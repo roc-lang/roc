@@ -1536,33 +1536,34 @@ In the first example, we've added 6 [centimeters](https://en.wikipedia.org/wiki/
 3 centimeters to get 9 centimeters. In the second example, we've taken 8 [kilowatts](https://en.wikipedia.org/wiki/Watt#Kilowatt)
 (or `kW` for short) and subtracted 2 kilowatts to get 6 kilowatts.
 
-If we tried to do `6 cm + 3 kW` or `8 kW - 2 cm`, we'd get a type mismatch. This can prevent bugs, including
-catastrophic ones like the famous [Mars Climate Orbiter crash](https://en.wikipedia.org/wiki/Mars_Climate_Orbiter#Cause_of_failure), where a calculation was done involving two incompatible units of measure.
+If we tried to do `6 cm + 3 kW` or `8 kW - 2 cm`, we'd get a type mismatch. These type mismatches can prevent bugs,
+including catastrophic ones like the famous [Mars Climate Orbiter crash](https://en.wikipedia.org/wiki/Mars_Climate_Orbiter#Cause_of_failure), where a calculation involving two incompatible units of measure led to a
+disaster.
 
 Note that type labels are surrounded by angle brackets in the type - e.g. `<cm>` rather than `cm`. That's
 done because in the scientific world, units of measure are often abbreviated in lowercase, but in Roc, lowercase
 names in types refer to type variables. So in the type `Num * <cm>`, the `<cm>` is a type label, whereas in
 the type `Num * cm`, the `cm` would be a type variable as normal.
 
-Type variables inside type labels begin with a `'`. For example, here are the types of `Num.add` and `Num.sub`:
+Type variables inside type labels begin with a '$'. For example, here are the types of `Num.add` and `Num.sub`:
 
-```elm
-add : Num a <'x>, Num a <'x> -> Num a <'x>
+```coffee
+add : Num a <$x>, Num a <$x> -> Num a <$x>
 ```
 
-```elm
-sub : Num a <'x>, Num a <'x> -> Num a <'x>
+```coffee
+sub : Num a <$x>, Num a <$x> -> Num a <$x>
 ```
 
 Both functions enforce that their numbers' ranges (represented by the `a` type variable) must be consistent,
-and also that their type labels (represented by the `'x` type variable) must also be consistent.
-The size distinguishes between number that represent different ranges (for example, `I32` and `F64` would
+and also that their type labels (represented by the `$x` type variable) must be consistent as well.
+The range distinguishes between numbers that cover different ranges (for example, `I32` and `F64` would
 have different `a` type variables here), and the type labels distinguish between numbers with different units
-(for example, `<cm>` and `<kW>` would have different `'x` type variables here).
+(for example, `<cm>` and `<kW>` would have different `$x` type variables here).
 
-There are two reasons for the `'` in type label variables:
-1. Normal type variables and type label variables cannot mix. It would be an error to use `'x` outside of `<` `>` brackets, and it would also be an error for a variable outside those brackets to be used inside them. The `'` syntax distinguishes them visually.
-2. Type label units can be both uppercase (e.g. `J` is the SI unit for Joules) or lowercase (e.g. `s` for seconds), so the `'` also distinguishes the type variable `'s` from the SI unit `s`.
+There are two reasons for the '$' in type label variables:
+1. Normal type variables and type label variables cannot mix. It would be an error to use `$x` outside of `<` `>` brackets, and it would also be an error for a variable outside those brackets to be used inside them. The '$' syntax distinguishes them visually.
+2. Type label units can be both uppercase (e.g. `J` is the SI unit for Joules) or lowercase (e.g. `h` for hours), so the '$' also distinguishes the type variable `$h` from the SI unit `h`.
 
 Unlike addition and subtraction, division accepts two arguments with different type labels:
 
@@ -1573,37 +1574,37 @@ Unlike addition and subtraction, division accepts two arguments with different t
 
 Note that the return type is `<km/h>`, which means [kilomters per hour](https://en.wikipedia.org/wiki/Kilometres_per_hour). This is because the type of `Num.div` is:
 
-```haskell
-div : Num a <'x>, Num a <'y> -> Num a <'x/'y>
+```coffee
+div : Num a <$x>, Num a <$y> -> Num a <$x/$y>
 ```
 
 Let's compare this type to `Num.add` from earlier:
 
-```haskell
-add : Num a <'x>, Num a <'x> -> Num a <'x>
+```coffee
+add : Num a <$x>, Num a <$x> -> Num a <$x>
 ```
 
 Both types use `Num a` for everything, but there are two differences in how they use type labels:
-1. In `add`, both arguments are `Num a x`, whereas in `div` the second argument is `Num a y` instead.
-2. `add` returns `Num a <'x>`, whereas `div` returns `Num a <'x/'y>`
+1. In `add`, both arguments are `Num a <$x>`, whereas in `div` the second argument is `Num a <$y>` instead.
+2. `add` returns `Num a <$x>`, whereas `div` returns `Num a <$x/$y>`
 
 Like division, multiplication also accepts arguments with different type labels. For example:
 
 ```
 » 5 kW * 3 h
-18 (kW h) : Num * <kW h>
+15 (kW h) : Num * <kW h>
 ```
 
-Here, we've multiplied 5 kilowatts by 3 hours to get 5 [kilowatt-hours](https://en.wikipedia.org/wiki/Kilowatt-hour).
+Here, we've multiplied 5 kilowatts by 3 hours to get 15 [kilowatt-hours](https://en.wikipedia.org/wiki/Kilowatt-hour).
 Kilowatt-hours are a common measure of residential electricity; if you keep a 100 kW lightbulb on for 10 hours,
 it will have used 1 kilowatt-hour of electricity. The type label for this is `<kW h>`, both because the
 [International System of Units](https://en.wikipedia.org/wiki/International_System_of_Units) uses spaces to represent
-multiplication of units, and also because `<kW * h>` would be ambiguous with the `*` wildcard type variable.
+multiplication of units, and also because `<kW * h>` would look like it contained a `*` wildcard type variable.
 
 The type of `Num.mul` is similar to the type of `Num.div`; only the type label in the return type is different:
 
-```haskell
-mul : Num <'a> x, Num <'a> y -> Num a <'x 'y>
+```coffee
+mul : Num a <$x>, Num a <$y> -> Num a <$x $y>
 ```
 
 ## TODO: use Num.pow as an example, and then talk about how Num.mul can return km^2. Also maybe discuss reciprocals
@@ -1626,8 +1627,8 @@ If we multiply two numbers with different type labels, the output will include t
 
 This is captured in the type of `Num.mul`:
 
-```haskell
-mul : Num a <'x>, Num a <'y> -> Num a <'x 'y>
+```coffee
+mul : Num a <$x>, Num a <$y> -> Num a <$x $y>
 ```
 
 This type says that:
@@ -1638,8 +1639,8 @@ This type says that:
 
 The type of `Num.div` is very similar:
 
-```elm
-div : Num a <'x>, Num a <'y> -> Num a <'x/'y>
+```coffee
+div : Num a <$x>, Num a <$y> -> Num a <$x/$y>
 ```
 
 The only difference is that the return type has the label `<x/y>` instead of `<x y>`.
@@ -1670,14 +1671,13 @@ Many numbers don't have type labels. For example, if you put `5` into `roc repl`
 5 : Num *
 ```
 
-There's a special type label called the *empty type label.* It's written as `<>`, and if you like, you can
-always omit it. So the type `Num *` is syntax sugar for the type `Num * <>`. You can write it either way,
-but stylistically it's preferred to omit the `<>`.
-
+That's because number literals with no units specified have a type label of `<1>`. If you like, you can always
+omit a type label of `<1>`, so the type `Num *` is equivalent to the type `Num * <1>`. You can write it
+either way, but stylistically it's preferred to omit the `<1>` - which is why `roc repl` omits it.
 
 ## TODO show how to put `5 (km/h)` into the repl, explain how this application only works with number literals;
 ## you can't do like `x (kW h)` because `x` is a varible, not a number literal! Instead you'd do `x * 1 (kw H)`.
-## Also, explain how 0 has no label.
+## Also, explain why 0 has the type `Num * <*>` but all other numbers have `Num * <1>`.
 
 # Appendix: Advanced Concepts
 
