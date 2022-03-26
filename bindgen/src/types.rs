@@ -6,6 +6,7 @@ pub enum RocType {
     Str,
     Bool,
     List(Box<RocType>),
+    RocBox(Box<RocType>),
     TagUnion(RocTagUnion),
     Record(RocRecord),
     I8,
@@ -24,14 +25,13 @@ pub enum RocType {
 }
 
 impl RocType {
-    pub fn alignment(&self) -> usize {
+    pub fn alignment(&self, ptr_alignment: usize) -> usize {
         match self {
-            RocType::Str => mem::align_of::<RocStr>(),
-            RocType::List(_) => mem::align_of::<RocList<()>>(),
+            RocType::Str | RocType::List(_) | RocType::RocBox(_) => ptr_alignment,
             RocType::Dec => mem::align_of::<RocDec>(),
             RocType::Bool => mem::align_of::<bool>(),
-            RocType::TagUnion(tag_union) => tag_union.alignment(),
-            RocType::Record(record) => record.alignment(),
+            RocType::TagUnion(tag_union) => tag_union.alignment(ptr_alignment),
+            RocType::Record(record) => record.alignment(ptr_alignment),
             RocType::I8 => mem::align_of::<i8>(),
             RocType::U8 => mem::align_of::<u8>(),
             RocType::I16 => mem::align_of::<i16>(),
@@ -61,26 +61,35 @@ impl RocRecord {
     pub fn into_fields(self) -> Vec<(String, Box<RocType>)> {
         self.fields
     }
-    pub fn alignment(&self) -> usize {
+
+    pub fn field_names(&self) -> Vec<&str> {
+        self.fields
+            .iter()
+            .map(|(field, _)| field.as_str())
+            .collect()
+    }
+
+    pub fn alignment(&self, ptr_alignment: usize) -> usize {
         let mut align = 0;
 
         for (_, field_type) in self.fields.iter() {
-            align = align.max(field_type.alignment())
+            align = align.max(field_type.alignment(ptr_alignment))
         }
 
         align
     }
 
     /// Use struct ordering, taking into account alignment and alphabetization.
-    pub fn use_struct_ordering(&mut self) {
+    pub fn use_struct_ordering(&mut self, ptr_alignment: usize) {
         self.fields.sort_by(|(field1, type1), (field2, type2)| {
-            let align1 = type1.alignment();
-            let align2 = type2.alignment();
+            let align1 = type1.alignment(ptr_alignment);
+            let align2 = type2.alignment(ptr_alignment);
 
             if align1 == align2 {
                 field1.cmp(field2)
             } else {
-                align1.cmp(&align2)
+                // Sort by *descending* alignment; highest alignments should go first!
+                align2.cmp(&align1)
             }
         });
     }
@@ -100,15 +109,49 @@ impl RocTagUnion {
         self.tags
     }
 
-    pub fn alignment(&self) -> usize {
+    pub fn alignment(&self, ptr_alignment: usize) -> usize {
         let mut align = 0;
 
         for (_, args) in self.tags.iter() {
             for arg in args {
-                align = align.max(arg.alignment())
+                align = align.max(arg.alignment(ptr_alignment));
             }
         }
 
         align
     }
+}
+
+#[test]
+fn field_order_str() {
+    use RocType::*;
+
+    // These all have the same alignment, so they should be sorted alphabetically.
+
+    let mut rec = RocRecord::new(vec![
+        ("second".to_string(), Box::new(Str)),
+        ("first".to_string(), Box::new(Str)),
+        ("third".to_string(), Box::new(Str)),
+    ]);
+
+    rec.use_struct_ordering(mem::align_of::<String>());
+
+    assert_eq!(vec!["first", "second", "third"], rec.field_names());
+}
+
+#[test]
+fn field_order_diff_align() {
+    use RocType::*;
+
+    // These have different alignments, and alignment takes precedence over field names.
+
+    let mut rec = RocRecord::new(vec![
+        ("first".to_string(), Box::new(U8)),
+        ("second".to_string(), Box::new(I32)),
+        ("third".to_string(), Box::new(Str)),
+    ]);
+
+    rec.use_struct_ordering(mem::align_of::<String>());
+
+    assert_eq!(vec!["third", "second", "first"], rec.field_names());
 }
