@@ -11,7 +11,7 @@ ButtonStyles : { bgColor : Rgba, borderColor : Rgba, borderWidth : F32, textColo
 
 Elem : [ Button Elem ButtonStyles, Col (List Elem), Row (List Elem), Text Str ]
 
-State : { width : U32, height : U32 } # TODO change from U32 to F32 once Num.toStr supports floats
+State : { width : Str, height : Str } # TODO change from U32 to F32 once Num.toStr supports floats
 
 Program state : { render : state -> Elem }
 
