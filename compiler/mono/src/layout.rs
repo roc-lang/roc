@@ -1014,7 +1014,7 @@ impl<'a> Layout<'a> {
 
     pub fn is_passed_by_reference(&self) -> bool {
         match self {
-            Layout::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
+            Layout::Union(UnionLayout::NonRecursive(_)) => true,
             Layout::LambdaSet(lambda_set) => {
                 lambda_set.runtime_representation().is_passed_by_reference()
             }
