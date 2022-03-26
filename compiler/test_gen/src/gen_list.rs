@@ -2391,13 +2391,49 @@ fn list_wrap_in_tag() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn list_contains() {
+fn list_contains_int() {
     assert_evals_to!(indoc!("List.contains [1,2,3] 1"), true, bool);
 
     assert_evals_to!(indoc!("List.contains [1,2,3] 4"), false, bool);
 
     assert_evals_to!(indoc!("List.contains [] 4"), false, bool);
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_contains_str() {
+    assert_evals_to!(indoc!(r#"List.contains ["foo", "bar"] "bar""#), true, bool);
+
+    assert_evals_to!(
+        indoc!(r#"List.contains ["foo", "bar"] "spam""#),
+        false,
+        bool
+    );
+
+    assert_evals_to!(indoc!(r#"List.contains [] "spam""#), false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_manual_range() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            range : I64, I64, List I64-> List I64
+            range = \low, high, accum ->
+                if low < high then
+                    range (low + 1) high (List.append accum low)
+                else
+                    accum
+
+            range 0 5 [ 42 ]
+            "#
+        ),
+        RocList::from_slice(&[42, 0, 1, 2, 3, 4]),
+        RocList<i64>
+    );
+}
+
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_min() {
@@ -2470,12 +2506,23 @@ fn list_product() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn list_keep_oks() {
+fn list_keep_void() {
     assert_evals_to!(
         "List.keepOks [] (\\x -> x)",
         RocList::from_slice(&[]),
         RocList<()>
     );
+
+    assert_evals_to!(
+        "List.keepErrs [] (\\x -> x)",
+        RocList::from_slice(&[]),
+        RocList<()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_keep_oks() {
     assert_evals_to!(
         "List.keepOks [Ok {}, Ok {}] (\\x -> x)",
         RocList::from_slice(&[(), ()]),
@@ -2501,11 +2548,6 @@ fn list_keep_oks() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_keep_errs() {
-    assert_evals_to!(
-        "List.keepErrs [] (\\x -> x)",
-        RocList::from_slice(&[]),
-        RocList<()>
-    );
     assert_evals_to!(
         "List.keepErrs [Err {}, Err {}] (\\x -> x)",
         RocList::from_slice(&[(), ()]),

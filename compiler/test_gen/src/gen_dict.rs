@@ -202,7 +202,7 @@ fn values() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn from_list_with_fold() {
+fn from_list_with_fold_simple() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -217,7 +217,11 @@ fn from_list_with_fold() {
         RocList::from_slice(&[2, 3, 1]),
         RocList<i64>
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn from_list_with_fold_reallocates() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -235,11 +239,13 @@ fn from_list_with_fold() {
                     |> List.walk Dict.empty (\accum, value -> Dict.insert accum value value)
 
             Dict.values myDict
-                |> List.len
             "#
         ),
-        25,
-        i64
+        RocList::from_slice(&[
+            4, 5, 20, 0, 7, 3, 1, 21, 10, 6, 13, 9, 14, 19, 2, 15, 12, 17, 16, 18, 22, 8, 11, 24,
+            23
+        ]),
+        RocList<i64>
     );
 }
 
