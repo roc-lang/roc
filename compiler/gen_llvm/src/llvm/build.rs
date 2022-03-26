@@ -1969,7 +1969,8 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
         .build_struct_gep(ptr, index as u32, "at_index_struct_gep")
         .unwrap();
 
-    let result = builder.build_load(elem_ptr, "load_at_index_ptr");
+    let field_layout = field_layouts[index];
+    let result = load_roc_value(env, field_layout, elem_ptr, "load_at_index_ptr_old");
 
     if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
         // a recursive field is stored as a `i64*`, to use it we must cast it to
@@ -2014,33 +2015,15 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         .into_pointer_value();
 
     let data_ptr = builder
-        .build_struct_gep(ptr, TAG_DATA_INDEX, "at_index_struct_gep")
+        .build_struct_gep(ptr, TAG_DATA_INDEX, "at_index_struct_gep_tag")
         .unwrap();
 
     let elem_ptr = builder
-        .build_struct_gep(data_ptr, index as u32, "at_index_struct_gep")
+        .build_struct_gep(data_ptr, index as u32, "at_index_struct_gep_data")
         .unwrap();
 
     let field_layout = field_layouts[index];
-    let result = if field_layout.is_passed_by_reference() {
-        let field_type = basic_type_from_layout(env, &field_layout);
-
-        let align_bytes = field_layout.alignment_bytes(env.target_info);
-        let alloca = entry_block_alloca_zerofill(env, field_type, "copied_tag");
-        if align_bytes > 0 {
-            let size = env
-                .ptr_int()
-                .const_int(field_layout.stack_size(env.target_info) as u64, false);
-
-            env.builder
-                .build_memcpy(alloca, align_bytes, elem_ptr, align_bytes, size)
-                .unwrap();
-        }
-
-        alloca.into()
-    } else {
-        builder.build_load(elem_ptr, "load_at_index_ptr")
-    };
+    let result = load_roc_value(env, field_layout, elem_ptr, "load_at_index_ptr");
 
     if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
         // a recursive field is stored as a `i64*`, to use it we must cast it to
