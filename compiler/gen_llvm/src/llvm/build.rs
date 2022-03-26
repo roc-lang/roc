@@ -1458,29 +1458,8 @@ pub fn entry_block_alloca_zerofill<'a, 'ctx, 'env>(
         .unwrap()
         .get_parent()
         .unwrap();
-    let result_alloca = create_entry_block_alloca(env, parent, basic_type, name);
 
-    // Initialize all memory of the alloca. This _should_ not be required, but currently
-    // LLVM can access uninitialized memory after applying some optimizations. Hopefully
-    // we can in the future adjust code gen so this is no longer an issue.
-    //
-    // An example is
-    //
-    // main : Task.Task {} []
-    // main =
-    //     when List.len [ Ok "foo", Err 42, Ok "spam" ] is
-    //         n -> Task.putLine (Str.fromInt n)
-    //
-    // Here the decrement function of result must first check it's an Ok tag,
-    // then defers to string decrement, which must check is the string is small or large
-    //
-    // After inlining, those checks are combined. That means that even if the tag is Err,
-    // a check is done on the "string" to see if it is big or small, which will touch the
-    // uninitialized memory.
-    let all_zeros = basic_type.const_zero();
-    env.builder.build_store(result_alloca, all_zeros);
-
-    result_alloca
+    create_entry_block_alloca(env, parent, basic_type, name)
 }
 
 fn build_tag_field_value<'a, 'ctx, 'env>(
