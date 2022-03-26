@@ -220,48 +220,6 @@ pub fn str_ends_with<'a, 'ctx, 'env>(
     )
 }
 
-/// Str.countGraphemes : Str -> Int
-pub fn str_count_graphemes<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let string = load_symbol(scope, &str_symbol);
-
-    call_bitcode_fn(env, &[string], bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
-}
-
-/// Str.trim : Str -> Str
-pub fn str_trim<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-
-    call_str_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM)
-}
-
-/// Str.trimLeft : Str -> Str
-pub fn str_trim_left<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    call_str_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_LEFT)
-}
-
-/// Str.trimRight : Str -> Str
-pub fn str_trim_right<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    call_str_bitcode_fn(env, &[str_i128.into()], bitcode::STR_TRIM_RIGHT)
-}
-
 /// Str.fromInt : Int -> Str
 pub fn str_from_int<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

@@ -2,7 +2,8 @@ use std::convert::{TryFrom, TryInto};
 use std::path::Path;
 
 use crate::llvm::bitcode::{
-    call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_void_bitcode_fn,
+    call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_str_bitcode_fn,
+    call_void_bitcode_fn,
 };
 use crate::llvm::build_dict::{
     self, dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
@@ -17,10 +18,9 @@ use crate::llvm::build_list::{
     list_single, list_sort_with, list_sublist, list_swap, list_to_c_abi,
 };
 use crate::llvm::build_str::{
-    str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
-    str_from_utf8_range, str_join_with, str_number_of_bytes, str_repeat, str_split,
-    str_starts_with, str_starts_with_code_point, str_to_utf8, str_trim, str_trim_left,
-    str_trim_right,
+    str_concat, str_ends_with, str_from_float, str_from_int, str_from_utf8, str_from_utf8_range,
+    str_join_with, str_number_of_bytes, str_repeat, str_split, str_starts_with,
+    str_starts_with_code_point, str_to_utf8,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
@@ -5473,25 +5473,29 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.countGraphemes : Str -> Int
             debug_assert_eq!(args.len(), 1);
 
-            str_count_graphemes(env, scope, args[0])
+            let string = load_symbol(scope, &args[0]);
+            call_bitcode_fn(env, &[string], bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
         }
         StrTrim => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
-            str_trim(env, scope, args[0])
+            let string = load_symbol(scope, &args[0]);
+            call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM)
         }
         StrTrimLeft => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
-            str_trim_left(env, scope, args[0])
+            let string = load_symbol(scope, &args[0]);
+            call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM_LEFT)
         }
         StrTrimRight => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
-            str_trim_right(env, scope, args[0])
+            let string = load_symbol(scope, &args[0]);
+            call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM_RIGHT)
         }
         ListLen => {
             // List.len : List * -> Int
