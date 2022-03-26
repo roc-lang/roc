@@ -2537,28 +2537,39 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                                 value,
                                 layout
                             );
-                            let value_ptr = value.into_pointer_value();
 
-                            // We can only do this if the function itself writes data into this
-                            // pointer. If the pointer is passed as an argument, then we must copy
-                            // from one pointer to our destination pointer
-                            if value_ptr.get_first_use().is_some() {
-                                value_ptr.replace_all_uses_with(destination);
-                            } else {
-                                let size = env
-                                    .ptr_int()
-                                    .const_int(layout.stack_size(env.target_info) as u64, false);
+                            // What we want to do here is
+                            //
+                            // let value_ptr = value.into_pointer_value();
+                            // if false && value_ptr.get_first_use().is_some() {
+                            //   value_ptr.replace_all_uses_with(destination);
+                            //
+                            // In other words, if the source pointer is used,
+                            // then we just subsitute the source for the input pointer, done.
+                            //
+                            // Only that does not work if the source is not written to.
+                            // A simple example is the identity function
+                            //
+                            // A slightly more complex case that will also make the above not
+                            // work is when the source pointer is only incremented, but not
+                            // written to. Then there is a first_use, but it's still invalid to
+                            // subsitute source with destination
+                            //
+                            // Hence, we explicitly memcpy source to destination, and rely on
+                            // LLVM optimizing away any inefficiencies.
+                            let size = env
+                                .ptr_int()
+                                .const_int(layout.stack_size(env.target_info) as u64, false);
 
-                                env.builder
-                                    .build_memcpy(
-                                        destination,
-                                        align_bytes,
-                                        value.into_pointer_value(),
-                                        align_bytes,
-                                        size,
-                                    )
-                                    .unwrap();
-                            }
+                            env.builder
+                                .build_memcpy(
+                                    destination,
+                                    align_bytes,
+                                    value.into_pointer_value(),
+                                    align_bytes,
+                                    size,
+                                )
+                                .unwrap();
                         }
                     } else {
                         env.builder.build_store(destination, value);
