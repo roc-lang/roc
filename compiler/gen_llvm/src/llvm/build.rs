@@ -45,8 +45,7 @@ use inkwell::types::{
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue,
-    GlobalValue, InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue,
-    StructValue,
+    InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -773,6 +772,7 @@ fn float_with_precision<'a, 'ctx, 'env>(
 
 pub fn build_exp_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     layout: &Layout<'_>,
     literal: &roc_mono::ir::Literal<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -810,16 +810,15 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Str(str_literal) => {
             let global = if str_literal.len() < env.small_str_bytes() as usize {
                 match env.small_str_bytes() {
-                    24 => small_str_ptr_width_8(env, str_literal),
-                    12 => small_str_ptr_width_4(env, str_literal),
+                    24 => small_str_ptr_width_8(env, parent, str_literal),
+                    12 => small_str_ptr_width_4(env, parent, str_literal),
                     _ => unreachable!("incorrect small_str_bytes"),
                 }
             } else {
                 let ptr = define_global_str_literal_ptr(env, *str_literal);
                 let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
 
-                const_str_global(env, ptr, number_of_elements, number_of_elements)
-                    .as_pointer_value()
+                const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements)
             };
 
             global.into()
@@ -827,28 +826,27 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
     }
 }
 
-fn const_str_global<'a, 'ctx, 'env>(
+fn const_str_alloca_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     ptr: PointerValue<'ctx>,
     len: IntValue<'ctx>,
     cap: IntValue<'ctx>,
-) -> GlobalValue<'ctx> {
+) -> PointerValue<'ctx> {
     let typ = zig_str_type(env);
-    let global = env.module.add_global(typ, None, "");
 
     let value = typ.const_named_struct(&[ptr.into(), len.into(), cap.into()]);
-    global.set_initializer(&value);
 
-    global.set_constant(true);
-    global.set_alignment(env.target_info.ptr_width() as u32);
-    global.set_unnamed_addr(true);
-    global.set_linkage(inkwell::module::Linkage::Internal);
+    let alloca = create_entry_block_alloca(env, parent, typ.into(), "const_str_store");
 
-    global
+    env.builder.build_store(alloca, value);
+
+    alloca
 }
 
 fn small_str_ptr_width_8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     str_literal: &str,
 ) -> PointerValue<'ctx> {
     debug_assert_eq!(env.target_info.ptr_width() as u8, 8);
@@ -871,11 +869,12 @@ fn small_str_ptr_width_8<'a, 'ctx, 'env>(
     let ptr_type = env.context.i8_type().ptr_type(address_space);
     let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
-    const_str_global(env, ptr, len, cap).as_pointer_value()
+    const_str_alloca_ptr(env, parent, ptr, len, cap)
 }
 
 fn small_str_ptr_width_4<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     str_literal: &str,
 ) -> PointerValue<'ctx> {
     debug_assert_eq!(env.target_info.ptr_width() as u8, 4);
@@ -898,7 +897,7 @@ fn small_str_ptr_width_4<'a, 'ctx, 'env>(
     let ptr_type = env.context.i8_type().ptr_type(address_space);
     let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
-    const_str_global(env, ptr, len, cap).as_pointer_value()
+    const_str_alloca_ptr(env, parent, ptr, len, cap)
 }
 
 pub fn build_exp_call<'a, 'ctx, 'env>(
@@ -1044,7 +1043,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     use roc_mono::ir::Expr::*;
 
     match expr {
-        Literal(literal) => build_exp_literal(env, layout, literal),
+        Literal(literal) => build_exp_literal(env, parent, layout, literal),
 
         Call(call) => build_exp_call(
             env,
@@ -1263,7 +1262,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         }
 
         EmptyArray => empty_polymorphic_list(env),
-        Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
+        Array { elem_layout, elems } => list_literal(env, parent, scope, elem_layout, elems),
         RuntimeErrorFunction(_) => todo!(),
 
         UnionAtIndex {
@@ -2197,6 +2196,7 @@ macro_rules! list_element_layout {
 
 fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     scope: &Scope<'a, 'ctx>,
     element_layout: &Layout<'a>,
     elems: &[ListLiteralElement],
@@ -2249,7 +2249,7 @@ fn list_literal<'a, 'ctx, 'env>(
             for (index, element) in elems.iter().enumerate() {
                 match element {
                     ListLiteralElement::Literal(literal) => {
-                        let val = build_exp_literal(env, element_layout, literal);
+                        let val = build_exp_literal(env, parent, element_layout, literal);
                         global_elements.push(val.into_int_value());
                     }
                     ListLiteralElement::Symbol(symbol) => {
@@ -2334,7 +2334,7 @@ fn list_literal<'a, 'ctx, 'env>(
         for (index, element) in elems.iter().enumerate() {
             let val = match element {
                 ListLiteralElement::Literal(literal) => {
-                    build_exp_literal(env, element_layout, literal)
+                    build_exp_literal(env, parent, element_layout, literal)
                 }
                 ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
             };
