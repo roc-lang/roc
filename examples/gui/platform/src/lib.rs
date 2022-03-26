@@ -6,11 +6,10 @@ mod roc;
 use crate::roc::RocElem;
 use core::alloc::Layout;
 use core::mem::MaybeUninit;
-use roc_std::{ReferenceCount, RocList, RocStr};
 
 extern "C" {
     #[link_name = "roc__programForHost_1_exposed_generic"]
-    fn roc_program(args: RocStr, output: *mut u8) -> ();
+    fn roc_program(args: State, output: *mut u8) -> ();
 
     #[link_name = "roc__programForHost_size"]
     fn roc_program_size() -> i64;
@@ -28,25 +27,24 @@ extern "C" {
 
 #[repr(C)]
 struct State {
-    height: RocStr,
-    width: RocStr,
+    height: u32,
+    width: u32,
 }
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     let size = unsafe { roc_program_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
-    let title: RocStr = "t1tl3".into();
-    // let state = State {
-    //     height: "big H".into(),
-    //     width: "the W".into(),
-    // };
+    let state = State {
+        height: 42,
+        width: 123,
+    };
 
     let root_elem = unsafe {
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        roc_program(title, buffer);
+        roc_program(state, buffer);
 
         // Call the program's render function
         let result = call_the_closure(buffer);
