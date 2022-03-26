@@ -59,12 +59,17 @@ pub fn write_roc_type(
         RocType::F64 => buf.write_str("f64"),
         RocType::Dec => buf.write_str("RocDec"),
         RocType::Str => buf.write_str("RocStr"),
+        RocType::Record(record) => buf.write_str(&structs.get_name(&record)),
+        RocType::RocBox(elem_type) => {
+            buf.write_str("RocBox<")?;
+            write_roc_type(*elem_type, structs, enums, buf)?;
+            buf.write_char('>')
+        }
         RocType::List(elem_type) => {
             buf.write_str("RocList<")?;
             write_roc_type(*elem_type, structs, enums, buf)?;
             buf.write_char('>')
         }
         RocType::TagUnion(tag_union) => buf.write_str(&enums.get_name(&tag_union)),
-        RocType::Record(record) => buf.write_str(&structs.get_name(&record)),
     }
 }
