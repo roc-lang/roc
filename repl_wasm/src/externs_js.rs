@@ -13,6 +13,16 @@ extern "C" {
     pub fn js_run_app() -> usize;
 
     pub fn js_get_result_and_memory(buffer_alloc_addr: *mut u8) -> usize;
+
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+}
+
+// To debug wasm issues, start up the web REPL as per instructions in repl_www/README.md
+// Then sprinkle your code with console_log!("{:?}", my_value);
+#[macro_export]
+macro_rules! console_log {
+    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
 }
 
 /// Async entrypoint for the browser
