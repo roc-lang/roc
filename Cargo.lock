@@ -3342,6 +3342,7 @@ version = "0.1.0"
 dependencies = [
  "indoc",
  "pretty_assertions",
+ "roc_std",
 ]
 
 [[package]]
