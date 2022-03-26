@@ -3375,7 +3375,14 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
                 let loaded = env.builder.build_load(fastcc_ptr, "load_arg");
                 arguments_for_call.push(loaded);
             } else {
-                todo!("C <-> Fastcc interaction that we haven't seen before")
+                // todo!("C <-> Fastcc interaction that we haven't seen before")
+
+                let as_cc_type = env.builder.build_pointer_cast(
+                    arg.into_pointer_value(),
+                    fastcc_type.into_pointer_type(),
+                    "to_cc_type_ptr",
+                );
+                arguments_for_call.push(as_cc_type.into());
             }
 
             // let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
