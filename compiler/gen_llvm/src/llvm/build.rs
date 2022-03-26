@@ -1138,7 +1138,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 layout.alignment_bytes(env.target_info),
             );
 
-            env.builder.build_store(allocation, value);
+            store_roc_value(env, *layout, allocation, value);
 
             allocation.into()
         }
@@ -1148,8 +1148,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             debug_assert!(value.is_pointer_value());
 
-            env.builder
-                .build_load(value.into_pointer_value(), "load_boxed_value")
+            load_roc_value(env, *layout, value.into_pointer_value(), "load_boxed_value")
         }
 
         Reset { symbol, .. } => {
