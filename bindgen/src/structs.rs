@@ -1,4 +1,4 @@
-use crate::types::{RocRecord, RocType};
+use crate::types::RocRecord;
 use std::collections::HashMap;
 
 #[derive(Copy, Clone, Debug)]
@@ -6,12 +6,12 @@ struct StructId(u64);
 
 impl StructId {
     pub fn to_name(self) -> String {
-        format!("S{}", self.0)
+        format!("R{}", self.0)
     }
 }
 
 /// Whenever we register a new record type,
-/// give it a unique and short name (e.g. S1, S2, S3...)
+/// give it a unique and short name (e.g. R1, R2, R3...)
 /// and then from then on, whenever we ask for that
 /// same record type, return the same name.
 pub struct Structs {
