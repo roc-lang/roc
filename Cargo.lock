@@ -3337,6 +3337,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_bindgen"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "pretty_assertions",
+]
+
+[[package]]
 name = "roc_build"
 version = "0.1.0"
 dependencies = [
