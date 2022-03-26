@@ -3,7 +3,6 @@ use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::tag_pointer_clear_tag_id;
 use crate::llvm::build::Env;
 use crate::llvm::build::{get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
-use crate::llvm::build_str;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::values::{
