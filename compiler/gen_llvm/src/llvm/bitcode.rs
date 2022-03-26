@@ -83,7 +83,8 @@ pub fn call_str_bitcode_fn<'a, 'ctx, 'env>(
 
     call_void_bitcode_fn(env, &arguments, fn_name);
 
-    env.builder.build_load(result, "load_str")
+    // TODO make this function return a PointerValue
+    result.into()
 }
 
 pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(

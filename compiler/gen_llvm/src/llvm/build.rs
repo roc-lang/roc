@@ -824,7 +824,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     .as_pointer_value()
             };
 
-            env.builder.build_load(global, "load_constant_string")
+            global.into()
         }
     }
 }
@@ -1500,7 +1500,7 @@ fn build_tag_field_value<'a, 'ctx, 'env>(
             "cast_recursive_pointer",
         )
     } else if tag_field_layout.is_passed_by_reference() {
-        debug_assert!(value.is_pointer_value());
+        debug_assert!(value.is_pointer_value(), "{:#?}", value);
 
         // NOTE: we rely on this being passed to `store_roc_value` so that
         // the value is memcpy'd
@@ -2755,6 +2755,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
                     match layout {
+                        Layout::Builtin(Builtin::Str) => todo!(),
                         Layout::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
                             let alignment = element_layout.alignment_bytes(env.target_info);
@@ -6203,6 +6204,11 @@ enum RocReturn {
 impl RocReturn {
     fn roc_return_by_pointer(layout: Layout) -> bool {
         match layout {
+            Layout::Builtin(builtin) => {
+                use Builtin::*;
+
+                matches!(builtin, Str)
+            }
             Layout::Union(UnionLayout::NonRecursive(_)) => true,
             Layout::LambdaSet(lambda_set) => {
                 RocReturn::roc_return_by_pointer(lambda_set.runtime_representation())
@@ -6332,7 +6338,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
 
                 cc_argument_types.push(to_cc_type(env, layout));
 
-                let basic_type = basic_type_from_layout(env, layout);
+                let basic_type = argument_type_from_layout(env, layout);
                 fastcc_argument_types.push(basic_type);
 
                 arguments.push(value);
@@ -6402,7 +6408,16 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
 
                             cc_arguments.push(as_cc_type.into());
                         } else {
-                            todo!("C <-> Fastcc interaction that we haven't seen before")
+                            // eprintln!("C type: {:?}", cc_type);
+                            // eprintln!("Fastcc type: {:?}", param.get_type());
+                            // todo!("C <-> Fastcc interaction that we haven't seen before")
+
+                            let as_cc_type = env.builder.build_pointer_cast(
+                                param.into_pointer_value(),
+                                cc_type.into_pointer_type(),
+                                "to_cc_type_ptr",
+                            );
+                            cc_arguments.push(as_cc_type.into());
                         }
                     }
                 }

@@ -865,6 +865,9 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
 
     let parent = fn_val;
 
+    let arg_val = env
+        .builder
+        .build_load(arg_val.into_pointer_value(), "load_str_to_stack");
     let str_wrapper = arg_val.into_struct_value();
 
     let capacity = builder

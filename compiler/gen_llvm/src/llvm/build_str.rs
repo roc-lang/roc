@@ -128,14 +128,10 @@ pub fn str_concat<'a, 'ctx, 'env>(
     str2_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
     // swap the arguments; second argument comes before the second in the output string
-    let str1_c_abi = str_symbol_to_c_abi(env, scope, str1_symbol);
-    let str2_c_abi = str_symbol_to_c_abi(env, scope, str2_symbol);
+    let str1 = load_symbol(scope, &str1_symbol);
+    let str2 = load_symbol(scope, &str2_symbol);
 
-    call_str_bitcode_fn(
-        env,
-        &[str1_c_abi.into(), str2_c_abi.into()],
-        bitcode::STR_CONCAT,
-    )
+    call_str_bitcode_fn(env, &[str1, str2], bitcode::STR_CONCAT)
 }
 
 /// Str.join : List Str, Str -> Str
@@ -398,12 +394,5 @@ pub fn str_equal<'a, 'ctx, 'env>(
     value1: BasicValueEnum<'ctx>,
     value2: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let str1_i128 = str_to_c_abi(env, value1);
-    let str2_i128 = str_to_c_abi(env, value2);
-
-    call_bitcode_fn(
-        env,
-        &[str1_i128.into(), str2_i128.into()],
-        bitcode::STR_EQUAL,
-    )
+    call_bitcode_fn(env, &[value1, value2], bitcode::STR_EQUAL)
 }
