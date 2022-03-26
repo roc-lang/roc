@@ -12,8 +12,8 @@ render = \state ->
 
     styles = { bgColor: rgba 100 50 50 1, borderColor: rgba 10 20 30 1, borderWidth: 10, textColor: rgba 220 220 250 1 }
 
-    height = Num.toStr state.height
-    width = Num.toStr state.width
+    height = if state.height == 42 then "correct!" else if state.height == 0 then "zero" else "incorrect"
+    width = if state.width == 123 then "Correct!" else if state.width == 0 then "zero" else "Incorrect"
 
     Col
         [
