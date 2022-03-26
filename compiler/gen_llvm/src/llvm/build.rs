@@ -15,12 +15,11 @@ use crate::llvm::build_list::{
     list_contains, list_drop_at, list_find_unsafe, list_get_unsafe, list_join, list_keep_errs,
     list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4,
     list_map_with_index, list_prepend, list_range, list_repeat, list_replace_unsafe, list_reverse,
-    list_single, list_sort_with, list_sublist, list_swap, list_to_c_abi,
+    list_single, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_to_c_abi,
 };
 use crate::llvm::build_str::{
-    str_concat, str_ends_with, str_from_float, str_from_int, str_from_utf8, str_from_utf8_range,
-    str_join_with, str_number_of_bytes, str_repeat, str_split, str_starts_with,
-    str_starts_with_code_point, str_to_utf8,
+    str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_number_of_bytes,
+    str_repeat, str_split, str_to_utf8,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
@@ -5358,31 +5357,46 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.concat : Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_concat(env, scope, args[0], args[1])
+            let string1 = load_symbol(scope, &args[0]);
+            let string2 = load_symbol(scope, &args[1]);
+
+            call_str_bitcode_fn(env, &[string1, string2], bitcode::STR_CONCAT)
         }
         StrJoinWith => {
             // Str.joinWith : List Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_join_with(env, scope, args[0], args[1])
+            let list = list_symbol_to_c_abi(env, scope, args[0]);
+            let string = load_symbol(scope, &args[1]);
+
+            call_str_bitcode_fn(env, &[list.into(), string], bitcode::STR_JOIN_WITH)
         }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            str_starts_with(env, scope, args[0], args[1])
+            let string = load_symbol(scope, &args[0]);
+            let prefix = load_symbol(scope, &args[0]);
+
+            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH)
         }
         StrStartsWithCodePt => {
             // Str.startsWithCodePt : Str, U32 -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            str_starts_with_code_point(env, scope, args[0], args[1])
+            let string = load_symbol(scope, &args[0]);
+            let prefix = load_symbol(scope, &args[1]);
+
+            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH_CODE_PT)
         }
         StrEndsWith => {
             // Str.startsWith : Str, Str -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            str_ends_with(env, scope, args[0], args[1])
+            let string = load_symbol(scope, &args[0]);
+            let prefix = load_symbol(scope, &args[0]);
+
+            call_bitcode_fn(env, &[string, prefix], bitcode::STR_ENDS_WITH)
         }
         StrToNum => {
             // Str.toNum : Str -> Result (Num *) {}
@@ -5460,10 +5474,19 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.isEmpty : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let len = str_number_of_bytes(env, scope, args[0]);
+            // the builtin will always return an u64
+            let string = load_symbol(scope, &args[0]);
+            let length =
+                call_bitcode_fn(env, &[string], bitcode::STR_NUMBER_OF_BYTES).into_int_value();
+
+            // cast to the appropriate usize of the current build
+            let byte_count =
+                env.builder
+                    .build_int_cast_sign_flag(length, env.ptr_int(), false, "len_as_usize");
+
             let is_zero = env.builder.build_int_compare(
                 IntPredicate::EQ,
-                len,
+                byte_count,
                 env.ptr_int().const_zero(),
                 "str_len_is_zero",
             );

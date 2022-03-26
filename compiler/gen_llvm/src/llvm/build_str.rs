@@ -169,57 +169,6 @@ pub fn str_number_of_bytes<'a, 'ctx, 'env>(
         .build_int_cast_sign_flag(length, env.ptr_int(), false, "len_as_usize")
 }
 
-/// Str.startsWith : Str, Str -> Bool
-pub fn str_starts_with<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str_symbol: Symbol,
-    prefix_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    let prefix_i128 = str_symbol_to_c_abi(env, scope, prefix_symbol);
-
-    call_bitcode_fn(
-        env,
-        &[str_i128.into(), prefix_i128.into()],
-        bitcode::STR_STARTS_WITH,
-    )
-}
-
-/// Str.startsWithCodePt : Str, U32 -> Bool
-pub fn str_starts_with_code_point<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str_symbol: Symbol,
-    prefix_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    let prefix = load_symbol(scope, &prefix_symbol);
-
-    call_bitcode_fn(
-        env,
-        &[str_i128.into(), prefix],
-        bitcode::STR_STARTS_WITH_CODE_PT,
-    )
-}
-
-/// Str.endsWith : Str, Str -> Bool
-pub fn str_ends_with<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str_symbol: Symbol,
-    prefix_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-    let prefix_i128 = str_symbol_to_c_abi(env, scope, prefix_symbol);
-
-    call_bitcode_fn(
-        env,
-        &[str_i128.into(), prefix_i128.into()],
-        bitcode::STR_ENDS_WITH,
-    )
-}
-
 /// Str.fromInt : Int -> Str
 pub fn str_from_int<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
