@@ -226,13 +226,9 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
+    let string = load_symbol(scope, &str_symbol);
 
-    call_bitcode_fn(
-        env,
-        &[str_i128.into()],
-        bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
-    )
+    call_bitcode_fn(env, &[string], bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
 }
 
 /// Str.trim : Str -> Str
