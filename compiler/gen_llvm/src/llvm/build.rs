@@ -1492,7 +1492,7 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
     }
 }
 
-pub fn tag_alloca<'a, 'ctx, 'env>(
+pub fn entry_block_alloca_zerofill<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     basic_type: BasicTypeEnum<'ctx>,
     name: &str,
@@ -1550,7 +1550,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
             let wrapper_type = env
                 .context
                 .struct_type(&[internal_type, tag_id_type.into()], false);
-            let result_alloca = tag_alloca(env, wrapper_type.into(), "opaque_tag");
+            let result_alloca = entry_block_alloca_zerofill(env, wrapper_type.into(), "opaque_tag");
 
             // Determine types
             let num_fields = arguments.len() + 1;
@@ -2077,7 +2077,7 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         let field_type = basic_type_from_layout(env, &field_layout);
 
         let align_bytes = field_layout.alignment_bytes(env.target_info);
-        let alloca = tag_alloca(env, field_type, "copied_tag");
+        let alloca = entry_block_alloca_zerofill(env, field_type, "copied_tag");
         if align_bytes > 0 {
             let size = env
                 .ptr_int()
@@ -2444,7 +2444,7 @@ pub fn load_roc_value<'a, 'ctx, 'env>(
     name: &str,
 ) -> BasicValueEnum<'ctx> {
     if layout.is_passed_by_reference() {
-        let alloca = tag_alloca(env, basic_type_from_layout(env, &layout), name);
+        let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
 
         store_roc_value(env, layout, alloca, source.into());
 
@@ -2461,7 +2461,7 @@ pub fn use_roc_value<'a, 'ctx, 'env>(
     name: &str,
 ) -> BasicValueEnum<'ctx> {
     if layout.is_passed_by_reference() {
-        let alloca = tag_alloca(env, basic_type_from_layout(env, &layout), name);
+        let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
 
         env.builder.build_store(alloca, source);
 
@@ -4721,7 +4721,7 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             let mut arguments = Vec::from_iter_in(it, env.arena);
 
             let result_type = basic_type_from_layout(env, result_layout);
-            let result_alloca = tag_alloca(env, result_type, "result_value");
+            let result_alloca = entry_block_alloca_zerofill(env, result_type, "result_value");
 
             arguments.push(result_alloca.into());
 
