@@ -7,7 +7,7 @@ use crate::llvm::build::{
     Scope,
 };
 use crate::llvm::build_list::{layout_width, pass_as_opaque};
-use crate::llvm::convert::{basic_type_from_layout, zig_dict_type, zig_list_type};
+use crate::llvm::convert::{basic_type_from_layout, zig_dict_type};
 use crate::llvm::refcounting::Mode;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::context::Context;
@@ -421,8 +421,6 @@ pub fn dict_keys<'a, 'ctx, 'env>(
     key_layout: &Layout<'a>,
     value_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
     let key_width = env
         .ptr_int()
         .const_int(key_layout.stack_size(env.target_info) as u64, false);
@@ -663,10 +661,6 @@ pub fn dict_values<'a, 'ctx, 'env>(
     key_layout: &Layout<'a>,
     value_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let zig_list_type = super::convert::zig_list_type(env);
-
     let key_width = env
         .ptr_int()
         .const_int(key_layout.stack_size(env.target_info) as u64, false);
