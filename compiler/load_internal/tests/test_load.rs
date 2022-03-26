@@ -88,6 +88,11 @@ mod test_load {
     }
 
     fn multiple_modules(files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
+<<<<<<< HEAD:compiler/load_internal/tests/test_load.rs
+=======
+        use roc_load_internal::file::LoadingProblem;
+
+>>>>>>> origin/trunk:compiler/load/tests/test_load.rs
         let arena = Bump::new();
         let arena = &arena;
 
