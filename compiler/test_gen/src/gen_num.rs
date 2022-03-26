@@ -1843,22 +1843,69 @@ fn shift_left_by() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn shift_right_by() {
     // Sign Extended Right Shift
-    assert_evals_to!("Num.shiftRightBy 0 0b0100_0000i8", 0b0001_0000, i8);
-    assert_evals_to!("Num.shiftRightBy 1 0b1110_0000u8", 0b1111_0000u8 as i8, i8);
-    assert_evals_to!("Num.shiftRightBy 2 0b1100_0000u8", 0b1111_0000u8 as i8, i8);
+
+    let is_wasm = cfg!(feature = "gen-wasm");
+    let is_llvm_release_mode = cfg!(feature = "gen-llvm") && !cfg!(debug_assertions);
+
+    // FIXME (Brian) Something funny happening with 8-bit binary literals in tests
+    if !is_wasm {
+        assert_evals_to!(
+            "Num.shiftRightBy 2 (Num.toI8 0b1100_0000u8)",
+            0b1111_0000u8 as i8,
+            i8
+        );
+        assert_evals_to!("Num.shiftRightBy 2 0b0100_0000i8", 0b0001_0000i8, i8);
+        assert_evals_to!("Num.shiftRightBy 1 0b1110_0000u8", 0b1111_0000u8, u8);
+        assert_evals_to!("Num.shiftRightBy 2 0b1100_0000u8", 0b1111_0000u8, u8);
+        assert_evals_to!("Num.shiftRightBy 12 0b0100_0000u8", 0b0000_0000u8, u8);
+
+        // LLVM in release mode returns 0 instead of -1 for some reason
+        if !is_llvm_release_mode {
+            assert_evals_to!("Num.shiftRightBy 12 0b1000_0000u8", 0b1111_1111u8, u8);
+        }
+    }
+    assert_evals_to!("Num.shiftRightBy 0 12", 12, i64);
+    assert_evals_to!("Num.shiftRightBy 1 12", 6, i64);
+    assert_evals_to!("Num.shiftRightBy 1 -12", -6, i64);
+    assert_evals_to!("Num.shiftRightBy 8 12", 0, i64);
+    assert_evals_to!("Num.shiftRightBy 8 -12", -1, i64);
+    assert_evals_to!("Num.shiftRightBy -1 12", 0, i64);
+    assert_evals_to!("Num.shiftRightBy 0 0", 0, i64);
+    assert_evals_to!("Num.shiftRightBy 1 0", 0, i64);
+
+    assert_evals_to!("Num.shiftRightBy 0 12i32", 12, i32);
+    assert_evals_to!("Num.shiftRightBy 1 12i32", 6, i32);
+    assert_evals_to!("Num.shiftRightBy 1 -12i32", -6, i32);
+    assert_evals_to!("Num.shiftRightBy 8 12i32", 0, i32);
+    assert_evals_to!("Num.shiftRightBy 8 -12i32", -1, i32);
+
+    assert_evals_to!("Num.shiftRightBy 0 12i8", 12, i8);
+    assert_evals_to!("Num.shiftRightBy 1 12i8", 6, i8);
+    assert_evals_to!("Num.shiftRightBy 1 -12i8", -6, i8);
+    assert_evals_to!("Num.shiftRightBy 8 12i8", 0, i8);
+
+    if !is_llvm_release_mode {
+        assert_evals_to!("Num.shiftRightBy -1 0", 0, i64);
+        assert_evals_to!("Num.shiftRightBy -1 -12", -1, i64);
+        assert_evals_to!("Num.shiftRightBy 8 -12i8", -1, i8);
+    }
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn shift_right_zf_by() {
     // Logical Right Shift
-    assert_evals_to!("Num.shiftRightBy 1 0b1100_0000u8", 0b0011_0000, i64);
-    assert_evals_to!("Num.shiftRightBy 2 0b0000_0010u8", 0b0000_0001, i64);
-    assert_evals_to!("Num.shiftRightBy 3 0b0000_1100u8", 0b0000_0011, i64);
+    assert_evals_to!(
+        "Num.shiftRightZfBy 2 (Num.toI8 0b1100_0000u8)",
+        0b0011_0000i8,
+        i8
+    );
+    assert_evals_to!("Num.shiftRightZfBy 2 0b1100_0000u8", 0b0011_0000u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 1 0b0000_0010u8", 0b0000_0001u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 2 0b0000_1100u8", 0b0000_0011u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 12 0b1000_0000u8", 0b0000_0000u8, u8);
 }
 
 #[test]
@@ -2179,6 +2226,12 @@ to_int_tests! {
         to_u128_same_width, "15i128", 15
         to_u128_extend, "15i8", 15
     )
+    "Num.toNat", usize, (
+        to_nat_same_width, "15i64", 15, ["gen-wasm"]
+        to_nat_extend, "15i8", 15, ["gen-wasm"]
+        to_nat_truncate, "115i128", 115
+        to_nat_truncate_wraps, "10_000_000_000_000_000_000_000i128", 1864712049423024128
+    )
 }
 
 macro_rules! to_int_checked_tests {
@@ -2311,6 +2364,18 @@ to_int_checked_tests! {
         to_u128_checked_same,                          "15u128",   15
         to_u128_checked_same_width_signed_fits,        "15i128",   15
         to_u128_checked_same_width_signed_oob,         "-1i128",   None
+    )
+    "Num.toNatChecked", usize, (
+        to_nat_checked_smaller_width_pos,              "15i8",     15
+        to_nat_checked_smaller_width_neg_oob,          "-15i8",    None
+        to_nat_checked_same,                           "15u64",    15
+        to_nat_checked_same_width_signed_fits,         "15i64",    15
+        to_nat_checked_same_width_signed_oob,          "-1i64",    None
+        to_nat_checked_larger_width_signed_fits_pos,   "15i128",   15
+        to_nat_checked_larger_width_signed_oob_pos,    "18446744073709551616i128", None
+        to_nat_checked_larger_width_signed_oob_neg,    "-1i128",   None
+        to_nat_checked_larger_width_unsigned_fits_pos, "15u128",   15
+        to_nat_checked_larger_width_unsigned_oob_pos,  "18446744073709551616u128", None
     )
 }
 
@@ -2779,5 +2844,65 @@ fn to_float_f64() {
         ),
         100.,
         f64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// https://github.com/rtfeldman/roc/issues/2696
+fn upcast_of_int_is_zext() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Num.toU16 0b1000_0000u8
+            "#
+        ),
+        128,
+        u16
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+// https://github.com/rtfeldman/roc/issues/2696
+fn upcast_of_int_checked_is_zext() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Num.toU16Checked 0b1000_0000u8 is
+                Ok 128u16 -> 1u8
+                _ -> 0u8
+            "#
+        ),
+        1,
+        u16
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn modulo_of_unsigned() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            0b1111_1111u8 % 64
+            "#
+        ),
+        63,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn div_of_unsigned() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            0b1111_1111u8 // 2
+            "#
+        ),
+        127,
+        u8
     )
 }

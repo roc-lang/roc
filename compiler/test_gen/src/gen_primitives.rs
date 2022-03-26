@@ -3,8 +3,6 @@ use crate::helpers::llvm::assert_evals_to;
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_expect_failed;
 #[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::assert_llvm_evals_to;
-#[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_non_opt_evals_to;
 
 #[cfg(feature = "gen-dev")]
@@ -18,6 +16,8 @@ use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
+#[cfg(feature = "gen-wasm")]
+use crate::helpers::wasm::assert_evals_to as assert_non_opt_evals_to;
 // #[cfg(feature = "gen-wasm")]
 // use crate::helpers::dev::assert_expect_failed;
 // #[cfg(feature = "gen-wasm")]
@@ -792,7 +792,7 @@ fn linked_list_sum_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_map() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1912,6 +1912,35 @@ fn wildcard_rigid() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn alias_of_alias_with_type_arguments() {
+    assert_non_opt_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            Effect a : [ @Effect a ]
+
+            Task a err : Effect (Result a err)
+
+            always : a -> Task a *
+            always = \x ->
+                inner = (Ok x)
+
+                @Effect inner
+
+
+            main : Task {} (Float *)
+            main = always {}
+            "#
+        ),
+        0,
+        i64,
+        |_| 0
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 fn todo_bad_error_message() {
     assert_non_opt_evals_to!(
@@ -2470,10 +2499,10 @@ fn function_malformed_pattern() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Hit an erroneous type when creating a layout for")]
 fn call_invalid_layout() {
-    assert_llvm_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 f : I64 -> I64
@@ -3228,5 +3257,21 @@ fn issue_2322() {
         ),
         6,
         i64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn box_and_unbox_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box (Str.concat "Leverage " "agile frameworks to provide a robust synopsis for high level overviews"))
+            "#
+        ),
+        RocStr::from(
+            "Leverage agile frameworks to provide a robust synopsis for high level overviews"
+        ),
+        RocStr
     )
 }

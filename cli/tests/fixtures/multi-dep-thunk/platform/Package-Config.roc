@@ -1,4 +1,4 @@
-platform "examples/multi-dep-thunk"
+platform "multi-dep-thunk"
     requires {}{ main : Str }
     exposes []
     packages {}

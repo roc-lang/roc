@@ -120,6 +120,8 @@ interface Num
             toU64Checked,
             toU128,
             toU128Checked,
+            toNat,
+            toNatChecked,
             toFloat,
             toStr
         ]

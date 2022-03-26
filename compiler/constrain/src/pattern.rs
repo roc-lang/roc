@@ -9,7 +9,9 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
-use roc_types::types::{AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type};
+use roc_types::types::{
+    AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type, TypeExtension,
+};
 
 #[derive(Default)]
 pub struct PatternState {
@@ -27,7 +29,7 @@ pub struct PatternState {
 /// definition has an annotation, we instead now add `x => Int`.
 pub fn headers_from_annotation(
     pattern: &Pattern,
-    annotation: &Loc<Type>,
+    annotation: &Loc<&Type>,
 ) -> Option<SendMap<Symbol, Loc<Type>>> {
     let mut headers = SendMap::default();
     // Check that the annotation structurally agrees with the pattern, preventing e.g. `{ x, y } : Int`
@@ -44,12 +46,13 @@ pub fn headers_from_annotation(
 
 fn headers_from_annotation_help(
     pattern: &Pattern,
-    annotation: &Loc<Type>,
+    annotation: &Loc<&Type>,
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> bool {
     match pattern {
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            headers.insert(*symbol, annotation.clone());
+            let typ = Loc::at(annotation.region, annotation.value.clone());
+            headers.insert(*symbol, typ);
             true
         }
         Underscore
@@ -106,7 +109,7 @@ fn headers_from_annotation_help(
                         .all(|(arg_pattern, arg_type)| {
                             headers_from_annotation_help(
                                 &arg_pattern.1.value,
-                                &Loc::at(annotation.region, arg_type.clone()),
+                                &Loc::at(annotation.region, arg_type),
                                 headers,
                             )
                         })
@@ -135,12 +138,13 @@ fn headers_from_annotation_help(
                 && type_arguments.len() == pat_type_arguments.len()
                 && lambda_set_variables.len() == pat_lambda_set_variables.len() =>
             {
-                headers.insert(*opaque, annotation.clone());
+                let typ = Loc::at(annotation.region, annotation.value.clone());
+                headers.insert(*opaque, typ);
 
                 let (_, argument_pat) = &**argument;
                 headers_from_annotation_help(
                     &argument_pat.value,
-                    &Loc::at(annotation.region, (**actual).clone()),
+                    &Loc::at(annotation.region, actual),
                     headers,
                 )
             }
@@ -168,18 +172,23 @@ pub fn constrain_pattern(
             //     A -> ""
             //     _ -> ""
             // so, we know that "x" (in this case, a tag union) must be open.
-            state
-                .constraints
-                .push(constraints.is_open_type(expected.get_type()));
+            if could_be_a_tag_union(expected.get_type_ref()) {
+                state
+                    .constraints
+                    .push(constraints.is_open_type(expected.get_type()));
+            }
         }
         UnsupportedPattern(_) | MalformedPattern(_, _) | OpaqueNotInScope(..) => {
             // Erroneous patterns don't add any constraints.
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            state
-                .constraints
-                .push(constraints.is_open_type(expected.get_type_ref().clone()));
+            if could_be_a_tag_union(expected.get_type_ref()) {
+                state
+                    .constraints
+                    .push(constraints.is_open_type(expected.get_type_ref().clone()));
+            }
+
             state.headers.insert(
                 *symbol,
                 Loc {
@@ -389,7 +398,7 @@ pub fn constrain_pattern(
                 state.vars.push(*var);
             }
 
-            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
 
             let whole_con = constraints.equal_types(
                 Type::Variable(*whole_var),
@@ -502,12 +511,22 @@ pub fn constrain_pattern(
             );
 
             // Link the entire wrapped opaque type (with the now-constrained argument) to the type
-            // variables of the opaque type
-            // TODO: better expectation here
-            let link_type_variables_con = constraints.equal_types(
-                (**specialized_def_type).clone(),
-                Expected::NoExpectation(arg_pattern_type),
-                Category::OpaqueWrap(*opaque),
+            // variables of the opaque type.
+            //
+            // For example, suppose we have `O k := [ A k, B k ]`, and the pattern `@O (A s) -> s == ""`.
+            // Previous constraints will have solved `typeof s ~ Str`, and we have the
+            // `specialized_def_type` being `[ A k1, B k1 ]`, specializing `k` as `k1` for this opaque
+            // usage.
+            // We now want to link `typeof s ~ k1`, so to capture this relationship, we link
+            // the type of `A s` (the arg type) to `[ A k1, B k1 ]` (the specialized opaque type).
+            //
+            // This must **always** be a presence constraint, that is enforcing
+            // `[ A k1, B k1 ] += typeof (A s)`, because we are in a destructure position and not
+            // all constructors are covered in this branch!
+            let link_type_variables_con = constraints.pattern_presence(
+                arg_pattern_type,
+                PExpected::NoExpectation((**specialized_def_type).clone()),
+                PatternCategory::Opaque(*opaque),
                 loc_arg_pattern.region,
             );
 
@@ -537,4 +556,8 @@ pub fn constrain_pattern(
             ]);
         }
     }
+}
+
+fn could_be_a_tag_union(typ: &Type) -> bool {
+    !matches!(typ, Type::Apply(..) | Type::Function(..) | Type::Record(..))
 }

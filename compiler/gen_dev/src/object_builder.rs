@@ -267,6 +267,27 @@ fn build_object<'a, B: Backend<'a>>(
                 helper_names_symbols_procs.push((fn_name, section_id, proc_id, proc));
                 continue;
             }
+        } else {
+            // The symbol isn't defined yet and will just be used by other rc procs.
+            let section_id = output.add_section(
+                output.segment_name(StandardSegment::Text).to_vec(),
+                format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
+                SectionKind::Text,
+            );
+
+            let rc_symbol = Symbol {
+                name: fn_name.as_bytes().to_vec(),
+                value: 0,
+                size: 0,
+                kind: SymbolKind::Text,
+                scope: SymbolScope::Linkage,
+                weak: false,
+                section: SymbolSection::Section(section_id),
+                flags: SymbolFlags::None,
+            };
+            let proc_id = output.add_symbol(rc_symbol);
+            helper_names_symbols_procs.push((fn_name, section_id, proc_id, proc));
+            continue;
         }
         internal_error!("failed to create rc fn for symbol {:?}", sym);
     }

@@ -24,7 +24,7 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    self, basic_type_from_builtin, basic_type_from_layout, basic_type_from_layout_1,
+    self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
     block_of_memory_slices,
 };
 use crate::llvm::refcounting::{
@@ -794,11 +794,13 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             _ => panic!("Invalid layout for float literal = {:?}", layout),
         },
 
-        Decimal(int) => env
-            .context
-            .i128_type()
-            .const_int(int.0 as u64, false)
-            .into(),
+        Decimal(int) => {
+            let (upper_bits, lower_bits) = int.as_bits();
+            env.context
+                .i128_type()
+                .const_int_arbitrary_precision(&[lower_bits, upper_bits as u64])
+                .into()
+        }
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
@@ -1125,6 +1127,30 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_id,
             ..
         } => build_tag(env, scope, union_layout, *tag_id, arguments, None, parent),
+
+        ExprBox { symbol } => {
+            let (value, layout) = load_symbol_and_layout(scope, symbol);
+            let basic_type = basic_type_from_layout(env, layout);
+            let allocation = reserve_with_refcount_help(
+                env,
+                basic_type,
+                layout.stack_size(env.target_info),
+                layout.alignment_bytes(env.target_info),
+            );
+
+            env.builder.build_store(allocation, value);
+
+            allocation.into()
+        }
+
+        ExprUnbox { symbol } => {
+            let value = load_symbol(scope, symbol);
+
+            debug_assert!(value.is_pointer_value());
+
+            env.builder
+                .build_load(value.into_pointer_value(), "load_boxed_value")
+        }
 
         Reset { symbol, .. } => {
             let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
@@ -1824,7 +1850,7 @@ pub fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
     let masked = env.builder.build_and(as_int, mask_intval, "mask");
 
     env.builder
-        .build_int_cast(masked, env.context.i8_type(), "to_u8")
+        .build_int_cast_sign_flag(masked, env.context.i8_type(), false, "to_u8")
 }
 
 pub fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
@@ -2579,6 +2605,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         let align_bytes = layout.alignment_bytes(env.target_info);
 
                         if align_bytes > 0 {
+                            debug_assert!(value.is_pointer_value(), "{:?}\n{:?}", value, layout);
                             let value_ptr = value.into_pointer_value();
 
                             // We can only do this if the function itself writes data into this
@@ -4223,7 +4250,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
     for (layout, _) in args.iter() {
-        let arg_type = basic_type_from_layout_1(env, layout);
+        let arg_type = argument_type_from_layout(env, layout);
 
         arg_basic_types.push(arg_type);
     }
@@ -5916,8 +5943,11 @@ fn run_low_level<'a, 'ctx, 'env>(
             let arg = load_symbol(scope, &args[0]).into_int_value();
 
             let to = basic_type_from_layout(env, layout).into_int_type();
+            let to_signed = intwidth_from_layout(*layout).is_signed();
 
-            env.builder.build_int_cast(arg, to, "inc_cast").into()
+            env.builder
+                .build_int_cast_sign_flag(arg, to, to_signed, "inc_cast")
+                .into()
         }
         Eq => {
             debug_assert_eq!(args.len(), 2);
@@ -6141,6 +6171,10 @@ fn run_low_level<'a, 'ctx, 'env>(
         | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
         | ListAny | ListAll | ListFindUnsafe | DictWalk => {
             unreachable!("these are higher order, and are handled elsewhere")
+        }
+
+        BoxExpr | UnboxExpr => {
+            unreachable!("The {:?} operation is turned into mono Expr", op)
         }
 
         PtrCast | RefCountInc | RefCountDec => {
@@ -6524,7 +6558,13 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
         NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
-        NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
+        NumRemUnchecked => {
+            if int_width.is_signed() {
+                bd.build_int_signed_rem(lhs, rhs, "rem_int").into()
+            } else {
+                bd.build_int_unsigned_rem(lhs, rhs, "rem_uint").into()
+            }
+        }
         NumIsMultipleOf => {
             // this builds the following construct
             //
@@ -6598,7 +6638,13 @@ fn build_int_binop<'a, 'ctx, 'env>(
             &[lhs.into(), rhs.into()],
             &bitcode::NUM_POW_INT[int_width],
         ),
-        NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
+        NumDivUnchecked => {
+            if int_width.is_signed() {
+                bd.build_int_signed_div(lhs, rhs, "div_int").into()
+            } else {
+                bd.build_int_unsigned_div(lhs, rhs, "div_uint").into()
+            }
+        }
         NumDivCeilUnchecked => call_bitcode_fn(
             env,
             &[lhs.into(), rhs.into()],
@@ -6615,12 +6661,12 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumShiftRightBy => {
             // NOTE arguments are flipped;
-            bd.build_right_shift(rhs, lhs, false, "int_shift_right")
+            bd.build_right_shift(rhs, lhs, true, "int_shift_right")
                 .into()
         }
         NumShiftRightZfBy => {
             // NOTE arguments are flipped;
-            bd.build_right_shift(rhs, lhs, true, "int_shift_right_zf")
+            bd.build_right_shift(rhs, lhs, false, "int_shift_right_zf")
                 .into()
         }
 
@@ -7021,7 +7067,12 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 let target_int_type = convert::int_type_from_int_width(env, target_int_width);
                 let target_int_val: BasicValueEnum<'ctx> = env
                     .builder
-                    .build_int_cast(arg, target_int_type, "int_cast")
+                    .build_int_cast_sign_flag(
+                        arg,
+                        target_int_type,
+                        target_int_width.is_signed(),
+                        "int_cast",
+                    )
                     .into();
 
                 let return_type =

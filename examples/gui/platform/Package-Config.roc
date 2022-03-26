@@ -1,4 +1,4 @@
-platform "examples/hello-world"
+platform "gui"
     requires {} { program : Program State }
     exposes []
     packages {}

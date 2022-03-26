@@ -610,7 +610,10 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftRightBy => {
-                self.load_args(backend);
+                backend.storage.load_symbols(
+                    &mut backend.code_builder,
+                    &[self.arguments[1], self.arguments[0]],
+                );
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => backend.code_builder.i32_shr_s(),
                     I64 => backend.code_builder.i64_shr_s(),
@@ -619,7 +622,10 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftRightZfBy => {
-                self.load_args(backend);
+                backend.storage.load_symbols(
+                    &mut backend.code_builder,
+                    &[self.arguments[1], self.arguments[0]],
+                );
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => backend.code_builder.i32_shr_u(),
                     I64 => backend.code_builder.i64_shr_u(),
@@ -682,6 +688,10 @@ impl<'a> LowLevelCall<'a> {
             Hash => todo!("{:?}", self.lowlevel),
 
             Eq | NotEq => self.eq_or_neq(backend),
+
+            BoxExpr | UnboxExpr => {
+                unreachable!("The {:?} operation is turned into mono Expr", self.lowlevel)
+            }
         }
     }
 
@@ -741,6 +751,8 @@ impl<'a> LowLevelCall<'a> {
                     backend.code_builder.i32_eqz();
                 }
             }
+
+            Layout::Boxed(_) => todo!(),
 
             Layout::RecursivePointer => {
                 internal_error!(

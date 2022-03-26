@@ -5,6 +5,7 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
+use roc_types::types::AliasKind;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CycleEntry {
@@ -42,6 +43,12 @@ pub enum Problem {
         typ: Symbol,
         variable_region: Region,
         variable_name: Lowercase,
+    },
+    UnboundTypeVariable {
+        typ: Symbol,
+        num_unbound: usize,
+        one_occurrence: Region,
+        kind: AliasKind,
     },
     DuplicateRecordFieldValue {
         field_name: Lowercase,
@@ -84,6 +91,16 @@ pub enum Problem {
         def_region: Region,
         differing_recursion_region: Region,
     },
+    InvalidExtensionType {
+        region: Region,
+        kind: ExtensionTypeKind,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExtensionTypeKind {
+    Record,
+    TagUnion,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -3,15 +3,14 @@ use crate::annotation::IntroducedVariables;
 use crate::env::Env;
 use crate::expr::ClosureData;
 use crate::expr::Expr::{self, *};
-use crate::expr::{
-    canonicalize_expr, local_successors, references_from_call, references_from_local, Output,
-    Recursive,
-};
+use crate::expr::{canonicalize_expr, local_successors_with_duplicates, Output, Recursive};
 use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::Scope;
-use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::ImSet;
+use roc_collections::all::{default_hasher, ImEntry, ImMap, MutMap, MutSet, SendMap};
+use roc_error_macros::todo_abilities;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -21,6 +20,7 @@ use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AliasKind;
+use roc_types::types::LambdaSet;
 use roc_types::types::{Alias, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -286,35 +286,65 @@ pub fn canonicalize_defs<'a>(
 
         // Record all the annotation's references in output.references.lookups
         for symbol in can_ann.references {
-            output.references.lookups.insert(symbol);
+            output.references.type_lookups.insert(symbol);
             output.references.referenced_type_defs.insert(symbol);
         }
 
         let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
         let mut is_phantom = false;
 
+        let mut named = can_ann.introduced_variables.named;
         for loc_lowercase in vars.iter() {
-            if let Some(var) = can_ann
-                .introduced_variables
-                .var_by_name(&loc_lowercase.value)
-            {
-                // This is a valid lowercase rigid var for the type def.
-                can_vars.push(Loc {
-                    value: (loc_lowercase.value.clone(), *var),
-                    region: loc_lowercase.region,
-                });
-            } else {
-                is_phantom = true;
+            match named.iter().position(|nv| nv.name == loc_lowercase.value) {
+                Some(index) => {
+                    // This is a valid lowercase rigid var for the type def.
+                    let named_variable = named.swap_remove(index);
 
-                env.problems.push(Problem::PhantomTypeArgument {
-                    typ: symbol,
-                    variable_region: loc_lowercase.region,
-                    variable_name: loc_lowercase.value.clone(),
-                });
+                    can_vars.push(Loc {
+                        value: (named_variable.name, named_variable.variable),
+                        region: loc_lowercase.region,
+                    });
+                }
+                None => {
+                    is_phantom = true;
+
+                    env.problems.push(Problem::PhantomTypeArgument {
+                        typ: symbol,
+                        variable_region: loc_lowercase.region,
+                        variable_name: loc_lowercase.value.clone(),
+                    });
+                }
             }
         }
 
         if is_phantom {
+            // Bail out
+            continue;
+        }
+
+        let IntroducedVariables {
+            wildcards,
+            inferred,
+            ..
+        } = can_ann.introduced_variables;
+        let num_unbound = named.len() + wildcards.len() + inferred.len();
+        if num_unbound > 0 {
+            let one_occurrence = named
+                .iter()
+                .map(|nv| Loc::at(nv.first_seen, nv.variable))
+                .chain(wildcards)
+                .chain(inferred)
+                .next()
+                .unwrap()
+                .region;
+
+            env.problems.push(Problem::UnboundTypeVariable {
+                typ: symbol,
+                num_unbound,
+                one_occurrence,
+                kind,
+            });
+
             // Bail out
             continue;
         }
@@ -331,7 +361,7 @@ pub fn canonicalize_defs<'a>(
 
     // Now that we know the alias dependency graph, we can try to insert recursion variables
     // where aliases are recursive tag unions, or detect illegal recursions.
-    let mut aliases = correct_mutual_recursive_type_alias(env, &aliases, var_store);
+    let mut aliases = correct_mutual_recursive_type_alias(env, aliases, var_store);
     for (symbol, alias) in aliases.iter() {
         scope.add_alias(
             *symbol,
@@ -383,7 +413,8 @@ pub fn canonicalize_defs<'a>(
         CanDefs {
             refs_by_symbol,
             can_defs_by_symbol,
-            aliases,
+            // The result needs a thread-safe `SendMap`
+            aliases: aliases.into_iter().collect(),
         },
         scope,
         output,
@@ -407,48 +438,10 @@ pub fn sort_can_defs(
         output.aliases.insert(symbol, alias);
     }
 
-    // Determine the full set of references by traversing the graph.
-    let mut visited_symbols = MutSet::default();
-    let returned_lookups = ImSet::clone(&output.references.lookups);
-
-    // Start with the return expression's referenced locals. They're the only ones that count!
-    //
-    // If I have two defs which reference each other, but neither of them is referenced
-    // in the return expression, I don't want either of them (or their references) to end up
-    // in the final output.references. They were unused, and so were their references!
-    //
-    // The reason we need a graph here is so we don't overlook transitive dependencies.
-    // For example, if I have `a = b + 1` and the def returns `a + 1`, then the
-    // def as a whole references both `a` *and* `b`, even though it doesn't
-    // directly mention `b` - because `a` depends on `b`. If we didn't traverse a graph here,
-    // we'd erroneously give a warning that `b` was unused since it wasn't directly referenced.
-    for symbol in returned_lookups.into_iter() {
-        // We only care about local symbols in this analysis.
-        if symbol.module_id() == env.home {
-            // Traverse the graph and look up *all* the references for this local symbol.
-            let refs =
-                references_from_local(symbol, &mut visited_symbols, &refs_by_symbol, &env.closures);
-
-            output.references = output.references.union(refs);
-        }
-    }
-
-    for symbol in ImSet::clone(&output.references.calls).into_iter() {
-        // Traverse the graph and look up *all* the references for this call.
-        // Reuse the same visited_symbols as before; if we already visited it,
-        // we won't learn anything new from visiting it again!
-        let refs =
-            references_from_call(symbol, &mut visited_symbols, &refs_by_symbol, &env.closures);
-
-        output.references = output.references.union(refs);
-    }
-
     let mut defined_symbols: Vec<Symbol> = Vec::new();
-    let mut defined_symbols_set: ImSet<Symbol> = ImSet::default();
 
     for symbol in can_defs_by_symbol.keys() {
         defined_symbols.push(*symbol);
-        defined_symbols_set.insert(*symbol);
     }
 
     // Use topological sort to reorder the defs based on their dependencies to one another.
@@ -458,7 +451,7 @@ pub fn sort_can_defs(
     // recursive definitions.
 
     // All successors that occur in the body of a symbol.
-    let all_successors_without_self = |symbol: &Symbol| -> ImSet<Symbol> {
+    let all_successors_without_self = |symbol: &Symbol| -> Vec<Symbol> {
         // This may not be in refs_by_symbol. For example, the `f` in `f x` here:
         //
         // f = \z -> z
@@ -479,28 +472,31 @@ pub fn sort_can_defs(
                 //
                 // In the above example, `f` cannot reference `a`, and in the closure
                 // a call to `f` cannot cycle back to `a`.
-                let mut loc_succ = local_successors(references, &env.closures);
+                let mut loc_succ = local_successors_with_duplicates(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
-                if let Some(References { lookups, .. }) = env.closures.get(symbol) {
+                if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
                     let home = env.home;
 
-                    for lookup in lookups {
+                    for lookup in value_lookups {
                         if lookup != symbol && lookup.module_id() == home {
                             // DO NOT register a self-call behind a lambda!
                             //
                             // We allow `boom = \_ -> boom {}`, but not `x = x`
-                            loc_succ.insert(*lookup);
+                            loc_succ.push(*lookup);
                         }
                     }
                 }
 
                 // remove anything that is not defined in the current block
-                loc_succ.retain(|key| defined_symbols_set.contains(key));
+                loc_succ.retain(|key| defined_symbols.contains(key));
+
+                loc_succ.sort();
+                loc_succ.dedup();
 
                 loc_succ
             }
-            None => ImSet::default(),
+            None => vec![],
         }
     };
 
@@ -508,7 +504,7 @@ pub fn sort_can_defs(
     // This is required to determine whether a symbol is recursive. Recursive symbols
     // (that are not faulty) always need a DeclareRec, even if there is just one symbol in the
     // group
-    let mut all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
+    let mut all_successors_with_self = |symbol: &Symbol| -> Vec<Symbol> {
         // This may not be in refs_by_symbol. For example, the `f` in `f x` here:
         //
         // f = \z -> z
@@ -529,42 +525,48 @@ pub fn sort_can_defs(
                 //
                 // In the above example, `f` cannot reference `a`, and in the closure
                 // a call to `f` cannot cycle back to `a`.
-                let mut loc_succ = local_successors(references, &env.closures);
+                let mut loc_succ = local_successors_with_duplicates(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
-                if let Some(References { lookups, .. }) = env.closures.get(symbol) {
-                    for lookup in lookups {
-                        loc_succ.insert(*lookup);
+                if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
+                    for lookup in value_lookups {
+                        loc_succ.push(*lookup);
                     }
                 }
 
                 // remove anything that is not defined in the current block
-                loc_succ.retain(|key| defined_symbols_set.contains(key));
+                loc_succ.retain(|key| defined_symbols.contains(key));
+
+                loc_succ.sort();
+                loc_succ.dedup();
 
                 loc_succ
             }
-            None => ImSet::default(),
+            None => vec![],
         }
     };
 
     // If a symbol is a direct successor of itself, there is an invalid cycle.
     // The difference with the function above is that this one does not look behind lambdas,
     // but does consider direct self-recursion.
-    let direct_successors = |symbol: &Symbol| -> ImSet<Symbol> {
+    let direct_successors = |symbol: &Symbol| -> Vec<Symbol> {
         match refs_by_symbol.get(symbol) {
             Some((_, references)) => {
-                let mut loc_succ = local_successors(references, &env.closures);
+                let mut loc_succ = local_successors_with_duplicates(references, &env.closures);
 
                 // NOTE: if the symbol is a closure we DONT look into its body
 
                 // remove anything that is not defined in the current block
-                loc_succ.retain(|key| defined_symbols_set.contains(key));
+                loc_succ.retain(|key| defined_symbols.contains(key));
 
                 // NOTE: direct recursion does matter here: `x = x` is invalid recursion!
 
+                loc_succ.sort();
+                loc_succ.dedup();
+
                 loc_succ
             }
-            None => ImSet::default(),
+            None => vec![],
         }
     };
 
@@ -738,14 +740,14 @@ pub fn sort_can_defs(
 fn group_to_declaration(
     group: &[Symbol],
     closures: &MutMap<Symbol, References>,
-    successors: &mut dyn FnMut(&Symbol) -> ImSet<Symbol>,
+    successors: &mut dyn FnMut(&Symbol) -> Vec<Symbol>,
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     declarations: &mut Vec<Declaration>,
 ) {
     use Declaration::*;
 
     // We want only successors in the current group, otherwise definitions get duplicated
-    let filtered_successors = |symbol: &Symbol| -> ImSet<Symbol> {
+    let filtered_successors = |symbol: &Symbol| -> Vec<Symbol> {
         let mut result = successors(symbol);
 
         result.retain(|key| group.contains(key));
@@ -864,6 +866,48 @@ fn pattern_to_vars_by_symbol(
     }
 }
 
+fn single_can_def(
+    loc_can_pattern: Loc<Pattern>,
+    loc_can_expr: Loc<Expr>,
+    expr_var: Variable,
+    opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
+    pattern_vars: SendMap<Symbol, Variable>,
+) -> Def {
+    let def_annotation = opt_loc_annotation.map(|loc_annotation| Annotation {
+        signature: loc_annotation.value.typ,
+        introduced_variables: loc_annotation.value.introduced_variables,
+        aliases: loc_annotation.value.aliases,
+        region: loc_annotation.region,
+    });
+
+    Def {
+        expr_var,
+        loc_pattern: loc_can_pattern,
+        loc_expr: Loc {
+            region: loc_can_expr.region,
+            value: loc_can_expr.value,
+        },
+        pattern_vars,
+        annotation: def_annotation,
+    }
+}
+
+fn add_annotation_aliases(
+    type_annotation: &crate::annotation::Annotation,
+    aliases: &mut ImMap<Symbol, Alias>,
+) {
+    for (name, alias) in type_annotation.aliases.iter() {
+        match aliases.entry(*name) {
+            ImEntry::Occupied(_) => {
+                // do nothing
+            }
+            ImEntry::Vacant(vacant) => {
+                vacant.insert(alias.clone());
+            }
+        }
+    }
+}
+
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::cognitive_complexity)]
@@ -875,7 +919,7 @@ fn canonicalize_pending_def<'a>(
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     var_store: &mut VarStore,
     refs_by_symbol: &mut MutMap<Symbol, (Region, References)>,
-    aliases: &mut SendMap<Symbol, Alias>,
+    aliases: &mut ImMap<Symbol, Alias>,
 ) -> Output {
     use PendingDef::*;
 
@@ -887,25 +931,25 @@ fn canonicalize_pending_def<'a>(
         AnnotationOnly(_, loc_can_pattern, loc_ann) => {
             // annotation sans body cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
-            let ann =
+            let type_annotation =
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
 
             // Record all the annotation's references in output.references.lookups
 
-            for symbol in ann.references {
-                output.references.lookups.insert(symbol);
-                output.references.referenced_type_defs.insert(symbol);
+            for symbol in type_annotation.references.iter() {
+                output.references.type_lookups.insert(*symbol);
+                output.references.referenced_type_defs.insert(*symbol);
             }
 
-            aliases.extend(ann.aliases.clone());
+            add_annotation_aliases(&type_annotation, aliases);
 
-            output.introduced_variables.union(&ann.introduced_variables);
+            output
+                .introduced_variables
+                .union(&type_annotation.introduced_variables);
 
             pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
 
-            let typ = ann.typ;
-
-            let arity = typ.arity();
+            let arity = type_annotation.typ.arity();
 
             let problem = match &loc_can_pattern.value {
                 Pattern::Identifier(symbol) => RuntimeError::NoImplementationNamed {
@@ -963,33 +1007,44 @@ fn canonicalize_pending_def<'a>(
                 }
             };
 
-            for (_, (symbol, _)) in scope.idents() {
-                if !vars_by_symbol.contains_key(symbol) {
-                    continue;
-                }
-
-                // We could potentially avoid some clones here by using Rc strategically,
-                // but the total amount of cloning going on here should typically be minimal.
-                can_defs_by_symbol.insert(
-                    *symbol,
-                    Def {
-                        expr_var,
-                        // TODO try to remove this .clone()!
-                        loc_pattern: loc_can_pattern.clone(),
-                        loc_expr: Loc {
-                            region: loc_can_expr.region,
-                            // TODO try to remove this .clone()!
-                            value: loc_can_expr.value.clone(),
-                        },
-                        pattern_vars: vars_by_symbol.clone(),
-                        annotation: Some(Annotation {
-                            signature: typ.clone(),
-                            introduced_variables: output.introduced_variables.clone(),
-                            aliases: ann.aliases.clone(),
-                            region: loc_ann.region,
-                        }),
-                    },
+            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
+                let def = single_can_def(
+                    loc_can_pattern,
+                    loc_can_expr,
+                    expr_var,
+                    Some(Loc::at(loc_ann.region, type_annotation)),
+                    vars_by_symbol.clone(),
                 );
+                can_defs_by_symbol.insert(symbol, def);
+            } else {
+                for (_, (symbol, _)) in scope.idents() {
+                    if !vars_by_symbol.contains_key(symbol) {
+                        continue;
+                    }
+
+                    // We could potentially avoid some clones here by using Rc strategically,
+                    // but the total amount of cloning going on here should typically be minimal.
+                    can_defs_by_symbol.insert(
+                        *symbol,
+                        Def {
+                            expr_var,
+                            // TODO try to remove this .clone()!
+                            loc_pattern: loc_can_pattern.clone(),
+                            loc_expr: Loc {
+                                region: loc_can_expr.region,
+                                // TODO try to remove this .clone()!
+                                value: loc_can_expr.value.clone(),
+                            },
+                            pattern_vars: vars_by_symbol.clone(),
+                            annotation: Some(Annotation {
+                                signature: type_annotation.typ.clone(),
+                                introduced_variables: output.introduced_variables.clone(),
+                                aliases: type_annotation.aliases.clone(),
+                                region: loc_ann.region,
+                            }),
+                        },
+                    );
+                }
             }
         }
 
@@ -998,23 +1053,21 @@ fn canonicalize_pending_def<'a>(
         InvalidAlias { .. } => {
             // invalid aliases and opaques (shadowed, incorrect patterns) get ignored
         }
-        TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
-            let ann =
+        TypedBody(_loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
+            let type_annotation =
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
 
             // Record all the annotation's references in output.references.lookups
-            for symbol in ann.references {
-                output.references.lookups.insert(symbol);
-                output.references.referenced_type_defs.insert(symbol);
+            for symbol in type_annotation.references.iter() {
+                output.references.type_lookups.insert(*symbol);
+                output.references.referenced_type_defs.insert(*symbol);
             }
 
-            let typ = ann.typ;
+            add_annotation_aliases(&type_annotation, aliases);
 
-            for (symbol, alias) in ann.aliases.clone() {
-                aliases.insert(symbol, alias);
-            }
-
-            output.introduced_variables.union(&ann.introduced_variables);
+            output
+                .introduced_variables
+                .union(&type_annotation.introduced_variables);
 
             // bookkeeping for tail-call detection. If we're assigning to an
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
@@ -1041,118 +1094,115 @@ fn canonicalize_pending_def<'a>(
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
 
-            // see below: a closure needs a fresh References!
-            let mut is_closure = false;
-
             // First, make sure we are actually assigning an identifier instead of (for example) a tag.
             //
             // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
             // which also implies it's not a self tail call!
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let (
-                &ast::Pattern::Identifier(_name),
-                &Pattern::Identifier(ref defined_symbol),
-                &Closure(ClosureData {
+            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
+                if let Closure(ClosureData {
                     function_type,
                     closure_type,
                     closure_ext_var,
                     return_type,
-                    name: ref symbol,
+                    name: ref closure_name,
                     ref arguments,
                     loc_body: ref body,
                     ref captured_symbols,
                     ..
-                }),
-            ) = (
-                &loc_pattern.value,
-                &loc_can_pattern.value,
-                &loc_can_expr.value,
-            ) {
-                is_closure = true;
-
-                // Since everywhere in the code it'll be referred to by its defined name,
-                // remove its generated name from the closure map. (We'll re-insert it later.)
-                let references = env.closures.remove(symbol).unwrap_or_else(|| {
-                    panic!(
-                        "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                        symbol, env.closures
-                    )
-                });
-
-                // Re-insert the closure into the map, under its defined name.
-                // closures don't have a name, and therefore pick a fresh symbol. But in this
-                // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
-                // and we want to reference it by that name.
-                env.closures.insert(*defined_symbol, references);
-
-                // The closure is self tail recursive iff it tail calls itself (by defined name).
-                let is_recursive = match can_output.tail_call {
-                    Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
-                    _ => Recursive::NotRecursive,
-                };
-
-                // Recursion doesn't count as referencing. (If it did, all recursive functions
-                // would result in circular def errors!)
-                refs_by_symbol
-                    .entry(*defined_symbol)
-                    .and_modify(|(_, refs)| {
-                        refs.lookups = refs.lookups.without(defined_symbol);
+                }) = loc_can_expr.value
+                {
+                    // Since everywhere in the code it'll be referred to by its defined name,
+                    // remove its generated name from the closure map. (We'll re-insert it later.)
+                    let references = env.closures.remove(closure_name).unwrap_or_else(|| {
+                        panic!(
+                            "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
+                            closure_name, env.closures
+                        )
                     });
 
-                // renamed_closure_def = Some(&defined_symbol);
-                loc_can_expr.value = Closure(ClosureData {
-                    function_type,
-                    closure_type,
-                    closure_ext_var,
-                    return_type,
-                    name: *defined_symbol,
-                    captured_symbols: captured_symbols.clone(),
-                    recursive: is_recursive,
-                    arguments: arguments.clone(),
-                    loc_body: body.clone(),
-                });
-            }
+                    // Re-insert the closure into the map, under its defined name.
+                    // closures don't have a name, and therefore pick a fresh symbol. But in this
+                    // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
+                    // and we want to reference it by that name.
+                    env.closures.insert(symbol, references);
 
-            // Store the referenced locals in the refs_by_symbol map, so we can later figure out
-            // which defined names reference each other.
-            for (_, (symbol, region)) in scope.idents() {
-                if !vars_by_symbol.contains_key(symbol) {
-                    continue;
-                }
+                    // The closure is self tail recursive iff it tail calls itself (by defined name).
+                    let is_recursive = match can_output.tail_call {
+                        Some(tail_symbol) if tail_symbol == symbol => Recursive::TailRecursive,
+                        _ => Recursive::NotRecursive,
+                    };
 
-                let refs =
+                    // Recursion doesn't count as referencing. (If it did, all recursive functions
+                    // would result in circular def errors!)
+                    refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
+                        refs.value_lookups = refs.value_lookups.without(&symbol);
+                    });
+
+                    // renamed_closure_def = Some(&symbol);
+                    loc_can_expr.value = Closure(ClosureData {
+                        function_type,
+                        closure_type,
+                        closure_ext_var,
+                        return_type,
+                        name: symbol,
+                        captured_symbols: captured_symbols.clone(),
+                        recursive: is_recursive,
+                        arguments: arguments.clone(),
+                        loc_body: body.clone(),
+                    });
+
                     // Functions' references don't count in defs.
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
                     // parent commit for the bug this fixed!
-                    if is_closure {
-                        References::new()
-                    } else {
-                        can_output.references.clone()
-                    };
+                    let refs = References::new();
 
-                refs_by_symbol.insert(*symbol, (*region, refs));
+                    refs_by_symbol.insert(symbol, (loc_can_pattern.region, refs));
+                } else {
+                    let refs = can_output.references;
+                    refs_by_symbol.insert(symbol, (loc_ann.region, refs));
+                }
 
-                can_defs_by_symbol.insert(
-                    *symbol,
-                    Def {
-                        expr_var,
-                        // TODO try to remove this .clone()!
-                        loc_pattern: loc_can_pattern.clone(),
-                        loc_expr: Loc {
-                            region: loc_can_expr.region,
-                            // TODO try to remove this .clone()!
-                            value: loc_can_expr.value.clone(),
-                        },
-                        pattern_vars: vars_by_symbol.clone(),
-                        annotation: Some(Annotation {
-                            signature: typ.clone(),
-                            introduced_variables: output.introduced_variables.clone(),
-                            aliases: ann.aliases.clone(),
-                            region: loc_ann.region,
-                        }),
-                    },
+                let def = single_can_def(
+                    loc_can_pattern,
+                    loc_can_expr,
+                    expr_var,
+                    Some(Loc::at(loc_ann.region, type_annotation)),
+                    vars_by_symbol.clone(),
                 );
+                can_defs_by_symbol.insert(symbol, def);
+            } else {
+                for (_, (symbol, region)) in scope.idents() {
+                    if !vars_by_symbol.contains_key(symbol) {
+                        continue;
+                    }
+
+                    let refs = can_output.references.clone();
+
+                    refs_by_symbol.insert(*symbol, (*region, refs));
+
+                    can_defs_by_symbol.insert(
+                        *symbol,
+                        Def {
+                            expr_var,
+                            // TODO try to remove this .clone()!
+                            loc_pattern: loc_can_pattern.clone(),
+                            loc_expr: Loc {
+                                region: loc_can_expr.region,
+                                // TODO try to remove this .clone()!
+                                value: loc_can_expr.value.clone(),
+                            },
+                            pattern_vars: vars_by_symbol.clone(),
+                            annotation: Some(Annotation {
+                                signature: type_annotation.typ.clone(),
+                                introduced_variables: type_annotation.introduced_variables.clone(),
+                                aliases: type_annotation.aliases.clone(),
+                                region: loc_ann.region,
+                            }),
+                        },
+                    );
+                }
             }
         }
         // If we have a pattern, then the def has a body (that is, it's not a
@@ -1184,108 +1234,105 @@ fn canonicalize_pending_def<'a>(
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
 
-            // see below: a closure needs a fresh References!
-            let mut is_closure = false;
-
             // First, make sure we are actually assigning an identifier instead of (for example) a tag.
             //
             // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
             // which also implies it's not a self tail call!
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let (
-                &ast::Pattern::Identifier(_name),
-                &Pattern::Identifier(ref defined_symbol),
-                &Closure(ClosureData {
+            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
+                if let Closure(ClosureData {
                     function_type,
                     closure_type,
                     closure_ext_var,
                     return_type,
-                    name: ref symbol,
+                    name: ref closure_name,
                     ref arguments,
                     loc_body: ref body,
                     ref captured_symbols,
                     ..
-                }),
-            ) = (
-                &loc_pattern.value,
-                &loc_can_pattern.value,
-                &loc_can_expr.value,
-            ) {
-                is_closure = true;
-
-                // Since everywhere in the code it'll be referred to by its defined name,
-                // remove its generated name from the closure map. (We'll re-insert it later.)
-                let references = env.closures.remove(symbol).unwrap_or_else(|| {
-                    panic!(
-                        "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                        symbol, env.closures
-                    )
-                });
-
-                // Re-insert the closure into the map, under its defined name.
-                // closures don't have a name, and therefore pick a fresh symbol. But in this
-                // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
-                // and we want to reference it by that name.
-                env.closures.insert(*defined_symbol, references);
-
-                // The closure is self tail recursive iff it tail calls itself (by defined name).
-                let is_recursive = match can_output.tail_call {
-                    Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
-                    _ => Recursive::NotRecursive,
-                };
-
-                // Recursion doesn't count as referencing. (If it did, all recursive functions
-                // would result in circular def errors!)
-                refs_by_symbol
-                    .entry(*defined_symbol)
-                    .and_modify(|(_, refs)| {
-                        refs.lookups = refs.lookups.without(defined_symbol);
+                }) = loc_can_expr.value
+                {
+                    // Since everywhere in the code it'll be referred to by its defined name,
+                    // remove its generated name from the closure map. (We'll re-insert it later.)
+                    let references = env.closures.remove(closure_name).unwrap_or_else(|| {
+                        panic!(
+                            "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
+                            closure_name, env.closures
+                        )
                     });
 
-                loc_can_expr.value = Closure(ClosureData {
-                    function_type,
-                    closure_type,
-                    closure_ext_var,
-                    return_type,
-                    name: *defined_symbol,
-                    captured_symbols: captured_symbols.clone(),
-                    recursive: is_recursive,
-                    arguments: arguments.clone(),
-                    loc_body: body.clone(),
-                });
-            }
+                    // Re-insert the closure into the map, under its defined name.
+                    // closures don't have a name, and therefore pick a fresh symbol. But in this
+                    // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
+                    // and we want to reference it by that name.
+                    env.closures.insert(symbol, references);
 
-            // Store the referenced locals in the refs_by_symbol map, so we can later figure out
-            // which defined names reference each other.
-            for (symbol, region) in bindings_from_patterns(std::iter::once(&loc_can_pattern)) {
-                let refs =
+                    // The closure is self tail recursive iff it tail calls itself (by defined name).
+                    let is_recursive = match can_output.tail_call {
+                        Some(tail_symbol) if tail_symbol == symbol => Recursive::TailRecursive,
+                        _ => Recursive::NotRecursive,
+                    };
+
+                    // Recursion doesn't count as referencing. (If it did, all recursive functions
+                    // would result in circular def errors!)
+                    refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
+                        refs.value_lookups = refs.value_lookups.without(&symbol);
+                    });
+
+                    loc_can_expr.value = Closure(ClosureData {
+                        function_type,
+                        closure_type,
+                        closure_ext_var,
+                        return_type,
+                        name: symbol,
+                        captured_symbols: captured_symbols.clone(),
+                        recursive: is_recursive,
+                        arguments: arguments.clone(),
+                        loc_body: body.clone(),
+                    });
+
                     // Functions' references don't count in defs.
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
                     // parent commit for the bug this fixed!
-                    if is_closure {
-                        References::new()
-                    } else {
-                        can_output.references.clone()
-                    };
+                    let refs = References::new();
+                    refs_by_symbol.insert(symbol, (loc_pattern.region, refs));
+                } else {
+                    let refs = can_output.references.clone();
+                    refs_by_symbol.insert(symbol, (loc_pattern.region, refs));
+                }
 
-                refs_by_symbol.insert(symbol, (region, refs));
-
-                can_defs_by_symbol.insert(
-                    symbol,
-                    Def {
-                        expr_var,
-                        // TODO try to remove this .clone()!
-                        loc_pattern: loc_can_pattern.clone(),
-                        loc_expr: Loc {
-                            // TODO try to remove this .clone()!
-                            region: loc_can_expr.region,
-                            value: loc_can_expr.value.clone(),
-                        },
-                        pattern_vars: vars_by_symbol.clone(),
-                        annotation: None,
-                    },
+                let def = single_can_def(
+                    loc_can_pattern,
+                    loc_can_expr,
+                    expr_var,
+                    None,
+                    vars_by_symbol.clone(),
                 );
+                can_defs_by_symbol.insert(symbol, def);
+            } else {
+                // Store the referenced locals in the refs_by_symbol map, so we can later figure out
+                // which defined names reference each other.
+                for (symbol, region) in bindings_from_patterns(std::iter::once(&loc_can_pattern)) {
+                    let refs = can_output.references.clone();
+                    refs_by_symbol.insert(symbol, (region, refs));
+
+                    can_defs_by_symbol.insert(
+                        symbol,
+                        Def {
+                            expr_var,
+                            // TODO try to remove this .clone()!
+                            loc_pattern: loc_can_pattern.clone(),
+                            loc_expr: Loc {
+                                // TODO try to remove this .clone()!
+                                region: loc_can_expr.region,
+                                value: loc_can_expr.value.clone(),
+                            },
+                            pattern_vars: vars_by_symbol.clone(),
+                            annotation: None,
+                        },
+                    );
+                }
             }
 
             output.union(can_output);
@@ -1325,7 +1372,8 @@ pub fn can_defs_with_return<'a>(
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
     for (symbol, region) in symbols_introduced {
-        if !output.references.has_lookup(symbol) {
+        if !output.references.has_value_lookup(symbol) && !output.references.has_type_lookup(symbol)
+        {
             env.problem(Problem::UnusedDef(symbol, region));
         }
     }
@@ -1556,6 +1604,8 @@ fn to_pending_def<'a>(
             }
         }
 
+        Ability { .. } => todo_abilities!(),
+
         Expect(_condition) => todo!(),
 
         SpaceBefore(sub_def, _) | SpaceAfter(sub_def, _) => {
@@ -1594,16 +1644,12 @@ fn pending_typed_body<'a>(
 /// Make aliases recursive
 fn correct_mutual_recursive_type_alias<'a>(
     env: &mut Env<'a>,
-    original_aliases: &SendMap<Symbol, Alias>,
+    mut original_aliases: SendMap<Symbol, Alias>,
     var_store: &mut VarStore,
-) -> SendMap<Symbol, Alias> {
-    let mut symbols_introduced = ImSet::default();
+) -> ImMap<Symbol, Alias> {
+    let symbols_introduced: Vec<Symbol> = original_aliases.keys().copied().collect();
 
-    for (key, _) in original_aliases.iter() {
-        symbols_introduced.insert(*key);
-    }
-
-    let all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
+    let all_successors_with_self = |symbol: &Symbol| -> Vec<Symbol> {
         match original_aliases.get(symbol) {
             Some(alias) => {
                 let mut loc_succ = alias.typ.symbols();
@@ -1612,7 +1658,7 @@ fn correct_mutual_recursive_type_alias<'a>(
 
                 loc_succ
             }
-            None => ImSet::default(),
+            None => vec![],
         }
     };
 
@@ -1620,44 +1666,48 @@ fn correct_mutual_recursive_type_alias<'a>(
     let defined_symbols: Vec<Symbol> = original_aliases.keys().copied().collect();
 
     let cycles = strongly_connected_components(&defined_symbols, all_successors_with_self);
-    let mut solved_aliases = SendMap::default();
+    let mut solved_aliases = ImMap::default();
 
     for cycle in cycles {
         debug_assert!(!cycle.is_empty());
 
-        let mut pending_aliases: SendMap<_, _> = cycle
+        let mut pending_aliases: ImMap<_, _> = cycle
             .iter()
-            .map(|&sym| (sym, original_aliases.get(&sym).unwrap().clone()))
+            .map(|&sym| (sym, original_aliases.remove(&sym).unwrap()))
             .collect();
 
         // Make sure we report only one error for the cycle, not an error for every
         // alias in the cycle.
         let mut can_still_report_error = true;
 
-        for &rec in cycle.iter() {
-            // First, we need to instantiate the alias with any symbols in the currrent module it
-            // depends on.
-            // We only need to worry about symbols in this SCC or any prior one, since the SCCs
-            // were sorted topologically, and we've already instantiated aliases coming from other
-            // modules.
-            let mut to_instantiate: ImMap<_, _> = solved_aliases.clone().into_iter().collect();
-            let mut others_in_scc = Vec::with_capacity(cycle.len() - 1);
-            for &other in cycle.iter() {
-                if rec != other {
-                    others_in_scc.push(other);
-                    if let Some(alias) = original_aliases.get(&other) {
-                        to_instantiate.insert(other, alias.clone());
-                    }
-                }
-            }
+        // We need to instantiate the alias with any symbols in the currrent module it
+        // depends on.
+        // We only need to worry about symbols in this SCC or any prior one, since the SCCs
+        // were sorted topologically, and we've already instantiated aliases coming from other
+        // modules.
+        // NB: ImMap::clone is O(1): https://docs.rs/im/latest/src/im/hash/map.rs.html#1527-1544
+        let mut to_instantiate = solved_aliases.clone().union(pending_aliases.clone());
 
+        for &rec in cycle.iter() {
             let alias = pending_aliases.get_mut(&rec).unwrap();
+            // Don't try to instantiate the alias itself in its definition.
+            let original_alias_def = to_instantiate.remove(&rec).unwrap();
+
+            let mut new_lambda_sets = ImSet::default();
             alias.typ.instantiate_aliases(
                 alias.region,
                 &to_instantiate,
                 var_store,
-                &mut ImSet::default(),
+                &mut new_lambda_sets,
             );
+
+            for lambda_set_var in new_lambda_sets {
+                alias
+                    .lambda_set_variables
+                    .push(LambdaSet(Type::Variable(lambda_set_var)));
+            }
+
+            to_instantiate.insert(rec, original_alias_def);
 
             // Now mark the alias recursive, if it needs to be.
             let is_self_recursive = alias.typ.contains_symbol(rec);
@@ -1721,7 +1771,7 @@ fn make_tag_union_of_alias_recursive<'a>(
         .map(|l| (l.value.0.clone(), Type::Variable(l.value.1)))
         .collect::<Vec<_>>();
 
-    make_tag_union_recursive_help(
+    let made_recursive = make_tag_union_recursive_help(
         env,
         Loc::at(alias.header_region(), (alias_name, &alias_args)),
         alias.region,
@@ -1729,7 +1779,24 @@ fn make_tag_union_of_alias_recursive<'a>(
         &mut alias.typ,
         var_store,
         can_report_error,
-    )
+    );
+
+    match made_recursive {
+        MakeTagUnionRecursive::Cyclic => Ok(()),
+        MakeTagUnionRecursive::MadeRecursive { recursion_variable } => {
+            alias.recursion_variables.clear();
+            alias.recursion_variables.insert(recursion_variable);
+
+            Ok(())
+        }
+        MakeTagUnionRecursive::InvalidRecursion => Err(()),
+    }
+}
+
+enum MakeTagUnionRecursive {
+    Cyclic,
+    MadeRecursive { recursion_variable: Variable },
+    InvalidRecursion,
 }
 
 /// Attempt to make a tag union recursive at the position of `recursive_alias`; for example,
@@ -1761,7 +1828,9 @@ fn make_tag_union_recursive_help<'a>(
     typ: &mut Type,
     var_store: &mut VarStore,
     can_report_error: &mut bool,
-) -> Result<(), ()> {
+) -> MakeTagUnionRecursive {
+    use MakeTagUnionRecursive::*;
+
     let Loc {
         value: (symbol, args),
         region: alias_region,
@@ -1769,15 +1838,17 @@ fn make_tag_union_recursive_help<'a>(
     let vars = args.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
     match typ {
         Type::TagUnion(tags, ext) => {
-            let rec_var = var_store.fresh();
-            let mut pending_typ = Type::RecursiveTagUnion(rec_var, tags.to_vec(), ext.clone());
+            let recursion_variable = var_store.fresh();
+            let mut pending_typ =
+                Type::RecursiveTagUnion(recursion_variable, tags.to_vec(), ext.clone());
             let substitution_result =
-                pending_typ.substitute_alias(symbol, &vars, &Type::Variable(rec_var));
+                pending_typ.substitute_alias(symbol, &vars, &Type::Variable(recursion_variable));
             match substitution_result {
                 Ok(()) => {
                     // We can substitute the alias presence for the variable exactly.
                     *typ = pending_typ;
-                    Ok(())
+
+                    MadeRecursive { recursion_variable }
                 }
                 Err(differing_recursion_region) => {
                     env.problems.push(Problem::NestedDatatype {
@@ -1785,11 +1856,14 @@ fn make_tag_union_recursive_help<'a>(
                         def_region: alias_region,
                         differing_recursion_region,
                     });
-                    Err(())
+
+                    InvalidRecursion
                 }
             }
         }
-        Type::RecursiveTagUnion(_, _, _) => Ok(()),
+        Type::RecursiveTagUnion(recursion_variable, _, _) => MadeRecursive {
+            recursion_variable: *recursion_variable,
+        },
         Type::Alias {
             actual,
             type_arguments,
@@ -1807,7 +1881,7 @@ fn make_tag_union_recursive_help<'a>(
             mark_cyclic_alias(env, typ, symbol, region, others, *can_report_error);
             *can_report_error = false;
 
-            Ok(())
+            Cyclic
         }
     }
 }

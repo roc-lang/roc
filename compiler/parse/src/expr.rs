@@ -1,5 +1,5 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Pattern, Spaceable,
+    AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Has, Pattern, Spaceable,
     TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{space0_after_e, space0_around_ee, space0_before_e, space0_e};
@@ -1071,6 +1071,187 @@ fn finish_parsing_alias_or_opaque<'a>(
     parse_defs_expr(options, start_column, def_state, arena, state)
 }
 
+mod ability {
+    use super::*;
+    use crate::{
+        ast::{AbilityDemand, Spaceable, Spaced},
+        parser::EAbility,
+    };
+
+    /// Parses a single ability demand line; see `parse_demand`.
+    fn parse_demand_help<'a>(
+        start_column: u32,
+    ) -> impl Parser<'a, AbilityDemand<'a>, EAbility<'a>> {
+        map!(
+            and!(
+                specialize(|_, pos| EAbility::DemandName(pos), loc!(lowercase_ident())),
+                skip_first!(
+                    and!(
+                        // TODO: do we get anything from picking up spaces here?
+                        space0_e(start_column, EAbility::DemandName),
+                        word1(b':', EAbility::DemandColon)
+                    ),
+                    specialize(
+                        EAbility::Type,
+                        // Require the type to be more indented than the name
+                        type_annotation::located_help(start_column + 1, true)
+                    )
+                )
+            ),
+            |(name, typ): (Loc<&'a str>, Loc<TypeAnnotation<'a>>)| {
+                AbilityDemand {
+                    name: name.map_owned(Spaced::Item),
+                    typ,
+                }
+            }
+        )
+    }
+
+    pub enum IndentLevel {
+        PendingMin(u32),
+        Exact(u32),
+    }
+
+    /// Parses an ability demand like `hash : a -> U64 | a has Hash`, in the context of a larger
+    /// ability definition.
+    /// This is basically the same as parsing a free-floating annotation, but with stricter rules.
+    pub fn parse_demand<'a>(
+        indent: IndentLevel,
+    ) -> impl Parser<'a, (u32, AbilityDemand<'a>), EAbility<'a>> {
+        move |arena, state: State<'a>| {
+            let initial = state.clone();
+
+            // Put no restrictions on the indent after the spaces; we'll check it manually.
+            match space0_e(0, EAbility::DemandName).parse(arena, state) {
+                Err((MadeProgress, fail, _)) => Err((NoProgress, fail, initial)),
+                Err((NoProgress, fail, _)) => Err((NoProgress, fail, initial)),
+
+                Ok((_progress, spaces, state)) => {
+                    match indent {
+                        IndentLevel::PendingMin(min_indent) if state.column() < min_indent => {
+                            let indent_difference = state.column() as i32 - min_indent as i32;
+                            Err((
+                                MadeProgress,
+                                EAbility::DemandAlignment(indent_difference, state.pos()),
+                                initial,
+                            ))
+                        }
+                        IndentLevel::Exact(wanted) if state.column() < wanted => {
+                            // This demand is not indented correctly
+                            let indent_difference = state.column() as i32 - wanted as i32;
+                            Err((
+                                // Rollback because the deindent may be because there is a next
+                                // expression
+                                NoProgress,
+                                EAbility::DemandAlignment(indent_difference, state.pos()),
+                                initial,
+                            ))
+                        }
+                        IndentLevel::Exact(wanted) if state.column() > wanted => {
+                            // This demand is not indented correctly
+                            let indent_difference = state.column() as i32 - wanted as i32;
+                            Err((
+                                MadeProgress,
+                                EAbility::DemandAlignment(indent_difference, state.pos()),
+                                initial,
+                            ))
+                        }
+                        _ => {
+                            let indent_column = state.column();
+
+                            let parser = parse_demand_help(indent_column);
+
+                            match parser.parse(arena, state) {
+                                Err((MadeProgress, fail, state)) => {
+                                    Err((MadeProgress, fail, state))
+                                }
+                                Err((NoProgress, fail, _)) => {
+                                    // We made progress relative to the entire ability definition,
+                                    // so this is an error.
+                                    Err((MadeProgress, fail, initial))
+                                }
+
+                                Ok((_, mut demand, state)) => {
+                                    // Tag spaces onto the parsed demand name
+                                    if !spaces.is_empty() {
+                                        demand.name = arena
+                                            .alloc(demand.name.value)
+                                            .with_spaces_before(spaces, demand.name.region);
+                                    }
+
+                                    Ok((MadeProgress, (indent_column, demand), state))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn finish_parsing_ability<'a>(
+    start_column: u32,
+    options: ExprParseOptions,
+    name: Loc<&'a str>,
+    args: &'a [Loc<Pattern<'a>>],
+    loc_has: Loc<Has<'a>>,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let mut demands = Vec::with_capacity_in(2, arena);
+
+    let min_indent_for_demand = start_column + 1;
+
+    // Parse the first demand. This will determine the indentation level all the
+    // other demands must observe.
+    let (_, (demand_indent_level, first_demand), mut state) =
+        ability::parse_demand(ability::IndentLevel::PendingMin(min_indent_for_demand))
+            .parse(arena, state)
+            .map_err(|(progress, err, state)| {
+                (progress, EExpr::Ability(err, state.pos()), state)
+            })?;
+    demands.push(first_demand);
+
+    let demand_indent = ability::IndentLevel::Exact(demand_indent_level);
+    let demand_parser = ability::parse_demand(demand_indent);
+
+    loop {
+        match demand_parser.parse(arena, state.clone()) {
+            Ok((_, (_indent, demand), next_state)) => {
+                state = next_state;
+                demands.push(demand);
+            }
+            Err((MadeProgress, problem, old_state)) => {
+                return Err((
+                    MadeProgress,
+                    EExpr::Ability(problem, old_state.pos()),
+                    old_state,
+                ));
+            }
+            Err((NoProgress, _, old_state)) => {
+                state = old_state;
+                break;
+            }
+        }
+    }
+
+    let def_region = Region::span_across(&name.region, &demands.last().unwrap().typ.region);
+    let def = Def::Ability {
+        header: TypeHeader { name, vars: args },
+        loc_has,
+        demands: demands.into_bump_slice(),
+    };
+    let loc_def = &*(arena.alloc(Loc::at(def_region, def)));
+
+    let def_state = DefState {
+        defs: bumpalo::vec![in arena; loc_def],
+        spaces_after: &[],
+    };
+
+    parse_defs_expr(options, start_column, def_state, arena, state)
+}
+
 fn parse_expr_operator<'a>(
     min_indent: u32,
     options: ExprParseOptions,
@@ -1290,6 +1471,62 @@ fn parse_expr_end<'a>(
 
     match parser.parse(arena, state.clone()) {
         Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
+        Ok((
+            _,
+            has @ Loc {
+                value:
+                    Expr::Var {
+                        module_name: "",
+                        ident: "has",
+                    },
+                ..
+            },
+            state,
+        )) if matches!(expr_state.expr.value, Expr::GlobalTag(..)) => {
+            // This is an ability definition, `Ability arg1 ... has ...`.
+
+            let name = expr_state.expr.map_owned(|e| match e {
+                Expr::GlobalTag(name) => name,
+                _ => unreachable!(),
+            });
+
+            let mut arguments = Vec::with_capacity_in(expr_state.arguments.len(), arena);
+            for argument in expr_state.arguments {
+                match expr_to_pattern_help(arena, &argument.value) {
+                    Ok(good) => {
+                        arguments.push(Loc::at(argument.region, good));
+                    }
+                    Err(_) => {
+                        let start = argument.region.start();
+                        let err = &*arena.alloc(EPattern::Start(start));
+                        return Err((
+                            MadeProgress,
+                            EExpr::Pattern(err, argument.region.start()),
+                            state,
+                        ));
+                    }
+                }
+            }
+
+            // Attach any spaces to the `has` keyword
+            let has = if !expr_state.spaces_after.is_empty() {
+                arena
+                    .alloc(Has::Has)
+                    .with_spaces_before(expr_state.spaces_after, has.region)
+            } else {
+                Loc::at(has.region, Has::Has)
+            };
+
+            finish_parsing_ability(
+                start_column,
+                options,
+                name,
+                arguments.into_bump_slice(),
+                has,
+                arena,
+                state,
+            )
+        }
         Ok((_, mut arg, state)) => {
             let new_end = state.pos();
 
@@ -1762,6 +1999,7 @@ mod when {
                 ((_, _), _),
                 State<'a>,
             ) = branch_alternatives(min_indent, options, None).parse(arena, state)?;
+
             let original_indent = pattern_indent_level;
 
             state.indent_column = pattern_indent_level;

@@ -994,6 +994,7 @@ fn issue_2588_record_with_function_and_nonfunction() {
     )
 }
 
+#[test]
 fn opaque_apply() {
     expect_success(
         indoc!(
@@ -1034,5 +1035,62 @@ fn opaque_pattern_and_call() {
             "#
         ),
         r#"Package {} A : F {} [ A ]*"#,
+    )
+}
+
+#[test]
+fn dec_in_repl() {
+    expect_success(
+        indoc!(
+            r#"
+            x: Dec
+            x=1.23
+            x
+            "#
+        ),
+        r#"1.23 : Dec"#,
+    )
+}
+
+#[test]
+fn print_i8_issue_2710() {
+    expect_success(
+        indoc!(
+            r#"
+            a : I8
+            a = -1
+            a
+            "#
+        ),
+        r#"-1 : I8"#,
+    )
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn box_box() {
+    expect_success(
+        indoc!(
+            r#"
+            Box.box "container store"
+            "#
+        ),
+        r#"Box.box "container store" : Box Str"#,
+    )
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn box_box_type_alias() {
+    expect_success(
+        indoc!(
+            r#"
+            HeapStr : Box Str
+            helloHeap : HeapStr
+            helloHeap = Box.box "bye stacks"
+            helloHeap
+            "#
+        ),
+        r#"Box.box "bye stacks" : HeapStr"#,
     )
 }

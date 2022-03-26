@@ -43,17 +43,21 @@ section.history {
   margin: 16px 0;
   padding: 8px;
 }
-#history-text .input {
+.history-item {
+  margin-bottom: 24px;
+}
+.history-item .input {
+  margin: 0;
   margin-bottom: 8px;
 }
-#history-text .output {
-  margin-bottom: 16px;
+.history-item .output {
+  margin: 0;
 }
-#history-text .output-ok {
-  color: #0f8;
+.panic {
+  color: red;
 }
-#history-text .output-error {
-  color: #f00;
+.input-line-prefix {
+  color: cyan;
 }
 .code {
   font-family: "Courier New", Courier, monospace;
@@ -64,9 +68,7 @@ section.source {
   display: flex;
   flex-direction: column;
 }
-
 section.source textarea {
-  height: 32px;
   padding: 8px;
   margin-bottom: 16px;
 }

@@ -1,8 +1,11 @@
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
-use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
+use roc_problem::can::{
+    BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
+};
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
+use roc_types::types::AliasKind;
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
@@ -15,6 +18,7 @@ const UNRECOGNIZED_NAME: &str = "UNRECOGNIZED NAME";
 const UNUSED_DEF: &str = "UNUSED DEFINITION";
 const UNUSED_IMPORT: &str = "UNUSED IMPORT";
 const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
+const UNBOUND_TYPE_VARIABLE: &str = "UNBOUND TYPE VARIABLE";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
 const MISSING_DEFINITION: &str = "MISSING DEFINITION";
 const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
@@ -33,6 +37,7 @@ const OPAQUE_NOT_DEFINED: &str = "OPAQUE TYPE NOT DEFINED";
 const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE TYPE DECLARED OUTSIDE SCOPE";
 const OPAQUE_NOT_APPLIED: &str = "OPAQUE TYPE NOT APPLIED";
 const OPAQUE_OVER_APPLIED: &str = "OPAQUE TYPE APPLIED TO TOO MANY ARGS";
+const INVALID_EXTENSION_TYPE: &str = "INVALID_EXTENSION_TYPE";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -247,6 +252,43 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNUSED_ALIAS_PARAM.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::UnboundTypeVariable {
+            typ: alias,
+            num_unbound,
+            one_occurrence,
+            kind,
+        } => {
+            let mut stack = Vec::with_capacity(4);
+            if num_unbound == 1 {
+                stack.push(alloc.concat(vec![
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" has an unbound type variable:"),
+                ]));
+            } else {
+                stack.push(alloc.concat(vec![
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" has "),
+                    alloc.text(format!("{}", num_unbound)),
+                    alloc.reflow(" unbound type variables."),
+                ]));
+                stack.push(alloc.reflow("Here is one occurrence:"));
+            }
+            stack.push(alloc.region(lines.convert_region(one_occurrence)));
+            stack.push(alloc.tip().append(alloc.concat(vec![
+                alloc.reflow("Type variables must be bound before the "),
+                alloc.keyword(match kind {
+                    AliasKind::Structural => ":",
+                    AliasKind::Opaque => ":=",
+                }),
+                alloc.reflow(". Perhaps you intended to add a type parameter to this type?"),
+            ])));
+            doc = alloc.stack(stack);
+
+            title = UNBOUND_TYPE_VARIABLE.to_string();
             severity = Severity::RuntimeError;
         }
         Problem::BadRecursion(entries) => {
@@ -490,6 +532,34 @@ pub fn can_problem<'b>(
             ]);
 
             title = NESTED_DATATYPE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::InvalidExtensionType { region, kind } => {
+            let (kind_str, can_only_contain) = match kind {
+                ExtensionTypeKind::Record => ("record", "a type variable or another record"),
+                ExtensionTypeKind::TagUnion => {
+                    ("tag union", "a type variable or another tag union")
+                }
+            };
+
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This "),
+                    alloc.text(kind_str),
+                    alloc.reflow(" extension type is invalid:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat(vec![
+                    alloc.note("A "),
+                    alloc.reflow(kind_str),
+                    alloc.reflow(" extension variable can only contain "),
+                    alloc.reflow(can_only_contain),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            title = INVALID_EXTENSION_TYPE.to_string();
             severity = Severity::RuntimeError;
         }
     };

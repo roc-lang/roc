@@ -29,6 +29,7 @@ enum HelperOp {
     Inc,
     Dec,
     DecRef(JoinPointId),
+    Reset,
     Eq,
 }
 
@@ -76,17 +77,24 @@ pub struct CodeGenHelp<'a> {
     home: ModuleId,
     target_info: TargetInfo,
     layout_isize: Layout<'a>,
+    union_refcount: UnionLayout<'a>,
     specializations: Vec<'a, Specialization<'a>>,
     debug_recursion_depth: usize,
 }
 
 impl<'a> CodeGenHelp<'a> {
     pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
+        let layout_isize = Layout::usize(target_info);
+
+        // Refcount is a boxed isize. TODO: use the new Box layout when dev backends support it
+        let union_refcount = UnionLayout::NonNullableUnwrapped(arena.alloc([layout_isize]));
+
         CodeGenHelp {
             arena,
             home,
             target_info,
-            layout_isize: Layout::usize(target_info),
+            layout_isize,
+            union_refcount,
             specializations: Vec::with_capacity_in(16, arena),
             debug_recursion_depth: 0,
         }
@@ -144,6 +152,36 @@ impl<'a> CodeGenHelp<'a> {
         (rc_stmt, ctx.new_linker_data)
     }
 
+    pub fn call_reset_refcount(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        layout: Layout<'a>,
+        argument: Symbol,
+    ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
+        let mut ctx = Context {
+            new_linker_data: Vec::new_in(self.arena),
+            recursive_union: None,
+            op: HelperOp::Reset,
+        };
+
+        let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout);
+
+        let arguments = self.arena.alloc([argument]);
+        let ret_layout = self.arena.alloc(layout);
+        let arg_layouts = self.arena.alloc([layout]);
+        let expr = Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: proc_name,
+                ret_layout,
+                arg_layouts,
+                specialization_id: CallSpecId::BACKEND_DUMMY,
+            },
+            arguments,
+        });
+
+        (expr, ctx.new_linker_data)
+    }
+
     /// Replace a generic `Lowlevel::Eq` call with a specialized helper proc.
     /// The helper procs themselves are to be generated later with `generate_procs`
     pub fn call_specialized_equals(
@@ -197,6 +235,7 @@ impl<'a> CodeGenHelp<'a> {
                 let arg = self.replace_rec_ptr(ctx, layout);
                 match ctx.op {
                     Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([arg])),
+                    Reset => (self.arena.alloc(layout), self.arena.alloc([layout])),
                     Inc => (&LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
                     Eq => (&LAYOUT_BOOL, self.arena.alloc([arg, arg])),
                 }
@@ -262,6 +301,10 @@ impl<'a> CodeGenHelp<'a> {
                 LAYOUT_UNIT,
                 refcount::refcount_generic(self, ident_ids, ctx, layout, Symbol::ARG_1),
             ),
+            Reset => (
+                layout,
+                refcount::refcount_reset_proc_body(self, ident_ids, ctx, layout, Symbol::ARG_1),
+            ),
             Eq => (
                 LAYOUT_BOOL,
                 equality::eq_generic(self, ident_ids, ctx, layout),
@@ -275,7 +318,7 @@ impl<'a> CodeGenHelp<'a> {
                     let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([roc_value, inc_amount])
                 }
-                Dec | DecRef(_) => self.arena.alloc([roc_value]),
+                Dec | DecRef(_) | Reset => self.arena.alloc([roc_value]),
                 Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
             }
         };
@@ -317,6 +360,10 @@ impl<'a> CodeGenHelp<'a> {
             HelperOp::Dec => ProcLayout {
                 arguments: self.arena.alloc([*layout]),
                 result: LAYOUT_UNIT,
+            },
+            HelperOp::Reset => ProcLayout {
+                arguments: self.arena.alloc([*layout]),
+                result: *layout,
             },
             HelperOp::DecRef(_) => unreachable!("No generated Proc for DecRef"),
             HelperOp::Eq => ProcLayout {
@@ -378,7 +425,13 @@ impl<'a> CodeGenHelp<'a> {
                 Layout::Union(UnionLayout::NonRecursive(new_tags.into_bump_slice()))
             }
 
-            Layout::Union(_) => layout,
+            Layout::Union(_) => {
+                // we always fully unroll recursive types. That means tha when we find a
+                // recursive tag union we can replace it with the layout
+                layout
+            }
+
+            Layout::Boxed(inner) => self.replace_rec_ptr(ctx, *inner),
 
             Layout::LambdaSet(lambda_set) => {
                 self.replace_rec_ptr(ctx, lambda_set.runtime_representation())
@@ -476,5 +529,7 @@ fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
         Layout::Union(_) => true,
 
         Layout::LambdaSet(_) | Layout::RecursivePointer => false,
+
+        Layout::Boxed(_) => true,
     }
 }

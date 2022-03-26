@@ -65,7 +65,7 @@ pub fn update_int(
             .get_offset_to_node_id(old_caret_pos, int_mark_node_id)?;
 
         let int_mark_node = ed_model.mark_node_pool.get_mut(int_mark_node_id);
-        let int_ast_node_id = int_mark_node.get_ast_node_id();
+        let int_ast_node_id = ed_model.mark_id_ast_id_map.get(int_mark_node_id)?;
 
         let content_str_mut = int_mark_node.get_content_mut()?;
 

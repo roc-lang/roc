@@ -24,6 +24,16 @@ pub enum MarkError {
         node_type: String,
         backtrace: Backtrace,
     },
+    #[snafu(display(
+        "MarkNodeIdWithoutCorrespondingASTNodeId: MarkupNode with id {} was not found in MarkIdAstIdMap, available keys are: {}.",
+        node_id,
+        keys_str
+    ))]
+    MarkNodeIdWithoutCorrespondingASTNodeId {
+        node_id: MarkNodeId,
+        keys_str: String,
+        backtrace: Backtrace,
+    },
     #[snafu(display("NestedNodeMissingChild: expected to find child with id {} in Nested MarkupNode, but it was missing. Id's of the children are {:?}.", node_id, children_ids))]
     NestedNodeMissingChild {
         node_id: MarkNodeId,

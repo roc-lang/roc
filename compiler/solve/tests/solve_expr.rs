@@ -10,7 +10,6 @@ mod helpers;
 #[cfg(test)]
 mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
-    use roc_collections::all::MutMap;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
     // HELPERS
@@ -33,9 +32,6 @@ mod solve_expr {
 
         let arena = &Bump::new();
 
-        // let stdlib = roc_builtins::unique::uniq_stdlib();
-        let stdlib = roc_builtins::std::standard_stdlib();
-
         let module_src;
         let temp;
         if src.starts_with("app") {
@@ -47,7 +43,7 @@ mod solve_expr {
             module_src = &temp;
         }
 
-        let exposed_types = MutMap::default();
+        let exposed_types = Default::default();
         let loaded = {
             let dir = tempdir()?;
             let filename = PathBuf::from("Test.roc");
@@ -56,10 +52,9 @@ mod solve_expr {
             let mut file = File::create(file_path)?;
             writeln!(file, "{}", module_src)?;
             drop(file);
-            let result = roc_load::file::load_and_typecheck(
+            let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
-                &stdlib,
                 dir.path(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
@@ -72,7 +67,7 @@ mod solve_expr {
 
         let loaded = loaded.expect("failed to load module");
 
-        use roc_load::file::LoadedModule;
+        use roc_load::LoadedModule;
         let LoadedModule {
             module_id: home,
             mut can_problems,
@@ -5263,6 +5258,7 @@ mod solve_expr {
                     toI32: Num.toI32,
                     toI64: Num.toI64,
                     toI128: Num.toI128,
+                    toNat: Num.toNat,
                     toU8: Num.toU8,
                     toU16: Num.toU16,
                     toU32: Num.toU32,
@@ -5271,7 +5267,7 @@ mod solve_expr {
                 }
                 "#
             ),
-            r#"{ toI128 : Int * -> I128, toI16 : Int * -> I16, toI32 : Int * -> I32, toI64 : Int * -> I64, toI8 : Int * -> I8, toU128 : Int * -> U128, toU16 : Int * -> U16, toU32 : Int * -> U32, toU64 : Int * -> U64, toU8 : Int * -> U8 }"#,
+            r#"{ toI128 : Int * -> I128, toI16 : Int * -> I16, toI32 : Int * -> I32, toI64 : Int * -> I64, toI8 : Int * -> I8, toNat : Int * -> Nat, toU128 : Int * -> U128, toU16 : Int * -> U16, toU32 : Int * -> U32, toU64 : Int * -> U64, toU8 : Int * -> U8 }"#,
         )
     }
 
@@ -5507,6 +5503,123 @@ mod solve_expr {
                 "#
             ),
             r#"Id [ A, B, C { a : Str }e ] -> Str"#,
+        )
+    }
+
+    #[test]
+    fn lambda_set_within_alias_is_quantified() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ effectAlways ] to "./platform"
+
+                Effect a : [ @Effect ({} -> a) ]
+
+                effectAlways : a -> Effect a
+                effectAlways = \x ->
+                    inner = \{} -> x
+
+                    @Effect inner
+                "#
+            ),
+            r#"a -> Effect a"#,
+        )
+    }
+
+    #[test]
+    fn generalized_accessor_function_applied() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                returnFoo = .foo
+
+                returnFoo { foo: "foo" }
+                "#
+            ),
+            "Str",
+        )
+    }
+
+    #[test]
+    fn record_extension_variable_is_alias() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Other a b : { y: a, z: b }
+
+                f : { x : Str }(Other Str Str)
+                f
+                "#
+            ),
+            r#"{ x : Str, y : Str, z : Str }"#,
+        )
+    }
+
+    #[test]
+    fn tag_extension_variable_is_alias() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Other : [ B, C ]
+
+                f : [ A ]Other
+                f
+                "#
+            ),
+            r#"[ A, B, C ]"#,
+        )
+    }
+
+    #[test]
+    // https://github.com/rtfeldman/roc/issues/2702
+    fn tag_inclusion_behind_opaque() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Outer k := [ Empty, Wrapped k ]
+
+                insert : Outer k, k -> Outer k
+                insert = \m, var ->
+                    when m is
+                        $Outer Empty -> $Outer (Wrapped var)
+                        $Outer (Wrapped _) -> $Outer (Wrapped var)
+
+                insert
+                "#
+            ),
+            r#"Outer k, k -> Outer k"#,
+        )
+    }
+
+    #[test]
+    fn tag_inclusion_behind_opaque_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Outer k := [ Empty, Wrapped k ]
+
+                when ($Outer Empty) is
+                    $Outer Empty -> $Outer (Wrapped "")
+                    $Outer (Wrapped k) -> $Outer (Wrapped k)
+                "#
+            ),
+            r#"Outer Str"#,
+        )
+    }
+
+    #[test]
+    fn tag_inclusion_behind_opaque_infer_single_ctor() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Outer := [ A, B ]
+
+                when ($Outer A) is
+                    $Outer A -> $Outer A
+                    $Outer B -> $Outer B
+                "#
+            ),
+            r#"Outer"#,
         )
     }
 }

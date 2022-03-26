@@ -1390,7 +1390,7 @@ fn adjust_rank_content(
         Alias(_, args, real_var, _) => {
             let mut rank = Rank::toplevel();
 
-            for var_index in args.variables() {
+            for var_index in args.all_variables() {
                 let var = subs[var_index];
                 rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }
@@ -1548,7 +1548,7 @@ fn instantiate_rigids_help(
         }
 
         Alias(_, args, real_type_var, _) => {
-            for var_index in args.variables() {
+            for var_index in args.all_variables() {
                 let var = subs[var_index];
                 instantiate_rigids_help(subs, max_rank, pools, var);
             }
@@ -1798,9 +1798,9 @@ fn deep_copy_var_help(
         }
 
         Alias(symbol, mut args, real_type_var, kind) => {
-            let mut new_args = Vec::with_capacity(args.variables().len());
+            let mut new_args = Vec::with_capacity(args.all_variables().len());
 
-            for var_index in args.variables() {
+            for var_index in args.all_variables() {
                 let var = subs[var_index];
                 let new_var = deep_copy_var_help(subs, max_rank, pools, var);
                 new_args.push(new_var);

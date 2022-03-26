@@ -112,6 +112,11 @@ pub struct PartialProcs<'a> {
     /// maps a function name (symbol) to an index
     symbols: Vec<'a, Symbol>,
 
+    /// An entry (a, b) means `a` directly references the lambda value of `b`,
+    /// i.e. this came from a `let a = b in ...` where `b` was defined as a
+    /// lambda earlier.
+    references: Vec<'a, (Symbol, Symbol)>,
+
     partial_procs: Vec<'a, PartialProc<'a>>,
 }
 
@@ -119,6 +124,7 @@ impl<'a> PartialProcs<'a> {
     fn new_in(arena: &'a Bump) -> Self {
         Self {
             symbols: Vec::new_in(arena),
+            references: Vec::new_in(arena),
             partial_procs: Vec::new_in(arena),
         }
     }
@@ -126,7 +132,16 @@ impl<'a> PartialProcs<'a> {
         self.symbol_to_id(symbol).is_some()
     }
 
-    fn symbol_to_id(&self, symbol: Symbol) -> Option<PartialProcId> {
+    fn symbol_to_id(&self, mut symbol: Symbol) -> Option<PartialProcId> {
+        while let Some(real_symbol) = self
+            .references
+            .iter()
+            .find(|(alias, _)| *alias == symbol)
+            .map(|(_, real)| real)
+        {
+            symbol = *real_symbol;
+        }
+
         self.symbols
             .iter()
             .position(|s| *s == symbol)
@@ -156,6 +171,21 @@ impl<'a> PartialProcs<'a> {
         self.partial_procs.push(partial_proc);
 
         id
+    }
+
+    pub fn insert_alias(&mut self, alias: Symbol, real_symbol: Symbol) {
+        debug_assert!(
+            !self.contains_key(alias),
+            "{:?} is inserted as a partial proc twice: that's a bug!",
+            alias,
+        );
+        debug_assert!(
+            self.contains_key(real_symbol),
+            "{:?} is not a partial proc or another alias: that's a bug!",
+            real_symbol,
+        );
+
+        self.references.push((alias, real_symbol));
     }
 }
 
@@ -1505,6 +1535,14 @@ pub enum Expr<'a> {
     },
     EmptyArray,
 
+    ExprBox {
+        symbol: Symbol,
+    },
+
+    ExprUnbox {
+        symbol: Symbol,
+    },
+
     Reuse {
         symbol: Symbol,
         update_tag_id: bool,
@@ -1536,8 +1574,7 @@ impl<'a> Literal<'a> {
             Int(lit) => alloc.text(format!("{}i64", lit)),
             U128(lit) => alloc.text(format!("{}u128", lit)),
             Float(lit) => alloc.text(format!("{}f64", lit)),
-            // TODO: Add proper Dec.to_str
-            Decimal(lit) => alloc.text(format!("{}Dec", lit.0)),
+            Decimal(lit) => alloc.text(format!("{}dec", lit)),
             Bool(lit) => alloc.text(format!("{}", lit)),
             Byte(lit) => alloc.text(format!("{}u8", lit)),
             Str(lit) => alloc.text(format!("{:?}", lit)),
@@ -1682,6 +1719,10 @@ impl<'a> Expr<'a> {
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure)),
+
+            ExprBox { symbol, .. } => alloc.text("Box ").append(symbol_to_doc(alloc, *symbol)),
+
+            ExprUnbox { symbol, .. } => alloc.text("Unbox ").append(symbol_to_doc(alloc, *symbol)),
 
             UnionAtIndex {
                 tag_id,
@@ -3882,44 +3923,24 @@ pub fn with_hole<'a>(
             stmt
         }
 
-        Accessor {
-            name,
-            function_var,
-            record_var,
-            closure_ext_var: _,
-            ext_var,
-            field_var,
-            field,
-        } => {
-            // IDEA: convert accessor fromt
-            //
-            // .foo
-            //
-            // into
-            //
-            // (\r -> r.foo)
-            let record_symbol = env.unique_symbol();
-            let body = roc_can::expr::Expr::Access {
-                record_var,
-                ext_var,
-                field_var,
-                loc_expr: Box::new(Loc::at_zero(roc_can::expr::Expr::Var(record_symbol))),
-                field,
-            };
+        Accessor(accessor_data) => {
+            let field_var = accessor_data.field_var;
+            let fresh_record_symbol = env.unique_symbol();
 
-            let loc_body = Loc::at_zero(body);
-
-            let arguments = vec![(
-                record_var,
-                Loc::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
-            )];
+            let ClosureData {
+                name,
+                function_type,
+                arguments,
+                loc_body,
+                ..
+            } = accessor_data.to_closure_data(fresh_record_symbol);
 
             match procs.insert_anonymous(
                 env,
                 name,
-                function_var,
+                function_type,
                 arguments,
-                loc_body,
+                *loc_body,
                 CapturedSymbols::None,
                 field_var,
                 layout_cache,
@@ -3927,7 +3948,7 @@ pub fn with_hole<'a>(
                 Ok(_) => {
                     let raw_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, function_var, env.subs)
+                        layout_cache.raw_from_var(env.arena, function_type, env.subs)
                     );
 
                     match raw_layout {
@@ -4635,6 +4656,18 @@ pub fn with_hole<'a>(
                     debug_assert_eq!(arg_symbols.len(), 2);
                     let xs = arg_symbols[0];
                     match_on_closure_argument!(ListFindUnsafe, [xs])
+                }
+                BoxExpr => {
+                    debug_assert_eq!(arg_symbols.len(), 1);
+                    let x = arg_symbols[0];
+
+                    Stmt::Let(assigned, Expr::ExprBox { symbol: x }, layout, hole)
+                }
+                UnboxExpr => {
+                    debug_assert_eq!(arg_symbols.len(), 1);
+                    let x = arg_symbols[0];
+
+                    Stmt::Let(assigned, Expr::ExprUnbox { symbol: x }, layout, hole)
                 }
                 _ => {
                     let call = self::Call {
@@ -5445,6 +5478,18 @@ pub fn from_can<'a>(
 
                         return from_can(env, variable, cont.value, procs, layout_cache);
                     }
+                    roc_can::expr::Expr::Accessor(accessor_data) => {
+                        let fresh_record_symbol = env.unique_symbol();
+                        register_noncapturing_closure(
+                            env,
+                            procs,
+                            layout_cache,
+                            *symbol,
+                            accessor_data.to_closure_data(fresh_record_symbol),
+                        );
+
+                        return from_can(env, variable, cont.value, procs, layout_cache);
+                    }
                     roc_can::expr::Expr::Var(original) => {
                         // a variable is aliased, e.g.
                         //
@@ -6188,6 +6233,14 @@ fn substitute_in_expr<'a>(
             }
         }
 
+        ExprBox { symbol } => {
+            substitute(subs, *symbol).map(|new_symbol| ExprBox { symbol: new_symbol })
+        }
+
+        ExprUnbox { symbol } => {
+            substitute(subs, *symbol).map(|new_symbol| ExprUnbox { symbol: new_symbol })
+        }
+
         StructAtIndex {
             index,
             structure,
@@ -6657,10 +6710,10 @@ where
     }
 
     // Otherwise we're dealing with an alias to something that doesn't need to be specialized, or
-    // whose usages will already be specialized in the rest of the program. Let's just build the
-    // rest of the program now to get our hole.
-    let mut result = build_rest(env, procs, layout_cache);
+    // whose usages will already be specialized in the rest of the program.
     if procs.is_imported_module_thunk(right) {
+        let result = build_rest(env, procs, layout_cache);
+
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
         add_needed_external(procs, env, variable, right);
@@ -6670,25 +6723,25 @@ where
 
         force_thunk(env, right, layout, left, env.arena.alloc(result))
     } else if env.is_imported_symbol(right) {
+        let result = build_rest(env, procs, layout_cache);
+
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
         add_needed_external(procs, env, variable, right);
 
         // then we must construct its closure; since imported symbols have no closure, we use the empty struct
         let_empty_struct(left, env.arena.alloc(result))
+    } else if procs.partial_procs.contains_key(right) {
+        // This is an alias to a function defined in this module.
+        // Attach the alias, then build the rest of the module, so that we reference and specialize
+        // the correct proc.
+        procs.partial_procs.insert_alias(left, right);
+        build_rest(env, procs, layout_cache)
     } else {
+        // This should be a fully specialized value. Replace the alias with the original symbol.
+        let mut result = build_rest(env, procs, layout_cache);
         substitute_in_exprs(env.arena, &mut result, left, right);
-
-        // if the substituted variable is a function, make sure we specialize it
-        reuse_function_symbol(
-            env,
-            procs,
-            layout_cache,
-            Some(variable),
-            right,
-            result,
-            right,
-        )
+        result
     }
 }
 
@@ -8423,7 +8476,7 @@ pub fn num_argument_to_int_or_float(
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
-            let var = subs[args.variables().into_iter().next().unwrap()];
+            let var = subs[args.all_variables().into_iter().next().unwrap()];
             num_argument_to_int_or_float(subs, target_info, var, false)
         }
 
@@ -8441,7 +8494,7 @@ pub fn num_argument_to_int_or_float(
                     debug_assert!(args.len() == 1);
 
                     // Recurse on the second argument
-                    let var = subs[args.variables().into_iter().next().unwrap()];
+                    let var = subs[args.all_variables().into_iter().next().unwrap()];
                     num_argument_to_int_or_float(subs, target_info, var, true)
                 }
 

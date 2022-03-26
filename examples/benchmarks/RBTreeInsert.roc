@@ -112,4 +112,3 @@ balance = \color, key, value, left, right ->
 
                 _ ->
                     Node color key value left right
-

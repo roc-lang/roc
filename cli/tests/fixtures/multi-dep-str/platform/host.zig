@@ -61,14 +61,14 @@ pub export fn main() i32 {
     // actually call roc to populate the callresult
     const callresult = roc__mainForHost_1_exposed();
 
+    // end time
+    var ts2: std.os.timespec = undefined;
+    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
+
     // stdout the result
     stdout.print("{s}\n", .{callresult.asSlice()}) catch unreachable;
 
     callresult.deinit();
-
-    // end time
-    var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
 
     const delta = to_seconds(ts2) - to_seconds(ts1);
 

@@ -1,10 +1,21 @@
 use std::usize;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct Index<T> {
     index: u32,
     _marker: std::marker::PhantomData<T>,
 }
+
+impl<T> Clone for Index<T> {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index,
+            _marker: self._marker,
+        }
+    }
+}
+
+impl<T> Copy for Index<T> {}
 
 impl<T> std::fmt::Debug for Index<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -33,12 +44,24 @@ impl<T> Index<T> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct Slice<T> {
     start: u32,
     length: u16,
     _marker: std::marker::PhantomData<T>,
 }
+
+impl<T> Clone for Slice<T> {
+    fn clone(&self) -> Self {
+        Self {
+            start: self.start,
+            length: self.length,
+            _marker: self._marker,
+        }
+    }
+}
+
+impl<T> Copy for Slice<T> {}
 
 impl<T> std::fmt::Debug for Slice<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -92,5 +115,58 @@ impl<T> Slice<T> {
 
     pub fn into_iter(&self) -> impl Iterator<Item = Index<T>> {
         self.indices().map(|i| Index::new(i as _))
+    }
+}
+
+#[derive(PartialEq, Eq)]
+pub struct EitherIndex<T, U> {
+    index: u32,
+    _marker: std::marker::PhantomData<(T, U)>,
+}
+
+impl<T, U> Clone for EitherIndex<T, U> {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index,
+            _marker: self._marker,
+        }
+    }
+}
+
+impl<T, U> Copy for EitherIndex<T, U> {}
+
+impl<T, U> std::fmt::Debug for EitherIndex<T, U> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Index({})", self.index)
+    }
+}
+
+impl<T, U> EitherIndex<T, U> {
+    const MASK: u32 = 1 << 31;
+
+    pub const fn from_left(input: Index<T>) -> Self {
+        assert!(input.index & Self::MASK == 0);
+
+        Self {
+            index: input.index,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub const fn from_right(input: Index<U>) -> Self {
+        assert!(input.index & Self::MASK == 0);
+
+        Self {
+            index: input.index | Self::MASK,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub const fn split(self) -> Result<Index<T>, Index<U>> {
+        if self.index & Self::MASK == 0 {
+            Ok(Index::new(self.index))
+        } else {
+            Err(Index::new(self.index ^ Self::MASK))
+        }
     }
 }

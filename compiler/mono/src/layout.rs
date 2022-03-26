@@ -74,7 +74,7 @@ impl<'a> RawFunctionLayout<'a> {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
-                Self::new_help(env, structure, structure_content.clone())
+                Self::new_help(env, structure, *structure_content)
             }
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(typ, _) => Self::from_var(env, typ),
@@ -207,7 +207,7 @@ impl<'a> RawFunctionLayout<'a> {
             unreachable!("The initial variable of a signature cannot be seen already")
         } else {
             let content = env.subs.get_content_without_compacting(var);
-            Self::new_help(env, var, content.clone())
+            Self::new_help(env, var, *content)
         }
     }
 }
@@ -250,6 +250,7 @@ pub enum Layout<'a> {
         field_order_hash: FieldOrderHash,
         field_layouts: &'a [Layout<'a>],
     },
+    Boxed(&'a Layout<'a>),
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
     RecursivePointer,
@@ -928,7 +929,7 @@ impl<'a> Layout<'a> {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
-                Self::new_help(env, structure, structure_content.clone())
+                Self::new_help(env, structure, *structure_content)
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
@@ -968,7 +969,7 @@ impl<'a> Layout<'a> {
             Ok(Layout::RecursivePointer)
         } else {
             let content = env.subs.get_content_without_compacting(var);
-            Self::new_help(env, var, content.clone())
+            Self::new_help(env, var, *content)
         }
     }
 
@@ -997,7 +998,7 @@ impl<'a> Layout<'a> {
                 }
             }
             LambdaSet(lambda_set) => lambda_set.runtime_representation().safe_to_memcpy(),
-            RecursivePointer => {
+            Boxed(_) | RecursivePointer => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
@@ -1066,6 +1067,7 @@ impl<'a> Layout<'a> {
                 .runtime_representation()
                 .stack_size_without_alignment(target_info),
             RecursivePointer => target_info.ptr_width() as u32,
+            Boxed(_) => target_info.ptr_width() as u32,
         }
     }
 
@@ -1114,6 +1116,7 @@ impl<'a> Layout<'a> {
                 .alignment_bytes(target_info),
             Layout::Builtin(builtin) => builtin.alignment_bytes(target_info),
             Layout::RecursivePointer => target_info.ptr_width() as u32,
+            Layout::Boxed(_) => target_info.ptr_width() as u32,
         }
     }
 
@@ -1126,6 +1129,7 @@ impl<'a> Layout<'a> {
                 .runtime_representation()
                 .allocation_alignment_bytes(target_info),
             Layout::RecursivePointer => unreachable!("should be looked up to get an actual layout"),
+            Layout::Boxed(inner) => inner.allocation_alignment_bytes(target_info),
         }
     }
 
@@ -1172,6 +1176,7 @@ impl<'a> Layout<'a> {
             }
             LambdaSet(lambda_set) => lambda_set.runtime_representation().contains_refcounted(),
             RecursivePointer => true,
+            Boxed(_) => true,
         }
     }
 
@@ -1196,6 +1201,10 @@ impl<'a> Layout<'a> {
             Union(union_layout) => union_layout.to_doc(alloc, parens),
             LambdaSet(lambda_set) => lambda_set.runtime_representation().to_doc(alloc, parens),
             RecursivePointer => alloc.text("*self"),
+            Boxed(inner) => alloc
+                .text("Boxed(")
+                .append(inner.to_doc(alloc, parens))
+                .append(")"),
         }
     }
 
@@ -1617,6 +1626,15 @@ fn layout_from_flat_type<'a>(
                 Symbol::LIST_LIST => list_layout_from_elem(env, args[0]),
                 Symbol::DICT_DICT => dict_layout_from_key_value(env, args[0], args[1]),
                 Symbol::SET_SET => dict_layout_from_key_value(env, args[0], Variable::EMPTY_RECORD),
+                Symbol::BOX_BOX_TYPE => {
+                    // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
+                    debug_assert_eq!(args.len(), 1);
+
+                    let inner_var = args[0];
+                    let inner_layout = Layout::from_var(env, inner_var)?;
+
+                    Ok(Layout::Boxed(env.arena.alloc(inner_layout)))
+                }
                 _ => {
                     panic!(
                         "TODO layout_from_flat_type for Apply({:?}, {:?})",
@@ -1976,7 +1994,15 @@ pub fn union_sorted_tags<'a>(
 
     let mut tags_vec = std::vec::Vec::new();
     let result = match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
-        Ok(()) | Err((_, Content::FlexVar(_))) | Err((_, Content::RecursionVar { .. })) => {
+        Ok(())
+        // Admit type variables in the extension for now. This may come from things that never got
+        // monomorphized, like in
+        //   x : [ A ]*
+        //   x = A
+        //   x
+        // In such cases it's fine to drop the variable. We may be proven wrong in the future...
+        | Err((_, Content::FlexVar(_) | Content::RigidVar(_)))
+        | Err((_, Content::RecursionVar { .. })) => {
             let opt_rec_var = get_recursion_var(subs, var);
             union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, target_info)
         }
@@ -2574,7 +2600,7 @@ pub fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
     match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => ext_fields.is_empty(),
+        Ok(()) | Err((_, Content::FlexVar(_) | Content::RigidVar(_))) => ext_fields.is_empty(),
         Err(content) => panic!("invalid content in ext_var: {:?}", content),
     }
 }
@@ -2652,7 +2678,7 @@ fn unwrap_num_tag<'a>(
         Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
             debug_assert!(args.len() == 1);
 
-            let precision_var = subs[args.variables().into_iter().next().unwrap()];
+            let precision_var = subs[args.all_variables().into_iter().next().unwrap()];
 
             let precision = subs.get_content_without_compacting(precision_var);
 
@@ -2688,7 +2714,7 @@ fn unwrap_num_tag<'a>(
         Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _, _) => {
             debug_assert!(args.len() == 1);
 
-            let precision_var = subs[args.variables().into_iter().next().unwrap()];
+            let precision_var = subs[args.all_variables().into_iter().next().unwrap()];
 
             let precision = subs.get_content_without_compacting(precision_var);
 

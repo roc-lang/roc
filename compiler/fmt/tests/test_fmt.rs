@@ -2582,6 +2582,43 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn apply_lambda() {
+        expr_formats_same(indoc!(
+            r#"
+            List.map
+                xs
+                (\i ->
+                    i + length)
+            "#
+        ));
+    }
+
+    #[test]
+    fn pipline_apply_lambda_1() {
+        expr_formats_same(indoc!(
+            r#"
+            shout
+                |> List.map
+                    xs
+                    (\i -> i)
+            "#
+        ));
+    }
+
+    #[test]
+    fn pipline_apply_lambda_2() {
+        expr_formats_same(indoc!(
+            r#"
+            shout
+                |> List.map
+                    xs
+                    (\i -> i)
+                |> List.join
+            "#
+        ));
+    }
+
     // MODULES
 
     #[test]
@@ -3014,7 +3051,7 @@ mod test_fmt {
         for entry in walkdir::WalkDir::new(&root) {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.extension() == Some(&std::ffi::OsStr::new("roc")) {
+            if path.extension() == Some(std::ffi::OsStr::new("roc")) {
                 count += 1;
                 let src = std::fs::read_to_string(path).unwrap();
                 println!("Now trying to format {}", path.display());

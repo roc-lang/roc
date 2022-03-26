@@ -1,4 +1,6 @@
-use crate::subs::{AliasVariables, Content, FlatType, GetSubsSlice, Subs, UnionTags, Variable};
+use crate::subs::{
+    AliasVariables, Content, FlatType, GetSubsSlice, Subs, SubsIndex, UnionTags, Variable,
+};
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
@@ -134,20 +136,22 @@ fn find_names_needed(
             }
         }
         RecursionVar {
-            opt_name: Some(name),
+            opt_name: Some(name_index),
             ..
         }
-        | FlexVar(Some(name)) => {
+        | FlexVar(Some(name_index)) => {
             // This root already has a name. Nothing more to do here!
 
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
-            names_taken.insert(name.clone());
+            let name = subs.field_names[name_index.index as usize].clone();
+            names_taken.insert(name);
         }
-        RigidVar(name) => {
+        RigidVar(name_index) => {
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
-            names_taken.insert(name.clone());
+            let name = subs.field_names[name_index.index as usize].clone();
+            names_taken.insert(name);
         }
         Structure(Apply(_, args)) => {
             for index in args.into_iter() {
@@ -257,16 +261,19 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
 
     match old_content {
         FlexVar(None) => {
-            let content = FlexVar(Some(name));
+            let name_index = SubsIndex::push_new(&mut subs.field_names, name);
+            let content = FlexVar(Some(name_index));
             subs.set_content(root, content);
         }
         RecursionVar {
             opt_name: None,
             structure,
         } => {
+            let structure = *structure;
+            let name_index = SubsIndex::push_new(&mut subs.field_names, name);
             let content = RecursionVar {
-                structure: *structure,
-                opt_name: Some(name),
+                structure,
+                opt_name: Some(name_index),
             };
             subs.set_content(root, content);
         }
@@ -311,11 +318,20 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
     use crate::subs::Content::*;
 
     match content {
-        FlexVar(Some(name)) => buf.push_str(name.as_str()),
+        FlexVar(Some(name_index)) => {
+            let name = &subs.field_names[name_index.index as usize];
+            buf.push_str(name.as_str())
+        }
         FlexVar(None) => buf.push_str(WILDCARD),
-        RigidVar(name) => buf.push_str(name.as_str()),
+        RigidVar(name_index) => {
+            let name = &subs.field_names[name_index.index as usize];
+            buf.push_str(name.as_str())
+        }
         RecursionVar { opt_name, .. } => match opt_name {
-            Some(name) => buf.push_str(name.as_str()),
+            Some(name_index) => {
+                let name = &subs.field_names[name_index.index as usize];
+                buf.push_str(name.as_str())
+            }
             None => buf.push_str(WILDCARD),
         },
         Structure(flat_type) => write_flat_type(env, flat_type, subs, buf, parens),
@@ -382,7 +398,7 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                 _ => write_parens!(write_parens, buf, {
                     write_symbol(env, *symbol, buf);
 
-                    for var_index in args.into_iter() {
+                    for var_index in args.named_type_arguments() {
                         let var = subs[var_index];
                         buf.push(' ');
                         write_content(

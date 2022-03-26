@@ -1,7 +1,17 @@
-// wasm_bindgen treats our `extern` declarations as JS globals, so let's keep it happy
-window.js_create_app = js_create_app;
-window.js_run_app = js_run_app;
-window.js_get_result_and_memory = js_get_result_and_memory;
+// The only way we can provide values to wasm_bindgen's generated code is to set globals
+function setGlobalsForWasmBindgen() {
+  window.js_create_app = js_create_app;
+  window.js_run_app = js_run_app;
+  window.js_get_result_and_memory = js_get_result_and_memory;
+
+  // The only place we use console.error is in wasm_bindgen, where it gets a single string argument.
+  console.error = function displayErrorInHistoryPanel(string) {
+    const html = `<div class="panic">${string}</div>`;
+    updateHistoryEntry(repl.inputHistoryIndex, false, html);
+  };
+}
+setGlobalsForWasmBindgen();
+
 import * as roc_repl_wasm from "/roc_repl_wasm.js";
 import { getMockWasiImports } from "/wasi.js";
 
@@ -82,7 +92,9 @@ function onInputKeyup(event) {
       break;
 
     case ENTER:
-      onInputChange({ target: repl.elemSourceInput });
+      if (!event.shiftKey) {
+        onInputChange({ target: repl.elemSourceInput });
+      }
       break;
 
     default:
@@ -168,12 +180,21 @@ function createHistoryEntry(inputText) {
   const historyIndex = repl.inputHistory.length;
   repl.inputHistory.push(inputText);
 
-  const inputElem = document.createElement("div");
-  inputElem.textContent = "> " + inputText;
+  const firstLinePrefix = '<span class="input-line-prefix">» </span>';
+  const otherLinePrefix = '\n<span class="input-line-prefix">… </span>';
+  const inputLines = inputText.split("\n");
+  if (inputLines[inputLines.length - 1] === "") {
+    inputLines.pop();
+  }
+  const inputWithPrefixes = firstLinePrefix + inputLines.join(otherLinePrefix);
+
+  const inputElem = document.createElement("pre");
+  inputElem.innerHTML = inputWithPrefixes;
   inputElem.classList.add("input");
 
   const historyItem = document.createElement("div");
   historyItem.appendChild(inputElem);
+  historyItem.classList.add("history-item");
 
   repl.elemHistory.appendChild(historyItem);
   repl.elemHistory.scrollTop = repl.elemHistory.scrollHeight;
@@ -182,8 +203,8 @@ function createHistoryEntry(inputText) {
 }
 
 function updateHistoryEntry(index, ok, outputText) {
-  const outputElem = document.createElement("div");
-  outputElem.textContent = outputText;
+  const outputElem = document.createElement("pre");
+  outputElem.innerHTML = outputText;
   outputElem.classList.add("output");
   outputElem.classList.add(ok ? "output-ok" : "output-error");
 
