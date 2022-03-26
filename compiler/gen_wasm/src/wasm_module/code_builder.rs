@@ -70,12 +70,29 @@ impl std::fmt::Debug for VmBlock<'_> {
 /// Rust representation matches Wasm encoding.
 /// It's an error to specify alignment higher than the "natural" alignment of the instruction
 #[repr(u8)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub enum Align {
     Bytes1 = 0,
     Bytes2 = 1,
     Bytes4 = 2,
     Bytes8 = 3,
+}
+
+impl Align {
+    /// Calculate the largest possible alignment for a load/store at a given stack frame offset
+    /// Assumes the stack frame is aligned to at least 8 bytes
+    pub fn from_stack_offset(max_align: Align, offset: u32) -> Align {
+        if (max_align == Align::Bytes8) && (offset & 7 == 0) {
+            return Align::Bytes8;
+        }
+        if (max_align >= Align::Bytes4) && (offset & 3 == 0) {
+            return Align::Bytes4;
+        }
+        if (max_align >= Align::Bytes2) && (offset & 1 == 0) {
+            return Align::Bytes2;
+        }
+        return Align::Bytes1;
+    }
 }
 
 impl From<u32> for Align {

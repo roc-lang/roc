@@ -170,7 +170,7 @@ pub fn build_module_without_wrapper<'a>(
         env.arena,
     );
     let mut helper_iter = helper_procs.iter();
-    for source in sources {
+    for (idx, source) in sources.iter().enumerate() {
         use ProcSource::*;
         match source {
             Roc => { /* already generated */ }
@@ -179,9 +179,7 @@ pub fn build_module_without_wrapper<'a>(
                     backend.build_proc(proc);
                 }
             }
-            ZigCallConvWrapper => {
-                todo!("Generate Wasm wrapper to convert from Zig CC to CCC");
-            }
+            ZigCallConvWrapper(inner_idx) => backend.build_zigcc_wrapper(idx, *inner_idx),
         }
     }
 

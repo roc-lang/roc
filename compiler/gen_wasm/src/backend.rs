@@ -36,7 +36,7 @@ pub enum ProcSource {
     Helper,
     /// Wrapper function for higher-order calls from Zig to Roc,
     /// to work around Zig's incorrect implementation of C calling convention in Wasm
-    ZigCallConvWrapper,
+    ZigCallConvWrapper(usize),
 }
 
 #[derive(Debug)]
@@ -272,6 +272,98 @@ impl<'a> WasmBackend<'a> {
         write!(debug_name, "{:?}", sym).unwrap();
         let name_bytes = debug_name.into_bytes().into_bump_slice();
         self.module.names.append_function(wasm_fn_index, name_bytes);
+    }
+
+    /// Procs that are called from higher-order Zig builtins currently need a wrapper,
+    /// because the Zig compiler has bugs in its C calling convention for Wasm.
+    /// Whenever Zig fixes this, we should be able to remove the wrapper entirely.
+    pub fn build_zigcc_wrapper(&mut self, wrapper_idx: usize, inner_idx: usize) {
+        let ProcLookupData {
+            layout: proc_layout,
+            ..
+        } = self.proc_lookup[wrapper_idx];
+        let ProcLayout {
+            arguments: arg_layouts,
+            result,
+        } = proc_layout;
+
+        let ret_sym = self.create_symbol("##ret");
+        let ret_layout = WasmLayout::new(&result);
+        let is_stack_return = match ret_layout.return_method() {
+            ReturnMethod::Primitive(_) => false,
+            ReturnMethod::NoReturnValue => false,
+            ReturnMethod::WriteToPointerArg => {
+                // Return variable must be at index 0
+                self.storage
+                    .allocate(result, ret_sym, StoredValueKind::Parameter);
+                true
+            }
+        };
+
+        let mut arg_symbols = Vec::with_capacity_in(arg_layouts.len(), self.env.arena);
+        let mut frame_writes = Vec::with_capacity_in(arg_layouts.len() * 2, self.env.arena);
+
+        for (i, arg) in arg_layouts.iter().enumerate() {
+            let arg_name = format!("arg{}", i);
+            let symbol = self.create_symbol(&arg_name);
+            arg_symbols.push(symbol);
+            self.storage
+                .allocate_zigcc_arg(arg, symbol, &mut frame_writes);
+        }
+
+        if !is_stack_return {
+            // Local variables must come *after* the arguments
+            self.storage
+                .allocate(result, ret_sym, StoredValueKind::Variable);
+        }
+
+        // Write structs to the stack frame
+        if !frame_writes.is_empty() {
+            let frame_ptr = self.storage.create_anonymous_local(PTR_TYPE);
+            self.storage.stack_frame_pointer = Some(frame_ptr);
+
+            for (zig_arg, value_type, offset) in frame_writes.into_iter() {
+                self.code_builder.get_local(frame_ptr);
+                self.code_builder.get_local(zig_arg);
+                if value_type == ValueType::I32 {
+                    let align = Align::from_stack_offset(Align::Bytes4, offset);
+                    self.code_builder.i32_store(align, offset);
+                } else {
+                    let align = Align::from_stack_offset(Align::Bytes8, offset);
+                    self.code_builder.i64_store(align, offset);
+                }
+            }
+        }
+
+        // Call the wrapped inner function
+        let ProcLookupData { linker_index, .. } = self.proc_lookup[inner_idx];
+        let (param_types, ret_type) = self.storage.load_symbols_for_call(
+            self.env.arena,
+            &mut self.code_builder,
+            arg_symbols.into_bump_slice(),
+            ret_sym,
+            &ret_layout,
+            CallConv::C,
+        );
+        let wasm_fn_index = self.fn_index_offset + inner_idx as u32;
+        let num_wasm_args = param_types.len();
+        let has_return_val = ret_type.is_some();
+        self.code_builder
+            .call(wasm_fn_index, linker_index, num_wasm_args, has_return_val);
+
+        // Setup & teardown the stack frame
+        self.code_builder.build_fn_header_and_footer(
+            &self.storage.local_types,
+            self.storage.stack_frame_size,
+            self.storage.stack_frame_pointer,
+        );
+
+        self.module.add_function_signature(Signature {
+            param_types: self.storage.arg_types.clone(),
+            ret_type,
+        });
+
+        self.reset();
     }
 
     /**********************************************************
