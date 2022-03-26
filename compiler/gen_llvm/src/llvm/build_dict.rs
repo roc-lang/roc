@@ -19,6 +19,8 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use roc_target::TargetInfo;
 
+use super::bitcode::call_list_bitcode_fn;
+
 #[repr(transparent)]
 struct Alignment(u8);
 
@@ -429,9 +431,7 @@ pub fn dict_keys<'a, 'ctx, 'env>(
 
     let inc_key_fn = build_inc_wrapper(env, layout_ids, key_layout);
 
-    let list_ptr = builder.build_alloca(zig_list_type(env), "list_ptr");
-
-    call_void_bitcode_fn(
+    call_list_bitcode_fn(
         env,
         &[
             pass_dict_c_abi(env, dict),
@@ -439,21 +439,9 @@ pub fn dict_keys<'a, 'ctx, 'env>(
             key_width.into(),
             value_width.into(),
             inc_key_fn.as_global_value().as_pointer_value().into(),
-            list_ptr.into(),
         ],
         bitcode::DICT_KEYS,
-    );
-
-    let list_ptr = env
-        .builder
-        .build_bitcast(
-            list_ptr,
-            super::convert::zig_list_type(env).ptr_type(AddressSpace::Generic),
-            "to_roc_list",
-        )
-        .into_pointer_value();
-
-    env.builder.build_load(list_ptr, "load_keys_list")
+    )
 }
 
 fn pass_dict_c_abi<'a, 'ctx, 'env>(
@@ -687,9 +675,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
 
     let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
 
-    let list_ptr = builder.build_alloca(zig_list_type, "list_ptr");
-
-    call_void_bitcode_fn(
+    call_list_bitcode_fn(
         env,
         &[
             pass_dict_c_abi(env, dict),
@@ -697,21 +683,9 @@ pub fn dict_values<'a, 'ctx, 'env>(
             key_width.into(),
             value_width.into(),
             inc_value_fn.as_global_value().as_pointer_value().into(),
-            list_ptr.into(),
         ],
         bitcode::DICT_VALUES,
-    );
-
-    let list_ptr = env
-        .builder
-        .build_bitcast(
-            list_ptr,
-            super::convert::zig_list_type(env).ptr_type(AddressSpace::Generic),
-            "to_roc_list",
-        )
-        .into_pointer_value();
-
-    env.builder.build_load(list_ptr, "load_keys_list")
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
