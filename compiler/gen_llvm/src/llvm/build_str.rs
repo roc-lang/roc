@@ -1,6 +1,4 @@
-use crate::llvm::bitcode::{
-    call_bitcode_fn, call_list_bitcode_fn, call_str_bitcode_fn, call_void_bitcode_fn,
-};
+use crate::llvm::bitcode::{call_bitcode_fn, call_str_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build::{complex_bitcast, Env, Scope};
 use crate::llvm::build_list::{allocate_list, pass_update_mode, store_list};
 use inkwell::builder::Builder;
@@ -17,18 +15,6 @@ use super::build_list::list_symbol_to_c_abi;
 
 pub static CHAR_LAYOUT: Layout = Layout::u8();
 
-/// Str.repeat : Str, Nat -> Str
-pub fn str_repeat<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str_symbol: Symbol,
-    count_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let str_c_abi = str_symbol_to_c_abi(env, scope, str_symbol);
-    let count = load_symbol(scope, &count_symbol);
-    call_str_bitcode_fn(env, &[str_c_abi.into(), count], bitcode::STR_REPEAT)
-}
-
 /// Str.split : Str, Str -> List Str
 pub fn str_split<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -38,15 +24,11 @@ pub fn str_split<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let str_c_abi = str_symbol_to_c_abi(env, scope, str_symbol);
-    let delim_c_abi = str_symbol_to_c_abi(env, scope, delimiter_symbol);
+    let string = load_symbol(scope, &str_symbol);
+    let delimiter = load_symbol(scope, &delimiter_symbol);
 
-    let segment_count = call_bitcode_fn(
-        env,
-        &[str_c_abi.into(), delim_c_abi.into()],
-        bitcode::STR_COUNT_SEGMENTS,
-    )
-    .into_int_value();
+    let segment_count =
+        call_bitcode_fn(env, &[string, delimiter], bitcode::STR_COUNT_SEGMENTS).into_int_value();
 
     // a pointer to the elements
     let ret_list_ptr = allocate_list(env, &Layout::Builtin(Builtin::Str), segment_count);
@@ -63,11 +45,7 @@ pub fn str_split<'a, 'ctx, 'env>(
 
     call_void_bitcode_fn(
         env,
-        &[
-            ret_list_ptr_zig_rocstr,
-            str_c_abi.into(),
-            delim_c_abi.into(),
-        ],
+        &[ret_list_ptr_zig_rocstr, string, delimiter],
         bitcode::STR_STR_SPLIT_IN_PLACE,
     );
 
@@ -120,55 +98,6 @@ pub fn destructure<'ctx>(
     (generic_ptr, length)
 }
 
-/// Str.concat : Str, Str -> Str
-pub fn str_concat<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str1_symbol: Symbol,
-    str2_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    // swap the arguments; second argument comes before the second in the output string
-    let str1 = load_symbol(scope, &str1_symbol);
-    let str2 = load_symbol(scope, &str2_symbol);
-
-    call_str_bitcode_fn(env, &[str1, str2], bitcode::STR_CONCAT)
-}
-
-/// Str.join : List Str, Str -> Str
-pub fn str_join_with<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    list_symbol: Symbol,
-    str_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    // dirty hack; pretend a `list` is a `str` that works because
-    // they have the same stack layout `{ u8*, usize }`
-    let list_i128 = list_symbol_to_c_abi(env, scope, list_symbol);
-    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-
-    call_str_bitcode_fn(
-        env,
-        &[list_i128.into(), str_i128.into()],
-        bitcode::STR_JOIN_WITH,
-    )
-}
-
-pub fn str_number_of_bytes<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str_symbol: Symbol,
-) -> IntValue<'ctx> {
-    let str_i128 = str_symbol_to_c_abi(env, scope, str_symbol);
-
-    // the builtin will always return an u64
-    let length =
-        call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_NUMBER_OF_BYTES).into_int_value();
-
-    // cast to the appropriate usize of the current build
-    env.builder
-        .build_int_cast_sign_flag(length, env.ptr_int(), false, "len_as_usize")
-}
-
 /// Str.fromInt : Int -> Str
 pub fn str_from_int<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -176,17 +105,6 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     int_width: IntWidth,
 ) -> BasicValueEnum<'ctx> {
     call_str_bitcode_fn(env, &[value.into()], &bitcode::STR_FROM_INT[int_width])
-}
-
-/// Str.toUtf8 : Str -> List U8
-pub fn str_to_utf8<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let string = str_symbol_to_c_abi(env, scope, symbol);
-
-    call_list_bitcode_fn(env, &[string.into()], bitcode::STR_TO_UTF8)
 }
 
 fn decode_from_utf8_result<'a, 'ctx, 'env>(

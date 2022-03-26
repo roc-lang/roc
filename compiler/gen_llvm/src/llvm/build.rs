@@ -2,8 +2,8 @@ use std::convert::{TryFrom, TryInto};
 use std::path::Path;
 
 use crate::llvm::bitcode::{
-    call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_str_bitcode_fn,
-    call_void_bitcode_fn,
+    call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
+    call_str_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build_dict::{
     self, dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
@@ -18,8 +18,7 @@ use crate::llvm::build_list::{
     list_single, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_to_c_abi,
 };
 use crate::llvm::build_str::{
-    str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_number_of_bytes,
-    str_repeat, str_split, str_to_utf8,
+    str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_split,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
@@ -5376,7 +5375,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
 
             let string = load_symbol(scope, &args[0]);
-            let prefix = load_symbol(scope, &args[0]);
+            let prefix = load_symbol(scope, &args[1]);
 
             call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH)
         }
@@ -5394,7 +5393,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
 
             let string = load_symbol(scope, &args[0]);
-            let prefix = load_symbol(scope, &args[0]);
+            let prefix = load_symbol(scope, &args[1]);
 
             call_bitcode_fn(env, &[string, prefix], bitcode::STR_ENDS_WITH)
         }
@@ -5415,9 +5414,9 @@ fn run_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!(),
             };
 
-            let string = super::build_str::str_symbol_to_c_abi(env, scope, args[0]);
+            let string = load_symbol(scope, &args[0]);
 
-            call_bitcode_fn(env, &[string.into()], intrinsic)
+            call_bitcode_fn(env, &[string], intrinsic)
         }
         StrFromInt => {
             // Str.fromInt : Int -> Str
@@ -5456,13 +5455,16 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.fromInt : Str -> List U8
             debug_assert_eq!(args.len(), 1);
 
-            str_to_utf8(env, scope, args[0])
+            let string = load_symbol(scope, &args[0]);
+            call_list_bitcode_fn(env, &[string], bitcode::STR_TO_UTF8)
         }
         StrRepeat => {
             // Str.repeat : Str, Nat -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_repeat(env, scope, args[0], args[1])
+            let string = load_symbol(scope, &args[0]);
+            let count = load_symbol(scope, &args[1]);
+            call_str_bitcode_fn(env, &[string, count], bitcode::STR_REPEAT)
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str
