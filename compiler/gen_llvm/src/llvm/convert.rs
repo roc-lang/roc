@@ -132,6 +132,15 @@ pub fn argument_type_from_layout<'a, 'ctx, 'env>(
             argument_type_from_layout(env, &lambda_set.runtime_representation())
         }
         Union(union_layout) => argument_type_from_union_layout(env, union_layout),
+        Builtin(_) => {
+            let base = basic_type_from_layout(env, layout);
+
+            if layout.is_passed_by_reference() {
+                base.ptr_type(AddressSpace::Generic).into()
+            } else {
+                base
+            }
+        }
         other => basic_type_from_layout(env, other),
     }
 }
