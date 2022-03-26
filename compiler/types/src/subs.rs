@@ -63,13 +63,13 @@ struct ErrorTypeState {
 
 #[derive(Clone, Copy, Debug)]
 struct SubsHeader {
-    utable: usize,
-    variables: usize,
-    tag_names: usize,
-    field_names: usize,
-    record_fields: usize,
-    variable_slices: usize,
-    exposed_vars_by_symbol: usize,
+    utable: u32,
+    variables: u32,
+    tag_names: u32,
+    field_names: u32,
+    record_fields: u32,
+    variable_slices: u32,
+    exposed_vars_by_symbol: u32,
 }
 
 impl SubsHeader {
@@ -79,13 +79,13 @@ impl SubsHeader {
         debug_assert!(subs.problems.is_empty());
 
         Self {
-            utable: subs.utable.len(),
-            variables: subs.variables.len(),
-            tag_names: subs.tag_names.len(),
-            field_names: subs.field_names.len(),
-            record_fields: subs.record_fields.len(),
-            variable_slices: subs.variable_slices.len(),
-            exposed_vars_by_symbol,
+            utable: subs.utable.len() as u32,
+            variables: subs.variables.len() as u32,
+            tag_names: subs.tag_names.len() as u32,
+            field_names: subs.field_names.len() as u32,
+            record_fields: subs.record_fields.len() as u32,
+            variable_slices: subs.variable_slices.len() as u32,
+            exposed_vars_by_symbol: exposed_vars_by_symbol as u32,
         }
     }
 
@@ -246,17 +246,20 @@ impl Subs {
         offset += header_slice.len();
         let header = SubsHeader::from_array(header_slice.try_into().unwrap());
 
-        let (utable, offset) = Self::deserialize_unification_table(bytes, header.utable, offset);
+        let (utable, offset) =
+            Self::deserialize_unification_table(bytes, header.utable as usize, offset);
 
-        let (variables, offset) = Self::deserialize_slice(bytes, header.variables, offset);
-        let (tag_names, offset) = Self::deserialize_tag_names(bytes, header.tag_names, offset);
+        let (variables, offset) = Self::deserialize_slice(bytes, header.variables as usize, offset);
+        let (tag_names, offset) =
+            Self::deserialize_tag_names(bytes, header.tag_names as usize, offset);
         let (field_names, offset) =
-            Self::deserialize_field_names(bytes, header.field_names, offset);
-        let (record_fields, offset) = Self::deserialize_slice(bytes, header.record_fields, offset);
+            Self::deserialize_field_names(bytes, header.field_names as usize, offset);
+        let (record_fields, offset) =
+            Self::deserialize_slice(bytes, header.record_fields as usize, offset);
         let (variable_slices, offset) =
-            Self::deserialize_slice(bytes, header.variable_slices, offset);
+            Self::deserialize_slice(bytes, header.variable_slices as usize, offset);
         let (exposed_vars_by_symbol, _) =
-            Self::deserialize_slice(bytes, header.exposed_vars_by_symbol, offset);
+            Self::deserialize_slice(bytes, header.exposed_vars_by_symbol as usize, offset);
 
         (
             Self {
