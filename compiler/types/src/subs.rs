@@ -63,13 +63,13 @@ struct ErrorTypeState {
 
 #[derive(Clone, Copy, Debug)]
 struct SubsHeader {
-    utable: u32,
-    variables: u32,
-    tag_names: u32,
-    field_names: u32,
-    record_fields: u32,
-    variable_slices: u32,
-    exposed_vars_by_symbol: u32,
+    utable: u64,
+    variables: u64,
+    tag_names: u64,
+    field_names: u64,
+    record_fields: u64,
+    variable_slices: u64,
+    exposed_vars_by_symbol: u64,
 }
 
 impl SubsHeader {
@@ -79,13 +79,13 @@ impl SubsHeader {
         debug_assert!(subs.problems.is_empty());
 
         Self {
-            utable: subs.utable.len() as u32,
-            variables: subs.variables.len() as u32,
-            tag_names: subs.tag_names.len() as u32,
-            field_names: subs.field_names.len() as u32,
-            record_fields: subs.record_fields.len() as u32,
-            variable_slices: subs.variable_slices.len() as u32,
-            exposed_vars_by_symbol: exposed_vars_by_symbol as u32,
+            utable: subs.utable.len() as u64,
+            variables: subs.variables.len() as u64,
+            tag_names: subs.tag_names.len() as u64,
+            field_names: subs.field_names.len() as u64,
+            record_fields: subs.record_fields.len() as u64,
+            variable_slices: subs.variable_slices.len() as u64,
+            exposed_vars_by_symbol: exposed_vars_by_symbol as u64,
         }
     }
 
