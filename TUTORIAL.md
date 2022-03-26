@@ -1585,32 +1585,7 @@ add : Num a <'x>, Num a <'x> -> Num a <'x>
 
 Both types use `Num a` for everything, but there are two differences in how they use type labels:
 1. In `add`, both arguments are `Num a x`, whereas in `div` the second argument is `Num a y` instead.
-2. `add` returns `Num a x`, whereas `div` returns `Num a <x/y>`
-
-Note that it's possible to get a compiler error for ambiguous naming when using type variables like `<x/y>` here.
-For example, suppose we had written the type with `h` instead of `y`, like so:
-
-```haskell
-div : Num a <'h>, Num a h -> Num a <x/h>
-```
-
-If `h` (for hours) is in scope, then the compiler will give an error that `x/h` is ambiguous because
-`h` in `<x/h>` could be referring to either the type variable `h` or the type label `h` (like in `<km/h>`,
-or in the `<h>` you'd get from putting `5 h` into `roc repl`). If you get this error, the easiest fix is
-to choose a different variable name - e.g. `y` instead of `h`.
-
-> **Aside:** It's a good idea to use the most general type variables that will work, like `Num a y` even though
-> `Num a <y>` would work too. Not only is `Num a y` more concise, it also means that if you later import a type
-> label named `y`, you'll get a more helpful naming error about the variable `y` and the imported type label `<y>`
-> being ambiguous, instead of a less helpful type mismatch - potentially in a different module - because the import
-> effectively changed the type signature's meaning. Note that an imported type label making a type signature more
-> specific like this will either do nothing or will cause a type mismatch to be reported; it will never affect
-> the actual behavior of your program!
->
-> The reason for the convention of using `x`, `y`, and `z` for type label variable names is that
-> using `a`, `b`, and `c` can collide with [candelas](https://en.wikipedia.org/wiki/Candela), which are
-> an [SI unit](https://en.wikipedia.org/wiki/International_System_of_Units) with the abbreviation `c`.
-> There are no SI units abbreviated `x`, `y`, or `z`.
+2. `add` returns `Num a <'x>`, whereas `div` returns `Num a <'x/'y>`
 
 Like division, multiplication also accepts arguments with different type labels. For example:
 
@@ -1627,8 +1602,8 @@ multiplication of units, and also because `<kW * h>` would be ambiguous with the
 
 The type of `Num.mul` is similar to the type of `Num.div`; only the type label in the return type is different:
 
-```elm
-mul : Num a x, Num a y -> Num a <x y>
+```haskell
+mul : Num <'a> x, Num <'a> y -> Num a <'x 'y>
 ```
 
 ## TODO: use Num.pow as an example, and then talk about how Num.mul can return km^2. Also maybe discuss reciprocals
@@ -1651,8 +1626,8 @@ If we multiply two numbers with different type labels, the output will include t
 
 This is captured in the type of `Num.mul`:
 
-```elm
-mul : Num a x, Num a y -> Num a <x y>
+```haskell
+mul : Num a <'x>, Num a <'y> -> Num a <'x 'y>
 ```
 
 This type says that:
@@ -1664,7 +1639,7 @@ This type says that:
 The type of `Num.div` is very similar:
 
 ```elm
-div : Num a x, Num a y -> Num a <x/y>
+div : Num a <'x>, Num a <'y> -> Num a <'x/'y>
 ```
 
 The only difference is that the return type has the label `<x/y>` instead of `<x y>`.
@@ -1703,13 +1678,6 @@ but stylistically it's preferred to omit the `<>`.
 ## TODO show how to put `5 (km/h)` into the repl, explain how this application only works with number literals;
 ## you can't do like `x (kW h)` because `x` is a varible, not a number literal! Instead you'd do `x * 1 (kw H)`.
 ## Also, explain how 0 has no label.
-
-
-
-### Labeled Strings
-
-## TODO examples: Email, Url, Path.
-
 
 # Appendix: Advanced Concepts
 
