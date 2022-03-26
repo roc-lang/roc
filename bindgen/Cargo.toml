@@ -1,0 +1,12 @@
+[package]
+name = "roc_bindgen"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2018"
+
+[dependencies]
+
+[dev-dependencies]
+pretty_assertions = "1.0.0"
+indoc = "1.0.3"
