@@ -20,6 +20,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_target::TargetInfo;
 
+use super::build::load_roc_value;
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 
 /// "Infinite" reference count, for static values
@@ -1435,9 +1436,8 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                     .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
                     .unwrap();
 
-                let field = env
-                    .builder
-                    .build_load(elem_pointer, "decrement_struct_field");
+                let field =
+                    load_roc_value(env, *field_layout, elem_pointer, "decrement_struct_field");
 
                 deferred_nonrec.push((field, field_layout));
             }
