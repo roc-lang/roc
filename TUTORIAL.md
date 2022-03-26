@@ -1513,6 +1513,204 @@ Some important things to note about backpassing and `await`:
 * Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 * Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
 
+## Type Labels
+
+### Units of Measure
+
+For example, if I add 6 kilometers and 3 kilometers, the result is 9 kilometers.
+However, if I multiply 6 kilometers by 3 kilometers (for example because I'm calculating
+the area of a retangle), the result should be 18 *square* kilometers, or `18 cm^2`.
+
+This can be done in Roc using *type labels.* Here are some examples:
+
+```
+» 6 cm + 3 cm
+9 cm : Num * <cm>
+```
+```
+» 8 kW - 2 kW
+6 kW : Num * <kW>
+```
+
+In the first example, we've added 6 [centimeters](https://en.wikipedia.org/wiki/Centimetre) (or `cm` for short) to
+3 centimeters to get 9 centimeters. In the second example, we've taken 8 [kilowatts](https://en.wikipedia.org/wiki/Watt#Kilowatt)
+(or `kW` for short) and subtracted 2 kilowatts to get 6 kilowatts.
+
+If we tried to do `6 cm + 3 kW` or `8 kW - 2 cm`, we'd get a type mismatch. This can prevent bugs, including
+catastrophic ones like the famous [Mars Climate Orbiter crash](https://en.wikipedia.org/wiki/Mars_Climate_Orbiter#Cause_of_failure), where a calculation was done involving two incompatible units of measure.
+
+Note that type labels are surrounded by angle brackets in the type - e.g. `<cm>` rather than `cm`. That's
+done because in the scientific world, units of measure are often abbreviated in lowercase, but in Roc, lowercase
+names in types refer to type variables. So in the type `Num * <cm>`, the `<cm>` is a type label, whereas in
+the type `Num * cm`, the `cm` would be a type variable as normal.
+
+Type variables inside type labels begin with a `'`. For example, here are the types of `Num.add` and `Num.sub`:
+
+```elm
+add : Num a <'x>, Num a <'x> -> Num a <'x>
+```
+
+```elm
+sub : Num a <'x>, Num a <'x> -> Num a <'x>
+```
+
+Both functions enforce that their numbers' ranges (represented by the `a` type variable) must be consistent,
+and also that their type labels (represented by the `'x` type variable) must also be consistent.
+The size distinguishes between number that represent different ranges (for example, `I32` and `F64` would
+have different `a` type variables here), and the type labels distinguish between numbers with different units
+(for example, `<cm>` and `<kW>` would have different `'x` type variables here).
+
+There are two reasons for the `'` in type label variables:
+1. Normal type variables and type label variables cannot mix. It would be an error to use `'x` outside of `<` `>` brackets, and it would also be an error for a variable outside those brackets to be used inside them. The `'` syntax distinguishes them visually.
+2. Type label units can be both uppercase (e.g. `J` is the SI unit for Joules) or lowercase (e.g. `s` for seconds), so the `'` also distinguishes the type variable `'s` from the SI unit `s`.
+
+Unlike addition and subtraction, division accepts two arguments with different type labels:
+
+```
+» 6 km / 3 h
+6 km/h : Num * <km/h>
+```
+
+Note that the return type is `<km/h>`, which means [kilomters per hour](https://en.wikipedia.org/wiki/Kilometres_per_hour). This is because the type of `Num.div` is:
+
+```haskell
+div : Num a <'x>, Num a <'y> -> Num a <'x/'y>
+```
+
+Let's compare this type to `Num.add` from earlier:
+
+```haskell
+add : Num a <'x>, Num a <'x> -> Num a <'x>
+```
+
+Both types use `Num a` for everything, but there are two differences in how they use type labels:
+1. In `add`, both arguments are `Num a x`, whereas in `div` the second argument is `Num a y` instead.
+2. `add` returns `Num a x`, whereas `div` returns `Num a <x/y>`
+
+Note that it's possible to get a compiler error for ambiguous naming when using type variables like `<x/y>` here.
+For example, suppose we had written the type with `h` instead of `y`, like so:
+
+```haskell
+div : Num a <'h>, Num a h -> Num a <x/h>
+```
+
+If `h` (for hours) is in scope, then the compiler will give an error that `x/h` is ambiguous because
+`h` in `<x/h>` could be referring to either the type variable `h` or the type label `h` (like in `<km/h>`,
+or in the `<h>` you'd get from putting `5 h` into `roc repl`). If you get this error, the easiest fix is
+to choose a different variable name - e.g. `y` instead of `h`.
+
+> **Aside:** It's a good idea to use the most general type variables that will work, like `Num a y` even though
+> `Num a <y>` would work too. Not only is `Num a y` more concise, it also means that if you later import a type
+> label named `y`, you'll get a more helpful naming error about the variable `y` and the imported type label `<y>`
+> being ambiguous, instead of a less helpful type mismatch - potentially in a different module - because the import
+> effectively changed the type signature's meaning. Note that an imported type label making a type signature more
+> specific like this will either do nothing or will cause a type mismatch to be reported; it will never affect
+> the actual behavior of your program!
+>
+> The reason for the convention of using `x`, `y`, and `z` for type label variable names is that
+> using `a`, `b`, and `c` can collide with [candelas](https://en.wikipedia.org/wiki/Candela), which are
+> an [SI unit](https://en.wikipedia.org/wiki/International_System_of_Units) with the abbreviation `c`.
+> There are no SI units abbreviated `x`, `y`, or `z`.
+
+Like division, multiplication also accepts arguments with different type labels. For example:
+
+```
+» 5 kW * 3 h
+18 (kW h) : Num * <kW h>
+```
+
+Here, we've multiplied 5 kilowatts by 3 hours to get 5 [kilowatt-hours](https://en.wikipedia.org/wiki/Kilowatt-hour).
+Kilowatt-hours are a common measure of residential electricity; if you keep a 100 kW lightbulb on for 10 hours,
+it will have used 1 kilowatt-hour of electricity. The type label for this is `<kW h>`, both because the
+[International System of Units](https://en.wikipedia.org/wiki/International_System_of_Units) uses spaces to represent
+multiplication of units, and also because `<kW * h>` would be ambiguous with the `*` wildcard type variable.
+
+The type of `Num.mul` is similar to the type of `Num.div`; only the type label in the return type is different:
+
+```elm
+mul : Num a x, Num a y -> Num a <x y>
+```
+
+## TODO: use Num.pow as an example, and then talk about how Num.mul can return km^2. Also maybe discuss reciprocals
+## and how they're represented as 1/x even if you comptued them as x^-1 bc of standard formatting.
+
+
+`<km>`, `<km^2>`, and `<km/s>` are *type labels.* Type labels are similar to type parameters,
+but have a few differences. The main differences are:
+
+1. Types can have multiple type parameters, but at most one type label.
+2. The type label is shown in angle brackets (like `<>`) and always comes after all the type parameters.
+3. Type labels can include exponents (e.g. `<km^2>`), division (e.g. `<km/s>`), and multiplication (e.g.
+
+If we multiply two numbers with different type labels, the output will include the [product](https://en.wikipedia.org/wiki/Product_(mathematics)) of both:
+
+```
+» 6 km * 3 km
+18 km^2 : Num * <km^2>
+```
+
+This is captured in the type of `Num.mul`:
+
+```elm
+mul : Num a x, Num a y -> Num a <x y>
+```
+
+This type says that:
+1. Both arguments and the return type are numbers (the `Num` part)
+2. Both argument numbers must have the same size, and the return type will have the same size (the `a` part in `Num a`).
+3. The two arguments can have different type labels (`x`) and (`y`). Note that these are ordinary type variables, just like `a`. They happen to be referring to type labels in this case.
+4. and the return type will be the product of those two labels (`<x y>`). Note that `<x x>` can also be written as `<x^2>` - both type labels are equivalent, but stylistically the convention is to prefer `<x^2>`.
+
+The type of `Num.div` is very similar:
+
+```elm
+div : Num a x, Num a y -> Num a <x/y>
+```
+
+The only difference is that the return type has the label `<x/y>` instead of `<x y>`.
+
+For this reason, you can do `6 km / 2 h` but not `5 km + 2 h`. The latter would (and should be!) a type mismatch,
+because it's not possible to add kilometers and hours together.
+
+Numbers aren't required to specify units. For example, you can multiply `5 km` by the unitless number `3`:
+
+```
+» 5 km * 3
+15 km : Num * <km>
+```
+
+If we had specified `km` for both arguments, the return type would have included the label `<km^2>` instead
+of `<km>`:
+
+```
+» 5 km * 3 km
+18 km^2 : Num * <km^2>
+```
+
+
+Many numbers don't have type labels. For example, if you put `5` into `roc repl`, you won't see a type label:
+
+```
+» 5
+5 : Num *
+```
+
+There's a special type label called the *empty type label.* It's written as `<>`, and if you like, you can
+always omit it. So the type `Num *` is syntax sugar for the type `Num * <>`. You can write it either way,
+but stylistically it's preferred to omit the `<>`.
+
+
+## TODO show how to put `5 (km/h)` into the repl, explain how this application only works with number literals;
+## you can't do like `x (kW h)` because `x` is a varible, not a number literal! Instead you'd do `x * 1 (kw H)`.
+## Also, explain how 0 has no label.
+
+
+
+### Labeled Strings
+
+## TODO examples: Email, Url, Path.
+
+
 # Appendix: Advanced Concepts
 
 Here are some concepts you likely won't need as a beginner, but may want to know about eventually.
