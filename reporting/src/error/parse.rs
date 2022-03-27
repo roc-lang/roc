@@ -3400,7 +3400,7 @@ fn to_imports_report<'a>(
             }
         }
 
-        EImports::Imports(pos) => {
+        EImports::Imports(pos) | EImports::IndentImports(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
