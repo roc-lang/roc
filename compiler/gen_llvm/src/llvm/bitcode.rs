@@ -110,7 +110,7 @@ fn type_attribute<'ctx>(
     context.create_type_attribute(kind_id, basic_type.as_any_type_enum())
 }
 
-fn enum_attribute<'ctx>(context: &Context, name: &str) -> inkwell::attributes::Attribute {
+fn enum_attribute(context: &Context, name: &str) -> inkwell::attributes::Attribute {
     let kind_id = Attribute::get_named_enum_kind_id(name);
     debug_assert!(kind_id > 0);
     context.create_enum_attribute(kind_id, 1)
