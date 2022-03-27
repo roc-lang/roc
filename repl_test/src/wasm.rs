@@ -6,10 +6,12 @@ use std::{
     sync::Mutex,
     thread_local,
 };
-use wasmer::{imports, Function, Instance, Module, Store, Value};
+use wasmer::{
+    imports, ChainableNamedResolver, Function, ImportObject, Instance, Module, Store, Value,
+};
 use wasmer_wasi::WasiState;
 
-const WASM_REPL_COMPILER_PATH: &str = "../target/wasm32-unknown-unknown/release/roc_repl_wasm.wasm";
+const WASM_REPL_COMPILER_PATH: &str = "../target/wasm32-wasi/release/roc_repl_wasm.wasm";
 
 thread_local! {
     static REPL_STATE: RefCell<Option<ReplState>> = RefCell::new(None)
@@ -40,7 +42,13 @@ fn init_compiler() -> Instance {
     let wasmer_module =
         unsafe { Module::from_binary_unchecked(&store, &wasm_module_bytes).unwrap() };
 
-    let import_object = imports! {
+    // Specify the external functions the Wasm module needs to link to
+    // We only use WASI so that we can debug test failures more easily with println!(), dbg!(), etc.
+    let mut wasi_env = WasiState::new("compiler").finalize().unwrap();
+    let wasi_import_obj = wasi_env
+        .import_object(&wasmer_module)
+        .unwrap_or_else(|_| ImportObject::new());
+    let repl_import_obj = imports! {
         "env" => {
             "wasmer_create_app" => Function::new_native(&store, wasmer_create_app),
             "wasmer_run_app" => Function::new_native(&store, wasmer_run_app),
@@ -50,7 +58,10 @@ fn init_compiler() -> Instance {
             "now" => Function::new_native(&store, dummy_system_time_now),
         }
     };
+    // "Chain" the import objects together. Wasmer will look up the REPL object first, then the WASI object
+    let import_object = wasi_import_obj.chain_front(repl_import_obj);
 
+    // Make a fully-linked instance with its own block of memory
     Instance::new(&wasmer_module, &import_object).unwrap()
 }
 
@@ -87,7 +98,7 @@ fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) -> u32 {
         };
 
         // Get the WASI imports for the app
-        let mut wasi_env = WasiState::new("hello").finalize().unwrap();
+        let mut wasi_env = WasiState::new("app").finalize().unwrap();
         let import_object = wasi_env
             .import_object(&wasmer_module)
             .unwrap_or_else(|_| imports!());
