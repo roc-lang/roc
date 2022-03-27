@@ -3395,7 +3395,7 @@ fn to_imports_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD EXPOSES".to_string(),
+                title: "WEIRD IMPORTS".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
