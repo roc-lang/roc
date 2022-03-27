@@ -18,8 +18,9 @@ extern "C" {
     fn log(s: &str);
 }
 
-// To debug wasm issues, start up the web REPL as per instructions in repl_www/README.md
-// Then sprinkle your code with console_log!("{:?}", my_value);
+// To debug in the browser, start up the web REPL as per instructions in repl_www/README.md
+// and sprinkle your code with console_log!("{:?}", my_value);
+// (Or if you're running the unit tests in Wasmer, you can just use println! or dbg!)
 #[macro_export]
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
