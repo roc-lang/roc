@@ -24,11 +24,11 @@ mod cli_run {
     #[cfg(not(debug_assertions))]
     use roc_collections::all::MutMap;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     const TEST_SURGICAL_LINKER: bool = true;
 
-    // Surgical linker currently only supports linux.
-    #[cfg(not(target_os = "linux"))]
+    // Surgical linker currently only supports linux x86_64.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     const TEST_SURGICAL_LINKER: bool = false;
 
     #[cfg(not(target_os = "macos"))]
@@ -247,7 +247,7 @@ mod cli_run {
                         }
                         "hello-gui" => {
                             // Since this one requires opening a window, we do `roc build` on it but don't run it.
-                            if cfg!(target_os = "linux") {
+                            if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
                                 // The surgical linker can successfully link this on Linux, but the legacy linker errors!
                                 build_example(&file_name, &["--optimize", "--roc-linker"]);
                             } else {
