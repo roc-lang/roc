@@ -3,15 +3,16 @@ use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_mono::ir::HigherOrderLowLevel;
+use roc_mono::ir::{HigherOrderLowLevel, PassedFunction};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_mono::low_level::HigherOrder;
 
 use crate::backend::WasmBackend;
 use crate::layout::CallConv;
 use crate::layout::{StackMemoryFormat, WasmLayout};
-use crate::storage::{StackMemoryLocation, StoredValue};
+use crate::storage::{StackMemoryLocation, Storage, StoredValue};
 use crate::wasm_module::{Align, ValueType};
+use crate::TARGET_INFO;
 
 /// Number types used for Wasm code gen
 /// Unlike other enums, this contains no details about layout or storage.
@@ -176,8 +177,8 @@ impl<'a> LowLevelCall<'a> {
 
     ///  Main entrypoint from WasmBackend
     pub fn generate(&self, backend: &mut WasmBackend<'a>) {
-        use LowLevel::*;
         use CodeGenNumType::*;
+        use LowLevel::*;
 
         let panic_ret_type = || {
             internal_error!(
@@ -932,11 +933,87 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
     }
 }
 
-fn gen_higher_order(higher_order: HigherOrder) {
+pub fn call_higher_order_lowlevel<'a>(
+    backend: &mut WasmBackend<'a>,
+    return_sym: Symbol,
+    return_layout: &Layout<'a>,
+    higher_order: &HigherOrderLowLevel<'a>,
+) {
     use HigherOrder::*;
-    match higher_order {
-        ListMap { .. }
-        | ListMap2 { .. }
+
+    let HigherOrderLowLevel {
+        op,
+        passed_function,
+        ..
+    } = higher_order;
+
+    let PassedFunction {
+        argument_layouts,
+        return_layout: result_layout,
+        owns_captured_environment,
+        captured_environment,
+        ..
+    } = passed_function;
+
+    /*
+        TODO indirect calls
+            passed_function
+                construct the ProcLayout
+                get the index of the inner function
+                append to (or find in) backend.proc_lookup
+                calculate its index
+                insert index into elements table
+            inc
+                construct the ProcLayout
+                call CodeGenHelp to make the specialization
+                append to (or find in) backend.proc_lookup
+                calculate its index
+                insert index into elements table
+    */
+
+    let caller_fn_idx: i32 = todo!();
+    let inc_fn_idx: i32 = todo!();
+
+    match op {
+        // List.map : List elem_old, (elem_old -> elem_new) -> List elem_new
+        ListMap { xs } => {
+            let list_layout_in = backend.storage.symbol_layouts[xs];
+
+            let (elem_old, elem_new) = match (list_layout_in, return_layout) {
+                (
+                    Layout::Builtin(Builtin::List(elem_old)),
+                    Layout::Builtin(Builtin::List(elem_new)),
+                ) => (elem_old, elem_new),
+                _ => unreachable!("invalid layout for List.map arguments"),
+            };
+            let (elem_old_size, _) = elem_old.stack_size_and_alignment(TARGET_INFO);
+            let (elem_new_size, elem_new_align) = elem_new.stack_size_and_alignment(TARGET_INFO);
+
+            let cb = &mut backend.code_builder;
+
+            // Load return pointer & argument values
+            backend.storage.load_symbols(cb, &[return_sym]);
+            backend.storage.load_symbol_zig(cb, *xs);
+            cb.i32_const(caller_fn_idx);
+            backend.storage.load_symbols(cb, &[*captured_environment]);
+            cb.i32_const(inc_fn_idx);
+            cb.i32_const(*owns_captured_environment as i32);
+            cb.i32_const(elem_new_align as i32); // used for allocating the new list
+            cb.i32_const(elem_old_size as i32);
+            cb.i32_const(elem_new_size as i32);
+
+            let (roc_proc_index, lookup) = backend
+                .proc_lookup
+                .iter()
+                .enumerate()
+                .find(|(_, lookup)| lookup.name == Symbol::LIST_MAP)
+                .unwrap_or_else(|| panic!("Can't find {:?}", op));
+            let wasm_fn_index = backend.fn_index_offset + roc_proc_index as u32;
+
+            cb.call(wasm_fn_index, lookup.linker_index, 9, false);
+        }
+
+        ListMap2 { .. }
         | ListMap3 { .. }
         | ListMap4 { .. }
         | ListMapWithIndex { .. }
@@ -950,6 +1027,6 @@ fn gen_higher_order(higher_order: HigherOrder) {
         | ListAny { .. }
         | ListAll { .. }
         | ListFindUnsafe { .. }
-        | DictWalk { .. } => todo!("{:?}", higher_order),
+        | DictWalk { .. } => todo!("{:?}", op),
     }
 }

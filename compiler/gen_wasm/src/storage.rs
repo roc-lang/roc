@@ -381,7 +381,8 @@ impl<'a> Storage<'a> {
         }
     }
 
-    fn load_symbol_zig(&mut self, code_builder: &mut CodeBuilder, arg: Symbol) {
+    // TODO: expose something higher level instead, shared among higher-order calls
+    pub fn load_symbol_zig(&mut self, code_builder: &mut CodeBuilder, arg: Symbol) {
         if let StoredValue::StackMemory {
             location,
             size,

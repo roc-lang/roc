@@ -17,7 +17,7 @@ use roc_error_macros::internal_error;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
-use crate::low_level::LowLevelCall;
+use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{DataSymbol, LinkingSegment, WasmObjectSymbol};
 use crate::wasm_module::sections::{DataMode, DataSegment};
@@ -55,7 +55,7 @@ pub struct WasmBackend<'a> {
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     next_constant_addr: u32,
-    fn_index_offset: u32,
+    pub fn_index_offset: u32,
     called_preload_fns: Vec<'a, u32>,
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
     helper_proc_gen: CodeGenHelp<'a>,
@@ -919,8 +919,7 @@ impl<'a> WasmBackend<'a> {
             }
 
             CallType::HigherOrder(higher_order_lowlevel) => {
-                // Note: Zig's calling convention bug will require a generated wrapper function!
-                todo!("higher order calls");
+                call_higher_order_lowlevel(self, ret_sym, ret_layout, *higher_order_lowlevel)
             }
 
             CallType::Foreign { .. } => todo!("CallType::Foreign"),

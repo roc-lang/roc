@@ -47,8 +47,7 @@ impl WasmLayout {
         use UnionLayout::*;
         use ValueType::*;
 
-        let size = layout.stack_size(TARGET_INFO);
-        let alignment_bytes = layout.alignment_bytes(TARGET_INFO);
+        let (size, alignment_bytes) = layout.stack_size_and_alignment(TARGET_INFO);
 
         match layout {
             Layout::Builtin(Int(int_width)) => {
