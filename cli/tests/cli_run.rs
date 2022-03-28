@@ -426,7 +426,7 @@ mod cli_run {
             stdin: &["Giovanni\n", "Giorgio\n"],
             input_file: None,
             expected_ending: "Hi, Giovanni Giorgio! 👋\n",
-            use_valgrind: true,
+            use_valgrind: false,
         },
         tui:"interactive" => Example {
             filename: "tui.roc",
@@ -459,7 +459,7 @@ mod cli_run {
                 stdin: &[],
                 input_file: Some("examples/hello.false"),
                 expected_ending:"Hello, World!\n",
-                use_valgrind: true,
+                use_valgrind: false,
             }
         },
     }
