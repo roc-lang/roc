@@ -391,3 +391,11 @@ Currying facilitates the antipattern of pointfree function composition, which I 
 
 Stacking up all these downsides of currying against the one upside of making certain function calls more concise,
 I concluded that it would be a mistake to have it in Roc.
+
+## Why are both rust and zig used?
+
+At the start of the project, we did not know zig well and it was not production ready. The reason zig entered the project because it has many different backends (wasm, various assembly formats, llvm IR) and can create code with minimal dependencies
+
+Rust has much more overhead in terms of code size. It's objectively not a lot, but it's less with zig.
+
+We think rust is a nicer language to work in for a project of this size. It has a type system that we're more familiar with, it has a package ecosystem and excellent tooling.
