@@ -3395,12 +3395,12 @@ fn to_imports_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD EXPOSES".to_string(),
+                title: "WEIRD IMPORTS".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
 
-        EImports::Imports(pos) => {
+        EImports::Imports(pos) | EImports::IndentImports(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
