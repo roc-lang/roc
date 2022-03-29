@@ -1,3 +1,21 @@
+interface Dict
+    exposes 
+        [ 
+            empty,
+            single,
+            walk,
+            insert,
+            len,
+            remove,
+            contains,
+            toList,
+            fromList,
+            union,
+            intersection,
+            difference,
+        ]
+    imports [ ]
+
 empty : Set k
 single : k -> Set k
 insert : Set k, k -> Set k
