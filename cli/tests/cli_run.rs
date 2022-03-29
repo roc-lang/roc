@@ -239,6 +239,11 @@ mod cli_run {
                             eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
                             return;
                         }
+                        "form" => {
+                            // test is skipped until we upgrate to zig 0.9 / llvm 13
+                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
+                            return;
+                        }
                         "helloSwift" => {
                             if cfg!(not(target_os = "macos")) {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
