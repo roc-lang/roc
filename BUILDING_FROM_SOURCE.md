@@ -2,7 +2,15 @@
 
 ## Using Nix
 
-### Install
+### On NixOS
+
+[For NixOS only Linux x86_64 is supported for now](https://github.com/rtfeldman/roc/issues/2734).
+
+NixOS users should make use of the nix flake by [enabling nix flakes](https://nixos.wiki/wiki/Flakes). Shell creation can be done by executing `nix develop` from the root of the repo. NixOS users that do not make use of this flake will get stuck on issue #1846.
+
+### On Linux/MacOS x86_64/aarch64
+
+#### Install
 
 Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.
 
@@ -16,7 +24,7 @@ Install nix:
 
 You will need to start a fresh terminal session to use nix.
 
-### Usage
+#### Usage
 
 Now with nix installed, you just need to run one command:
 
@@ -31,7 +39,7 @@ Use `cargo run help` to see all subcommands.
 To use the `repl` subcommand, execute `cargo run repl`.
 Use `cargo build` to build the whole project.
 
-### Extra tips
+#### Extra tips
 
 If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependencies into your current shell, so you never have to run nix-shell directly!
 
