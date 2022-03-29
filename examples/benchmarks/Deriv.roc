@@ -204,5 +204,5 @@ deriv = \i, f ->
             |> Str.concat " count: "
             |> Str.concat (Num.toStr (count fprime))
 
-    Task.putLine line 
+    Task.putLine line
         |> Task.after \_ -> Task.succeed fprime
