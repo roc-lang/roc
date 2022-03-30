@@ -131,60 +131,33 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
 
     let call = env.builder.build_call(fn_val, &arguments, "call_builtin");
 
+    // Attributes that we propagate from the zig builtin paramters, to the arguments we give to the
+    // call. It is undefined behavior in LLVM to have an attribute on a parameter, and then call
+    // the function where that parameter is not present. For many (e.g. nonnull) it can be inferred
+    // but e.g. byval and sret cannot and must be explicitly provided.
+    let propagate = [
+        Attribute::get_named_enum_kind_id("nonnull"),
+        Attribute::get_named_enum_kind_id("nocapture"),
+        Attribute::get_named_enum_kind_id("readonly"),
+        Attribute::get_named_enum_kind_id("noalias"),
+        Attribute::get_named_enum_kind_id("sret"),
+        Attribute::get_named_enum_kind_id("byval"),
+    ];
+
     for i in 0..fn_val.count_params() {
         let attributes = fn_val.attributes(AttributeLoc::Param(i));
 
         for attribute in attributes {
-            if attribute.is_type() {}
-            call.add_attribute(AttributeLoc::Param(i), attribute)
-        }
-    }
+            let kind_id = attribute.get_enum_kind_id();
 
-    match fn_name {
-        bitcode::STR_NUMBER_OF_BYTES | bitcode::STR_COUNT_GRAPEHEME_CLUSTERS => {
-            string_argument(env, call, 0);
+            if propagate.contains(&kind_id) {
+                call.add_attribute(AttributeLoc::Param(i), attribute)
+            }
         }
-        bitcode::STR_ENDS_WITH | bitcode::STR_STARTS_WITH => {
-            string_argument(env, call, 0);
-            string_argument(env, call, 1);
-        }
-        bitcode::STR_STR_SPLIT_IN_PLACE => {
-            string_argument(env, call, 0);
-            string_argument(env, call, 1);
-
-            dbg!(fn_val.get_type());
-        }
-        _ => {}
     }
 
     call.set_call_convention(fn_val.get_call_conventions());
     call
-}
-
-fn string_argument<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    call: CallSiteValue,
-    parameter_index: u32,
-) {
-    call.add_attribute(
-        AttributeLoc::Param(0),
-        type_attribute(env.context, "byval", zig_str_type(env).into()),
-    );
-
-    call.add_attribute(
-        AttributeLoc::Param(parameter_index as u32),
-        enum_attribute(env.context, "nonnull"),
-    );
-
-    call.add_attribute(
-        AttributeLoc::Param(parameter_index as u32),
-        enum_attribute(env.context, "nocapture"),
-    );
-
-    call.add_attribute(
-        AttributeLoc::Param(parameter_index as u32),
-        enum_attribute(env.context, "readonly"),
-    );
 }
 
 pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
