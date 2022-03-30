@@ -434,7 +434,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
         ListWalk::WalkBackwardsUntil => todo!(),
     };
 
-    let default_ptr = if default_layout.is_passed_by_reference() {
+    let default_ptr = if default_layout.is_passed_by_reference(env.target_info) {
         debug_assert!(default.is_pointer_value());
         default.into_pointer_value()
     } else {
@@ -503,7 +503,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
         }
     }
 
-    if default_layout.is_passed_by_reference() {
+    if default_layout.is_passed_by_reference(env.target_info) {
         result_ptr.into()
     } else {
         env.builder.build_load(result_ptr, "load_result")

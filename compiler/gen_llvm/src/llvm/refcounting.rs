@@ -865,9 +865,14 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
 
     let parent = fn_val;
 
-    let arg_val = env
-        .builder
-        .build_load(arg_val.into_pointer_value(), "load_str_to_stack");
+    let arg_val = if Layout::Builtin(Builtin::Str).is_passed_by_reference(env.target_info) {
+        env.builder
+            .build_load(arg_val.into_pointer_value(), "load_str_to_stack")
+    } else {
+        // it's already a struct, just do nothing
+        debug_assert!(arg_val.is_struct_value());
+        arg_val
+    };
     let str_wrapper = arg_val.into_struct_value();
 
     let capacity = builder
@@ -1829,7 +1834,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
                     .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
                     .unwrap();
 
-                let field_value = if field_layout.is_passed_by_reference() {
+                let field_value = if field_layout.is_passed_by_reference(env.target_info) {
                     field_ptr.into()
                 } else {
                     env.builder.build_load(field_ptr, "field_value")

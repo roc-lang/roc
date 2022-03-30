@@ -75,16 +75,26 @@ pub fn call_str_bitcode_fn<'a, 'ctx, 'env>(
         .unwrap();
 
     let str_type = super::convert::zig_str_type(env);
-    let result = create_entry_block_alloca(env, parent, str_type.into(), "return_str_alloca");
-    let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len() + 1, env.arena);
 
-    arguments.push(result.into());
-    arguments.extend(args);
+    match env.target_info.ptr_width() {
+        roc_target::PtrWidth::Bytes4 => {
+            // 3 machine words actually fit into 2 registers
+            call_bitcode_fn(env, args, fn_name)
+        }
+        roc_target::PtrWidth::Bytes8 => {
+            let result =
+                create_entry_block_alloca(env, parent, str_type.into(), "return_str_alloca");
+            let mut arguments: Vec<BasicValueEnum> =
+                Vec::with_capacity_in(args.len() + 1, env.arena);
 
-    call_void_bitcode_fn(env, &arguments, fn_name);
+            arguments.push(result.into());
+            arguments.extend(args);
 
-    // TODO make this function return a PointerValue
-    result.into()
+            call_void_bitcode_fn(env, &arguments, fn_name);
+
+            result.into()
+        }
+    }
 }
 
 pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
@@ -403,7 +413,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
         let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
-        let argument = if layout.is_passed_by_reference() {
+        let argument = if layout.is_passed_by_reference(env.target_info) {
             env.builder
                 .build_pointer_cast(
                     argument_ptr.into_pointer_value(),
@@ -557,7 +567,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
             let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
-            let value = if layout.is_passed_by_reference() {
+            let value = if layout.is_passed_by_reference(env.target_info) {
                 env.builder
                     .build_pointer_cast(value_ptr, value_type, "cast_ptr_to_tag_build_rc_wrapper")
                     .into()

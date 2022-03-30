@@ -1070,7 +1070,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 if !field_layout.is_dropped_because_empty() {
                     field_types.push(basic_type_from_layout(env, field_layout));
 
-                    if field_layout.is_passed_by_reference() {
+                    if field_layout.is_passed_by_reference(env.target_info) {
                         let field_value = env.builder.build_load(
                             field_expr.into_pointer_value(),
                             "load_tag_to_put_in_struct",
@@ -1475,7 +1475,7 @@ fn build_tag_field_value<'a, 'ctx, 'env>(
             env.context.i64_type().ptr_type(AddressSpace::Generic),
             "cast_recursive_pointer",
         )
-    } else if tag_field_layout.is_passed_by_reference() {
+    } else if tag_field_layout.is_passed_by_reference(env.target_info) {
         debug_assert!(value.is_pointer_value(), "{:#?}", value);
 
         // NOTE: we rely on this being passed to `store_roc_value` so that
@@ -2354,7 +2354,7 @@ pub fn load_roc_value<'a, 'ctx, 'env>(
     source: PointerValue<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    if layout.is_passed_by_reference() {
+    if layout.is_passed_by_reference(env.target_info) {
         let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
 
         store_roc_value(env, layout, alloca, source.into());
@@ -2371,7 +2371,7 @@ pub fn use_roc_value<'a, 'ctx, 'env>(
     source: BasicValueEnum<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    if layout.is_passed_by_reference() {
+    if layout.is_passed_by_reference(env.target_info) {
         let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
 
         env.builder.build_store(alloca, source);
@@ -2402,7 +2402,7 @@ pub fn store_roc_value<'a, 'ctx, 'env>(
     destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
 ) {
-    if layout.is_passed_by_reference() {
+    if layout.is_passed_by_reference(env.target_info) {
         debug_assert!(value.is_pointer_value());
 
         let align_bytes = layout.alignment_bytes(env.target_info);
@@ -2505,7 +2505,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
 
                     let destination = out_parameter.into_pointer_value();
-                    if layout.is_passed_by_reference() {
+                    if layout.is_passed_by_reference(env.target_info) {
                         let align_bytes = layout.alignment_bytes(env.target_info);
 
                         if align_bytes > 0 {
@@ -2618,7 +2618,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 for param in parameters.iter() {
                     let basic_type = basic_type_from_layout(env, &param.layout);
 
-                    let phi_type = if param.layout.is_passed_by_reference() {
+                    let phi_type = if param.layout.is_passed_by_reference(env.target_info) {
                         basic_type.ptr_type(AddressSpace::Generic).into()
                     } else {
                         basic_type
@@ -3926,7 +3926,7 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
         .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
         .unwrap();
 
-    let v3 = if return_layout.is_passed_by_reference() {
+    let v3 = if return_layout.is_passed_by_reference(env.target_info) {
         let loaded = env.builder.build_load(
             return_value.into_pointer_value(),
             "load_call_result_passed_by_ptr",
@@ -4332,7 +4332,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     let closure_layout = lambda_set.runtime_representation();
     let layouts_it = arguments.iter().chain(std::iter::once(&closure_layout));
     for (param, layout) in evaluator_arguments.iter_mut().zip(layouts_it) {
-        if param.is_pointer_value() && !layout.is_passed_by_reference() {
+        if param.is_pointer_value() && !layout.is_passed_by_reference(env.target_info) {
             *param = builder.build_load(param.into_pointer_value(), "load_param");
         }
     }
@@ -4350,7 +4350,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     } else {
         let call_result = call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
 
-        if return_layout.is_passed_by_reference() {
+        if return_layout.is_passed_by_reference(env.target_info) {
             let align_bytes = return_layout.alignment_bytes(env.target_info);
 
             if align_bytes > 0 {
@@ -4674,7 +4674,7 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
-            if result_layout.is_passed_by_reference() {
+            if result_layout.is_passed_by_reference(env.target_info) {
                 result_alloca.into()
             } else {
                 env.builder
@@ -6212,23 +6212,30 @@ enum RocReturn {
 }
 
 impl RocReturn {
-    fn roc_return_by_pointer(layout: Layout) -> bool {
+    fn roc_return_by_pointer(target_info: TargetInfo, layout: Layout) -> bool {
         match layout {
             Layout::Builtin(builtin) => {
                 use Builtin::*;
 
-                matches!(builtin, Str)
+                match target_info.ptr_width() {
+                    roc_target::PtrWidth::Bytes4 => false,
+
+                    roc_target::PtrWidth::Bytes8 => {
+                        //
+                        matches!(builtin, Str)
+                    }
+                }
             }
             Layout::Union(UnionLayout::NonRecursive(_)) => true,
             Layout::LambdaSet(lambda_set) => {
-                RocReturn::roc_return_by_pointer(lambda_set.runtime_representation())
+                RocReturn::roc_return_by_pointer(target_info, lambda_set.runtime_representation())
             }
             _ => false,
         }
     }
 
-    fn from_layout<'a, 'ctx, 'env>(_env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> Self {
-        if Self::roc_return_by_pointer(*layout) {
+    fn from_layout<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> Self {
+        if Self::roc_return_by_pointer(env.target_info, *layout) {
             RocReturn::ByPointer
         } else {
             RocReturn::Return

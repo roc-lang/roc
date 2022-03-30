@@ -1037,17 +1037,26 @@ impl<'a> Layout<'a> {
         false
     }
 
-    pub fn is_passed_by_reference(&self) -> bool {
+    pub fn is_passed_by_reference(&self, target_info: TargetInfo) -> bool {
         match self {
             Layout::Builtin(builtin) => {
                 use Builtin::*;
 
-                matches!(builtin, Str)
+                match target_info.ptr_width() {
+                    PtrWidth::Bytes4 => {
+                        // more things fit into a register
+                        false
+                    }
+                    PtrWidth::Bytes8 => {
+                        // currently, only Str is passed by-reference internally
+                        matches!(builtin, Str)
+                    }
+                }
             }
             Layout::Union(UnionLayout::NonRecursive(_)) => true,
-            Layout::LambdaSet(lambda_set) => {
-                lambda_set.runtime_representation().is_passed_by_reference()
-            }
+            Layout::LambdaSet(lambda_set) => lambda_set
+                .runtime_representation()
+                .is_passed_by_reference(target_info),
             _ => false,
         }
     }

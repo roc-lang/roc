@@ -135,7 +135,7 @@ pub fn argument_type_from_layout<'a, 'ctx, 'env>(
         Builtin(_) => {
             let base = basic_type_from_layout(env, layout);
 
-            if layout.is_passed_by_reference() {
+            if layout.is_passed_by_reference(env.target_info) {
                 base.ptr_type(AddressSpace::Generic).into()
             } else {
                 base
