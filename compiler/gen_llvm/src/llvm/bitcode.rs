@@ -131,36 +131,60 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
 
     let call = env.builder.build_call(fn_val, &arguments, "call_builtin");
 
+    for i in 0..fn_val.count_params() {
+        let attributes = fn_val.attributes(AttributeLoc::Param(i));
+
+        for attribute in attributes {
+            if attribute.is_type() {}
+            call.add_attribute(AttributeLoc::Param(i), attribute)
+        }
+    }
+
     match fn_name {
         bitcode::STR_NUMBER_OF_BYTES | bitcode::STR_COUNT_GRAPEHEME_CLUSTERS => {
-            // hacks
+            string_argument(env, call, 0);
+        }
+        bitcode::STR_ENDS_WITH | bitcode::STR_STARTS_WITH => {
+            string_argument(env, call, 0);
+            string_argument(env, call, 1);
+        }
+        bitcode::STR_STR_SPLIT_IN_PLACE => {
+            string_argument(env, call, 0);
+            string_argument(env, call, 1);
 
-            let i = 0;
-            call.add_attribute(
-                AttributeLoc::Param(0),
-                type_attribute(env.context, "byval", zig_str_type(env).into()),
-            );
-
-            call.add_attribute(
-                AttributeLoc::Param(i as u32),
-                enum_attribute(env.context, "nonnull"),
-            );
-
-            call.add_attribute(
-                AttributeLoc::Param(i as u32),
-                enum_attribute(env.context, "nocapture"),
-            );
-
-            call.add_attribute(
-                AttributeLoc::Param(i as u32),
-                enum_attribute(env.context, "readonly"),
-            );
+            dbg!(fn_val.get_type());
         }
         _ => {}
     }
 
     call.set_call_convention(fn_val.get_call_conventions());
     call
+}
+
+fn string_argument<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    call: CallSiteValue,
+    parameter_index: u32,
+) {
+    call.add_attribute(
+        AttributeLoc::Param(0),
+        type_attribute(env.context, "byval", zig_str_type(env).into()),
+    );
+
+    call.add_attribute(
+        AttributeLoc::Param(parameter_index as u32),
+        enum_attribute(env.context, "nonnull"),
+    );
+
+    call.add_attribute(
+        AttributeLoc::Param(parameter_index as u32),
+        enum_attribute(env.context, "nocapture"),
+    );
+
+    call.add_attribute(
+        AttributeLoc::Param(parameter_index as u32),
+        enum_attribute(env.context, "readonly"),
+    );
 }
 
 pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(

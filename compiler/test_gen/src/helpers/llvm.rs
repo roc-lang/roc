@@ -265,7 +265,8 @@ pub fn helper<'a>(
     let target = target_lexicon::Triple::host();
 
     let opt_level = if cfg!(debug_assertions) {
-        OptLevel::Normal
+        // OptLevel::Normal
+        OptLevel::Optimize
     } else {
         OptLevel::Optimize
     };
