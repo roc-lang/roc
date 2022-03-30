@@ -2567,9 +2567,10 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             if value_ptr.get_first_use().is_some() {
                                 value_ptr.replace_all_uses_with(destination);
                             } else {
-                                let size = env
-                                    .ptr_int()
-                                    .const_int(layout.stack_size(env.target_info) as u64, false);
+                                let size = env.ptr_int().const_int(
+                                    layout.stack_size_without_alignment(env.target_info) as u64,
+                                    false,
+                                );
 
                                 env.builder
                                     .build_memcpy(
