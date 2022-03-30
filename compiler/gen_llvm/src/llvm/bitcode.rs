@@ -9,17 +9,14 @@ use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
 };
 use inkwell::attributes::{Attribute, AttributeLoc};
-use inkwell::context::Context;
-use inkwell::types::{AnyType, BasicType, BasicTypeEnum};
+use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue};
 use inkwell::AddressSpace;
-use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{LambdaSet, Layout, LayoutIds, UnionLayout};
 
 use super::build::create_entry_block_alloca;
-use super::convert::zig_str_type;
 
 use std::convert::TryInto;
 
@@ -99,21 +96,6 @@ pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
         .try_as_basic_value()
         .right()
         .unwrap_or_else(|| panic!("LLVM error: Tried to call void bitcode function, but got return value from bitcode function, {:?}", fn_name))
-}
-
-fn type_attribute<'ctx>(
-    context: &Context,
-    name: &str,
-    basic_type: BasicTypeEnum<'ctx>,
-) -> inkwell::attributes::Attribute {
-    let kind_id = Attribute::get_named_enum_kind_id(name);
-    context.create_type_attribute(kind_id, basic_type.as_any_type_enum())
-}
-
-fn enum_attribute(context: &Context, name: &str) -> inkwell::attributes::Attribute {
-    let kind_id = Attribute::get_named_enum_kind_id(name);
-    debug_assert!(kind_id > 0);
-    context.create_enum_attribute(kind_id, 1)
 }
 
 fn call_bitcode_fn_help<'a, 'ctx, 'env>(
