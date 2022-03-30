@@ -512,8 +512,12 @@ fn strFromFloatHelp(comptime T: type, float: T) RocStr {
 }
 
 // Str.split
-pub fn strSplitInPlaceC(array: [*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {
-    return @call(.{ .modifier = always_inline }, strSplitInPlace, .{ array, string, delimiter });
+pub fn strSplitInPlaceC(opt_array: ?[*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {
+    if (opt_array) |array| {
+        return @call(.{ .modifier = always_inline }, strSplitInPlace, .{ array, string, delimiter });
+    } else {
+        return;
+    }
 }
 
 fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
