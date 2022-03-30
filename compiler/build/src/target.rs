@@ -72,6 +72,16 @@ pub fn target_zig_str(target: &Triple) -> &'static str {
             operating_system: OperatingSystem::Linux,
             ..
         } => "aarch64-linux-gnu",
+        Triple {
+            architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Darwin,
+            ..
+        } => "x86_64-apple-darwinn",
+        Triple {
+            architecture: Architecture::Aarch64(_),
+            operating_system: OperatingSystem::Darwin,
+            ..
+        } => "aarch64-apple-darwinn",
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
