@@ -1,7 +1,7 @@
 use crate::expected::{Expected, PExpected};
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::ident::TagName;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{Category, PatternCategory, Type};
@@ -41,7 +41,11 @@ impl Constraints {
         let includes_tags = Vec::new();
         let strings = Vec::new();
 
-        types.extend([Type::EmptyRec, Type::EmptyTagUnion]);
+        types.extend([
+            Type::EmptyRec,
+            Type::EmptyTagUnion,
+            Type::Apply(Symbol::STR_STR, vec![], Region::zero()),
+        ]);
 
         categories.extend([
             Category::Record,
@@ -91,6 +95,7 @@ impl Constraints {
 
     pub const EMPTY_RECORD: Index<Type> = Index::new(0);
     pub const EMPTY_TAG_UNION: Index<Type> = Index::new(1);
+    pub const STR: Index<Type> = Index::new(2);
 
     pub const CATEGORY_RECORD: Index<Category> = Index::new(0);
     pub const CATEGORY_FOREIGNCALL: Index<Category> = Index::new(1);
@@ -124,12 +129,35 @@ impl Constraints {
         match typ {
             Type::EmptyRec => EitherIndex::from_left(Self::EMPTY_RECORD),
             Type::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
+            Type::Apply(Symbol::STR_STR, args, _) if args.is_empty() => {
+                EitherIndex::from_left(Self::STR)
+            }
             Type::Variable(var) => Self::push_type_variable(var),
             other => {
                 let index: Index<Type> = Index::push_new(&mut self.types, other);
                 EitherIndex::from_left(index)
             }
         }
+    }
+
+    pub fn statistics(&self, module_id: ModuleId) -> Result<String, std::fmt::Error> {
+        use std::fmt::Write;
+
+        let mut buf = String::new();
+
+        writeln!(buf, "Constraints statistics for module {:?}:", module_id)?;
+
+        writeln!(buf, "   constraints length: {}:", self.constraints.len())?;
+        writeln!(buf, "   types length: {}:", self.types.len())?;
+        writeln!(
+            buf,
+            "   let_constraints length: {}:",
+            self.let_constraints.len()
+        )?;
+        writeln!(buf, "   expectations length: {}:", self.expectations.len())?;
+        writeln!(buf, "   categories length: {}:", self.categories.len())?;
+
+        Ok(buf)
     }
 
     #[inline(always)]

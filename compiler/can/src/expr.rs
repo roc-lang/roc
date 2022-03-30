@@ -9,7 +9,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -40,7 +40,8 @@ impl Output {
             self.tail_call = Some(later);
         }
 
-        self.introduced_variables.union(&other.introduced_variables);
+        self.introduced_variables
+            .union_owned(other.introduced_variables);
         self.aliases.extend(other.aliases);
         self.non_closures.extend(other.non_closures);
     }
@@ -1015,10 +1016,6 @@ pub fn canonicalize_expr<'a>(
         }
     };
 
-    if cfg!(debug_assertions) {
-        env.home.register_debug_idents(&env.ident_ids);
-    }
-
     // At the end, diff used_idents and defined_idents to see which were unused.
     // Add warnings for those!
 
@@ -1112,126 +1109,32 @@ fn canonicalize_when_branch<'a>(
     )
 }
 
-pub fn local_successors<'a>(
+pub fn local_successors_with_duplicates<'a>(
     references: &'a References,
     closures: &'a MutMap<Symbol, References>,
-) -> ImSet<Symbol> {
-    let mut answer = references.value_lookups.clone();
+) -> Vec<Symbol> {
+    let mut answer: Vec<_> = references.value_lookups.iter().copied().collect();
 
-    for call_symbol in references.calls.iter() {
-        answer = answer.union(call_successors(*call_symbol, closures));
-    }
+    let mut stack: Vec<_> = references.calls.iter().copied().collect();
+    let mut seen = Vec::new();
 
-    answer
-}
-
-fn call_successors(call_symbol: Symbol, closures: &MutMap<Symbol, References>) -> ImSet<Symbol> {
-    let mut answer = ImSet::default();
-    let mut seen = MutSet::default();
-    let mut queue = vec![call_symbol];
-
-    while let Some(symbol) = queue.pop() {
+    while let Some(symbol) = stack.pop() {
         if seen.contains(&symbol) {
             continue;
         }
 
         if let Some(references) = closures.get(&symbol) {
             answer.extend(references.value_lookups.iter().copied());
-            queue.extend(references.calls.iter().copied());
+            stack.extend(references.calls.iter().copied());
 
-            seen.insert(symbol);
+            seen.push(symbol);
         }
     }
+
+    answer.sort();
+    answer.dedup();
 
     answer
-}
-
-pub fn references_from_local<'a, T>(
-    defined_symbol: Symbol,
-    visited: &'a mut MutSet<Symbol>,
-    refs_by_def: &'a MutMap<Symbol, (T, References)>,
-    closures: &'a MutMap<Symbol, References>,
-) -> References
-where
-    T: Debug,
-{
-    let mut answer: References = References::new();
-
-    match refs_by_def.get(&defined_symbol) {
-        Some((_, refs)) => {
-            visited.insert(defined_symbol);
-
-            for local in refs.value_lookups.iter() {
-                if !visited.contains(local) {
-                    let other_refs: References =
-                        references_from_local(*local, visited, refs_by_def, closures);
-
-                    answer = answer.union(other_refs);
-                }
-
-                answer.value_lookups.insert(*local);
-            }
-
-            for call in refs.calls.iter() {
-                if !visited.contains(call) {
-                    let other_refs = references_from_call(*call, visited, refs_by_def, closures);
-
-                    answer = answer.union(other_refs);
-                }
-
-                answer.calls.insert(*call);
-            }
-
-            answer
-        }
-        None => answer,
-    }
-}
-
-pub fn references_from_call<'a, T>(
-    call_symbol: Symbol,
-    visited: &'a mut MutSet<Symbol>,
-    refs_by_def: &'a MutMap<Symbol, (T, References)>,
-    closures: &'a MutMap<Symbol, References>,
-) -> References
-where
-    T: Debug,
-{
-    match closures.get(&call_symbol) {
-        Some(references) => {
-            let mut answer = references.clone();
-
-            visited.insert(call_symbol);
-
-            for closed_over_local in references.value_lookups.iter() {
-                if !visited.contains(closed_over_local) {
-                    let other_refs =
-                        references_from_local(*closed_over_local, visited, refs_by_def, closures);
-
-                    answer = answer.union(other_refs);
-                }
-
-                answer.value_lookups.insert(*closed_over_local);
-            }
-
-            for call in references.calls.iter() {
-                if !visited.contains(call) {
-                    let other_refs = references_from_call(*call, visited, refs_by_def, closures);
-
-                    answer = answer.union(other_refs);
-                }
-
-                answer.calls.insert(*call);
-            }
-
-            answer
-        }
-        None => {
-            // If the call symbol was not in the closure map, that means we're calling a non-function and
-            // will get a type mismatch later. For now, assume no references as a result of the "call."
-            References::new()
-        }
-    }
 }
 
 enum CanonicalizeRecordProblem {

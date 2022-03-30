@@ -38,8 +38,8 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add clippy
     # rustfmt
     RUN rustup component add rustfmt
-    # wasm repl
-    RUN rustup target add wasm32-unknown-unknown
+    # wasm repl & tests
+    RUN rustup target add wasm32-unknown-unknown wasm32-wasi
     RUN apt -y install libssl-dev
     RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack
     # criterion

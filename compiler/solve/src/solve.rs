@@ -428,6 +428,7 @@ impl Env {
         it1.zip(it2)
     }
 
+    #[inline(always)]
     fn get_var_by_symbol(&self, symbol: &Symbol) -> Option<Variable> {
         self.symbols
             .iter()
@@ -435,6 +436,7 @@ impl Env {
             .map(|index| self.variables[index])
     }
 
+    #[inline(always)]
     fn insert_symbol_var_if_vacant(&mut self, symbol: Symbol, var: Variable) {
         match self.symbols.iter().position(|s| *s == symbol) {
             None => {
@@ -725,23 +727,27 @@ fn solve(
 
                 // check that things went well
                 debug_assert!({
-                    // NOTE the `subs.redundant` check is added for the uniqueness
-                    // inference, and does not come from elm. It's unclear whether this is
-                    // a bug with uniqueness inference (something is redundant that
-                    // shouldn't be) or that it just never came up in elm.
                     let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
 
-                    let failing: Vec<_> = rigid_vars
+                    // NOTE the `subs.redundant` check does not come from elm.
+                    // It's unclear whether this is a bug with our implementation
+                    // (something is redundant that shouldn't be)
+                    // or that it just never came up in elm.
+                    let mut it = rigid_vars
                         .iter()
                         .filter(|&var| !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE)
-                        .collect();
+                        .peekable();
 
-                    if !failing.is_empty() {
+                    if it.peek().is_some() {
+                        let failing: Vec<_> = it.collect();
                         println!("Rigids {:?}", &rigid_vars);
                         println!("Failing {:?}", failing);
-                    }
 
-                    failing.is_empty()
+                        // nicer error message
+                        failing.is_empty()
+                    } else {
+                        true
+                    }
                 });
 
                 let mut new_env = env.clone();
@@ -1254,7 +1260,6 @@ fn type_to_var(
     } else {
         let mut arena = take_scratchpad();
 
-        // let var = type_to_variable(subs, rank, pools, &arena, typ);
         let var = type_to_variable(subs, rank, pools, &arena, aliases, typ);
 
         arena.reset();
@@ -1845,6 +1850,29 @@ fn find_tag_name_run<T>(slice: &[(TagName, T)], subs: &mut Subs) -> Option<SubsS
     result
 }
 
+#[inline(always)]
+fn register_tag_arguments<'a>(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    arena: &'_ bumpalo::Bump,
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+    arguments: &'a [Type],
+) -> VariableSubsSlice {
+    if arguments.is_empty() {
+        VariableSubsSlice::default()
+    } else {
+        let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
+        let it = (new_variables.indices()).zip(arguments);
+        for (target_index, argument) in it {
+            let var = RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
+            subs.variables[target_index] = var;
+        }
+
+        new_variables
+    }
+}
+
 /// Assumes that the tags are sorted and there are no duplicates!
 fn insert_tags_fast_path<'a>(
     subs: &mut Subs,
@@ -1854,23 +1882,35 @@ fn insert_tags_fast_path<'a>(
     tags: &'a [(TagName, Vec<Type>)],
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
-    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
+    if let [(TagName::Global(tag_name), arguments)] = tags {
+        let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, arguments);
+        let new_variable_slices =
+            SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
 
+        macro_rules! subs_tag_name {
+            ($tag_name_slice:expr) => {
+                return UnionTags::from_slices($tag_name_slice, new_variable_slices)
+            };
+        }
+
+        match tag_name.as_str() {
+            "Ok" => subs_tag_name!(Subs::TAG_NAME_OK.as_slice()),
+            "Err" => subs_tag_name!(Subs::TAG_NAME_ERR.as_slice()),
+            "InvalidNumStr" => subs_tag_name!(Subs::TAG_NAME_INVALID_NUM_STR.as_slice()),
+            "BadUtf8" => subs_tag_name!(Subs::TAG_NAME_BAD_UTF_8.as_slice()),
+            "OutOfBounds" => subs_tag_name!(Subs::TAG_NAME_OUT_OF_BOUNDS.as_slice()),
+            _other => {}
+        }
+    }
+
+    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
     match find_tag_name_run(tags, subs) {
         Some(new_tag_names) => {
             let it = (new_variable_slices.indices()).zip(tags);
 
             for (variable_slice_index, (_, arguments)) in it {
-                // turn the arguments into variables
-                let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-                let it = (new_variables.indices()).zip(arguments);
-                for (target_index, argument) in it {
-                    let var =
-                        RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
-                    subs.variables[target_index] = var;
-                }
-
-                subs.variable_slices[variable_slice_index] = new_variables;
+                subs.variable_slices[variable_slice_index] =
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments);
             }
 
             UnionTags::from_slices(new_tag_names, new_variable_slices)
@@ -1883,16 +1923,9 @@ fn insert_tags_fast_path<'a>(
                 .zip(tags);
 
             for ((variable_slice_index, tag_name_index), (tag_name, arguments)) in it {
-                // turn the arguments into variables
-                let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-                let it = (new_variables.indices()).zip(arguments);
-                for (target_index, argument) in it {
-                    let var =
-                        RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
-                    subs.variables[target_index] = var;
-                }
+                subs.variable_slices[variable_slice_index] =
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments);
 
-                subs.variable_slices[variable_slice_index] = new_variables;
                 subs.tag_names[tag_name_index] = tag_name.clone();
             }
 
@@ -2122,7 +2155,8 @@ fn adjust_rank(
 
         max_rank
     } else if desc_mark == visit_mark {
-        // nothing changes
+        // we have already visited this variable
+        // (probably two variables had the same root)
         desc_rank
     } else {
         let min_rank = group_rank.min(desc_rank);

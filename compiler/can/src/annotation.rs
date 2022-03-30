@@ -19,32 +19,37 @@ pub struct Annotation {
     pub aliases: SendMap<Symbol, Alias>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NamedVariable {
+    pub variable: Variable,
+    pub name: Lowercase,
+    // NB: there may be multiple occurrences of a variable
+    pub first_seen: Region,
+}
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct IntroducedVariables {
-    // NOTE on rigids
-    //
-    // Rigids must be unique within a type annotation.
-    // E.g. in `identity : a -> a`, there should only be one
-    // variable (a rigid one, with name "a").
-    // Hence `rigids : ImMap<Lowercase, Variable>`
-    //
-    // But then between annotations, the same name can occur multiple times,
-    // but a variable can only have one name. Therefore
-    // `ftv : SendMap<Variable, Lowercase>`.
     pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,
     pub inferred: Vec<Loc<Variable>>,
-    // NB: A mapping of a -> Loc<v1> in this map has the region of the first-seen var, but there
-    // may be multiple occurrences of it!
-    pub var_by_name: SendMap<Lowercase, Loc<Variable>>,
-    pub name_by_var: SendMap<Variable, Lowercase>,
+    pub named: Vec<NamedVariable>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {
     pub fn insert_named(&mut self, name: Lowercase, var: Loc<Variable>) {
-        self.var_by_name.insert(name.clone(), var);
-        self.name_by_var.insert(var.value, name);
+        debug_assert!(!self
+            .named
+            .iter()
+            .any(|nv| nv.name == name || nv.variable == var.value));
+
+        let named_variable = NamedVariable {
+            name,
+            variable: var.value,
+            first_seen: var.region,
+        };
+
+        self.named.push(named_variable);
     }
 
     pub fn insert_wildcard(&mut self, var: Loc<Variable>) {
@@ -64,21 +69,40 @@ impl IntroducedVariables {
     }
 
     pub fn union(&mut self, other: &Self) {
-        self.wildcards.extend(other.wildcards.iter().cloned());
-        self.lambda_sets.extend(other.lambda_sets.iter().cloned());
-        self.inferred.extend(other.inferred.iter().cloned());
-        self.var_by_name.extend(other.var_by_name.clone());
-        self.name_by_var.extend(other.name_by_var.clone());
+        self.wildcards.extend(other.wildcards.iter().copied());
+        self.lambda_sets.extend(other.lambda_sets.iter().copied());
+        self.inferred.extend(other.inferred.iter().copied());
         self.host_exposed_aliases
             .extend(other.host_exposed_aliases.clone());
+
+        self.named.extend(other.named.iter().cloned());
+        self.named.sort();
+        self.named.dedup();
+    }
+
+    pub fn union_owned(&mut self, other: Self) {
+        self.wildcards.extend(other.wildcards);
+        self.lambda_sets.extend(other.lambda_sets);
+        self.inferred.extend(other.inferred);
+        self.host_exposed_aliases.extend(other.host_exposed_aliases);
+
+        self.named.extend(other.named);
+        self.named.sort();
+        self.named.dedup();
     }
 
     pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {
-        self.var_by_name.get(name).map(|v| &v.value)
+        self.named
+            .iter()
+            .find(|nv| &nv.name == name)
+            .map(|nv| &nv.variable)
     }
 
     pub fn name_by_var(&self, var: Variable) -> Option<&Lowercase> {
-        self.name_by_var.get(&var)
+        self.named
+            .iter()
+            .find(|nv| nv.variable == var)
+            .map(|nv| &nv.name)
     }
 }
 
@@ -343,12 +367,8 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    // For now, aliases of function types cannot be delayed.
-                    // This is a limitation of the current implementation,
-                    // and this totally should be possible in the future.
-                    let is_import = !symbol.is_builtin() && (env.home != symbol.module_id());
                     let is_structural = alias.kind == AliasKind::Structural;
-                    if !is_import && is_structural && alias.lambda_set_variables.is_empty() {
+                    if is_structural {
                         let mut type_var_to_arg = Vec::new();
 
                         for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
@@ -357,10 +377,21 @@ fn can_annotation_help(
                             type_var_to_arg.push((name, arg_ann));
                         }
 
+                        let mut lambda_set_variables =
+                            Vec::with_capacity(alias.lambda_set_variables.len());
+
+                        for _ in 0..alias.lambda_set_variables.len() {
+                            let lvar = var_store.fresh();
+
+                            introduced_variables.insert_lambda_set(lvar);
+
+                            lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
+                        }
+
                         Type::DelayedAlias(AliasCommon {
                             symbol,
                             type_arguments: type_var_to_arg,
-                            lambda_set_variables: alias.lambda_set_variables.clone(),
+                            lambda_set_variables,
                         })
                     } else {
                         let (type_arguments, lambda_set_variables, actual) =

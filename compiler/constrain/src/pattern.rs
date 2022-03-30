@@ -172,18 +172,23 @@ pub fn constrain_pattern(
             //     A -> ""
             //     _ -> ""
             // so, we know that "x" (in this case, a tag union) must be open.
-            state
-                .constraints
-                .push(constraints.is_open_type(expected.get_type()));
+            if could_be_a_tag_union(expected.get_type_ref()) {
+                state
+                    .constraints
+                    .push(constraints.is_open_type(expected.get_type()));
+            }
         }
         UnsupportedPattern(_) | MalformedPattern(_, _) | OpaqueNotInScope(..) => {
             // Erroneous patterns don't add any constraints.
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            state
-                .constraints
-                .push(constraints.is_open_type(expected.get_type_ref().clone()));
+            if could_be_a_tag_union(expected.get_type_ref()) {
+                state
+                    .constraints
+                    .push(constraints.is_open_type(expected.get_type_ref().clone()));
+            }
+
             state.headers.insert(
                 *symbol,
                 Loc {
@@ -551,4 +556,8 @@ pub fn constrain_pattern(
             ]);
         }
     }
+}
+
+fn could_be_a_tag_union(typ: &Type) -> bool {
+    !matches!(typ, Type::Apply(..) | Type::Function(..) | Type::Record(..))
 }

@@ -19,7 +19,7 @@ use roc_code_markup::markup::convert::from_ast::ast_to_mark_nodes;
 use roc_code_markup::markup::mark_id_ast_id_map::MarkIdAstIdMap;
 use roc_code_markup::markup::nodes;
 use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
-use roc_load::file::LoadedModule;
+use roc_load::LoadedModule;
 use roc_module::symbol::Interns;
 use std::path::Path;
 
@@ -232,7 +232,7 @@ pub mod test_ed_model {
     use roc_ast::lang::env::Env;
     use roc_ast::mem_pool::pool::Pool;
     use roc_ast::module::load_module;
-    use roc_load::file::LoadedModule;
+    use roc_load::LoadedModule;
     use roc_module::symbol::IdentIds;
     use roc_module::symbol::ModuleIds;
     use roc_types::subs::VarStore;

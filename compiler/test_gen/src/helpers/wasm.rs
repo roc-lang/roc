@@ -8,7 +8,7 @@ use wasmer::{Memory, WasmPtr};
 
 use super::RefCount;
 use crate::helpers::from_wasmer_memory::FromWasmerMemory;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
 
@@ -37,13 +37,12 @@ fn promote_expr_to_module(src: &str) -> String {
 pub fn compile_and_load<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: &'a roc_builtins::std::StdLib,
     _test_wrapper_type_info: PhantomData<T>,
 ) -> wasmer::Instance {
     let platform_bytes = load_platform_and_builtins();
 
     let compiled_bytes =
-        compile_roc_to_wasm_bytes(arena, stdlib, &platform_bytes, src, _test_wrapper_type_info);
+        compile_roc_to_wasm_bytes(arena, &platform_bytes, src, _test_wrapper_type_info);
 
     if DEBUG_LOG_SETTINGS.keep_test_binary {
         let build_dir_hash = src_hash(src);
@@ -67,7 +66,6 @@ fn src_hash(src: &str) -> u64 {
 
 fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
-    stdlib: &'a roc_builtins::std::StdLib,
     preload_bytes: &[u8],
     src: &str,
     _test_wrapper_type_info: PhantomData<T>,
@@ -86,11 +84,10 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         module_src = &temp;
     }
 
-    let loaded = roc_load::file::load_and_monomorphize_from_str(
+    let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
-        stdlib,
         src_dir,
         Default::default(),
         roc_target::TargetInfo::default_wasm32(),
@@ -98,7 +95,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
 
     let loaded = loaded.expect("failed to load module");
 
-    use roc_load::file::MonomorphizedModule;
+    use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         module_id,
         procedures,
@@ -183,10 +180,7 @@ where
 {
     let arena = bumpalo::Bump::new();
 
-    // NOTE the stdlib must be in the arena; just taking a reference will segfault
-    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -256,10 +250,7 @@ where
 {
     let arena = bumpalo::Bump::new();
 
-    // NOTE the stdlib must be in the arena; just taking a reference will segfault
-    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 

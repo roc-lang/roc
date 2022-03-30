@@ -13,6 +13,17 @@ extern "C" {
     pub fn js_run_app() -> usize;
 
     pub fn js_get_result_and_memory(buffer_alloc_addr: *mut u8) -> usize;
+
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+}
+
+// To debug in the browser, start up the web REPL as per instructions in repl_www/README.md
+// and sprinkle your code with console_log!("{:?}", my_value);
+// (Or if you're running the unit tests in Wasmer, you can just use println! or dbg!)
+#[macro_export]
+macro_rules! console_log {
+    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
 }
 
 /// Async entrypoint for the browser

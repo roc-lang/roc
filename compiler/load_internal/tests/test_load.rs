@@ -7,7 +7,7 @@ extern crate maplit;
 
 extern crate bumpalo;
 extern crate roc_collections;
-extern crate roc_load;
+extern crate roc_load_internal;
 extern crate roc_module;
 
 mod helpers;
@@ -19,17 +19,43 @@ mod test_load {
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
     use roc_constrain::module::ExposedByModule;
-    use roc_load::file::LoadedModule;
+    use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem, Phase};
     use roc_module::ident::ModuleName;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_problem::can::Problem;
     use roc_region::all::LineInfo;
     use roc_reporting::report::can_problem;
     use roc_reporting::report::RocDocAllocator;
+    use roc_target::TargetInfo;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
     use std::collections::HashMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
+    fn load_and_typecheck<'a>(
+        arena: &'a Bump,
+        filename: PathBuf,
+        src_dir: &Path,
+        exposed_types: ExposedByModule,
+        target_info: TargetInfo,
+    ) -> Result<LoadedModule, LoadingProblem<'a>> {
+        use LoadResult::*;
+
+        let load_start = LoadStart::from_path(arena, filename)?;
+
+        match roc_load_internal::file::load(
+            arena,
+            load_start,
+            src_dir,
+            exposed_types,
+            Phase::SolveTypes,
+            target_info,
+            Default::default(), // these tests will re-compile the builtins
+        )? {
+            Monomorphized(_) => unreachable!(""),
+            TypeChecked(module) => Ok(module),
+        }
+    }
 
     const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
 
@@ -62,7 +88,7 @@ mod test_load {
     }
 
     fn multiple_modules(files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
-        use roc_load::file::LoadingProblem;
+        use roc_load_internal::file::LoadingProblem;
 
         let arena = Bump::new();
         let arena = &arena;
@@ -102,12 +128,11 @@ mod test_load {
     fn multiple_modules_help<'a>(
         arena: &'a Bump,
         mut files: Vec<(&str, &str)>,
-    ) -> Result<Result<LoadedModule, roc_load::file::LoadingProblem<'a>>, std::io::Error> {
+    ) -> Result<Result<LoadedModule, roc_load_internal::file::LoadingProblem<'a>>, std::io::Error>
+    {
         use std::fs::{self, File};
         use std::io::Write;
         use tempfile::tempdir;
-
-        let stdlib = roc_builtins::std::standard_stdlib();
 
         let mut file_handles: Vec<_> = Vec::new();
 
@@ -139,10 +164,9 @@ mod test_load {
             writeln!(file, "{}", source)?;
             file_handles.push(file);
 
-            roc_load::file::load_and_typecheck(
+            load_and_typecheck(
                 arena,
                 full_file_path,
-                arena.alloc(stdlib),
                 dir.path(),
                 Default::default(),
                 TARGET_INFO,
@@ -162,17 +186,16 @@ mod test_load {
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
         let arena = Bump::new();
-        let loaded = roc_load::file::load_and_typecheck(
+        let loaded = load_and_typecheck(
             &arena,
             filename,
-            arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
             TARGET_INFO,
         );
         let mut loaded_module = match loaded {
             Ok(x) => x,
-            Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
+            Err(roc_load_internal::file::LoadingProblem::FormattedReport(report)) => {
                 println!("{}", report);
                 panic!("{}", report);
             }
@@ -327,10 +350,9 @@ mod test_load {
         let src_dir = fixtures_dir().join("interface_with_deps");
         let filename = src_dir.join("Primary.roc");
         let arena = Bump::new();
-        let loaded = roc_load::file::load_and_typecheck(
+        let loaded = load_and_typecheck(
             &arena,
             filename,
-            arena.alloc(roc_builtins::std::standard_stdlib()),
             src_dir.as_path(),
             subs_by_module,
             TARGET_INFO,
@@ -396,7 +418,7 @@ mod test_load {
     }
 
     #[test]
-    fn load_and_typecheck() {
+    fn test_load_and_typecheck() {
         let subs_by_module = Default::default();
         let loaded_module = load_fixture("interface_with_deps", "WithBuiltins", subs_by_module);
 

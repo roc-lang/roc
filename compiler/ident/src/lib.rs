@@ -20,9 +20,6 @@ use std::os::raw::c_char;
 /// a UTF-8 string). This design works on little-endian targets, but a different
 /// design for storing length might be necessary on big-endian targets.
 
-// For big-endian, field order must be swapped!
-// Otherwise, the discriminant byte will be in the wrong place.
-#[cfg(target_endian = "little")]
 #[repr(C)]
 pub struct IdentStr {
     elements: *const u8,
@@ -30,6 +27,9 @@ pub struct IdentStr {
 }
 
 impl IdentStr {
+    // Reserve 1 byte for the discriminant
+    const SMALL_STR_BYTES: usize = std::mem::size_of::<Self>() - 1;
+
     pub fn len(&self) -> usize {
         let bytes = self.length.to_ne_bytes();
         let last_byte = bytes[mem::size_of::<usize>() - 1];
@@ -82,22 +82,34 @@ impl IdentStr {
         (self as *const IdentStr).cast()
     }
 
-    fn from_str(str: &str) -> Self {
+    #[inline(always)]
+    const fn small_str_from_bytes(slice: &[u8]) -> Self {
+        assert!(slice.len() <= Self::SMALL_STR_BYTES);
+
+        let len = slice.len();
+        let mut bytes = [0; mem::size_of::<Self>()];
+
+        // Copy the bytes from the slice into bytes.
+        // while because for/Iterator does not work in const context
+        let mut i = 0;
+        while i < len {
+            bytes[i] = slice[i];
+            i += 1;
+        }
+
+        // Write length and small string bit to last byte of length.
+        bytes[Self::SMALL_STR_BYTES] = u8::MAX - len as u8;
+
+        unsafe { mem::transmute::<[u8; mem::size_of::<Self>()], Self>(bytes) }
+    }
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(str: &str) -> Self {
         let slice = str.as_bytes();
         let len = slice.len();
 
         match len.cmp(&mem::size_of::<Self>()) {
-            Ordering::Less => {
-                let mut bytes = [0; mem::size_of::<Self>()];
-
-                // Copy the bytes from the slice into bytes.
-                bytes[..len].copy_from_slice(slice);
-
-                // Write length and small string bit to last byte of length.
-                bytes[mem::size_of::<usize>() * 2 - 1] = u8::MAX - len as u8;
-
-                unsafe { mem::transmute::<[u8; mem::size_of::<Self>()], Self>(bytes) }
-            }
+            Ordering::Less => Self::small_str_from_bytes(slice),
             Ordering::Equal => {
                 // This fits in a small string, and is exactly long enough to
                 // take up the entire available struct

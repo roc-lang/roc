@@ -26,7 +26,6 @@ fn promote_expr_to_module(src: &str) -> String {
 pub fn helper(
     arena: &bumpalo::Bump,
     src: &str,
-    stdlib: roc_builtins::std::StdLib,
     _leak: bool,
     lazy_literals: bool,
 ) -> (String, Vec<roc_problem::can::Problem>, Library) {
@@ -48,11 +47,10 @@ pub fn helper(
         module_src = &temp;
     }
 
-    let loaded = roc_load::file::load_and_monomorphize_from_str(
+    let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
-        &stdlib,
         src_dir,
         Default::default(),
         roc_target::TargetInfo::default_x86_64(),
@@ -60,7 +58,7 @@ pub fn helper(
 
     let mut loaded = loaded.expect("failed to load module");
 
-    use roc_load::file::MonomorphizedModule;
+    use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         module_id,
         procedures,
@@ -239,11 +237,10 @@ macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr, $lazy_literals:expr) => {
         use bumpalo::Bump;
         use roc_gen_dev::run_jit_function_raw;
-        let stdlib = roc_builtins::std::standard_stdlib();
 
         let arena = Bump::new();
         let (main_fn_name, errors, lib) =
-            $crate::helpers::dev::helper(&arena, $src, stdlib, $leak, $lazy_literals);
+            $crate::helpers::dev::helper(&arena, $src, $leak, $lazy_literals);
 
         let transform = |success| {
             let expected = $expected;

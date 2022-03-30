@@ -244,7 +244,7 @@ impl Scope {
                 // when the value was exposed in the module header,
                 // use that existing IdentId. Otherwise, create a fresh one.
                 let ident_id = match exposed_ident_ids.get_id(&ident) {
-                    Some(ident_id) => *ident_id,
+                    Some(ident_id) => ident_id,
                     None => all_ident_ids.add(ident.clone().into()),
                 };
 

@@ -4,7 +4,7 @@ Roc is a direct descendant of the [Elm programming language](https://elm-lang.or
 
 This is a guide to help Elm programmers learn what's different between Elm and Roc.
 
-> NOTE: Almost all what's in this document has been implemented - but not quite all of it!
+> NOTE: Almost all that's in this document has been implemented - but not quite all of it!
 
 ## Comments
 
@@ -386,7 +386,7 @@ Let's start with the motivation. Suppose I'm using a platform for making a
 web server, and I want to:
 
 * Read some data from a file
-* Send a HTTP request containing some of the data from the file
+* Send an HTTP request containing some of the data from the file
 * Write some data to a file containing some of the data from the HTTP response
 
 Assuming I'm writing this on a Roc platform which has a `Task`-based API,
@@ -499,7 +499,7 @@ That type variable has a similar purpose to the type variable in Elm's *open rec
 `{ name : Str, email : Str }a`) - except applied to sum types (such as
 Elm's custom types) instead of product types (such as records).
 
-> If you were to remove the type variables from the Roc declaraionts for
+> If you were to remove the type variables from the Roc declarations for
 > `Http.Err`, `File.ReadErr`, and `File.WriteErr`, they would work practically
 > the same way as the Elm one. Roc *tag unions* can be used as traditional
 > algebraic data types, and they have the usual support for pattern matching,
@@ -728,7 +728,7 @@ Here's how the above module header imports section would look in Roc:
 app imports [ Parser, Http.{ Request }, Task.{ Task, await } ]
 ```
 
-`app` modules are application entrypoints, and they don't formally expose anything.
+`app` modules are application entry points, and they don't formally expose anything.
 They also don't have names, so other modules can't even import them!
 
 Modules that *can* be imported are `interface` modules. Their headers look like this:
@@ -1278,7 +1278,7 @@ Some differences to note:
 * In Roc it's called `Str` instead of `String`.
 * `List` refers to something more like Elm's `Array`, as noted earlier.
 * No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).
-* No `Basics`. You use everything from the standard library fully-qualified; e.g. `Bool.not` or `Num.negate` or `Num.ceiling`. There is no `Never` because `[]` already serves that purpose. (Roc's standard library doesn't include an equivalent of `Basics.never`, but it's one line of code and anyone can implmement it: `never = \a -> never a`.)
+* No `Basics`. You use everything from the standard library fully-qualified; e.g. `Bool.not` or `Num.negate` or `Num.ceiling`. There is no `Never` because `[]` already serves that purpose. (Roc's standard library doesn't include an equivalent of `Basics.never`, but it's one line of code and anyone can implement it: `never = \a -> never a`.)
 * No `Tuple`. Roc doesn't have tuple syntax. As a convention, `Pair` can be used to represent tuples (e.g. `List.zip : List a, List b -> List [ Pair a b ]*`), but this comes up infrequently compared to languages that have dedicated syntax for it.
 * No `Task`. By design, platform authors implement `Task` (or don't; it's up to them) - it's not something that really *could* be usefully present in Roc's standard library.
 * No `Process`, `Platform`, `Cmd`, or `Sub` - similarly to `Task`, these are things platform authors would include, or not.

@@ -80,8 +80,6 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let arena = &Bump::new();
 
-    // let stdlib = roc_builtins::unique::uniq_stdlib();
-    let stdlib = roc_builtins::std::standard_stdlib();
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -96,11 +94,10 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         module_src = &temp;
     }
 
-    let loaded = roc_load::file::load_and_monomorphize_from_str(
+    let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
-        &stdlib,
         src_dir,
         Default::default(),
         TARGET_INFO,
@@ -108,14 +105,14 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
+        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
             println!("{}", report);
             panic!();
         }
         Err(e) => panic!("{:?}", e),
     };
 
-    use roc_load::file::MonomorphizedModule;
+    use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         module_id: home,
         procedures,

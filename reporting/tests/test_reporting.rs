@@ -1,8 +1,7 @@
 #[macro_use]
 extern crate pretty_assertions;
-#[macro_use]
-extern crate indoc;
 extern crate bumpalo;
+extern crate indoc;
 extern crate roc_reporting;
 
 mod helpers;
@@ -35,7 +34,7 @@ mod test_reporting {
         filename
     }
 
-    fn to_simple_report<'b>(doc: RocDocBuilder<'b>) -> Report<'b> {
+    fn to_simple_report(doc: RocDocBuilder) -> Report {
         Report {
             title: "".to_string(),
             doc,
@@ -71,8 +70,8 @@ mod test_reporting {
         } = can_expr(arena, expr_src)?;
         let mut subs = Subs::new_from_varstore(var_store);
 
-        for (var, name) in output.introduced_variables.name_by_var {
-            subs.rigid_var(var, name);
+        for named in output.introduced_variables.named {
+            subs.rigid_var(named.variable, named.name);
         }
 
         for var in output.introduced_variables.wildcards {
@@ -6135,6 +6134,32 @@ I need all branches in an `if` to have the same type!
 
                     requires { Model, Msg } {main : Effect {}}
             "#
+            ),
+        )
+    }
+
+    #[test]
+    fn missing_imports() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                interface Foobar
+                    exposes [ main, Foo ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD IMPORTS ───────────────────────────────────────────────────────────────
+
+                I am partway through parsing a header, but I got stuck here:
+
+                2│      exposes [ main, Foo ]
+                                             ^
+
+                I am expecting the `imports` keyword next, like 
+
+                    imports [ Animal, default, tame ]
+                "#
             ),
         )
     }

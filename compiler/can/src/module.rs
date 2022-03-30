@@ -25,7 +25,8 @@ pub struct Module {
     pub exposed_symbols: MutSet<Symbol>,
     pub referenced_values: MutSet<Symbol>,
     pub referenced_types: MutSet<Symbol>,
-    pub aliases: MutMap<Symbol, Alias>,
+    /// all aliases. `bool` indicates whether it is exposed
+    pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
 }
 
@@ -254,8 +255,8 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    for (var, lowercase) in output.introduced_variables.name_by_var {
-        rigid_variables.named.insert(var, lowercase.clone());
+    for named in output.introduced_variables.named {
+        rigid_variables.named.insert(named.variable, named.name);
     }
 
     for var in output.introduced_variables.wildcards {
@@ -500,7 +501,7 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
 
-            Ok(ModuleOutput {
+            let output = ModuleOutput {
                 scope,
                 aliases,
                 rigid_variables,
@@ -511,7 +512,9 @@ pub fn canonicalize_module_defs<'a>(
                 problems: env.problems,
                 lookups,
                 ident_ids: env.ident_ids,
-            })
+            };
+
+            Ok(output)
         }
         (Err(runtime_error), _) => Err(runtime_error),
     }

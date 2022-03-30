@@ -32,9 +32,6 @@ mod solve_expr {
 
         let arena = &Bump::new();
 
-        // let stdlib = roc_builtins::unique::uniq_stdlib();
-        let stdlib = roc_builtins::std::standard_stdlib();
-
         let module_src;
         let temp;
         if src.starts_with("app") {
@@ -55,10 +52,9 @@ mod solve_expr {
             let mut file = File::create(file_path)?;
             writeln!(file, "{}", module_src)?;
             drop(file);
-            let result = roc_load::file::load_and_typecheck(
+            let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
-                &stdlib,
                 dir.path(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
@@ -71,7 +67,7 @@ mod solve_expr {
 
         let loaded = loaded.expect("failed to load module");
 
-        use roc_load::file::LoadedModule;
+        use roc_load::LoadedModule;
         let LoadedModule {
             module_id: home,
             mut can_problems,
