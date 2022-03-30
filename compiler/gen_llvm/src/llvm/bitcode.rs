@@ -113,7 +113,7 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
 
     let call = env.builder.build_call(fn_val, &arguments, "call_builtin");
 
-    // Attributes that we propagate from the zig builtin paramters, to the arguments we give to the
+    // Attributes that we propagate from the zig builtin parameters, to the arguments we give to the
     // call. It is undefined behavior in LLVM to have an attribute on a parameter, and then call
     // the function where that parameter is not present. For many (e.g. nonnull) it can be inferred
     // but e.g. byval and sret cannot and must be explicitly provided.
