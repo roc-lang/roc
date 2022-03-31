@@ -174,7 +174,7 @@ inline fn decref_ptr_to_refcount(
 
     if (refcount == REFCOUNT_ONE_ISIZE) {
         dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
-    } else if (refcount < 0) {
+    } else if (refcount < REFCOUNT_MAX_ISIZE) {
         refcount_ptr[0] = refcount - 1;
     }
 }
