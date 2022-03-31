@@ -1476,7 +1476,7 @@ fn build_tag_field_value<'a, 'ctx, 'env>(
             "cast_recursive_pointer",
         )
     } else if tag_field_layout.is_passed_by_reference(env.target_info) {
-        debug_assert!(value.is_pointer_value(), "{:#?}", value);
+        debug_assert!(value.is_pointer_value());
 
         // NOTE: we rely on this being passed to `store_roc_value` so that
         // the value is memcpy'd

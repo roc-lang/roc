@@ -1731,10 +1731,10 @@ fn to_precord_report<'a>(
         },
 
         PRecord::Colon(_) => {
-            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+            unreachable!("because `foo` is a valid field; the colon is not required")
         }
         PRecord::Optional(_) => {
-            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+            unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
         PRecord::Pattern(pattern, pos) => to_pattern_report(alloc, lines, filename, pattern, pos),
