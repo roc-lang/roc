@@ -21,6 +21,7 @@ use roc_target::TargetInfo;
 
 use super::bitcode::call_list_bitcode_fn;
 use super::build::store_roc_value;
+use super::build_list::list_to_c_abi;
 
 #[repr(transparent)]
 struct Alignment(u8);
@@ -714,7 +715,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            list,
+            list_to_c_abi(env, list).into(),
             alignment_iv.into(),
             key_width.into(),
             value_width.into(),
