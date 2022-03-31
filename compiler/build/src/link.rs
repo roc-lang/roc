@@ -947,7 +947,7 @@ fn link_macos(
         Err(_) => "".to_string(),
     };
     for roc_link_flag in roc_link_flags.split_whitespace() {
-        ld_command.arg(roc_link_flag.to_string());
+        ld_command.arg(roc_link_flag);
     }
 
     ld_command.args(&[

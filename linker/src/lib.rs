@@ -416,7 +416,7 @@ fn preprocess_impl(
     })
     .map(|(_, reloc)| reloc)
     .filter(|reloc| matches!(reloc.kind(), RelocationKind::Elf(6)))
-    .map(|reloc| {
+    .filter_map(|reloc| {
         for symbol in app_syms.iter() {
             if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
                 return Some((symbol.name().unwrap().to_string(), symbol.index().0));
@@ -424,7 +424,6 @@ fn preprocess_impl(
         }
         None
     })
-    .flatten()
     .collect();
 
     for sym in app_syms.iter() {

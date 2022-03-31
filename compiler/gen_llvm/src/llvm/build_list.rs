@@ -1285,10 +1285,8 @@ pub fn store_list<'a, 'ctx, 'env>(
 
     let struct_type = super::convert::zig_list_type(env);
 
-    let mut struct_val;
-
     // Store the pointer
-    struct_val = builder
+    let mut struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
             pass_as_opaque(env, pointer_to_first_element),

@@ -966,8 +966,7 @@ impl Type {
                 Self::contains_symbol_ext(ext, rep_symbol)
                     || tags
                         .iter()
-                        .map(|v| v.1.iter())
-                        .flatten()
+                        .flat_map(|v| v.1.iter())
                         .any(|arg| arg.contains_symbol(rep_symbol))
             }
 
@@ -1026,8 +1025,7 @@ impl Type {
                 Self::contains_variable_ext(ext, rep_variable)
                     || tags
                         .iter()
-                        .map(|v| v.1.iter())
-                        .flatten()
+                        .flat_map(|v| v.1.iter())
                         .any(|arg| arg.contains_variable(rep_variable))
             }
 
@@ -1235,7 +1233,7 @@ impl Type {
                             substitution.clear();
                             substitution.insert(rec_var, Type::Variable(new_rec_var));
 
-                            for typ in tags.iter_mut().map(|v| v.1.iter_mut()).flatten() {
+                            for typ in tags.iter_mut().flat_map(|v| v.1.iter_mut()) {
                                 typ.substitute(&substitution);
                             }
 
@@ -1353,7 +1351,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 stack.extend(ext);
-                stack.extend(tags.iter().map(|v| v.1.iter()).flatten());
+                stack.extend(tags.iter().flat_map(|v| v.1.iter()));
             }
 
             Record(fields, ext) => {
@@ -2377,8 +2375,7 @@ pub fn gather_fields_unsorted_iter(
 
     let it = stack
         .into_iter()
-        .map(|fields| fields.iter_all())
-        .flatten()
+        .flat_map(|fields| fields.iter_all())
         .map(move |(i1, i2, i3)| {
             let field_name: &Lowercase = &subs[i1];
             let variable = subs[i2];
@@ -2462,8 +2459,7 @@ pub fn gather_tags_unsorted_iter(
 
     let it = stack
         .into_iter()
-        .map(|union_tags| union_tags.iter_all())
-        .flatten()
+        .flat_map(|union_tags| union_tags.iter_all())
         .map(move |(i1, i2)| {
             let tag_name: &TagName = &subs[i1];
             let subs_slice = subs[i2];

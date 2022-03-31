@@ -478,22 +478,18 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String) 
             .unwrap_or_else(|err| panic!("Failed to list items in project directory: {:?}", err))
             .items;
 
-        let file_names = dir_items
-            .iter()
-            .map(|info_hash_map| {
-                info_hash_map
-                    .values()
-                    .map(|dir_entry_value| {
-                        if let DirEntryValue::String(file_name) = dir_entry_value {
-                            Some(file_name)
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten() // remove None
-                    .collect::<Vec<&String>>()
-            })
-            .flatten();
+        let file_names = dir_items.iter().flat_map(|info_hash_map| {
+            info_hash_map
+                .values()
+                .filter_map(|dir_entry_value| {
+                    if let DirEntryValue::String(file_name) = dir_entry_value {
+                        Some(file_name)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<&String>>()
+        });
 
         let roc_file_names: Vec<&String> = file_names
             .filter(|file_name| file_name.contains(".roc"))

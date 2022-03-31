@@ -83,7 +83,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
     // Write each package's module docs html file
     for loaded_module in package.modules.iter_mut() {
         for module_docs in loaded_module.documentation.values() {
-            let module_dir = build_dir.join(module_docs.name.replace(".", "/").as_str());
+            let module_dir = build_dir.join(module_docs.name.replace('.', "/").as_str());
 
             fs::create_dir_all(&module_dir)
                 .expect("TODO gracefully handle not being able to create the module dir");

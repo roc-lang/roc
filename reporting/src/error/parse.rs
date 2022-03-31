@@ -1731,10 +1731,10 @@ fn to_precord_report<'a>(
         },
 
         PRecord::Colon(_) => {
-            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+            unreachable!("because `foo` is a valid field; the colon is not required")
         }
         PRecord::Optional(_) => {
-            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+            unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
         PRecord::Pattern(pattern, pos) => to_pattern_report(alloc, lines, filename, pattern, pos),
@@ -1823,11 +1823,11 @@ fn to_precord_report<'a>(
         }
 
         PRecord::IndentColon(_) => {
-            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+            unreachable!("because `foo` is a valid field; the colon is not required")
         }
 
         PRecord::IndentOptional(_) => {
-            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+            unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
         PRecord::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
@@ -2288,10 +2288,10 @@ fn to_trecord_report<'a>(
         },
 
         ETypeRecord::Colon(_) => {
-            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+            unreachable!("because `foo` is a valid field; the colon is not required")
         }
         ETypeRecord::Optional(_) => {
-            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+            unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
         ETypeRecord::Type(tipe, pos) => to_type_report(alloc, lines, filename, tipe, pos),
@@ -2371,11 +2371,11 @@ fn to_trecord_report<'a>(
         }
 
         ETypeRecord::IndentColon(_) => {
-            unreachable!("because `{ foo }` is a valid field; the colon is not required")
+            unreachable!("because `foo` is a valid field; the colon is not required")
         }
 
         ETypeRecord::IndentOptional(_) => {
-            unreachable!("because `{ foo }` is a valid field; the question mark is not required")
+            unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
         ETypeRecord::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),

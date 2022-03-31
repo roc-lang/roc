@@ -395,7 +395,7 @@ fn tree_as_string_helper(
             .to_owned();
 
         let child = mark_node_pool.get(child_id);
-        let child_str = format!("{}", mark_node_pool.get(child_id)).replace("\n", "\\n");
+        let child_str = format!("{}", mark_node_pool.get(child_id)).replace('\n', "\\n");
 
         full_str.push_str(&format!("{} mn_id {}\n", child_str, child_id));
 
