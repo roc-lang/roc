@@ -13,7 +13,7 @@ use crate::helpers::dev::assert_evals_to as assert_llvm_evals_to;
 #[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocList, RocStr};
+use roc_std::{RocList, RocResult, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
@@ -103,18 +103,9 @@ fn str_split_str_concat_repeated() {
 #[cfg(any(feature = "gen-llvm"))]
 fn str_split_small_str_bigger_delimiter() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                    when
-                        List.first
-                            (Str.split "JJJ" "0123456789abcdefghi")
-                    is
-                        Ok str -> str
-                        _ -> ""
-                "#
-        ),
-        RocStr::from("JJJ"),
-        RocStr
+        indoc!(r#"Str.split "JJJ" "0123456789abcdefghi""#),
+        RocList::from_slice(&[RocStr::from("JJJ")]),
+        RocList<RocStr>
     );
 }
 
@@ -1390,16 +1381,9 @@ fn str_to_i64() {
 #[cfg(any(feature = "gen-llvm"))]
 fn str_to_u64() {
     assert_evals_to!(
-        indoc!(
-            r#"
-            when Str.toU64 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
-        ),
-        1,
-        u64
+        r#"Str.toU64 "1""#,
+        RocResult::ok(1u64),
+        RocResult<u64, u8>
     );
 }
 
@@ -1424,16 +1408,9 @@ fn str_to_i32() {
 #[cfg(any(feature = "gen-llvm"))]
 fn str_to_u32() {
     assert_evals_to!(
-        indoc!(
-            r#"
-            when Str.toU32 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
-        ),
-        1,
-        u32
+        r#"Str.toU32 "1""#,
+        RocResult::ok(1u32),
+        RocResult<u32, u8>
     );
 }
 

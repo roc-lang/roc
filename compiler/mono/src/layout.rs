@@ -554,6 +554,31 @@ impl<'a> UnionLayout<'a> {
 
         (size, alignment_bytes)
     }
+
+    /// Very important to use this when doing a memcpy!
+    fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
+        match self {
+            UnionLayout::NonRecursive(tags) => {
+                let id_layout = self.tag_id_layout();
+
+                let mut size = 0;
+
+                for field_layouts in tags.iter() {
+                    let fields = Layout::struct_no_name_order(field_layouts);
+                    let fields_and_id = [fields, id_layout];
+
+                    let data = Layout::struct_no_name_order(&fields_and_id);
+                    size = size.max(data.stack_size_without_alignment(target_info));
+                }
+
+                size
+            }
+            UnionLayout::Recursive(_)
+            | UnionLayout::NonNullableUnwrapped(_)
+            | UnionLayout::NullableWrapped { .. }
+            | UnionLayout::NullableUnwrapped { .. } => target_info.ptr_width() as u32,
+        }
+    }
 }
 
 /// Custom type so we can get the numeric representation of a symbol in tests (so `#UserApp.3`
@@ -1037,7 +1062,8 @@ impl<'a> Layout<'a> {
         (size, alignment)
     }
 
-    fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
+    /// Very important to use this when doing a memcpy!
+    pub fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
         use Layout::*;
 
         match self {
@@ -1051,18 +1077,7 @@ impl<'a> Layout<'a> {
 
                 sum
             }
-            Union(variant) => {
-                use UnionLayout::*;
-
-                match variant {
-                    NonRecursive(_) => variant.data_size_and_alignment(target_info).0,
-
-                    Recursive(_)
-                    | NullableWrapped { .. }
-                    | NullableUnwrapped { .. }
-                    | NonNullableUnwrapped(_) => target_info.ptr_width() as u32,
-                }
-            }
+            Union(variant) => variant.stack_size_without_alignment(target_info),
             LambdaSet(lambda_set) => lambda_set
                 .runtime_representation()
                 .stack_size_without_alignment(target_info),
@@ -2946,5 +2961,17 @@ mod test {
         let target_info = TargetInfo::default_x86_64();
         assert_eq!(layout.stack_size(target_info), 1);
         assert_eq!(layout.alignment_bytes(target_info), 1);
+    }
+
+    #[test]
+    fn memcpy_size_result_u32_unit() {
+        let ok_tag = &[Layout::Builtin(Builtin::Int(IntWidth::U32))];
+        let err_tag = &[Layout::UNIT];
+        let tags = [ok_tag as &[_], err_tag as &[_]];
+        let union_layout = UnionLayout::NonRecursive(&tags as &[_]);
+        let layout = Layout::Union(union_layout);
+
+        let target_info = TargetInfo::default_x86_64();
+        assert_eq!(layout.stack_size_without_alignment(target_info), 5);
     }
 }

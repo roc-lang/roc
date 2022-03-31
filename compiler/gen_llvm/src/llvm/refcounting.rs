@@ -20,7 +20,8 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_target::TargetInfo;
 
-use super::convert::argument_type_from_union_layout;
+use super::build::load_roc_value;
+use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 
 /// "Infinite" reference count, for static values
 /// Ref counts are encoded as negative numbers where isize::MIN represents 1
@@ -687,7 +688,7 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, layout);
+            let basic_type = argument_type_from_layout(env, layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_list_help(
@@ -824,7 +825,7 @@ fn modify_refcount_str<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, layout);
+            let basic_type = argument_type_from_layout(env, layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_str_help(env, mode, layout, function_value);
@@ -1434,9 +1435,8 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                     .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
                     .unwrap();
 
-                let field = env
-                    .builder
-                    .build_load(elem_pointer, "decrement_struct_field");
+                let field =
+                    load_roc_value(env, *field_layout, elem_pointer, "decrement_struct_field");
 
                 deferred_nonrec.push((field, field_layout));
             }
