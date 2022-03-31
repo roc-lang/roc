@@ -179,7 +179,7 @@ pub fn build_module_without_wrapper<'a>(
                     backend.build_proc(proc);
                 }
             }
-            ZigCallConvWrapper(inner_idx) => backend.build_zigcc_wrapper(idx, *inner_idx),
+            HigherOrderWrapper(inner_idx) => backend.build_zigcc_wrapper(idx, *inner_idx),
         }
     }
 

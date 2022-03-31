@@ -36,7 +36,7 @@ pub enum ProcSource {
     Helper,
     /// Wrapper function for higher-order calls from Zig to Roc,
     /// to work around Zig's incorrect implementation of C calling convention in Wasm
-    ZigCallConvWrapper(usize),
+    HigherOrderWrapper(usize),
 }
 
 #[derive(Debug)]
@@ -121,21 +121,25 @@ impl<'a> WasmBackend<'a> {
         self.helper_proc_gen.take_procs()
     }
 
-    fn register_helper_proc(&mut self, new_proc_info: (Symbol, ProcLayout<'a>)) {
-        let (new_proc_sym, new_proc_layout) = new_proc_info;
+    pub fn register_helper_proc(
+        &mut self,
+        symbol: Symbol,
+        layout: ProcLayout<'a>,
+        source: ProcSource,
+    ) -> u32 {
         let wasm_fn_index = self.proc_lookup.len() as u32;
         let linker_sym_index = self.module.linking.symbol_table.len() as u32;
 
         let name = self
             .layout_ids
-            .get_toplevel(new_proc_sym, &new_proc_layout)
-            .to_symbol_string(new_proc_sym, self.interns);
+            .get_toplevel(symbol, &layout)
+            .to_symbol_string(symbol, self.interns);
 
         self.proc_lookup.push(ProcLookupData {
-            name: new_proc_sym,
-            layout: new_proc_layout,
+            name: symbol,
+            layout,
             linker_index: linker_sym_index,
-            source: ProcSource::Helper,
+            source,
         });
 
         let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
@@ -144,6 +148,8 @@ impl<'a> WasmBackend<'a> {
             name,
         });
         self.module.linking.symbol_table.push(linker_symbol);
+
+        wasm_fn_index
     }
 
     pub fn finalize(self) -> (WasmModule<'a>, Vec<'a, u32>) {
@@ -164,7 +170,7 @@ impl<'a> WasmBackend<'a> {
     pub fn register_symbol_debug_names(&self) {}
 
     /// Create an IR Symbol for an anonymous value (such as ListLiteral)
-    fn create_symbol(&mut self, debug_name: &str) -> Symbol {
+    pub fn create_symbol(&mut self, debug_name: &str) -> Symbol {
         let ident_ids = self
             .interns
             .all_ident_ids
@@ -652,8 +658,8 @@ impl<'a> WasmBackend<'a> {
         }
 
         // If any new specializations were created, register their symbol data
-        for spec in new_specializations.into_iter() {
-            self.register_helper_proc(spec);
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
         self.stmt(rc_stmt);
@@ -1044,8 +1050,8 @@ impl<'a> WasmBackend<'a> {
             .call_specialized_equals(ident_ids, arg_layout, arguments);
 
         // If any new specializations were created, register their symbol data
-        for spec in new_specializations.into_iter() {
-            self.register_helper_proc(spec);
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
         // Generate Wasm code for the IR call expression
@@ -1529,8 +1535,8 @@ impl<'a> WasmBackend<'a> {
             .call_reset_refcount(ident_ids, layout, argument);
 
         // If any new specializations were created, register their symbol data
-        for spec in new_specializations.into_iter() {
-            self.register_helper_proc(spec);
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
         // Generate Wasm code for the IR call expression

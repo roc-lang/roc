@@ -3,11 +3,11 @@ use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_mono::ir::{HigherOrderLowLevel, PassedFunction};
+use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_mono::low_level::HigherOrder;
 
-use crate::backend::WasmBackend;
+use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::layout::CallConv;
 use crate::layout::{StackMemoryFormat, WasmLayout};
 use crate::storage::{StackMemoryLocation, Storage, StoredValue};
@@ -937,7 +937,7 @@ pub fn call_higher_order_lowlevel<'a>(
     backend: &mut WasmBackend<'a>,
     return_sym: Symbol,
     return_layout: &Layout<'a>,
-    higher_order: &HigherOrderLowLevel<'a>,
+    higher_order: &'a HigherOrderLowLevel<'a>,
 ) {
     use HigherOrder::*;
 
@@ -948,12 +948,63 @@ pub fn call_higher_order_lowlevel<'a>(
     } = higher_order;
 
     let PassedFunction {
+        name: fn_name,
         argument_layouts,
         return_layout: result_layout,
         owns_captured_environment,
         captured_environment,
         ..
     } = passed_function;
+
+    // We create a wrapper around the passed function, which just unboxes the arguments.
+    // This allows Zig builtins to have a generic pointer-based interface.
+    let source = {
+        let passed_proc_layout = ProcLayout {
+            arguments: argument_layouts,
+            result: *result_layout,
+        };
+        let passed_proc_index = backend
+            .proc_lookup
+            .iter()
+            .position(|ProcLookupData { name, layout, .. }| {
+                name == fn_name && layout == &passed_proc_layout
+            })
+            .unwrap();
+        ProcSource::HigherOrderWrapper(passed_proc_index)
+    };
+    let wrapper_sym = backend.create_symbol(&format!("#wrap#{:?}", fn_name));
+    let wrapper_layout = {
+        let mut wrapper_arg_layouts: Vec<Layout<'a>> =
+            Vec::with_capacity_in(argument_layouts.len() + 1, backend.env.arena);
+
+        let closure_data_layout = backend.storage.symbol_layouts[captured_environment];
+
+        let last_arg_is_closure_data: bool = match closure_data_layout {
+            Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation() != Layout::UNIT,
+            x => internal_error!("Closure data has an invalid layout\n{:?}", x),
+        };
+        let n_non_closure_args = if last_arg_is_closure_data {
+            argument_layouts.len() - 1
+        } else {
+            argument_layouts.len()
+        };
+
+        wrapper_arg_layouts.push(closure_data_layout);
+        wrapper_arg_layouts.extend(
+            argument_layouts
+                .iter()
+                .take(n_non_closure_args)
+                .map(Layout::Boxed),
+        );
+        wrapper_arg_layouts.push(Layout::Boxed(result_layout));
+
+        ProcLayout {
+            arguments: wrapper_arg_layouts.into_bump_slice(),
+            result: Layout::UNIT,
+        }
+    };
+
+    let wrapper_fn_idx = backend.register_helper_proc(wrapper_sym, wrapper_layout, source);
 
     /*
         TODO indirect calls
@@ -969,10 +1020,20 @@ pub fn call_higher_order_lowlevel<'a>(
                 append to (or find in) backend.proc_lookup
                 calculate its index
                 insert index into elements table
+
+        questions about the closure data
+        - is the first arg always closure data? no, last
+        - Do I need a special case where if the closure layout is Unit then no argument exists on the Proc?
+            (Otherwise I suppose there would always an arg with Unit layout and I haven't seen that)
+        - if the closure exists then does it reliably appear first or last in the argument list on the Proc?
+            - or is it absent from that
+        - if there is no closure data then I need a dummy incrementor for Unit?
+            yes
+
+
     */
 
-    let caller_fn_idx: i32 = todo!();
-    let inc_fn_idx: i32 = todo!();
+    let inc_fn_idx: i32 = 123;
 
     match op {
         // List.map : List elem_old, (elem_old -> elem_new) -> List elem_new
@@ -994,7 +1055,7 @@ pub fn call_higher_order_lowlevel<'a>(
             // Load return pointer & argument values
             backend.storage.load_symbols(cb, &[return_sym]);
             backend.storage.load_symbol_zig(cb, *xs);
-            cb.i32_const(caller_fn_idx);
+            cb.i32_const(wrapper_fn_idx as i32);
             backend.storage.load_symbols(cb, &[*captured_environment]);
             cb.i32_const(inc_fn_idx);
             cb.i32_const(*owns_captured_environment as i32);
