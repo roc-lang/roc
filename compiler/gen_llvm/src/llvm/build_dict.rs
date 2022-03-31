@@ -714,7 +714,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-        list,
+            list,
             alignment_iv.into(),
             key_width.into(),
             value_width.into(),
