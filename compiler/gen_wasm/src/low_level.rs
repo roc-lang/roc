@@ -10,7 +10,7 @@ use roc_mono::low_level::HigherOrder;
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::layout::CallConv;
 use crate::layout::{StackMemoryFormat, WasmLayout};
-use crate::storage::{StackMemoryLocation, Storage, StoredValue};
+use crate::storage::{StackMemoryLocation, StoredValue};
 use crate::wasm_module::{Align, ValueType};
 use crate::TARGET_INFO;
 
@@ -956,6 +956,15 @@ pub fn call_higher_order_lowlevel<'a>(
         ..
     } = passed_function;
 
+    let closure_data_layout = match backend.storage.symbol_layouts[captured_environment] {
+        Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(),
+        Layout::Struct {
+            field_layouts: &[], ..
+        } => Layout::UNIT,
+        x => internal_error!("Closure data has an invalid layout\n{:?}", x),
+    };
+    let closure_data_exists: bool = closure_data_layout != Layout::UNIT;
+
     // We create a wrapper around the passed function, which just unboxes the arguments.
     // This allows Zig builtins to have a generic pointer-based interface.
     let source = {
@@ -977,13 +986,7 @@ pub fn call_higher_order_lowlevel<'a>(
         let mut wrapper_arg_layouts: Vec<Layout<'a>> =
             Vec::with_capacity_in(argument_layouts.len() + 1, backend.env.arena);
 
-        let closure_data_layout = backend.storage.symbol_layouts[captured_environment];
-
-        let last_arg_is_closure_data: bool = match closure_data_layout {
-            Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation() != Layout::UNIT,
-            x => internal_error!("Closure data has an invalid layout\n{:?}", x),
-        };
-        let n_non_closure_args = if last_arg_is_closure_data {
+        let n_non_closure_args = if closure_data_exists {
             argument_layouts.len() - 1
         } else {
             argument_layouts.len()
@@ -1005,35 +1008,7 @@ pub fn call_higher_order_lowlevel<'a>(
     };
 
     let wrapper_fn_idx = backend.register_helper_proc(wrapper_sym, wrapper_layout, source);
-
-    /*
-        TODO indirect calls
-            passed_function
-                construct the ProcLayout
-                get the index of the inner function
-                append to (or find in) backend.proc_lookup
-                calculate its index
-                insert index into elements table
-            inc
-                construct the ProcLayout
-                call CodeGenHelp to make the specialization
-                append to (or find in) backend.proc_lookup
-                calculate its index
-                insert index into elements table
-
-        questions about the closure data
-        - is the first arg always closure data? no, last
-        - Do I need a special case where if the closure layout is Unit then no argument exists on the Proc?
-            (Otherwise I suppose there would always an arg with Unit layout and I haven't seen that)
-        - if the closure exists then does it reliably appear first or last in the argument list on the Proc?
-            - or is it absent from that
-        - if there is no closure data then I need a dummy incrementor for Unit?
-            yes
-
-
-    */
-
-    let inc_fn_idx: i32 = 123;
+    let inc_fn_idx = backend.gen_refcount_inc_for_zig(closure_data_layout);
 
     match op {
         // List.map : List elem_old, (elem_old -> elem_new) -> List elem_new
@@ -1056,20 +1031,24 @@ pub fn call_higher_order_lowlevel<'a>(
             backend.storage.load_symbols(cb, &[return_sym]);
             backend.storage.load_symbol_zig(cb, *xs);
             cb.i32_const(wrapper_fn_idx as i32);
-            backend.storage.load_symbols(cb, &[*captured_environment]);
-            cb.i32_const(inc_fn_idx);
+            if closure_data_exists {
+                backend.storage.load_symbols(cb, &[*captured_environment]);
+            } else {
+                cb.i32_const(0); // null pointer
+            }
+            cb.i32_const(inc_fn_idx as i32);
             cb.i32_const(*owns_captured_environment as i32);
             cb.i32_const(elem_new_align as i32); // used for allocating the new list
             cb.i32_const(elem_old_size as i32);
             cb.i32_const(elem_new_size as i32);
 
-            let (roc_proc_index, lookup) = backend
+            let (proc_index, lookup) = backend
                 .proc_lookup
                 .iter()
                 .enumerate()
                 .find(|(_, lookup)| lookup.name == Symbol::LIST_MAP)
                 .unwrap_or_else(|| panic!("Can't find {:?}", op));
-            let wasm_fn_index = backend.fn_index_offset + roc_proc_index as u32;
+            let wasm_fn_index = backend.fn_index_offset + proc_index as u32;
 
             cb.call(wasm_fn_index, lookup.linker_index, 9, false);
         }

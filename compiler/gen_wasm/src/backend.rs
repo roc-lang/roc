@@ -127,7 +127,8 @@ impl<'a> WasmBackend<'a> {
         layout: ProcLayout<'a>,
         source: ProcSource,
     ) -> u32 {
-        let wasm_fn_index = self.proc_lookup.len() as u32;
+        let proc_index = self.proc_lookup.len();
+        let wasm_fn_index = self.fn_index_offset + proc_index as u32;
         let linker_sym_index = self.module.linking.symbol_table.len() as u32;
 
         let name = self
@@ -1546,5 +1547,34 @@ impl<'a> WasmBackend<'a> {
             &Layout::Builtin(Builtin::Bool),
             ret_storage,
         );
+    }
+
+    pub fn gen_refcount_inc_for_zig(&mut self, layout: Layout<'a>) -> u32 {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (proc_symbol, new_specializations) = self
+            .helper_proc_gen
+            .gen_refcount_inc_proc(ident_ids, layout);
+
+        // If any new specializations were created, register their symbol data
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
+        }
+
+        let proc_index = self
+            .proc_lookup
+            .iter()
+            .position(|lookup| {
+                lookup.name == proc_symbol && lookup.layout.arguments[0] == layout
+            })
+            .unwrap();
+
+        let wasm_fn_index = self.fn_index_offset + proc_index as u32;
+
+        wasm_fn_index
     }
 }
