@@ -8,7 +8,6 @@ use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
-use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
@@ -18,7 +17,6 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
-use roc_target::TargetInfo;
 
 use super::build::load_roc_value;
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
