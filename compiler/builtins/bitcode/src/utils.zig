@@ -135,13 +135,13 @@ pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     if (refcount < REFCOUNT_MAX_ISIZE) {
         switch (RC_TYPE) {
             Refcount.normal => {
-                ptr_to_refcount.* = std.math.max(refcount + amount, REFCOUNT_MAX_ISIZE);
+                ptr_to_refcount.* = std.math.min(refcount + amount, REFCOUNT_MAX_ISIZE);
             },
             Refcount.atomic => {
-                var next = std.math.max(refcount + amount, REFCOUNT_MAX_ISIZE);
+                var next = std.math.min(refcount + amount, REFCOUNT_MAX_ISIZE);
                 while (@cmpxchgWeak(isize, ptr_to_refcount, refcount, next, Monotonic, Monotonic)) |found| {
                     refcount = found;
-                    next = std.math.max(refcount + amount, REFCOUNT_MAX_ISIZE);
+                    next = std.math.min(refcount + amount, REFCOUNT_MAX_ISIZE);
                 }
             },
             else => unreachable,
