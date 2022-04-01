@@ -127,7 +127,7 @@ const Refcount = enum {
     atomic,
 };
 
-const RC_TYPE = Refcount.atomic;
+const RC_TYPE = Refcount.normal;
 
 pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     if (RC_TYPE == Refcount.none) return;
