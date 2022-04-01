@@ -132,7 +132,7 @@ pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     if (RC_TYPE == Refcount.none) return;
     var refcount = ptr_to_refcount.*;
     var masked_amount = if (refcount < REFCOUNT_MAX_ISIZE) amount else 0;
-    switch(RC_TYPE) {
+    switch (RC_TYPE) {
         Refcount.normal => {
             ptr_to_refcount.* = refcount + masked_amount;
         },
@@ -188,7 +188,7 @@ inline fn decref_ptr_to_refcount(
 ) void {
     if (RC_TYPE == Refcount.none) return;
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
-    switch(RC_TYPE) {
+    switch (RC_TYPE) {
         Refcount.normal => {
             const refcount: isize = refcount_ptr[0];
             if (refcount == REFCOUNT_ONE_ISIZE) {
