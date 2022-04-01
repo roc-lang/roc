@@ -125,38 +125,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
     }
 
     fn increment<'a, 'env>(&self, amount: IntValue<'ctx>, env: &Env<'a, 'ctx, 'env>) {
-        let refcount = self.get_refcount(env);
-        let builder = env.builder;
-        let refcount_type = env.ptr_int();
-
-        let is_static_allocation = builder.build_int_compare(
-            IntPredicate::EQ,
-            refcount,
-            refcount_type.const_int(REFCOUNT_MAX as u64, false),
-            "refcount_max_check",
-        );
-
-        let block = env.builder.get_insert_block().expect("to be in a function");
-        let parent = block.get_parent().unwrap();
-
-        let modify_block = env
-            .context
-            .append_basic_block(parent, "inc_refcount_modify");
-        let cont_block = env.context.append_basic_block(parent, "inc_refcount_cont");
-
-        env.builder
-            .build_conditional_branch(is_static_allocation, cont_block, modify_block);
-
-        {
-            env.builder.position_at_end(modify_block);
-
-            let incremented = builder.build_int_add(refcount, amount, "increment_refcount");
-            self.set_refcount(env, incremented);
-
-            env.builder.build_unconditional_branch(cont_block);
-        }
-
-        env.builder.position_at_end(cont_block);
+        incref_pointer(env, self.value, amount);
     }
 
     pub fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
@@ -230,6 +199,25 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
         builder.build_return(None);
     }
+}
+
+fn incref_pointer<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    pointer: PointerValue<'ctx>,
+    amount: IntValue<'ctx>,
+) {
+    call_void_bitcode_fn(
+        env,
+        &[
+            env.builder.build_bitcast(
+                pointer,
+                env.ptr_int().ptr_type(AddressSpace::Generic),
+                "to_isize_ptr",
+            ),
+            amount.into(),
+        ],
+        roc_builtins::bitcode::UTILS_INCREF,
+    );
 }
 
 fn decref_pointer<'a, 'ctx, 'env>(
