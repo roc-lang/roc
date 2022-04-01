@@ -174,12 +174,8 @@ pub fn build_module_without_wrapper<'a>(
         use ProcSource::*;
         match source {
             Roc => { /* already generated */ }
-            Helper => {
-                if let Some(proc) = helper_iter.next() {
-                    backend.build_proc(proc);
-                }
-            }
-            HigherOrderWrapper(inner_idx) => backend.build_zigcc_wrapper(idx, *inner_idx),
+            Helper => backend.build_proc(helper_iter.next().unwrap()),
+            HigherOrderWrapper(inner_idx) => backend.build_higher_order_wrapper(idx, *inner_idx),
         }
     }
 

@@ -1042,15 +1042,13 @@ pub fn call_higher_order_lowlevel<'a>(
             cb.i32_const(elem_old_size as i32);
             cb.i32_const(elem_new_size as i32);
 
-            let (proc_index, lookup) = backend
-                .proc_lookup
-                .iter()
-                .enumerate()
-                .find(|(_, lookup)| lookup.name == Symbol::LIST_MAP)
-                .unwrap_or_else(|| panic!("Can't find {:?}", op));
-            let wasm_fn_index = backend.fn_index_offset + proc_index as u32;
-
-            cb.call(wasm_fn_index, lookup.linker_index, 9, false);
+            let num_wasm_args = 9;
+            let has_return_val = false;
+            backend.call_zig_builtin_after_loading_args(
+                bitcode::LIST_MAP,
+                num_wasm_args,
+                has_return_val,
+            );
         }
 
         ListMap2 { .. }

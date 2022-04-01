@@ -211,86 +211,6 @@ impl<'a> Storage<'a> {
         storage
     }
 
-    /// Allocate storage for an argument that will be passed from Zig code
-    /// (Zig *should* implement the C calling convention here, but it has bugs we need to work around)
-    pub fn allocate_zigcc_arg(
-        &mut self,
-        layout: &Layout<'a>,
-        symbol: Symbol,
-        frame_writes: &mut Vec<(LocalId, ValueType, u32)>,
-    ) {
-        let wasm_layout = WasmLayout::new(layout);
-        self.symbol_layouts.insert(symbol, *layout);
-
-        match wasm_layout {
-            WasmLayout::Primitive(value_type, size) => {
-                self.arg_types.push(value_type);
-                let storage = StoredValue::Local {
-                    local_id: self.get_next_local_id(),
-                    value_type,
-                    size,
-                };
-                self.symbol_storage_map.insert(symbol, storage);
-            }
-
-            WasmLayout::StackMemory {
-                size,
-                alignment_bytes,
-                format,
-            } => {
-                // Stack frame offset where we'll write the Zig argument value
-                let location = if size == 0 {
-                    // An argument with zero size is purely conceptual, and will not exist in Wasm.
-                    // However we need to track the symbol, so we treat it like a local variable rather than an argument.
-                    StackMemoryLocation::FrameOffset(0)
-                } else if size > 16 {
-                    // For larger structs, Zig passes a pointer to stack memory in the Zig caller. That suits us. Just pass it through.
-                    self.arg_types.push(PTR_TYPE);
-                    StackMemoryLocation::PointerArg(self.get_next_local_id())
-                } else {
-                    // Zig passes small structs as primitive values, but Roc expects a pointer to stack memory
-
-                    // Generate the Zig-compatible argument(s)
-                    let types: &[ValueType] = if size <= 4 {
-                        &[ValueType::I32]
-                    } else if size <= 8 {
-                        &[ValueType::I64]
-                    } else if size <= 12 {
-                        &[ValueType::I64, ValueType::I32]
-                    } else {
-                        &[ValueType::I64, ValueType::I64]
-                    };
-
-                    // Allocate space in the stack frame, so we can pass a pointer to Roc
-                    let mut offset: u32 =
-                        round_up_to_alignment!(self.stack_frame_size as u32, alignment_bytes);
-                    let loc = StackMemoryLocation::FrameOffset(offset);
-                    self.stack_frame_size = (offset + size) as i32;
-
-                    // Make a note of which writes we need to do
-                    // Note: We can't do the writes until after we know how many Wasm args we have.
-                    // We need a LocalId for the stack frame pointer and it must come after the args.
-                    for ty in types.iter() {
-                        let local_id = LocalId(self.arg_types.len() as u32);
-                        frame_writes.push((local_id, *ty, offset));
-                        offset += if *ty == ValueType::I32 { 4 } else { 8 };
-                    }
-
-                    loc
-                };
-
-                let storage = StoredValue::StackMemory {
-                    location,
-                    size,
-                    alignment_bytes,
-                    format,
-                };
-
-                self.symbol_storage_map.insert(symbol, storage);
-            }
-        }
-    }
-
     /// Get storage info for a given symbol
     pub fn get(&self, sym: &Symbol) -> &StoredValue {
         self.symbol_storage_map.get(sym).unwrap_or_else(|| {
@@ -483,7 +403,7 @@ impl<'a> Storage<'a> {
 
         let return_method = return_layout.return_method();
         let return_type = match return_method {
-            ReturnMethod::Primitive(ty) => Some(ty),
+            ReturnMethod::Primitive(ty, _) => Some(ty),
             ReturnMethod::NoReturnValue => None,
             ReturnMethod::WriteToPointerArg => {
                 wasm_arg_types.push(PTR_TYPE);
@@ -577,7 +497,7 @@ impl<'a> Storage<'a> {
                             size
                         );
                     }
-                };
+                }
                 size
             }
         }

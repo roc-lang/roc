@@ -10,7 +10,7 @@ pub const BUILTINS_ZIG_VERSION: ZigVersion = ZigVersion::Zig8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReturnMethod {
     /// This layout is returned from a Wasm function "normally" as a Primitive
-    Primitive(ValueType),
+    Primitive(ValueType, u32),
     /// This layout is returned by writing to a pointer passed as the first argument
     WriteToPointerArg,
     /// This layout is empty and requires no return value or argument (e.g. refcount helpers)
@@ -125,7 +125,7 @@ impl WasmLayout {
 
     pub fn return_method(&self) -> ReturnMethod {
         match self {
-            Self::Primitive(ty, _) => ReturnMethod::Primitive(*ty),
+            Self::Primitive(ty, size) => ReturnMethod::Primitive(*ty, *size),
             Self::StackMemory { size, .. } => {
                 if *size == 0 {
                     ReturnMethod::NoReturnValue
