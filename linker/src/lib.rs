@@ -20,7 +20,6 @@ use std::io;
 use std::io::{BufReader, BufWriter};
 use std::mem;
 use std::os::raw::c_char;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, SystemTime};
@@ -367,9 +366,7 @@ fn preprocess_impl(
         Some(section) => {
             let file_offset = match section.compressed_file_range() {
                 Ok(
-                    range
-                    @
-                    CompressedFileRange {
+                    range @ CompressedFileRange {
                         format: CompressionFormat::None,
                         ..
                     },
@@ -494,9 +491,7 @@ fn preprocess_impl(
     for sec in text_sections {
         let (file_offset, compressed) = match sec.compressed_file_range() {
             Ok(
-                range
-                @
-                CompressedFileRange {
+                range @ CompressedFileRange {
                     format: CompressionFormat::None,
                     ..
                 },
@@ -626,9 +621,7 @@ fn preprocess_impl(
     };
     let dyn_offset = match dyn_sec.compressed_file_range() {
         Ok(
-            range
-            @
-            CompressedFileRange {
+            range @ CompressedFileRange {
                 format: CompressionFormat::None,
                 ..
             },
@@ -680,7 +673,7 @@ fn preprocess_impl(
                 )
                 .unwrap(),
             ) as usize;
-            let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const i8;
+            let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const c_char;
             let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
             if Path::new(c_str).file_name().unwrap().to_str().unwrap() == shared_lib_name {
                 shared_lib_index = Some(dyn_lib_index);
@@ -714,9 +707,7 @@ fn preprocess_impl(
     };
     let symtab_offset = match symtab_sec.compressed_file_range() {
         Ok(
-            range
-            @
-            CompressedFileRange {
+            range @ CompressedFileRange {
                 format: CompressionFormat::None,
                 ..
             },
@@ -738,9 +729,7 @@ fn preprocess_impl(
     };
     let dynsym_offset = match dynsym_sec.compressed_file_range() {
         Ok(
-            range
-            @
-            CompressedFileRange {
+            range @ CompressedFileRange {
                 format: CompressionFormat::None,
                 ..
             },
@@ -759,9 +748,7 @@ fn preprocess_impl(
     {
         match sec.compressed_file_range() {
             Ok(
-                range
-                @
-                CompressedFileRange {
+                range @ CompressedFileRange {
                     format: CompressionFormat::None,
                     ..
                 },
@@ -1627,9 +1614,14 @@ fn surgery_impl(
     let flushing_data_duration = flushing_data_start.elapsed().unwrap();
 
     // Make sure the final executable has permision to execute.
-    let mut perms = fs::metadata(out_filename)?.permissions();
-    perms.set_mode(perms.mode() | 0o111);
-    fs::set_permissions(out_filename, perms)?;
+    // TODO windows alternative?
+    #[cfg(target_family = "unix")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(out_filename)?.permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        fs::set_permissions(out_filename, perms)?;
+    }
 
     let total_duration = total_start.elapsed().unwrap();
 

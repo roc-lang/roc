@@ -141,7 +141,7 @@ impl FunctionLayout {
             Content::RigidVar(_) => Err(UnresolvedVariable(var)),
             Content::RecursionVar { .. } => Err(TypeError(())),
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
-            Content::Alias(_, _, actual) => Self::from_var_help(layouts, subs, *actual),
+            Content::Alias(_, _, actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::Error => Err(TypeError(())),
         }
@@ -249,7 +249,7 @@ impl LambdaSet {
                 unreachable!("lambda sets cannot currently be recursive")
             }
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
-            Content::Alias(_, _, actual) => Self::from_var_help(layouts, subs, *actual),
+            Content::Alias(_, _, actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::Error => Err(TypeError(())),
         }
@@ -660,7 +660,7 @@ impl Layout {
                 }
             }
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
-            Content::Alias(symbol, _, actual) => {
+            Content::Alias(symbol, _, actual, _) => {
                 let symbol = *symbol;
 
                 if let Some(int_width) = IntWidth::try_from_symbol(symbol) {

@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use crate::FormatMode;
 use bumpalo::collections::Vec;
@@ -9,8 +10,8 @@ use roc_fmt::module::fmt_module;
 use roc_fmt::Buf;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::ast::{
-    AssignedField, Collection, Expr, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation,
-    TypeHeader, WhenBranch,
+    AbilityDemand, AssignedField, Collection, Expr, Has, HasClause, Pattern, Spaced, StrLiteral,
+    StrSegment, Tag, TypeAnnotation, TypeHeader, WhenBranch,
 };
 use roc_parse::header::{
     AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
@@ -25,7 +26,54 @@ use roc_parse::{
 };
 use roc_region::all::{Loc, Region};
 
+fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> {
+    let mut to_flatten = files;
+    let mut files = vec![];
+
+    while let Some(path) = to_flatten.pop() {
+        if path.is_dir() {
+            match path.read_dir() {
+                Ok(directory) => {
+                    for item in directory {
+                        match item {
+                            Ok(file) => {
+                                let file_path = file.path();
+                                if file_path.is_dir() {
+                                    to_flatten.push(file_path);
+                                } else if is_roc_file(&file_path) {
+                                    files.push(file_path);
+                                }
+                            }
+
+                            Err(error) => internal_error!(
+                                "There was an error while trying to read a file from a directory: {:?}",
+                                error
+                            ),
+                        }
+                    }
+                }
+
+                Err(error) => internal_error!(
+                    "There was an error while trying to read the contents of a directory: {:?}",
+                    error
+                ),
+            }
+        } else if is_roc_file(&path) {
+            files.push(path);
+        }
+    }
+
+    files
+}
+
+fn is_roc_file(path: &Path) -> bool {
+    let ext = path.extension().and_then(OsStr::to_str);
+    return matches!(ext, Some("roc"));
+}
+
 pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
+    let files = flatten_directories(files);
+
     for file in files {
         let arena = Bump::new();
 
@@ -138,6 +186,8 @@ fn fmt_all<'a>(arena: &'a Bump, buf: &mut Buf<'a>, ast: &'a Ast) {
     for def in &ast.defs {
         fmt_def(buf, arena.alloc(def.value), 0);
     }
+
+    buf.fmt_end_of_file();
 }
 
 /// RemoveSpaces normalizes the ast to something that we _expect_ to be invariant under formatting.
@@ -438,9 +488,36 @@ impl<'a> RemoveSpaces<'a> for Def<'a> {
                 body_pattern: arena.alloc(body_pattern.remove_spaces(arena)),
                 body_expr: arena.alloc(body_expr.remove_spaces(arena)),
             },
+            Def::Ability {
+                header: TypeHeader { name, vars },
+                loc_has,
+                demands,
+            } => Def::Ability {
+                header: TypeHeader {
+                    name: name.remove_spaces(arena),
+                    vars: vars.remove_spaces(arena),
+                },
+                loc_has: loc_has.remove_spaces(arena),
+                demands: demands.remove_spaces(arena),
+            },
             Def::Expect(a) => Def::Expect(arena.alloc(a.remove_spaces(arena))),
             Def::NotYetImplemented(a) => Def::NotYetImplemented(a),
             Def::SpaceBefore(a, _) | Def::SpaceAfter(a, _) => a.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for Has<'a> {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        Has::Has
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for AbilityDemand<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        AbilityDemand {
+            name: self.name.remove_spaces(arena),
+            typ: self.typ.remove_spaces(arena),
         }
     }
 }
@@ -565,6 +642,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
+            Expr::SingleQuote(a) => Expr::Num(a),
         }
     }
 }
@@ -607,6 +685,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             }
             Pattern::SpaceBefore(a, _) => a.remove_spaces(arena),
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
+            Pattern::SingleQuote(a) => Pattern::NumLiteral(a),
         }
     }
 }
@@ -633,12 +712,26 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
             },
             TypeAnnotation::Inferred => TypeAnnotation::Inferred,
             TypeAnnotation::Wildcard => TypeAnnotation::Wildcard,
+            TypeAnnotation::Where(annot, has_clauses) => TypeAnnotation::Where(
+                arena.alloc(annot.remove_spaces(arena)),
+                arena.alloc(has_clauses.remove_spaces(arena)),
+            ),
             TypeAnnotation::SpaceBefore(a, _) => a.remove_spaces(arena),
             TypeAnnotation::SpaceAfter(a, _) => a.remove_spaces(arena),
             TypeAnnotation::Malformed(a) => TypeAnnotation::Malformed(a),
         }
     }
 }
+
+impl<'a> RemoveSpaces<'a> for HasClause<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        HasClause {
+            var: self.var.remove_spaces(arena),
+            ability: self.ability.remove_spaces(arena),
+        }
+    }
+}
+
 impl<'a> RemoveSpaces<'a> for Tag<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {

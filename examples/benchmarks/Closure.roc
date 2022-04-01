@@ -49,4 +49,3 @@ closure4 = \_ ->
     Task.succeed {}
         |> Task.after (\_ -> Task.succeed x)
         |> Task.map (\_ -> {})
-

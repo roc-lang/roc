@@ -148,6 +148,9 @@ fn expr2_to_string_helper(
         &Expr2::Var { .. } => {
             out_string.push_str(&format!("{:?}", expr2,));
         }
+        Expr2::RuntimeError { .. } => {
+            out_string.push_str("RuntimeError\n");
+        }
         other => todo!("Implement for {:?}", other),
     }
 

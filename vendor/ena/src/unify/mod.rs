@@ -298,11 +298,15 @@ impl<S: UnificationStore> UnificationTable<S> {
     ///
     /// NB. This is a building-block operation and you would probably
     /// prefer to call `probe` below.
-    pub fn get_root_key(&mut self, vid: S::Key) -> S::Key {
+    ///
+    /// This is an always-inlined version of this function for the hot
+    /// callsites. `uninlined_get_root_key` is the never-inlined version.
+    #[inline(always)]
+    pub fn inlined_get_root_key(&mut self, vid: S::Key) -> S::Key {
         match self.value(vid).parent(vid) {
             None => vid,
             Some(redirect) => {
-                let root_key: S::Key = self.get_root_key(redirect);
+                let root_key: S::Key = self.uninlined_get_root_key(redirect);
                 if root_key != redirect {
                     // Path compression
                     self.update_value(vid, |value| value.parent = root_key);
@@ -313,6 +317,14 @@ impl<S: UnificationStore> UnificationTable<S> {
         }
     }
 
+    // This is a never-inlined version of this function for cold callsites.
+    // 'inlined_get_root_key` is the always-inlined version.
+    #[inline(never)]
+    fn uninlined_get_root_key(&mut self, vid: S::Key) -> S::Key {
+        self.inlined_get_root_key(vid)
+    }
+
+    #[inline(always)]
     pub fn get_root_key_without_compacting(&self, mut vid: S::Key) -> S::Key {
         while let Some(redirect) = self.value(vid).parent(vid) {
             vid = redirect;
@@ -435,7 +447,7 @@ where
         K1: Into<K>,
     {
         let id = id.into();
-        self.get_root_key(id)
+        self.inlined_get_root_key(id)
     }
 
     /// Returns the current value for the given key. If the key has
@@ -446,7 +458,7 @@ where
         K1: Into<K>,
     {
         let id = id.into();
-        let id = self.get_root_key(id);
+        let id = self.inlined_get_root_key(id);
         self.value(id).value.clone()
     }
 
@@ -470,7 +482,7 @@ where
         K1: Into<K>,
     {
         let id = id.into();
-        let id = self.get_root_key_without_compacting(id);
+        let id = self.inlined_get_root_key(id);
         self.value_mut(id)
     }
 

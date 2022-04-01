@@ -7,7 +7,7 @@ To add a builtin:
 2. Make sure the function is public with the `pub` keyword and uses the C calling convention. This is really easy, just add `pub` and `callconv(.C)` to the function declaration like so: `pub fn atan(num: f64) callconv(.C) f64 { ... }`
 3. In `src/main.zig`, export the function. This is also organized by module. For example, for a `Num` function find the `Num` section and add: `comptime { exportNumFn(num.atan, "atan"); }`. The first argument is the function, the second is the name of it in LLVM.
 4. In `compiler/builtins/src/bitcode.rs`, add a constant for the new function. This is how we use it in Rust. Once again, this is organized by module, so just find the relevant area and add your new function.
-5. You can now  your function in Rust using `call_bitcode_fn` in `llvm/src/build.rs`!
+5. You can now use your function in Rust using `call_bitcode_fn` in `llvm/src/build.rs`!
 
 ## How it works
 

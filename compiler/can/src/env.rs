@@ -27,8 +27,11 @@ pub struct Env<'a> {
     /// current closure name (if any)
     pub closure_name_symbol: Option<Symbol>,
 
-    /// Symbols which were referenced by qualified lookups.
-    pub qualified_lookups: MutSet<Symbol>,
+    /// Symbols of values/functions which were referenced by qualified lookups.
+    pub qualified_value_lookups: MutSet<Symbol>,
+
+    /// Symbols of types which were referenced by qualified lookups.
+    pub qualified_type_lookups: MutSet<Symbol>,
 
     pub top_level_symbols: MutSet<Symbol>,
 
@@ -51,7 +54,8 @@ impl<'a> Env<'a> {
             exposed_ident_ids,
             problems: Vec::new(),
             closures: MutMap::default(),
-            qualified_lookups: MutSet::default(),
+            qualified_value_lookups: MutSet::default(),
+            qualified_type_lookups: MutSet::default(),
             tailcallable_symbol: None,
             closure_name_symbol: None,
             top_level_symbols: MutSet::default(),
@@ -71,6 +75,8 @@ impl<'a> Env<'a> {
             ident
         );
 
+        let is_type_name = ident.starts_with(|c: char| c.is_uppercase());
+
         let module_name = ModuleName::from(module_name_str);
         let ident = Ident::from(ident);
 
@@ -81,9 +87,13 @@ impl<'a> Env<'a> {
                 if module_id == self.home {
                     match self.ident_ids.get_id(&ident) {
                         Some(ident_id) => {
-                            let symbol = Symbol::new(module_id, *ident_id);
+                            let symbol = Symbol::new(module_id, ident_id);
 
-                            self.qualified_lookups.insert(symbol);
+                            if is_type_name {
+                                self.qualified_type_lookups.insert(symbol);
+                            } else {
+                                self.qualified_value_lookups.insert(symbol);
+                            }
 
                             Ok(symbol)
                         }
@@ -102,9 +112,13 @@ impl<'a> Env<'a> {
                     match self.dep_idents.get(&module_id) {
                         Some(exposed_ids) => match exposed_ids.get_id(&ident) {
                             Some(ident_id) => {
-                                let symbol = Symbol::new(module_id, *ident_id);
+                                let symbol = Symbol::new(module_id, ident_id);
 
-                                self.qualified_lookups.insert(symbol);
+                                if is_type_name {
+                                    self.qualified_type_lookups.insert(symbol);
+                                } else {
+                                    self.qualified_value_lookups.insert(symbol);
+                                }
 
                                 Ok(symbol)
                             }
@@ -124,12 +138,17 @@ impl<'a> Env<'a> {
                                 })
                             }
                         },
-                        None => {
-                            panic!(
-                                "Module {} exists, but is not recorded in dep_idents",
-                                module_name
-                            )
-                        }
+                        None => Err(RuntimeError::ModuleNotImported {
+                            module_name,
+                            imported_modules: self
+                                .dep_idents
+                                .keys()
+                                .filter_map(|module_id| self.module_ids.get_name(*module_id))
+                                .map(|module_name| module_name.as_ref().into())
+                                .collect(),
+                            region,
+                            module_exists: true,
+                        }),
                     }
                 }
             }
@@ -141,6 +160,7 @@ impl<'a> Env<'a> {
                     .map(|string| string.as_ref().into())
                     .collect(),
                 region,
+                module_exists: false,
             }),
         }
     }

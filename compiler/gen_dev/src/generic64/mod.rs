@@ -1,12 +1,15 @@
-use crate::{single_register_floats, single_register_integers, Backend, Env, Relocation};
+use crate::{
+    single_register_floats, single_register_int_builtins, single_register_integers, Backend, Env,
+    Relocation,
+};
 use bumpalo::collections::Vec;
-use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{BranchInfo, JoinPointId, Literal, Param, ProcLayout, SelfRecursive, Stmt};
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, Layout, TagIdIntType, UnionLayout};
 use roc_target::TargetInfo;
 use std::marker::PhantomData;
 
@@ -16,8 +19,10 @@ pub(crate) mod x86_64;
 
 use storage::StorageManager;
 
+// TODO: on all number functions double check and deal with over/underflow.
+
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<GeneralReg, FloatReg>>:
-    Sized
+    Sized + Copy
 {
     const BASE_PTR_REG: GeneralReg;
     const STACK_PTR_REG: GeneralReg;
@@ -72,7 +77,8 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
     fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
-        args: &'a [Symbol],
+        dst: &Symbol,
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
         ret_layout: &Layout<'a>,
@@ -103,7 +109,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
 /// Thus, some backends will need to use mulitiple instructions to preform a single one of this calls.
 /// Generally, I prefer explicit sources, as opposed to dst being one of the sources. Ex: `x = x + y` would be `add x, x, y` instead of `add x, y`.
 /// dst should always come before sources.
-pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized {
+pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
     fn abs_freg64_freg64(
         buf: &mut Vec<'_, u8>,
@@ -167,6 +173,26 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized {
     fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
 
+    fn mov_reg64_mem64_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src: GeneralReg,
+        offset: i32,
+    );
+    fn mov_mem64_offset32_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        offset: i32,
+        src: GeneralReg,
+    );
+
+    /// Sign extends the data at `offset` with `size` as it copies it to `dst`
+    /// size must be less than or equal to 8.
+    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, size: u8);
+    /// Zero extends the data at `offset` with `size` as it copies it to `dst`
+    /// size must be less than or equal to 8.
+    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, size: u8);
+
     fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
@@ -217,6 +243,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized {
 
     fn to_float_freg64_freg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
 
+    fn lte_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
     fn gte_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
@@ -256,7 +289,7 @@ pub struct Backend64Bit<
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
 
     literal_map: MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>,
-    join_map: MutMap<JoinPointId, u64>,
+    join_map: MutMap<JoinPointId, Vec<'a, (u64, u64)>>,
 
     storage_manager: StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
 }
@@ -328,7 +361,6 @@ impl<
         self.join_map.clear();
         self.free_map.clear();
         self.buf.clear();
-        self.helper_proc_symbols.clear();
         self.storage_manager.reset();
     }
 
@@ -462,7 +494,7 @@ impl<
         &mut self,
         dst: &Symbol,
         fn_name: String,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     ) {
@@ -479,6 +511,7 @@ impl<
         CC::store_args(
             &mut self.buf,
             &mut self.storage_manager,
+            dst,
             args,
             arg_layouts,
             ret_layout,
@@ -523,52 +556,56 @@ impl<
             .storage_manager
             .load_to_general_reg(&mut self.buf, cond_symbol);
 
+        let mut base_storage = self.storage_manager.clone();
+        let mut max_branch_stack_size = 0;
         let mut ret_jumps = bumpalo::vec![in self.env.arena];
         let mut tmp = bumpalo::vec![in self.env.arena];
-        for (val, branch_info, stmt) in branches.iter() {
+        for (val, _branch_info, stmt) in branches.iter() {
+            // TODO: look into branch info and if it matters here.
             tmp.clear();
-            if let BranchInfo::None = branch_info {
-                // Create jump to next branch if not cond_sym not equal to value.
-                // Since we don't know the offset yet, set it to 0 and overwrite later.
-                let jne_location = self.buf.len();
-                let start_offset = ASM::jne_reg64_imm64_imm32(&mut self.buf, cond_reg, *val, 0);
+            // Create jump to next branch if cond_sym not equal to value.
+            // Since we don't know the offset yet, set it to 0 and overwrite later.
+            let jne_location = self.buf.len();
+            let start_offset = ASM::jne_reg64_imm64_imm32(&mut self.buf, cond_reg, *val, 0);
 
-                // Build all statements in this branch.
-                self.build_stmt(stmt, ret_layout);
-
-                // Build unconditional jump to the end of this switch.
-                // Since we don't know the offset yet, set it to 0 and overwrite later.
-                let jmp_location = self.buf.len();
-                let jmp_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
-                ret_jumps.push((jmp_location, jmp_offset));
-
-                // Overwrite the original jne with the correct offset.
-                let end_offset = self.buf.len();
-                let jne_offset = end_offset - start_offset;
-                ASM::jne_reg64_imm64_imm32(&mut tmp, cond_reg, *val, jne_offset as i32);
-                for (i, byte) in tmp.iter().enumerate() {
-                    self.buf[jne_location + i] = *byte;
-                }
-            } else {
-                todo!("Switch: branch info, {:?}", branch_info);
-            }
-        }
-        let (branch_info, stmt) = default_branch;
-        if let BranchInfo::None = branch_info {
+            // Build all statements in this branch. Using storage as from before any branch.
+            self.storage_manager = base_storage.clone();
             self.build_stmt(stmt, ret_layout);
 
-            // Update all return jumps to jump past the default case.
-            let ret_offset = self.buf.len();
-            for (jmp_location, start_offset) in ret_jumps.into_iter() {
-                self.update_jmp_imm32_offset(
-                    &mut tmp,
-                    jmp_location as u64,
-                    start_offset as u64,
-                    ret_offset as u64,
-                );
+            // Build unconditional jump to the end of this switch.
+            // Since we don't know the offset yet, set it to 0 and overwrite later.
+            let jmp_location = self.buf.len();
+            let jmp_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
+            ret_jumps.push((jmp_location, jmp_offset));
+
+            // Overwrite the original jne with the correct offset.
+            let end_offset = self.buf.len();
+            let jne_offset = end_offset - start_offset;
+            ASM::jne_reg64_imm64_imm32(&mut tmp, cond_reg, *val, jne_offset as i32);
+            for (i, byte) in tmp.iter().enumerate() {
+                self.buf[jne_location + i] = *byte;
             }
-        } else {
-            todo!("Switch: branch info, {:?}", branch_info);
+
+            // Update important storage information to avoid overwrites.
+            max_branch_stack_size =
+                std::cmp::max(max_branch_stack_size, self.storage_manager.stack_size());
+            base_storage.update_fn_call_stack_size(self.storage_manager.fn_call_stack_size());
+        }
+        self.storage_manager = base_storage;
+        self.storage_manager
+            .update_stack_size(max_branch_stack_size);
+        let (_branch_info, stmt) = default_branch;
+        self.build_stmt(stmt, ret_layout);
+
+        // Update all return jumps to jump past the default case.
+        let ret_offset = self.buf.len();
+        for (jmp_location, start_offset) in ret_jumps.into_iter() {
+            self.update_jmp_imm32_offset(
+                &mut tmp,
+                jmp_location as u64,
+                start_offset as u64,
+                ret_offset as u64,
+            );
         }
     }
 
@@ -580,36 +617,41 @@ impl<
         remainder: &'a Stmt<'a>,
         ret_layout: &Layout<'a>,
     ) {
+        // Free everything to the stack to make sure they don't get messed up when looping back to this point.
+        // TODO: look into a nicer solution.
+        self.storage_manager.free_all_to_stack(&mut self.buf);
+
         // Ensure all the joinpoint parameters have storage locations.
         // On jumps to the joinpoint, we will overwrite those locations as a way to "pass parameters" to the joinpoint.
         self.storage_manager
             .setup_joinpoint(&mut self.buf, id, parameters);
 
-        // Create jump to remaining.
-        let jmp_location = self.buf.len();
-        let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
+        self.join_map.insert(*id, bumpalo::vec![in self.env.arena]);
+
+        // Build remainder of function first. It is what gets run and jumps to join.
+        self.build_stmt(remainder, ret_layout);
+
+        let join_location = self.buf.len() as u64;
 
         // Build all statements in body.
-        self.join_map.insert(*id, self.buf.len() as u64);
         self.build_stmt(body, ret_layout);
 
-        // Overwrite the original jump with the correct offset.
+        // Overwrite the all jumps to the joinpoint with the correct offset.
         let mut tmp = bumpalo::vec![in self.env.arena];
-        self.update_jmp_imm32_offset(
-            &mut tmp,
-            jmp_location as u64,
-            start_offset as u64,
-            self.buf.len() as u64,
-        );
-
-        // Build remainder of function.
-        self.build_stmt(remainder, ret_layout)
+        for (jmp_location, start_offset) in self
+            .join_map
+            .remove(id)
+            .unwrap_or_else(|| internal_error!("join point not defined"))
+        {
+            tmp.clear();
+            self.update_jmp_imm32_offset(&mut tmp, jmp_location, start_offset, join_location);
+        }
     }
 
     fn build_jump(
         &mut self,
         id: &JoinPointId,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         _ret_layout: &Layout<'a>,
     ) {
@@ -619,15 +661,8 @@ impl<
         let jmp_location = self.buf.len();
         let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
 
-        if let Some(offset) = self.join_map.get(id) {
-            let offset = *offset;
-            let mut tmp = bumpalo::vec![in self.env.arena];
-            self.update_jmp_imm32_offset(
-                &mut tmp,
-                jmp_location as u64,
-                start_offset as u64,
-                offset,
-            );
+        if let Some(vec) = self.join_map.get_mut(id) {
+            vec.push((jmp_location as u64, start_offset as u64))
         } else {
             internal_error!("Jump: unknown point specified to jump to: {:?}", id);
         }
@@ -716,7 +751,7 @@ impl<
 
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>) {
         match arg_layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            Layout::Builtin(single_register_int_builtins!()) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -823,6 +858,28 @@ impl<
         }
     }
 
+    fn build_num_lte(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    ) {
+        match arg_layout {
+            Layout::Builtin(single_register_int_builtins!()) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+                ASM::lte_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            x => todo!("NumLte: layout, {:?}", x),
+        }
+    }
+
     fn build_num_gte(
         &mut self,
         dst: &Symbol,
@@ -831,7 +888,7 @@ impl<
         arg_layout: &Layout<'a>,
     ) {
         match arg_layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            Layout::Builtin(single_register_int_builtins!()) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -845,13 +902,173 @@ impl<
         }
     }
 
+    fn build_list_len(&mut self, dst: &Symbol, list: &Symbol) {
+        self.storage_manager.list_len(&mut self.buf, dst, list);
+    }
+
+    fn build_list_get_unsafe(
+        &mut self,
+        dst: &Symbol,
+        list: &Symbol,
+        index: &Symbol,
+        ret_layout: &Layout<'a>,
+    ) {
+        let (base_offset, _) = self.storage_manager.stack_offset_and_size(list);
+        let index_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, index);
+        let ret_stack_size = ret_layout.stack_size(self.storage_manager.target_info());
+        // TODO: This can be optimized with smarter instructions.
+        // Also can probably be moved into storage manager at least partly.
+        self.storage_manager.with_tmp_general_reg(
+            &mut self.buf,
+            |storage_manager, buf, list_ptr| {
+                ASM::mov_reg64_base32(buf, list_ptr, base_offset as i32);
+                storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp| {
+                    ASM::mov_reg64_imm64(buf, tmp, ret_stack_size as i64);
+                    ASM::imul_reg64_reg64_reg64(buf, tmp, tmp, index_reg);
+                    ASM::add_reg64_reg64_reg64(buf, tmp, tmp, list_ptr);
+                    match ret_layout {
+                        single_register_integers!() if ret_stack_size == 8 => {
+                            let dst_reg = storage_manager.claim_general_reg(buf, dst);
+                            ASM::mov_reg64_mem64_offset32(buf, dst_reg, tmp, 0);
+                        }
+                        x => internal_error!("Loading list element with layout: {:?}", x),
+                    }
+                });
+            },
+        );
+    }
+
+    fn build_list_replace_unsafe(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
+        ret_layout: &Layout<'a>,
+    ) {
+        // We want to delegate to the zig builtin, but it takes some extra parameters.
+        // Firstly, it takes the alignment of the list.
+        // Secondly, it takes the stack size of an element.
+        // Thirdly, it takes a pointer that it will write the output element to.
+        let list = args[0];
+        let list_layout = arg_layouts[0];
+        let index = args[1];
+        let index_layout = arg_layouts[1];
+        let elem = args[2];
+        let elem_layout = arg_layouts[2];
+
+        let u32_layout = &Layout::Builtin(Builtin::Int(IntWidth::U32));
+        let list_alignment = list_layout.alignment_bytes(self.storage_manager.target_info());
+        self.load_literal(
+            &Symbol::DEV_TMP,
+            u32_layout,
+            &Literal::Int(list_alignment as i128),
+        );
+
+        // Have to pass the input element by pointer, so put it on the stack and load it's address.
+        self.storage_manager
+            .ensure_symbol_on_stack(&mut self.buf, &elem);
+        let u64_layout = &Layout::Builtin(Builtin::Int(IntWidth::U64));
+        let (new_elem_offset, _) = self.storage_manager.stack_offset_and_size(&elem);
+        // Load address of output element into register.
+        let reg = self
+            .storage_manager
+            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP2);
+        ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
+
+        // Load the elements size.
+        let elem_stack_size = elem_layout.stack_size(self.storage_manager.target_info());
+        self.load_literal(
+            &Symbol::DEV_TMP3,
+            u64_layout,
+            &Literal::Int(elem_stack_size as i128),
+        );
+
+        // Setup the return location.
+        let base_offset = self.storage_manager.claim_stack_area(
+            dst,
+            ret_layout.stack_size(self.storage_manager.target_info()),
+        );
+
+        let ret_fields = if let Layout::Struct { field_layouts, .. } = ret_layout {
+            field_layouts
+        } else {
+            internal_error!(
+                "Expected replace to return a struct instead found: {:?}",
+                ret_layout
+            )
+        };
+
+        // Only return list and old element.
+        debug_assert_eq!(ret_fields.len(), 2);
+
+        let (out_list_offset, out_elem_offset) = if ret_fields[0] == elem_layout {
+            (
+                base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
+                base_offset,
+            )
+        } else {
+            (
+                base_offset,
+                base_offset + ret_fields[0].stack_size(self.storage_manager.target_info()) as i32,
+            )
+        };
+
+        // Load address of output element into register.
+        let reg = self
+            .storage_manager
+            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP4);
+        ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, out_elem_offset);
+
+        let lowlevel_args = bumpalo::vec![
+        in self.env.arena;
+            list,
+            Symbol::DEV_TMP,
+            index,
+            Symbol::DEV_TMP2,
+            Symbol::DEV_TMP3,
+            Symbol::DEV_TMP4,
+         ];
+        let lowlevel_arg_layouts = bumpalo::vec![
+        in self.env.arena;
+                list_layout,
+                *u32_layout,
+                index_layout,
+                *u64_layout,
+                *u64_layout,
+                *u64_layout,
+        ];
+
+        self.build_fn_call(
+            &Symbol::DEV_TMP5,
+            bitcode::LIST_REPLACE.to_string(),
+            &lowlevel_args,
+            &lowlevel_arg_layouts,
+            &list_layout,
+        );
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
+
+        // Copy from list to the output record.
+        self.storage_manager.copy_symbol_to_stack_offset(
+            &mut self.buf,
+            out_list_offset,
+            &Symbol::DEV_TMP5,
+            &list_layout,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP5);
+    }
+
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
-        // We may not strictly need an instruction here.
-        // What's important is to load the value, and for src and dest to have different Layouts.
-        // This is used for pointer math in refcounting and for pointer equality
         let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-        let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
-        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
+        self.storage_manager
+            .ensure_symbol_on_stack(&mut self.buf, src);
+        let (offset, _) = self.storage_manager.stack_offset_and_size(src);
+        ASM::add_reg64_reg64_imm32(&mut self.buf, dst_reg, CC::BASE_PTR_REG, offset);
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
@@ -868,6 +1085,43 @@ impl<
     ) {
         self.storage_manager
             .load_field_at_index(sym, structure, index, field_layouts);
+    }
+
+    fn load_union_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        tag_id: TagIdIntType,
+        index: u64,
+        union_layout: &UnionLayout<'a>,
+    ) {
+        match union_layout {
+            UnionLayout::NonRecursive(tag_layouts) | UnionLayout::Recursive(tag_layouts) => {
+                self.storage_manager.load_field_at_index(
+                    sym,
+                    structure,
+                    index,
+                    tag_layouts[tag_id as usize],
+                );
+            }
+            x => todo!("loading from union type: {:?}", x),
+        }
+    }
+
+    fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>) {
+        self.storage_manager
+            .load_union_tag_id(&mut self.buf, sym, structure, union_layout);
+    }
+
+    fn tag(
+        &mut self,
+        sym: &Symbol,
+        fields: &'a [Symbol],
+        union_layout: &UnionLayout<'a>,
+        tag_id: TagIdIntType,
+    ) {
+        self.storage_manager
+            .create_union(&mut self.buf, sym, union_layout, fields, tag_id)
     }
 
     fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>) {
@@ -994,21 +1248,39 @@ impl<
 }
 
 #[macro_export]
+macro_rules! sign_extended_int_builtins {
+    () => {
+        Builtin::Int(IntWidth::I8 | IntWidth::I16 | IntWidth::I32 | IntWidth::I64 | IntWidth::I128)
+    };
+}
+
+#[macro_export]
+macro_rules! zero_extended_int_builtins {
+    () => {
+        Builtin::Int(IntWidth::U8 | IntWidth::U16 | IntWidth::U32 | IntWidth::U64 | IntWidth::U128)
+    };
+}
+
+#[macro_export]
+macro_rules! single_register_int_builtins {
+    () => {
+        Builtin::Int(
+            IntWidth::I8
+                | IntWidth::I16
+                | IntWidth::I32
+                | IntWidth::I64
+                | IntWidth::U8
+                | IntWidth::U16
+                | IntWidth::U32
+                | IntWidth::U64,
+        )
+    };
+}
+
+#[macro_export]
 macro_rules! single_register_integers {
     () => {
-        Layout::Builtin(
-            Builtin::Bool
-                | Builtin::Int(
-                    IntWidth::I8
-                        | IntWidth::I16
-                        | IntWidth::I32
-                        | IntWidth::I64
-                        | IntWidth::U8
-                        | IntWidth::U16
-                        | IntWidth::U32
-                        | IntWidth::U64,
-                ),
-        ) | Layout::RecursivePointer
+        Layout::Builtin(Builtin::Bool | single_register_int_builtins!()) | Layout::RecursivePointer
     };
 }
 

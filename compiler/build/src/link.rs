@@ -1,4 +1,4 @@
-use crate::target::{arch_str, target_triple_str};
+use crate::target::{arch_str, target_zig_str};
 #[cfg(feature = "llvm")]
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
@@ -46,6 +46,10 @@ pub fn link(
             operating_system: OperatingSystem::Darwin,
             ..
         } => link_macos(target, output_path, input_paths, link_type),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            ..
+        } => link_windows(target, output_path, input_paths, link_type),
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
@@ -137,6 +141,8 @@ pub fn build_zig_host_native(
 
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.args(&["-O", "ReleaseSmall"]);
     }
     command.output().unwrap()
 }
@@ -231,6 +237,8 @@ pub fn build_zig_host_native(
     ]);
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.args(&["-O", "ReleaseSmall"]);
     }
     command.output().unwrap()
 }
@@ -282,6 +290,8 @@ pub fn build_zig_host_wasm32(
         ]);
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.args(&["-O", "ReleaseSmall"]);
     }
     command.output().unwrap()
 }
@@ -317,7 +327,9 @@ pub fn build_c_host_native(
         command.args(&["-fPIC", "-c"]);
     }
     if matches!(opt_level, OptLevel::Optimize) {
-        command.arg("-O2");
+        command.arg("-O3");
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.arg("-Os");
     }
     command.output().unwrap()
 }
@@ -351,6 +363,8 @@ pub fn build_swift_host_native(
 
     if matches!(opt_level, OptLevel::Optimize) {
         command.arg("-O");
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.arg("-Osize");
     }
 
     command.output().unwrap()
@@ -478,7 +492,7 @@ pub fn rebuild_host(
                     &emit_bin,
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
-                    target_triple_str(target),
+                    target_zig_str(target),
                     opt_level,
                     shared_lib_path,
                     target_valgrind,
@@ -491,18 +505,18 @@ pub fn rebuild_host(
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
-        let cargo_out_dir =
-            cargo_dir
-                .join("target")
-                .join(if matches!(opt_level, OptLevel::Optimize) {
-                    "release"
-                } else {
-                    "debug"
-                });
+        let cargo_out_dir = cargo_dir.join("target").join(
+            if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
+                "release"
+            } else {
+                "debug"
+            },
+        );
 
         let mut command = Command::new("cargo");
         command.arg("build").current_dir(cargo_dir);
-        if matches!(opt_level, OptLevel::Optimize) {
+        // Rust doesn't expose size without editing the cargo.toml. Instead just use release.
+        if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
             command.arg("--release");
         }
         let source_file = if shared_lib_path.is_some() {
@@ -568,6 +582,8 @@ pub fn rebuild_host(
         ]);
         if matches!(opt_level, OptLevel::Optimize) {
             command.arg("-O");
+        } else if matches!(opt_level, OptLevel::Size) {
+            command.arg("-C opt-level=s");
         }
         let output = command.output().unwrap();
 
@@ -869,8 +885,6 @@ fn link_linux(
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
 
-    init_arch(target);
-
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
 
@@ -1085,6 +1099,15 @@ fn link_wasm32(
     Ok((child, output_path))
 }
 
+fn link_windows(
+    _target: &Triple,
+    _output_path: PathBuf,
+    _input_paths: &[&str],
+    _link_type: LinkType,
+) -> io::Result<(Child, PathBuf)> {
+    todo!("Add windows support to the surgical linker. See issue #2608.")
+}
+
 #[cfg(feature = "llvm")]
 pub fn module_to_dylib(
     module: &inkwell::module::Module,
@@ -1141,14 +1164,4 @@ fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
             ),
         }
     }
-}
-
-#[cfg(feature = "llvm")]
-fn init_arch(target: &Triple) {
-    crate::target::init_arch(target);
-}
-
-#[cfg(not(feature = "llvm"))]
-fn init_arch(_target: &Triple) {
-    panic!("Tried to initialize LLVM when crate was not built with `feature = \"llvm\"` enabled");
 }

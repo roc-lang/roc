@@ -12,9 +12,11 @@ extern crate indoc;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        example_file, examples_dir, extract_valgrind_errors, fixture_file, known_bad_file, run_cmd,
-        run_roc, run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
+        example_file, examples_dir, extract_valgrind_errors, fixture_file, fixtures_dir,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
+        ValgrindErrorXWhat,
     };
+    use indoc::indoc;
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::path::{Path, PathBuf};
@@ -22,11 +24,11 @@ mod cli_run {
     #[cfg(not(debug_assertions))]
     use roc_collections::all::MutMap;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     const TEST_SURGICAL_LINKER: bool = true;
 
-    // Surgical linker currently only supports linux.
-    #[cfg(not(target_os = "linux"))]
+    // Surgical linker currently only supports linux x86_64.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     const TEST_SURGICAL_LINKER: bool = false;
 
     #[cfg(not(target_os = "macos"))]
@@ -49,35 +51,45 @@ mod cli_run {
     }
 
     fn strip_colors(str: &str) -> String {
-        use roc_reporting::report::*;
-        str.replace(RED_CODE, "")
-            .replace(WHITE_CODE, "")
-            .replace(BLUE_CODE, "")
-            .replace(YELLOW_CODE, "")
-            .replace(GREEN_CODE, "")
-            .replace(CYAN_CODE, "")
-            .replace(MAGENTA_CODE, "")
-            .replace(RESET_CODE, "")
-            .replace(BOLD_CODE, "")
-            .replace(UNDERLINE_CODE, "")
+        use roc_reporting::report::ANSI_STYLE_CODES;
+        str.replace(ANSI_STYLE_CODES.red, "")
+            .replace(ANSI_STYLE_CODES.green, "")
+            .replace(ANSI_STYLE_CODES.yellow, "")
+            .replace(ANSI_STYLE_CODES.blue, "")
+            .replace(ANSI_STYLE_CODES.magenta, "")
+            .replace(ANSI_STYLE_CODES.cyan, "")
+            .replace(ANSI_STYLE_CODES.white, "")
+            .replace(ANSI_STYLE_CODES.bold, "")
+            .replace(ANSI_STYLE_CODES.underline, "")
+            .replace(ANSI_STYLE_CODES.reset, "")
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-        let compile_out = run_roc(&[&["check", file.to_str().unwrap()], &flags[..]].concat());
+        let compile_out = run_roc(&[&["check", file.to_str().unwrap()], flags].concat());
         let err = compile_out.stdout.trim();
-        let err = strip_colors(&err);
+        let err = strip_colors(err);
         assert_multiline_str_eq!(err, expected.into());
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
         let flags = &["--check"];
-        let out = run_roc(&[&["format", &file.to_str().unwrap()], &flags[..]].concat());
-
+        let out = run_roc(&[&["format", file.to_str().unwrap()], &flags[..]].concat());
         if expects_success_exit_code {
             assert!(out.status.success());
         } else {
             assert!(!out.status.success());
         }
+    }
+
+    fn build_example(file: &Path, flags: &[&str]) -> Out {
+        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
+        if !compile_out.stderr.is_empty() {
+            panic!("roc build had stderr: {}", compile_out.stderr);
+        }
+
+        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+
+        compile_out
     }
 
     fn check_output_with_stdin(
@@ -96,12 +108,7 @@ mod cli_run {
             all_flags.extend_from_slice(&["--valgrind"]);
         }
 
-        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], &all_flags[..]].concat());
-        if !compile_out.stderr.is_empty() {
-            panic!("roc build had stderr: {}", compile_out.stderr);
-        }
-
-        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+        build_example(file, &all_flags[..]);
 
         let out = if use_valgrind && ALLOW_VALGRIND {
             let (valgrind_out, raw_xml) = if let Some(input_file) = input_file {
@@ -187,7 +194,7 @@ mod cli_run {
     ) {
         assert_eq!(input_file, None, "Wasm does not support input files");
         let mut flags = flags.to_vec();
-        flags.push("--backend=wasm32");
+        flags.push("--target=wasm32");
 
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags.as_slice()].concat());
         if !compile_out.stderr.is_empty() {
@@ -227,12 +234,12 @@ mod cli_run {
                     let file_name = example_file(dir_name, example.filename);
 
                     match example.executable_filename {
-                        "hello-web" => {
+                        "helloWeb" => {
                             // this is a web webassembly example, but we don't test with JS at the moment
                             eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
                             return;
                         }
-                        "hello-swift" => {
+                        "helloSwift" => {
                             if cfg!(not(target_os = "macos")) {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
                                 return;
@@ -243,6 +250,17 @@ mod cli_run {
                             let script_out = run_cmd(&script_path.into_os_string().into_string().unwrap(), &[], &[]);
 
                             std::env::set_var("ROC_LINK_FLAGS", script_out.stdout);
+                        }
+                        "hello-gui" => {
+                            // Since this one requires opening a window, we do `roc build` on it but don't run it.
+                            if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+                                // The surgical linker can successfully link this on Linux, but the legacy linker errors!
+                                build_example(&file_name, &["--optimize", "--roc-linker"]);
+                            } else {
+                                build_example(&file_name, &["--optimize"]);
+                            }
+
+                            return;
                         }
                         _ => {}
                     }
@@ -319,64 +337,80 @@ mod cli_run {
     //     },
     // ]
     examples! {
-        hello_world:"hello-world" => Example {
-            filename: "Hello.roc",
-            executable_filename: "hello-world",
+        helloWorld:"hello-world" => Example {
+            filename: "helloWorld.roc",
+            executable_filename: "helloWorld",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        hello_zig:"hello-zig" => Example {
-            filename: "Hello.roc",
-            executable_filename: "hello-world",
+        helloC:"hello-world/c-platform" => Example {
+            filename: "helloC.roc",
+            executable_filename: "helloC",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        hello_rust:"hello-rust" => Example {
-            filename: "Hello.roc",
-            executable_filename: "hello-rust",
+        helloZig:"hello-world/zig-platform" => Example {
+            filename: "helloZig.roc",
+            executable_filename: "helloZig",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        hello_swift:"hello-swift" => Example {
-            filename: "Hello.roc",
-            executable_filename: "hello-swift",
+        helloRust:"hello-world/rust-platform" => Example {
+            filename: "helloRust.roc",
+            executable_filename: "helloRust",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello Swift, meet Roc\n",
+            expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        hello_crystal:"hello-crystal" => Example {
-            filename: "Hello.roc",
-            executable_filename: "hello-crystal",
+        helloCrystal:"hello-world/crystal-platform" => Example {
+            filename: "helloCrystal.roc",
+            executable_filename: "helloCrystal",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello Crystal, meet Roc\n",
             use_valgrind: true,
         },
-        hello_web:"hello-web" => Example {
-            filename: "Hello.roc",
-            executable_filename: "hello-web",
+        helloSwift:"hello-world/swift-platform" => Example {
+            filename: "helloSwift.roc",
+            executable_filename: "helloSwift",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        fib:"fib" => Example {
-            filename: "Fib.roc",
-            executable_filename: "fib",
+        helloWeb:"hello-world/web-platform" => Example {
+            filename: "helloWeb.roc",
+            executable_filename: "helloWeb",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"Hello, World!\n",
+            use_valgrind: true,
+        },
+        fib:"algorithms" => Example {
+            filename: "fibonacci.roc",
+            executable_filename: "fibonacci",
             stdin: &[],
             input_file: None,
             expected_ending:"55\n",
             use_valgrind: true,
         },
-        quicksort:"quicksort" => Example {
-            filename: "Quicksort.roc",
+        gui:"gui" => Example {
+            filename: "Hello.roc",
+            executable_filename: "hello-gui",
+            stdin: &[],
+            input_file: None,
+            expected_ending: "",
+            use_valgrind: false,
+        },
+        quicksort:"algorithms" => Example {
+            filename: "quicksort.roc",
             executable_filename: "quicksort",
             stdin: &[],
             input_file: None,
@@ -391,9 +425,9 @@ mod cli_run {
         //     expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
         //     use_valgrind: true,
         // },
-        effect:"effect" => Example {
-            filename: "Main.roc",
-            executable_filename: "effect-example",
+        effects:"interactive" => Example {
+            filename: "effects.roc",
+            executable_filename: "effects",
             stdin: &["hi there!"],
             input_file: None,
             expected_ending: "hi there!\nIt is known\n",
@@ -407,7 +441,7 @@ mod cli_run {
         //     expected_ending: "",
         //     use_valgrind: true,
         // },
-        cli:"cli" => Example {
+        cli:"interactive" => Example {
             filename: "form.roc",
             executable_filename: "form",
             stdin: &["Giovanni\n", "Giorgio\n"],
@@ -415,8 +449,8 @@ mod cli_run {
             expected_ending: "Hi, Giovanni Giorgio! 👋\n",
             use_valgrind: true,
         },
-        tui:"tui" => Example {
-            filename: "Main.roc",
+        tui:"interactive" => Example {
+            filename: "tui.roc",
             executable_filename: "tui",
             stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
             input_file: None,
@@ -560,7 +594,7 @@ mod cli_run {
                         &file_name,
                         benchmark.stdin,
                         benchmark.executable_filename,
-                        &["--backend=x86_32"],
+                        &["--target=x86_32"],
                         benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
@@ -570,7 +604,7 @@ mod cli_run {
                         &file_name,
                         benchmark.stdin,
                         benchmark.executable_filename,
-                        &["--backend=x86_32", "--optimize"],
+                        &["--target=x86_32", "--optimize"],
                         benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
@@ -700,6 +734,22 @@ mod cli_run {
 
             if entry.file_type().unwrap().is_dir() {
                 let example_dir_name = entry.file_name().into_string().unwrap();
+
+                // TODO: Improve this with a more-dynamic approach. (Read all subdirectories?)
+                // Some hello-world examples live in nested directories
+                if example_dir_name == "hello-world" {
+                    for sub_dir in [
+                        "c-platform",
+                        "rust-platform",
+                        "swift-platform",
+                        "web-platform",
+                        "zig-platform",
+                    ] {
+                        all_examples.remove(format!("{}/{}", example_dir_name, sub_dir).as_str()).unwrap_or_else(|| {
+                            panic!("The example directory {}/{}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name, sub_dir);
+                        });
+                    }
+                }
 
                 // We test benchmarks separately
                 if example_dir_name != "benchmarks" {
@@ -904,6 +954,15 @@ mod cli_run {
     #[test]
     fn format_check_reformatting_needed() {
         check_format_check_as_expected(&fixture_file("format", "NotFormatted.roc"), false);
+    }
+
+    #[test]
+    fn format_check_folders() {
+        // This fails, because "NotFormatted.roc" is present in this folder
+        check_format_check_as_expected(&fixtures_dir("format"), false);
+
+        // This doesn't fail, since only "Formatted.roc" and non-roc files are present in this folder
+        check_format_check_as_expected(&fixtures_dir("format/formatted_directory"), true);
     }
 }
 

@@ -3,6 +3,7 @@ members = [
     "compiler/ident",
     "compiler/region",
     "compiler/collections",
+    "compiler/exhaustive",
     "compiler/module",
     "compiler/parse",
     "compiler/can",
@@ -14,8 +15,10 @@ members = [
     "compiler/solve",
     "compiler/fmt",
     "compiler/mono",
+    "compiler/alias_analysis",
     "compiler/test_mono",
     "compiler/load",
+    "compiler/load_internal",
     "compiler/gen_llvm",
     "compiler/gen_dev",
     "compiler/gen_wasm",
@@ -31,13 +34,13 @@ members = [
     "ast",
     "cli",
     "code_markup",
+    "highlight",
     "error_macros",
     "reporting",
     "repl_cli",
     "repl_eval",
     "repl_test",
     "repl_wasm",
-    "roc_std",
     "test_utils",
     "utils",
     "docs",
@@ -49,6 +52,8 @@ exclude = [
     # The tests will still correctly build them.
     "cli_utils",
     "compiler/test_mono_macros",
+    # `cargo build` would cause roc_std to be built with default features which errors on windows 
+    "roc_std",
 ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
 # see www/build.sh for more.

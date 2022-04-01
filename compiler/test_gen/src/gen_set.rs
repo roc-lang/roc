@@ -238,7 +238,7 @@ fn from_list() {
                 |> Set.toList
             "#
         ),
-        RocList::default(),
+        RocList::<i64>::default(),
         RocList<i64>
     );
 }
@@ -254,7 +254,7 @@ fn from_list_void() {
                 |> Set.toList
             "#
         ),
-        RocList::default(),
+        RocList::<i64>::default(),
         RocList<i64>
     );
 }

@@ -408,7 +408,19 @@ const Dec = fn (?[*]u8) callconv(.C) void;
 const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
 // Dict.insert : Dict k v, k, v -> Dict k v
-pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value: Opaque, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
+pub fn dictInsert(
+    input: RocDict,
+    alignment: Alignment,
+    key: Opaque,
+    key_width: usize,
+    value: Opaque,
+    value_width: usize,
+    hash_fn: HashFn,
+    is_eq: EqFn,
+    dec_key: Dec,
+    dec_value: Dec,
+    output: *RocDict,
+) callconv(.C) void {
     var seed: u64 = INITIAL_SEED;
 
     var result = input.makeUnique(alignment, key_width, value_width);
@@ -543,7 +555,13 @@ pub fn elementsRc(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     }
 }
 
-pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_width: usize, inc_key: Inc, output: *RocList) callconv(.C) void {
+pub fn dictKeys(
+    dict: RocDict,
+    alignment: Alignment,
+    key_width: usize,
+    value_width: usize,
+    inc_key: Inc,
+) callconv(.C) RocList {
     const size = dict.capacity();
 
     var length: usize = 0;
@@ -558,8 +576,7 @@ pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_wid
     }
 
     if (length == 0) {
-        output.* = RocList.empty();
-        return;
+        return RocList.empty();
     }
 
     const data_bytes = length * key_width;
@@ -581,10 +598,16 @@ pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_wid
         }
     }
 
-    output.* = RocList{ .bytes = ptr, .length = length };
+    return RocList{ .bytes = ptr, .length = length };
 }
 
-pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_width: usize, inc_value: Inc, output: *RocList) callconv(.C) void {
+pub fn dictValues(
+    dict: RocDict,
+    alignment: Alignment,
+    key_width: usize,
+    value_width: usize,
+    inc_value: Inc,
+) callconv(.C) RocList {
     const size = dict.capacity();
 
     var length: usize = 0;
@@ -599,8 +622,7 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     }
 
     if (length == 0) {
-        output.* = RocList.empty();
-        return;
+        return RocList.empty();
     }
 
     const data_bytes = length * value_width;
@@ -622,7 +644,7 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
         }
     }
 
-    output.* = RocList{ .bytes = ptr, .length = length };
+    return RocList{ .bytes = ptr, .length = length };
 }
 
 fn doNothing(_: Opaque) callconv(.C) void {

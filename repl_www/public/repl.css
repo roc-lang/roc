@@ -1,0 +1,74 @@
+html {
+  height: 100%;
+}
+body {
+  height: 100%;
+  background-color: #222;
+  color: #ccc;
+  font-family: sans-serif;
+  font-size: 18px;
+}
+.body-wrapper {
+  display: flex;
+  flex-direction: column;
+  max-width: 900px;
+  height: 100%;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+h1 {
+  margin: 32px auto;
+  color: #eee;
+  text-align: center;
+}
+li {
+  margin: 8px;
+}
+section.history {
+  flex: 1;
+}
+.scroll-wrap {
+  position: relative;
+  height: 100%;
+}
+.scroll {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  overflow: auto;
+}
+#history-text {
+  margin: 16px 0;
+  padding: 8px;
+}
+.history-item {
+  margin-bottom: 24px;
+}
+.history-item .input {
+  margin: 0;
+  margin-bottom: 8px;
+}
+.history-item .output {
+  margin: 0;
+}
+.panic {
+  color: red;
+}
+.input-line-prefix {
+  color: cyan;
+}
+.code {
+  font-family: "Courier New", Courier, monospace;
+  background-color: #111;
+  color: #fff;
+}
+section.source {
+  display: flex;
+  flex-direction: column;
+}
+section.source textarea {
+  padding: 8px;
+  margin-bottom: 16px;
+}

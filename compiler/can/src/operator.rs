@@ -96,6 +96,7 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         SpaceBefore(def, _) | SpaceAfter(def, _) => desugar_def(arena, def),
         alias @ Alias { .. } => *alias,
         opaque @ Opaque { .. } => *opaque,
+        ability @ Ability { .. } => *ability,
         ann @ Annotation(_, _) => *ann,
         AnnotatedBody {
             ann_pattern,
@@ -126,6 +127,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | Num(..)
         | NonBase10Int { .. }
         | Str(_)
+        | SingleQuote(_)
         | AccessorFunction(_)
         | Var { .. }
         | Underscore { .. }

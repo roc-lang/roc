@@ -2,7 +2,7 @@
 use roc_gen_llvm::llvm::build::module_from_builtins;
 #[cfg(feature = "llvm")]
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
-use roc_load::file::{LoadedModule, MonomorphizedModule};
+use roc_load::{LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
@@ -179,7 +179,7 @@ pub fn gen_from_mono_module(
     _emit_debug_info: bool,
 ) -> CodeGenTiming {
     match opt_level {
-        OptLevel::Optimize => {
+        OptLevel::Optimize | OptLevel::Size => {
             todo!("Return this error message in a better way: optimized builds not supported without llvm backend");
         }
         OptLevel::Normal | OptLevel::Development => {
@@ -199,7 +199,7 @@ pub fn gen_from_mono_module(
     emit_debug_info: bool,
 ) -> CodeGenTiming {
     match opt_level {
-        OptLevel::Normal | OptLevel::Optimize => gen_from_mono_module_llvm(
+        OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => gen_from_mono_module_llvm(
             arena,
             loaded,
             roc_file_path,

@@ -117,7 +117,7 @@ impl<'a> Env<'a> {
                 if module_id == self.home {
                     match self.ident_ids.get_id(&ident) {
                         Some(ident_id) => {
-                            let symbol = Symbol::new(module_id, *ident_id);
+                            let symbol = Symbol::new(module_id, ident_id);
 
                             self.qualified_lookups.insert(symbol);
 
@@ -138,7 +138,7 @@ impl<'a> Env<'a> {
                     match self.dep_idents.get(&module_id) {
                         Some(exposed_ids) => match exposed_ids.get_id(&ident) {
                             Some(ident_id) => {
-                                let symbol = Symbol::new(module_id, *ident_id);
+                                let symbol = Symbol::new(module_id, ident_id);
 
                                 self.qualified_lookups.insert(symbol);
 
@@ -160,12 +160,17 @@ impl<'a> Env<'a> {
                                 })
                             }
                         },
-                        None => {
-                            panic!(
-                                "Module {} exists, but is not recorded in dep_idents",
-                                module_name
-                            )
-                        }
+                        None => Err(RuntimeError::ModuleNotImported {
+                            module_name,
+                            imported_modules: self
+                                .dep_idents
+                                .keys()
+                                .filter_map(|module_id| self.module_ids.get_name(*module_id))
+                                .map(|module_name| module_name.as_ref().into())
+                                .collect(),
+                            region,
+                            module_exists: true,
+                        }),
                     }
                 }
             }
@@ -177,6 +182,7 @@ impl<'a> Env<'a> {
                     .map(|string| string.as_ref().into())
                     .collect(),
                 region,
+                module_exists: false,
             }),
         }
     }

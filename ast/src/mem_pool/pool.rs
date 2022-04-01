@@ -10,12 +10,10 @@
 ///
 /// Pages also use the node value 0 (all 0 bits) to mark nodes as unoccupied.
 /// This is important for performance.
-use libc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use std::any::type_name;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::mem::{align_of, size_of, MaybeUninit};
-use std::ptr::null;
 
 pub const NODE_BYTES: usize = 32;
 
@@ -108,14 +106,32 @@ impl Pool {
             // addresses from the OS which will be lazily translated into
             // physical memory one 4096-byte page at a time, once we actually
             // try to read or write in that page's address range.
-            libc::mmap(
-                null::<c_void>() as *mut c_void,
-                bytes_to_mmap,
-                PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS,
-                0,
-                0,
-            )
+            #[cfg(unix)]
+            {
+                use libc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    bytes_to_mmap,
+                    PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS,
+                    0,
+                    0,
+                )
+            }
+            #[cfg(windows)]
+            {
+                use winapi::um::memoryapi::VirtualAlloc;
+                use winapi::um::winnt::PAGE_READWRITE;
+                use winapi::um::winnt::{MEM_COMMIT, MEM_RESERVE};
+
+                VirtualAlloc(
+                    std::ptr::null_mut(),
+                    bytes_to_mmap,
+                    MEM_COMMIT | MEM_RESERVE,
+                    PAGE_READWRITE,
+                )
+            }
         } as *mut [MaybeUninit<u8>; NODE_BYTES];
 
         // This is our actual capacity, in nodes.
@@ -230,10 +246,24 @@ impl<T> std::ops::IndexMut<NodeId<T>> for Pool {
 impl Drop for Pool {
     fn drop(&mut self) {
         unsafe {
-            libc::munmap(
-                self.nodes as *mut c_void,
-                NODE_BYTES * self.capacity as usize,
-            );
+            #[cfg(unix)]
+            {
+                libc::munmap(
+                    self.nodes as *mut c_void,
+                    NODE_BYTES * self.capacity as usize,
+                );
+            }
+            #[cfg(windows)]
+            {
+                use winapi::um::memoryapi::VirtualFree;
+                use winapi::um::winnt::MEM_RELEASE;
+
+                VirtualFree(
+                    self.nodes as *mut c_void,
+                    NODE_BYTES * self.capacity as usize,
+                    MEM_RELEASE,
+                );
+            }
         }
     }
 }

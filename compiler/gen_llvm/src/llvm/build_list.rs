@@ -43,7 +43,7 @@ fn pass_element_as_opaque<'a, 'ctx, 'env>(
     env.builder.build_bitcast(
         element_ptr,
         env.context.i8_type().ptr_type(AddressSpace::Generic),
-        "to_opaque",
+        "pass_element_as_opaque",
     )
 }
 
@@ -75,7 +75,7 @@ pub fn pass_as_opaque<'a, 'ctx, 'env>(
     env.builder.build_bitcast(
         ptr,
         env.context.i8_type().ptr_type(AddressSpace::Generic),
-        "to_opaque",
+        "pass_as_opaque",
     )
 }
 
@@ -291,52 +291,70 @@ pub fn list_drop_at<'a, 'ctx, 'env>(
     )
 }
 
-/// List.set : List elem, Nat, elem -> List elem
-pub fn list_set<'a, 'ctx, 'env>(
+/// List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
+pub fn list_replace_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
+    _layout_ids: &mut LayoutIds<'a>,
     list: BasicValueEnum<'ctx>,
     index: IntValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
-    let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
+    let element_type = basic_type_from_layout(env, element_layout);
+    let element_ptr = env
+        .builder
+        .build_alloca(element_type, "output_element_as_opaque");
 
-    let (length, bytes) = load_list(
-        env.builder,
-        list.into_struct_value(),
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
-    );
-
-    let new_bytes = match update_mode {
-        UpdateMode::InPlace => call_bitcode_fn(
+    // Assume the bounds have already been checked earlier
+    // (e.g. by List.replace or List.set, which wrap List.#replaceUnsafe)
+    let new_list = match update_mode {
+        UpdateMode::InPlace => call_list_bitcode_fn(
             env,
             &[
-                bytes.into(),
+                pass_list_cc(env, list),
                 index.into(),
                 pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
-                dec_element_fn.as_global_value().as_pointer_value().into(),
+                pass_as_opaque(env, element_ptr),
             ],
-            bitcode::LIST_SET_IN_PLACE,
+            bitcode::LIST_REPLACE_IN_PLACE,
         ),
-        UpdateMode::Immutable => call_bitcode_fn(
+        UpdateMode::Immutable => call_list_bitcode_fn(
             env,
             &[
-                bytes.into(),
-                length.into(),
+                pass_list_cc(env, list),
                 env.alignment_intvalue(element_layout),
                 index.into(),
                 pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
-                dec_element_fn.as_global_value().as_pointer_value().into(),
+                pass_as_opaque(env, element_ptr),
             ],
-            bitcode::LIST_SET,
+            bitcode::LIST_REPLACE,
         ),
     };
 
-    store_list(env, new_bytes.into_pointer_value(), length)
+    // Load the element and returned list into a struct.
+    let old_element = env.builder.build_load(element_ptr, "load_element");
+
+    let result = env
+        .context
+        .struct_type(
+            &[super::convert::zig_list_type(env).into(), element_type],
+            false,
+        )
+        .const_zero();
+
+    let result = env
+        .builder
+        .build_insert_value(result, new_list, 0, "insert_list")
+        .unwrap();
+
+    env.builder
+        .build_insert_value(result, old_element, 1, "insert_value")
+        .unwrap()
+        .into_struct_value()
+        .into()
 }
 
 fn bounds_check_comparison<'ctx>(
@@ -389,10 +407,19 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
         ListWalk::WalkBackwardsUntil => todo!(),
     };
 
-    let default_ptr = builder.build_alloca(default.get_type(), "default_ptr");
-    env.builder.build_store(default_ptr, default);
+    let default_ptr = if default_layout.is_passed_by_reference() {
+        debug_assert!(default.is_pointer_value());
+        default.into_pointer_value()
+    } else {
+        let default_ptr = builder.build_alloca(default.get_type(), "default_ptr");
+        env.builder.build_store(default_ptr, default);
+        default_ptr
+    };
 
-    let result_ptr = env.builder.build_alloca(default.get_type(), "result");
+    let result_ptr = {
+        let basic_type = basic_type_from_layout(env, default_layout);
+        env.builder.build_alloca(basic_type, "result")
+    };
 
     match variant {
         ListWalk::Walk | ListWalk::WalkBackwards => {
@@ -449,7 +476,11 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
         }
     }
 
-    env.builder.build_load(result_ptr, "load_result")
+    if default_layout.is_passed_by_reference() {
+        result_ptr.into()
+    } else {
+        env.builder.build_load(result_ptr, "load_result")
+    }
 }
 
 /// List.range : Int a, Int a -> List (Int a)

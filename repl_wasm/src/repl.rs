@@ -3,13 +3,14 @@ use std::mem::size_of;
 
 use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result;
-use roc_load::file::MonomorphizedModule;
+use roc_load::MonomorphizedModule;
 use roc_parse::ast::Expr;
 use roc_repl_eval::{
     eval::jit_to_ast,
     gen::{compile_to_mono, format_answer, ReplOutput},
     ReplApp, ReplAppMemory,
 };
+use roc_reporting::report::DEFAULT_PALETTE_HTML;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
@@ -64,10 +65,22 @@ impl<'a> ReplAppMemory for WasmMemory<'a> {
     deref_number!(deref_f64, f64);
 
     fn deref_str(&self, addr: usize) -> &str {
-        let elems_addr = self.deref_usize(addr);
-        let len = self.deref_usize(addr + size_of::<usize>());
-        let bytes = &self.copied_bytes[elems_addr..][..len];
-        std::str::from_utf8(bytes).unwrap()
+        // We can't use RocStr, we need our own small/big string logic.
+        // The first field is *not* a pointer. We can calculate a pointer for it, but only for big strings.
+        // If changing this code, remember it also runs in wasm32, not just the app.
+        let last_byte = self.copied_bytes[addr + 7] as i8;
+        let is_small = last_byte < 0;
+
+        let str_bytes = if is_small {
+            let len = (last_byte & 0x7f) as usize;
+            &self.copied_bytes[addr..][..len]
+        } else {
+            let chars_index = self.deref_usize(addr);
+            let len = self.deref_usize(addr + 4);
+            &self.copied_bytes[chars_index..][..len]
+        };
+
+        unsafe { std::str::from_utf8_unchecked(str_bytes) }
     }
 }
 
@@ -143,12 +156,15 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
 }
 
 pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
+    #[cfg(feature = "console_error_panic_hook")]
+    console_error_panic_hook::set_once();
+
     let arena = &Bump::new();
     let pre_linked_binary: &'static [u8] = include_bytes!("../data/pre_linked_binary.o");
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
-    let mono = match compile_to_mono(arena, &src, target_info) {
+    let mono = match compile_to_mono(arena, &src, target_info, DEFAULT_PALETTE_HTML) {
         Ok(m) => m,
         Err(messages) => return Err(messages.join("\n\n")),
     };

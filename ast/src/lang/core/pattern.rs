@@ -39,6 +39,7 @@ pub enum Pattern2 {
     IntLiteral(IntVal),        // 16B
     FloatLiteral(FloatVal),    // 16B
     StrLiteral(PoolStr),       // 8B
+    CharacterLiteral(char),    // 4B
     Underscore,                // 0B
     GlobalTag {
         whole_var: Variable,                       // 4B
@@ -246,6 +247,26 @@ pub fn to_pattern2<'a>(
 
         StrLiteral(literal) => match pattern_type {
             WhenBranch => flatten_str_literal(env.pool, literal),
+            ptype => unsupported_pattern(env, ptype, region),
+        },
+
+        SingleQuote(string) => match pattern_type {
+            WhenBranch => {
+                let mut it = string.chars().peekable();
+                if let Some(char) = it.next() {
+                    if it.peek().is_none() {
+                        Pattern2::CharacterLiteral(char)
+                    } else {
+                        // multiple chars is found
+                        let problem = MalformedPatternProblem::MultipleCharsInSingleQuote;
+                        malformed_pattern(env, problem, region)
+                    }
+                } else {
+                    // no characters found
+                    let problem = MalformedPatternProblem::EmptySingleQuote;
+                    malformed_pattern(env, problem, region)
+                }
+            }
             ptype => unsupported_pattern(env, ptype, region),
         },
 
@@ -506,6 +527,7 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
             | IntLiteral(_)
             | FloatLiteral(_)
             | StrLiteral(_)
+            | CharacterLiteral(_)
             | Underscore
             | MalformedPattern(_, _)
             | Shadowed { .. }
@@ -566,6 +588,7 @@ pub fn symbols_and_variables_from_pattern(
             | IntLiteral(_)
             | FloatLiteral(_)
             | StrLiteral(_)
+            | CharacterLiteral(_)
             | Underscore
             | MalformedPattern(_, _)
             | Shadowed { .. }

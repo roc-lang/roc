@@ -1,4 +1,4 @@
-platform "examples/multi-module"
+platform "multi-module"
     requires {}{ main : Str }
     exposes []
     packages {}

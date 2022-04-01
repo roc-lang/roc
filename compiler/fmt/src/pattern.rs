@@ -36,6 +36,7 @@ impl<'a> Formattable for Pattern<'a> {
             | Pattern::NonBase10Literal { .. }
             | Pattern::FloatLiteral(..)
             | Pattern::StrLiteral(_)
+            | Pattern::SingleQuote(_)
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
             | Pattern::MalformedIdent(_, _)
@@ -146,6 +147,11 @@ impl<'a> Formattable for Pattern<'a> {
             }
             StrLiteral(literal) => {
                 todo!("Format string literal: {:?}", literal);
+            }
+            SingleQuote(string) => {
+                buf.push('\'');
+                buf.push_str(string);
+                buf.push('\'');
             }
             Underscore(name) => {
                 buf.indent(indent);

@@ -55,8 +55,13 @@ pub enum Attribute {
     HighlightStart { highlight_start: HighlightStart },
     HighlightEnd { highlight_end: HighlightEnd },
 
-    UnderlineStart { underline_start: UnderlineStart },
-    UnderlineEnd { underline_end: UnderlineEnd },
+    Underline { underline_spec: UnderlineSpec },
+}
+
+#[derive(Debug)]
+pub enum UnderlineSpec {
+    Partial { start: usize, end: usize },
+    Full,
 }
 
 #[derive(Debug, Default)]

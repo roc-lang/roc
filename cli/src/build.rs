@@ -4,8 +4,7 @@ use roc_build::{
     program,
 };
 use roc_builtins::bitcode;
-use roc_collections::all::MutMap;
-use roc_load::file::LoadingProblem;
+use roc_load::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use roc_target::TargetInfo;
 use std::path::PathBuf;
@@ -61,15 +60,11 @@ pub fn build_file<'a>(
     let target_info = TargetInfo::from(target);
 
     // Step 1: compile the app and generate the .o file
-    let subs_by_module = MutMap::default();
+    let subs_by_module = Default::default();
 
-    // Release builds use uniqueness optimizations
-    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
-    let loaded = roc_load::file::load_and_monomorphize(
+    let loaded = roc_load::load_and_monomorphize(
         arena,
         roc_file_path.clone(),
-        stdlib,
         src_dir.as_path(),
         subs_by_module,
         target_info,
@@ -366,15 +361,11 @@ pub fn check_file(
     let target_info = TargetInfo::default_x86_64();
 
     // Step 1: compile the app and generate the .o file
-    let subs_by_module = MutMap::default();
+    let subs_by_module = Default::default();
 
-    // Release builds use uniqueness optimizations
-    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
-    let mut loaded = roc_load::file::load_and_typecheck(
+    let mut loaded = roc_load::load_and_typecheck(
         arena,
         roc_file_path,
-        stdlib,
         src_dir.as_path(),
         subs_by_module,
         target_info,

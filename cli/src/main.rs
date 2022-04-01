@@ -3,7 +3,7 @@ use roc_cli::{
     build_app, docs, format, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
     CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_TIME, ROC_FILE,
 };
-use roc_load::file::LoadingProblem;
+use roc_load::LoadingProblem;
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -63,10 +63,16 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_REPL, _)) => {
-            roc_repl_cli::main()?;
+            #[cfg(feature = "llvm")]
+            {
+                roc_repl_cli::main()?;
 
-            // Exit 0 if the repl exited normally
-            Ok(0)
+                // Exit 0 if the repl exited normally
+                Ok(0)
+            }
+
+            #[cfg(not(feature = "llvm"))]
+            todo!("enable roc repl without llvm");
         }
         Some((CMD_EDIT, matches)) => {
             match matches

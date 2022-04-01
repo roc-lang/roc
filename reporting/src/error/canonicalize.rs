@@ -1,8 +1,11 @@
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
-use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
+use roc_problem::can::{
+    BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
+};
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
+use roc_types::types::AliasKind;
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
@@ -15,6 +18,7 @@ const UNRECOGNIZED_NAME: &str = "UNRECOGNIZED NAME";
 const UNUSED_DEF: &str = "UNUSED DEFINITION";
 const UNUSED_IMPORT: &str = "UNUSED IMPORT";
 const UNUSED_ALIAS_PARAM: &str = "UNUSED TYPE ALIAS PARAMETER";
+const UNBOUND_TYPE_VARIABLE: &str = "UNBOUND TYPE VARIABLE";
 const UNUSED_ARG: &str = "UNUSED ARGUMENT";
 const MISSING_DEFINITION: &str = "MISSING DEFINITION";
 const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
@@ -29,8 +33,11 @@ const NESTED_DATATYPE: &str = "NESTED DATATYPE";
 const CONFLICTING_NUMBER_SUFFIX: &str = "CONFLICTING NUMBER SUFFIX";
 const NUMBER_OVERFLOWS_SUFFIX: &str = "NUMBER OVERFLOWS SUFFIX";
 const NUMBER_UNDERFLOWS_SUFFIX: &str = "NUMBER UNDERFLOWS SUFFIX";
-const OPAQUE_NOT_DEFINED: &str = "OPAQUE NOT DEFINED";
-const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE DECLARED OUTSIDE SCOPE";
+const OPAQUE_NOT_DEFINED: &str = "OPAQUE TYPE NOT DEFINED";
+const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE TYPE DECLARED OUTSIDE SCOPE";
+const OPAQUE_NOT_APPLIED: &str = "OPAQUE TYPE NOT APPLIED";
+const OPAQUE_OVER_APPLIED: &str = "OPAQUE TYPE APPLIED TO TOO MANY ARGS";
+const INVALID_EXTENSION_TYPE: &str = "INVALID_EXTENSION_TYPE";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -245,6 +252,43 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNUSED_ALIAS_PARAM.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::UnboundTypeVariable {
+            typ: alias,
+            num_unbound,
+            one_occurrence,
+            kind,
+        } => {
+            let mut stack = Vec::with_capacity(4);
+            if num_unbound == 1 {
+                stack.push(alloc.concat(vec![
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" has an unbound type variable:"),
+                ]));
+            } else {
+                stack.push(alloc.concat(vec![
+                    alloc.reflow("The definition of "),
+                    alloc.symbol_unqualified(alias),
+                    alloc.reflow(" has "),
+                    alloc.text(format!("{}", num_unbound)),
+                    alloc.reflow(" unbound type variables."),
+                ]));
+                stack.push(alloc.reflow("Here is one occurrence:"));
+            }
+            stack.push(alloc.region(lines.convert_region(one_occurrence)));
+            stack.push(alloc.tip().append(alloc.concat(vec![
+                alloc.reflow("Type variables must be bound before the "),
+                alloc.keyword(match kind {
+                    AliasKind::Structural => ":",
+                    AliasKind::Opaque => ":=",
+                }),
+                alloc.reflow(". Perhaps you intended to add a type parameter to this type?"),
+            ])));
+            doc = alloc.stack(stack);
+
+            title = UNBOUND_TYPE_VARIABLE.to_string();
             severity = Severity::RuntimeError;
         }
         Problem::BadRecursion(entries) => {
@@ -488,6 +532,34 @@ pub fn can_problem<'b>(
             ]);
 
             title = NESTED_DATATYPE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::InvalidExtensionType { region, kind } => {
+            let (kind_str, can_only_contain) = match kind {
+                ExtensionTypeKind::Record => ("record", "a type variable or another record"),
+                ExtensionTypeKind::TagUnion => {
+                    ("tag union", "a type variable or another tag union")
+                }
+            };
+
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This "),
+                    alloc.text(kind_str),
+                    alloc.reflow(" extension type is invalid:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat(vec![
+                    alloc.note("A "),
+                    alloc.reflow(kind_str),
+                    alloc.reflow(" extension variable can only contain "),
+                    alloc.reflow(can_only_contain),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            title = INVALID_EXTENSION_TYPE.to_string();
             severity = Severity::RuntimeError;
         }
     };
@@ -945,13 +1017,17 @@ fn pretty_runtime_error<'b>(
                 }
                 Unknown => " ",
                 QualifiedIdentifier => " qualified ",
+                EmptySingleQuote => " empty character literal ",
+                MultipleCharsInSingleQuote => " overfull literal ",
             };
 
             let tip = match problem {
                 MalformedInt | MalformedFloat | MalformedBase(_) => alloc
                     .tip()
                     .append(alloc.reflow("Learn more about number literals at TODO")),
-                Unknown | BadIdent(_) => alloc.nil(),
+                EmptySingleQuote | MultipleCharsInSingleQuote | Unknown | BadIdent(_) => {
+                    alloc.nil()
+                }
                 QualifiedIdentifier => alloc.tip().append(
                     alloc.reflow("In patterns, only private and global tags can be qualified"),
                 ),
@@ -1015,8 +1091,16 @@ fn pretty_runtime_error<'b>(
             module_name,
             imported_modules,
             region,
+            module_exists,
         } => {
-            doc = module_not_found(alloc, lines, region, &module_name, imported_modules);
+            doc = module_not_found(
+                alloc,
+                lines,
+                region,
+                &module_name,
+                imported_modules,
+                module_exists,
+            );
 
             title = MODULE_NOT_IMPORTED;
         }
@@ -1333,6 +1417,37 @@ fn pretty_runtime_error<'b>(
 
             title = MISSING_DEFINITION;
         }
+        RuntimeError::EmptySingleQuote(region) => {
+            let tip = alloc
+                .tip()
+                .append(alloc.reflow("Learn more about character literals at TODO"));
+
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow("This character literal is empty.")]),
+                alloc.region(lines.convert_region(region)),
+                tip,
+            ]);
+
+            title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::MultipleCharsInSingleQuote(region) => {
+            let tip = alloc
+                .tip()
+                .append(alloc.reflow("Learn more about character literals at TODO"));
+
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This character literal contains more than one code point.")
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat(vec![
+                    alloc.reflow("Character literals can only contain one code point.")
+                ]),
+                tip,
+            ]);
+
+            title = SYNTAX_PROBLEM;
+        }
         RuntimeError::OpaqueNotDefined {
             usage:
                 Loc {
@@ -1403,6 +1518,24 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = OPAQUE_DECLARED_OUTSIDE_SCOPE;
+        }
+        RuntimeError::OpaqueNotApplied(loc_ident) => {
+            doc = alloc.stack(vec![
+                alloc.reflow("This opaque type is not applied to an argument:"),
+                alloc.region(lines.convert_region(loc_ident.region)),
+                alloc.note("Opaque types always wrap exactly one argument!"),
+            ]);
+
+            title = OPAQUE_NOT_APPLIED;
+        }
+        RuntimeError::OpaqueAppliedToMultipleArgs(region) => {
+            doc = alloc.stack(vec![
+                alloc.reflow("This opaque type is applied to multiple arguments:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.note("Opaque types always wrap exactly one argument!"),
+            ]);
+
+            title = OPAQUE_OVER_APPLIED;
         }
     }
 
@@ -1501,34 +1634,39 @@ fn not_found<'b>(
     ])
 }
 
+/// Generate a message informing the user that a module was referenced, but not found
+///
+/// See [`roc_problem::can::ModuleNotImported`]
 fn module_not_found<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     region: roc_region::all::Region,
     name: &ModuleName,
     options: MutSet<Box<str>>,
+    module_exists: bool,
 ) -> RocDocBuilder<'b> {
-    let mut suggestions =
-        suggest::sort(name.as_str(), options.iter().map(|v| v.as_ref()).collect());
-    suggestions.truncate(4);
+    // If the module exists, sugguest that the user import it
+    let details = if module_exists {
+        // TODO:  Maybe give an example of how to do that
+        alloc.reflow("Did you mean to import it?")
+    } else {
+        // If the module might not exist, sugguest that it's a typo
+        let mut suggestions =
+            suggest::sort(name.as_str(), options.iter().map(|v| v.as_ref()).collect());
+        suggestions.truncate(4);
 
-    let default_no = alloc.concat(vec![
-        alloc.reflow("Is there an "),
-        alloc.keyword("import"),
-        alloc.reflow(" or "),
-        alloc.keyword("exposing"),
-        alloc.reflow(" missing up-top"),
-    ]);
-
-    let default_yes = alloc
-        .reflow("Is there an import missing? Perhaps there is a typo. Did you mean one of these?");
-
-    let to_details = |no_suggestion_details, yes_suggestion_details| {
         if suggestions.is_empty() {
-            no_suggestion_details
+            // We don't have any recommended spelling corrections
+            alloc.concat(vec![
+                alloc.reflow("Is there an "),
+                alloc.keyword("import"),
+                alloc.reflow(" or "),
+                alloc.keyword("exposing"),
+                alloc.reflow(" missing up-top"),
+            ])
         } else {
             alloc.stack(vec![
-                yes_suggestion_details,
+                alloc.reflow("Is there an import missing? Perhaps there is a typo. Did you mean one of these?"),
                 alloc
                     .vcat(suggestions.into_iter().map(|v| alloc.string(v.to_string())))
                     .indent(4),
@@ -1543,6 +1681,6 @@ fn module_not_found<'b>(
             alloc.reflow("` module is not imported:"),
         ]),
         alloc.region(lines.convert_region(region)),
-        to_details(default_no, default_yes),
+        details,
     ])
 }

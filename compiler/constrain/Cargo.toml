@@ -14,3 +14,4 @@ roc_parse = { path = "../parse" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_builtins = { path = "../builtins" }
+arrayvec = "0.7.2"

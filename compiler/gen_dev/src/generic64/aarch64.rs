@@ -66,10 +66,12 @@ impl RegTrait for AArch64FloatReg {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct AArch64Assembler {}
 
 // AArch64Call may need to eventually be split by OS,
 // but I think with how we use it, they may all be the same.
+#[derive(Copy, Clone)]
 pub struct AArch64Call {}
 
 const STACK_ALIGNMENT: u8 = 16;
@@ -281,7 +283,8 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             AArch64Assembler,
             AArch64Call,
         >,
-        _args: &'a [Symbol],
+        _dst: &Symbol,
+        _args: &[Symbol],
         _arg_layouts: &[Layout<'a>],
         _ret_layout: &Layout<'a>,
     ) {
@@ -481,6 +484,70 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn mov_reg64_mem64_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
+        offset: i32,
+    ) {
+        if offset < 0 {
+            todo!("negative mem offsets for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            ldr_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
+        } else {
+            todo!("mem offsets over 32k for AArch64");
+        }
+    }
+    #[inline(always)]
+    fn mov_mem64_offset32_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        offset: i32,
+        src: AArch64GeneralReg,
+    ) {
+        if offset < 0 {
+            todo!("negative mem offsets for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            str_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
+        } else {
+            todo!("mem offsets over 32k for AArch64");
+        }
+    }
+
+    #[inline(always)]
+    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32, size: u8) {
+        debug_assert!(size <= 8);
+        if size == 8 {
+            Self::mov_reg64_base32(buf, dst, offset);
+        } else if size == 4 {
+            todo!("sign extending 4 byte values");
+        } else if size == 2 {
+            todo!("sign extending 2 byte values");
+        } else if size == 1 {
+            todo!("sign extending 1 byte values");
+        } else {
+            internal_error!("Invalid size for sign extension: {}", size);
+        }
+    }
+    #[inline(always)]
+    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32, size: u8) {
+        debug_assert!(size <= 8);
+        if size == 8 {
+            Self::mov_reg64_base32(buf, dst, offset);
+        } else if size == 4 {
+            todo!("zero extending 4 byte values");
+        } else if size == 2 {
+            todo!("zero extending 2 byte values");
+        } else if size == 1 {
+            todo!("zero extending 1 byte values");
+        } else {
+            internal_error!("Invalid size for zero extension: {}", size);
+        }
+    }
+
+    #[inline(always)]
     fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
         todo!("loading floating point reg from stack for AArch64");
     }
@@ -604,6 +671,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src: AArch64FloatReg,
     ) {
         todo!("registers to float for AArch64");
+    }
+
+    #[inline(always)]
+    fn lte_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers less than or equal for AArch64");
     }
 
     #[inline(always)]

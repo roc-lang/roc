@@ -1,6 +1,6 @@
 use std::{fmt::Debug, iter::FromIterator};
 
-use bumpalo::collections::vec::Vec;
+use bumpalo::{collections::vec::Vec, Bump};
 use roc_error_macros::internal_error;
 
 /// In the WebAssembly binary format, all integers are variable-length encoded (using LEB-128)
@@ -260,6 +260,15 @@ pub fn parse_u32_or_panic(bytes: &[u8], cursor: &mut usize) -> u32 {
     let (value, len) = decode_u32(&bytes[*cursor..]).unwrap_or_else(|e| internal_error!("{}", e));
     *cursor += len;
     value
+}
+
+pub fn parse_string_bytes<'a>(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> &'a [u8] {
+    let len = parse_u32_or_panic(bytes, cursor);
+    let end = *cursor + len as usize;
+    let bytes: &[u8] = &bytes[*cursor..end];
+    let copy = arena.alloc_slice_copy(bytes);
+    *cursor = end;
+    copy
 }
 
 /// Skip over serialized bytes for a type

@@ -1,12 +1,7 @@
-use bumpalo::collections::String as BumpString;
 use roc_code_markup::{markup::nodes::MarkupNode, slow_pool::SlowPool};
 
 // determine appropriate css class for MarkupNode
-pub fn mark_node_to_html<'a>(
-    mark_node: &MarkupNode,
-    mark_node_pool: &SlowPool,
-    buf: &mut BumpString<'a>,
-) {
+pub fn mark_node_to_html(mark_node: &MarkupNode, mark_node_pool: &SlowPool, buf: &mut String) {
     let mut additional_newlines = 0;
 
     match mark_node {
@@ -31,7 +26,6 @@ pub fn mark_node_to_html<'a>(
 
             let css_class = match syn_high_style {
                 Operator => "operator",
-                Comma => "comma",
                 String => "string",
                 FunctionName => "function-name",
                 FunctionArgName => "function-arg-name",
@@ -46,6 +40,9 @@ pub fn mark_node_to_html<'a>(
                 Blank => "blank",
                 Comment => "comment",
                 DocsComment => "docs-comment",
+                UppercaseIdent => "uppercase-ident",
+                LowercaseIdent => "lowercase-ident",
+                Keyword => "keyword-ident",
             };
 
             write_html_to_buf(content, css_class, buf);
@@ -77,7 +74,7 @@ pub fn mark_node_to_html<'a>(
     }
 }
 
-fn write_html_to_buf<'a>(content: &str, css_class: &'static str, buf: &mut BumpString<'a>) {
+fn write_html_to_buf(content: &str, css_class: &'static str, buf: &mut String) {
     let opening_tag: String = ["<span class=\"syntax-", css_class, "\">"].concat();
 
     buf.push_str(opening_tag.as_str());

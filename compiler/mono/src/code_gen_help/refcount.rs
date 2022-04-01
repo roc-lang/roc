@@ -2,6 +2,7 @@ use bumpalo::collections::vec::Vec;
 use roc_builtins::bitcode::IntWidth;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
+use roc_target::PtrWidth;
 
 use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
@@ -13,8 +14,10 @@ use super::{CodeGenHelp, Context, HelperOp};
 
 const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
 const LAYOUT_UNIT: Layout = Layout::UNIT;
-const LAYOUT_PTR: Layout = Layout::RecursivePointer;
 const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
+
+// TODO: Replace usages with root.union_refcount
+const LAYOUT_PTR: Layout = Layout::RecursivePointer;
 
 pub fn refcount_stmt<'a>(
     root: &mut CodeGenHelp<'a>,
@@ -121,8 +124,190 @@ pub fn refcount_generic<'a>(
             let runtime_layout = lambda_set.runtime_representation();
             refcount_generic(root, ident_ids, ctx, runtime_layout, structure)
         }
-        Layout::RecursivePointer => rc_todo(),
+        Layout::RecursivePointer => unreachable!(
+            "We should never call a refcounting helper on a RecursivePointer layout directly"
+        ),
+        Layout::Boxed(_) => rc_todo(),
     }
+}
+
+pub fn refcount_reset_proc_body<'a>(
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+    layout: Layout<'a>,
+    structure: Symbol,
+) -> Stmt<'a> {
+    let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
+    let rc = root.create_symbol(ident_ids, "rc");
+    let refcount_1 = root.create_symbol(ident_ids, "refcount_1");
+    let is_unique = root.create_symbol(ident_ids, "is_unique");
+
+    let union_layout = match layout {
+        Layout::Union(u) => u,
+        _ => unimplemented!("Reset is only implemented for UnionLayout"),
+    };
+
+    // Whenever we recurse into a child layout we will want to Decrement
+    ctx.op = HelperOp::Dec;
+    ctx.recursive_union = Some(union_layout);
+
+    // Reset structure is unique. Decrement its children and return a pointer to the allocation.
+    let then_stmt = {
+        use UnionLayout::*;
+
+        let tag_layouts;
+        let mut null_id = None;
+        match union_layout {
+            NonRecursive(tags) => {
+                tag_layouts = tags;
+            }
+            Recursive(tags) => {
+                tag_layouts = tags;
+            }
+            NonNullableUnwrapped(field_layouts) => {
+                tag_layouts = root.arena.alloc([field_layouts]);
+            }
+            NullableWrapped {
+                other_tags: tags,
+                nullable_id,
+            } => {
+                null_id = Some(nullable_id);
+                tag_layouts = tags;
+            }
+            NullableUnwrapped {
+                other_fields,
+                nullable_id,
+            } => {
+                null_id = Some(nullable_id as TagIdIntType);
+                tag_layouts = root.arena.alloc([other_fields]);
+            }
+        };
+
+        let tag_id_layout = union_layout.tag_id_layout();
+
+        let tag_id_sym = root.create_symbol(ident_ids, "tag_id");
+        let tag_id_stmt = |next| {
+            Stmt::Let(
+                tag_id_sym,
+                Expr::GetTagId {
+                    structure,
+                    union_layout,
+                },
+                tag_id_layout,
+                next,
+            )
+        };
+
+        let rc_contents_stmt = refcount_union_contents(
+            root,
+            ident_ids,
+            ctx,
+            union_layout,
+            tag_layouts,
+            null_id,
+            structure,
+            tag_id_sym,
+            tag_id_layout,
+            Stmt::Ret(structure),
+        );
+
+        tag_id_stmt(root.arena.alloc(
+            //
+            rc_contents_stmt,
+        ))
+    };
+
+    // Reset structure is not unique. Decrement it and return a NULL pointer.
+    let else_stmt = {
+        let decrement_unit = root.create_symbol(ident_ids, "decrement_unit");
+        let decrement_expr = root
+            .call_specialized_op(ident_ids, ctx, layout, root.arena.alloc([structure]))
+            .unwrap();
+        let decrement_stmt = |next| Stmt::Let(decrement_unit, decrement_expr, LAYOUT_UNIT, next);
+
+        // Zero
+        let zero = root.create_symbol(ident_ids, "zero");
+        let zero_expr = Expr::Literal(Literal::Int(0));
+        let zero_stmt = |next| Stmt::Let(zero, zero_expr, root.layout_isize, next);
+
+        // Null pointer with union layout
+        let null = root.create_symbol(ident_ids, "null");
+        let null_stmt =
+            |next| let_lowlevel(root.arena, root.layout_isize, null, PtrCast, &[zero], next);
+
+        decrement_stmt(root.arena.alloc(
+            //
+            zero_stmt(root.arena.alloc(
+                //
+                null_stmt(root.arena.alloc(
+                    //
+                    Stmt::Ret(null),
+                )),
+            )),
+        ))
+    };
+
+    let if_stmt = Stmt::Switch {
+        cond_symbol: is_unique,
+        cond_layout: LAYOUT_BOOL,
+        branches: root.arena.alloc([(1, BranchInfo::None, then_stmt)]),
+        default_branch: (BranchInfo::None, root.arena.alloc(else_stmt)),
+        ret_layout: layout,
+    };
+
+    // Uniqueness test
+    let is_unique_stmt = {
+        let_lowlevel(
+            root.arena,
+            LAYOUT_BOOL,
+            is_unique,
+            Eq,
+            &[rc, refcount_1],
+            root.arena.alloc(if_stmt),
+        )
+    };
+
+    // Constant for unique refcount
+    let refcount_1_encoded = match root.target_info.ptr_width() {
+        PtrWidth::Bytes4 => i32::MIN as i128,
+        PtrWidth::Bytes8 => i64::MIN as i128,
+    };
+    let refcount_1_expr = Expr::Literal(Literal::Int(refcount_1_encoded));
+    let refcount_1_stmt = Stmt::Let(
+        refcount_1,
+        refcount_1_expr,
+        root.layout_isize,
+        root.arena.alloc(is_unique_stmt),
+    );
+
+    // Refcount value
+    let rc_expr = Expr::UnionAtIndex {
+        structure: rc_ptr,
+        tag_id: 0,
+        union_layout: root.union_refcount,
+        index: 0,
+    };
+    let rc_stmt = Stmt::Let(
+        rc,
+        rc_expr,
+        root.layout_isize,
+        root.arena.alloc(refcount_1_stmt),
+    );
+
+    // Refcount pointer
+    let rc_ptr_stmt = {
+        rc_ptr_from_data_ptr(
+            root,
+            ident_ids,
+            structure,
+            rc_ptr,
+            union_layout.stores_tag_id_in_pointer(root.target_info),
+            root.arena.alloc(rc_stmt),
+        )
+    };
+
+    rc_ptr_stmt
 }
 
 // Check if refcounting is implemented yet. In the long term, this will be deleted.
@@ -155,6 +340,7 @@ pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
             is_rc_implemented_yet(&lambda_set.runtime_representation())
         }
         Layout::RecursivePointer => true,
+        Layout::Boxed(_) => false,
     }
 }
 
@@ -890,9 +1076,9 @@ fn refcount_union_contents<'a>(
     structure: Symbol,
     tag_id_sym: Symbol,
     tag_id_layout: Layout<'a>,
-    modify_union_stmt: Stmt<'a>,
+    next_stmt: Stmt<'a>,
 ) -> Stmt<'a> {
-    let jp_modify_union = JoinPointId(root.create_symbol(ident_ids, "jp_modify_union"));
+    let jp_contents_modified = JoinPointId(root.create_symbol(ident_ids, "jp_contents_modified"));
     let mut tag_branches = Vec::with_capacity_in(tag_layouts.len() + 1, root.arena);
 
     if let Some(id) = null_id {
@@ -911,7 +1097,7 @@ fn refcount_union_contents<'a>(
 
         // After refcounting the fields, jump to modify the union itself
         // (Order is important, to avoid use-after-free for Dec)
-        let following = Stmt::Jump(jp_modify_union, &[]);
+        let following = Stmt::Jump(jp_contents_modified, &[]);
 
         let fields_stmt = refcount_tag_fields(
             root,
@@ -940,9 +1126,9 @@ fn refcount_union_contents<'a>(
     };
 
     Stmt::Join {
-        id: jp_modify_union,
+        id: jp_contents_modified,
         parameters: &[],
-        body: root.arena.alloc(modify_union_stmt),
+        body: root.arena.alloc(next_stmt),
         remainder: root.arena.alloc(tag_id_switch),
     }
 }
