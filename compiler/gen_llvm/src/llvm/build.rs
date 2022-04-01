@@ -2127,15 +2127,11 @@ fn reserve_with_refcount_help<'a, 'ctx, 'env>(
     stack_size: u32,
     alignment_bytes: u32,
 ) -> PointerValue<'ctx> {
-    let ctx = env.context;
-
     let len_type = env.ptr_int();
 
     let value_bytes_intvalue = len_type.const_int(stack_size as u64, false);
 
-    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.target_info);
-
-    allocate_with_refcount_help(env, basic_type, alignment_bytes, value_bytes_intvalue, rc1)
+    allocate_with_refcount_help(env, basic_type, alignment_bytes, value_bytes_intvalue)
 }
 
 pub fn allocate_with_refcount<'a, 'ctx, 'env>(
@@ -2156,74 +2152,22 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     value_type: impl BasicType<'ctx>,
     alignment_bytes: u32,
     number_of_data_bytes: IntValue<'ctx>,
-    initial_refcount: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {
-    let builder = env.builder;
+    let ptr = call_bitcode_fn(
+        env,
+        &[
+            number_of_data_bytes.into(),
+            env.alignment_const(alignment_bytes).into(),
+        ],
+        roc_builtins::bitcode::UTILS_ALLOCATE_WITH_REFCOUNT,
+    )
+    .into_pointer_value();
 
-    let len_type = env.ptr_int();
-    let ptr_width_u32 = env.target_info.ptr_width() as u32;
+    let ptr_type = value_type.ptr_type(AddressSpace::Generic);
 
-    let extra_bytes = alignment_bytes.max(ptr_width_u32);
-
-    let ptr = {
-        // number of bytes we will allocated
-        let number_of_bytes = builder.build_int_add(
-            len_type.const_int(extra_bytes as u64, false),
-            number_of_data_bytes,
-            "add_extra_bytes",
-        );
-
-        env.call_alloc(number_of_bytes, alignment_bytes)
-    };
-
-    // We must return a pointer to the first element:
-    let data_ptr = {
-        let int_type = env.ptr_int();
-        let as_usize_ptr = builder
-            .build_bitcast(
-                ptr,
-                int_type.ptr_type(AddressSpace::Generic),
-                "to_usize_ptr",
-            )
-            .into_pointer_value();
-
-        let index = match extra_bytes {
-            n if n == ptr_width_u32 => 1,
-            n if n == 2 * ptr_width_u32 => 2,
-            _ => unreachable!("invalid extra_bytes, {}", extra_bytes),
-        };
-
-        let index_intvalue = int_type.const_int(index, false);
-
-        let ptr_type = value_type.ptr_type(AddressSpace::Generic);
-
-        unsafe {
-            builder.build_pointer_cast(
-                env.builder
-                    .build_in_bounds_gep(as_usize_ptr, &[index_intvalue], "get_data_ptr"),
-                ptr_type,
-                "alloc_cast_to_desired",
-            )
-        }
-    };
-
-    let refcount_ptr = match extra_bytes {
-        n if n == ptr_width_u32 => {
-            // the allocated pointer is the same as the refcounted pointer
-            unsafe { PointerToRefcount::from_ptr(env, ptr) }
-        }
-        n if n == 2 * ptr_width_u32 => {
-            // the refcount is stored just before the start of the actual data
-            // but in this case (because of alignment) not at the start of the allocated buffer
-            PointerToRefcount::from_ptr_to_data(env, data_ptr)
-        }
-        n => unreachable!("invalid extra_bytes {}", n),
-    };
-
-    // let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
-    refcount_ptr.set_refcount(env, initial_refcount);
-
-    data_ptr
+    env.builder
+        .build_bitcast(ptr, ptr_type, "alloc_cast_to_desired")
+        .into_pointer_value()
 }
 
 macro_rules! dict_key_value_layout {

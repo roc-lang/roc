@@ -208,6 +208,13 @@ inline fn decref_ptr_to_refcount(
     }
 }
 
+pub fn allocateWithRefcountC(
+    data_bytes: usize,
+    element_alignment: u32,
+) callconv(.C) [*]u8 {
+    return allocateWithRefcount(data_bytes, element_alignment);
+}
+
 pub fn allocateWithRefcount(
     data_bytes: usize,
     element_alignment: u32,

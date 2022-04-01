@@ -23,17 +23,6 @@ use roc_target::TargetInfo;
 use super::build::load_roc_value;
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 
-/// "Infinite" reference count, for static values
-/// Ref counts are encoded as negative numbers where isize::MIN represents 1
-pub const REFCOUNT_MAX: usize = 0_usize;
-
-pub fn refcount_1(ctx: &Context, target_info: TargetInfo) -> IntValue<'_> {
-    match target_info.ptr_width() {
-        roc_target::PtrWidth::Bytes4 => ctx.i32_type().const_int(i32::MIN as u64, false),
-        roc_target::PtrWidth::Bytes8 => ctx.i64_type().const_int(i64::MIN as u64, false),
-    }
-}
-
 pub struct PointerToRefcount<'ctx> {
     value: PointerValue<'ctx>,
 }
@@ -96,7 +85,14 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     pub fn is_1<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         let current = self.get_refcount(env);
-        let one = refcount_1(env.context, env.target_info);
+        let one = match env.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => {
+                env.context.i32_type().const_int(i32::MIN as u64, false)
+            }
+            roc_target::PtrWidth::Bytes8 => {
+                env.context.i64_type().const_int(i64::MIN as u64, false)
+            }
+        };
 
         env.builder
             .build_int_compare(IntPredicate::EQ, current, one, "is_one")
