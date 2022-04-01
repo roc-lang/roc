@@ -238,6 +238,12 @@ mod cli_run {
                                 return;
                             }
                         }
+                        "hello-crystal" => {
+                            let script_path = example_file(dir_name, "get-flags.sh");
+                            let script_out = run_cmd(&script_path.into_os_string().into_string().unwrap(), &[], &[]);
+
+                            std::env::set_var("ROC_LINK_FLAGS", script_out.stdout);
+                        }
                         _ => {}
                     }
 
@@ -277,6 +283,13 @@ mod cli_run {
                             example.expected_ending,
                             example.use_valgrind,
                         );
+                    }
+
+                    match example.executable_filename {
+                        "hello-crystal" => {
+                            std::env::remove_var("ROC_LINK_FLAGS");
+                        }
+                        _ => {}
                     }
                 }
             )*
@@ -336,6 +349,14 @@ mod cli_run {
             stdin: &[],
             input_file: None,
             expected_ending:"Hello Swift, meet Roc\n",
+            use_valgrind: true,
+        },
+        hello_crystal:"hello-crystal" => Example {
+            filename: "Hello.roc",
+            executable_filename: "hello-crystal",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"Hello Crystal, meet Roc\n",
             use_valgrind: true,
         },
         hello_web:"hello-web" => Example {
