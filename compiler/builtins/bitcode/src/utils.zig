@@ -1,5 +1,6 @@
 const std = @import("std");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
+const Monotonic = std.builtin.AtomicOrder.Monotonic;
 
 pub fn WithOverflow(comptime T: type) type {
     return extern struct { value: T, has_overflowed: bool };
@@ -126,20 +127,25 @@ const Refcount = enum {
     atomic,
 };
 
-const RC_TYPE = Refcount.normal;
+const RC_TYPE = Refcount.atomic;
 
 pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     if (RC_TYPE == Refcount.none) return;
     var refcount = ptr_to_refcount.*;
-    var masked_amount = if (refcount < REFCOUNT_MAX_ISIZE) amount else 0;
-    switch (RC_TYPE) {
-        Refcount.normal => {
-            ptr_to_refcount.* = refcount + masked_amount;
-        },
-        Refcount.atomic => {
-            var last = @atomicRmw(isize, ptr_to_refcount, std.builtin.AtomicRmwOp.Add, masked_amount, std.builtin.AtomicOrder.Monotonic);
-        },
-        else => unreachable,
+    if (refcount < REFCOUNT_MAX_ISIZE) {
+        switch (RC_TYPE) {
+            Refcount.normal => {
+                ptr_to_refcount.* = std.math.max(refcount + amount, REFCOUNT_MAX_ISIZE);
+            },
+            Refcount.atomic => {
+                var next = std.math.max(refcount + amount, REFCOUNT_MAX_ISIZE);
+                while (@cmpxchgWeak(isize, ptr_to_refcount, refcount, next, Monotonic, Monotonic)) |found| {
+                    refcount = found;
+                    next = std.math.max(refcount + amount, REFCOUNT_MAX_ISIZE);
+                }
+            },
+            else => unreachable,
+        }
     }
 }
 
@@ -198,10 +204,11 @@ inline fn decref_ptr_to_refcount(
             }
         },
         Refcount.atomic => {
-            var amount: isize = if (refcount_ptr[0] < REFCOUNT_MAX_ISIZE) 1 else 0;
-            var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, amount, std.builtin.AtomicOrder.Monotonic);
-            if (last == REFCOUNT_ONE_ISIZE) {
-                dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+            if (refcount_ptr[0] < REFCOUNT_MAX_ISIZE) {
+                var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, 1, Monotonic);
+                if (last == REFCOUNT_ONE_ISIZE) {
+                    dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+                }
             }
         },
         else => unreachable,
