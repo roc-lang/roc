@@ -1,6 +1,8 @@
 #!/bin/bash
 
-OUTPUT=$(crystal build platform/host.cr --no-color 2>&1);
+EXAMPLE_DIR="$(dirname "${BASH_SOURCE[0]}")"
+
+OUTPUT=$(cd $EXAMPLE_DIR;crystal build platform/host.cr --no-color 2>&1);
 LAST_LINE=$(echo $OUTPUT | tail -n 1)
 
 if [[ $OUTPUT =~ ^.*-rdynamic[[:space:]](.*)\`$ ]]
