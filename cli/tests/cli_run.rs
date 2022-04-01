@@ -245,7 +245,7 @@ mod cli_run {
                                 return;
                             }
                         }
-                        "hello-crystal" => {
+                        "helloCrystal" => {
                             let script_path = example_file(dir_name, "get-flags.sh");
                             let script_out = run_cmd(&script_path.into_os_string().into_string().unwrap(), &[], &[]);
 
@@ -304,7 +304,7 @@ mod cli_run {
                     }
 
                     match example.executable_filename {
-                        "hello-crystal" => {
+                        "helloCrystal" => {
                             std::env::remove_var("ROC_LINK_FLAGS");
                         }
                         _ => {}

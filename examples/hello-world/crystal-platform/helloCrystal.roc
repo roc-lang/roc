@@ -1,5 +1,5 @@
-app "hello-crystal"
-    packages { pf: "platform" }
+app "helloCrystal"
+    packages { pf: "." }
     imports []
     provides [ main ] to pf
 
