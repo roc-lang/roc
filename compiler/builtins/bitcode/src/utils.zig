@@ -177,7 +177,7 @@ inline fn decref_ptr_to_refcount(
 ) void {
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
     if (USE_ATOMICS) {
-        var amount : isize = if (refcount_ptr[0] < REFCOUNT_MAX_ISIZE) 1 else 0;
+        var amount: isize = if (refcount_ptr[0] < REFCOUNT_MAX_ISIZE) 1 else 0;
         var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, amount, std.builtin.AtomicOrder.Monotonic);
         if (last == REFCOUNT_ONE_ISIZE) {
             dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
