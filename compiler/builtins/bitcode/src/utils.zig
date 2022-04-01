@@ -120,15 +120,26 @@ pub const IntWidth = enum(u8) {
     I128 = 9,
 };
 
-const USE_ATOMICS = false;
+const Refcount = enum {
+    none,
+    normal,
+    atomic,
+};
+
+const RC_TYPE = Refcount.normal;
 
 pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
+    if (RC_TYPE == Refcount.none) return;
     var refcount = ptr_to_refcount.*;
     var masked_amount = if (refcount < REFCOUNT_MAX_ISIZE) amount else 0;
-    if (USE_ATOMICS) {
-        var last = @atomicRmw(isize, ptr_to_refcount, std.builtin.AtomicRmwOp.Add, masked_amount, std.builtin.AtomicOrder.Monotonic);
-    } else {
-        ptr_to_refcount.* = refcount + masked_amount;
+    switch(RC_TYPE) {
+        Refcount.normal => {
+            ptr_to_refcount.* = refcount + masked_amount;
+        },
+        Refcount.atomic => {
+            var last = @atomicRmw(isize, ptr_to_refcount, std.builtin.AtomicRmwOp.Add, masked_amount, std.builtin.AtomicOrder.Monotonic);
+        },
+        else => unreachable,
     }
 }
 
@@ -175,20 +186,25 @@ inline fn decref_ptr_to_refcount(
     refcount_ptr: [*]isize,
     alignment: u32,
 ) void {
+    if (RC_TYPE == Refcount.none) return;
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
-    if (USE_ATOMICS) {
-        var amount: isize = if (refcount_ptr[0] < REFCOUNT_MAX_ISIZE) 1 else 0;
-        var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, amount, std.builtin.AtomicOrder.Monotonic);
-        if (last == REFCOUNT_ONE_ISIZE) {
-            dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
-        }
-    } else {
-        const refcount: isize = refcount_ptr[0];
-        if (refcount == REFCOUNT_ONE_ISIZE) {
-            dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
-        } else if (refcount < REFCOUNT_MAX_ISIZE) {
-            refcount_ptr[0] = refcount - 1;
-        }
+    switch(RC_TYPE) {
+        Refcount.normal => {
+            const refcount: isize = refcount_ptr[0];
+            if (refcount == REFCOUNT_ONE_ISIZE) {
+                dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+            } else if (refcount < REFCOUNT_MAX_ISIZE) {
+                refcount_ptr[0] = refcount - 1;
+            }
+        },
+        Refcount.atomic => {
+            var amount: isize = if (refcount_ptr[0] < REFCOUNT_MAX_ISIZE) 1 else 0;
+            var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, amount, std.builtin.AtomicOrder.Monotonic);
+            if (last == REFCOUNT_ONE_ISIZE) {
+                dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+            }
+        },
+        else => unreachable,
     }
 }
 
@@ -207,7 +223,7 @@ pub fn allocateWithRefcount(
 
             var as_usize_array = @ptrCast([*]usize, new_bytes);
             as_usize_array[0] = 0;
-            as_usize_array[1] = REFCOUNT_ONE;
+            as_usize_array[1] = if (RC_TYPE == Refcount.none) REFCOUNT_MAX_ISIZE else REFCOUNT_ONE;
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
             const first_slot = as_u8_array + first_slot_offset;
@@ -220,7 +236,7 @@ pub fn allocateWithRefcount(
             var new_bytes: [*]align(8) u8 = @alignCast(8, raw);
 
             var as_isize_array = @ptrCast([*]isize, new_bytes);
-            as_isize_array[0] = REFCOUNT_ONE_ISIZE;
+            as_isize_array[0] = if (RC_TYPE == Refcount.none) REFCOUNT_MAX_ISIZE else REFCOUNT_ONE_ISIZE;
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
             const first_slot = as_u8_array + first_slot_offset;
@@ -233,7 +249,7 @@ pub fn allocateWithRefcount(
             var new_bytes: [*]align(@alignOf(isize)) u8 = @alignCast(@alignOf(isize), raw);
 
             var as_isize_array = @ptrCast([*]isize, new_bytes);
-            as_isize_array[0] = REFCOUNT_ONE_ISIZE;
+            as_isize_array[0] = if (RC_TYPE == Refcount.none) REFCOUNT_MAX_ISIZE else REFCOUNT_ONE_ISIZE;
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
             const first_slot = as_u8_array + first_slot_offset;
