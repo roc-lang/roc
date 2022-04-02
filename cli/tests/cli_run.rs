@@ -740,6 +740,7 @@ mod cli_run {
                 if example_dir_name == "hello-world" {
                     for sub_dir in [
                         "c-platform",
+                        "crystal-platform",
                         "rust-platform",
                         "swift-platform",
                         "web-platform",
