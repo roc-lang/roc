@@ -110,7 +110,7 @@ pub enum ParsedNumResult {
 pub fn finish_parsing_num(raw: &str) -> Result<ParsedNumResult, (&str, IntErrorKind)> {
     // Ignore underscores.
     let radix = 10;
-    from_str_radix(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e))
+    from_str_radix(raw.replace('_', "").as_str(), radix).map_err(|e| (raw, e))
 }
 
 #[inline(always)]
@@ -128,9 +128,9 @@ pub fn finish_parsing_base(
 
     // Ignore underscores, insert - when negative to get correct underflow/overflow behavior
     (if is_negative {
-        from_str_radix(format!("-{}", raw.replace("_", "")).as_str(), radix)
+        from_str_radix(format!("-{}", raw.replace('_', "")).as_str(), radix)
     } else {
-        from_str_radix(raw.replace("_", "").as_str(), radix)
+        from_str_radix(raw.replace('_', "").as_str(), radix)
     })
     .and_then(|parsed| match parsed {
         ParsedNumResult::Float(..) => Err(IntErrorKind::FloatSuffix),
@@ -154,7 +154,7 @@ pub fn finish_parsing_float(raw: &str) -> Result<(f64, FloatBound), (&str, Float
     };
 
     // Ignore underscores.
-    match raw_without_suffix.replace("_", "").parse::<f64>() {
+    match raw_without_suffix.replace('_', "").parse::<f64>() {
         Ok(float) if float.is_finite() => Ok((float, bound)),
         Ok(float) => {
             if float.is_sign_positive() {

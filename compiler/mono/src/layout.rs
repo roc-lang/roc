@@ -1180,8 +1180,7 @@ impl<'a> Layout<'a> {
                 match variant {
                     NonRecursive(fields) => fields
                         .iter()
-                        .map(|ls| ls.iter())
-                        .flatten()
+                        .flat_map(|ls| ls.iter())
                         .any(|f| f.contains_refcounted()),
                     Recursive(_)
                     | NullableWrapped { .. }

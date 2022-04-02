@@ -185,8 +185,7 @@ fn is_exhaustive(matrix: &RefPatternMatrix, n: usize) -> PatternMatrix {
                 alt_list
                     .iter()
                     .cloned()
-                    .map(is_alt_exhaustive)
-                    .flatten()
+                    .flat_map(is_alt_exhaustive)
                     .collect()
             }
         }

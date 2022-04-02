@@ -281,8 +281,7 @@ pub fn canonicalize_module_defs<'a>(
     let transitive_builtins: Vec<Symbol> = referenced_values
         .iter()
         .filter(|s| s.is_builtin())
-        .map(|s| crate::builtins::builtin_dependencies(*s))
-        .flatten()
+        .flat_map(|s| crate::builtins::builtin_dependencies(*s))
         .copied()
         .collect();
 

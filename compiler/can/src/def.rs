@@ -166,8 +166,7 @@ fn sort_type_defs_before_introduction(
         Ok(result) => result
             .iter()
             .rev()
-            .map(|group_index| sccs[*group_index].iter())
-            .flatten()
+            .flat_map(|group_index| sccs[*group_index].iter())
             .copied()
             .collect(),
 

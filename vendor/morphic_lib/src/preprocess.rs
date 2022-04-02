@@ -774,7 +774,7 @@ fn preprocess_op(
             debug_assert_eq!(inputs.len(), 1);
 
             let cont_binding = continuations_in_scope[continuation]
-                .ok_or_else(|| ErrorKind::ContinuationNotInScope(*continuation))?;
+                .ok_or(ErrorKind::ContinuationNotInScope(*continuation))?;
 
             check_type(ctx.nc, tc, cont_binding.arg_type, input_types[0])?;
 
@@ -1045,7 +1045,7 @@ fn preprocess_op(
             let field_types = try_get_tuple_field_types(ctx.nc, tc, tuple_type)?;
             let field_type = *field_types
                 .get(*field_idx as usize)
-                .ok_or_else(|| ErrorKind::TupleFieldOutOfRange(*field_idx))?;
+                .ok_or(ErrorKind::TupleFieldOutOfRange(*field_idx))?;
             let value = graph_builder.add_op(
                 block,
                 ir::OpKind::GetTupleField {
@@ -1068,7 +1068,7 @@ fn preprocess_op(
                 .collect();
             let this_variant_type = *tc_variant_types
                 .get(*variant_idx as usize)
-                .ok_or_else(|| ErrorKind::UnionVariantOutOfRange(*variant_idx))?;
+                .ok_or(ErrorKind::UnionVariantOutOfRange(*variant_idx))?;
             check_type(ctx.nc, tc, this_variant_type, input_types[0])?;
             let union_type = tc.types.get_or_insert(TypeData::Union {
                 variants: tc_variant_types,
@@ -1089,7 +1089,7 @@ fn preprocess_op(
             let variant_types = try_get_union_variant_types(ctx.nc, tc, input_types[0])?;
             let this_variant_type = *variant_types
                 .get(*variant_idx as usize)
-                .ok_or_else(|| ErrorKind::UnionVariantOutOfRange(*variant_idx))?;
+                .ok_or(ErrorKind::UnionVariantOutOfRange(*variant_idx))?;
             let value = graph_builder.add_op(
                 block,
                 ir::OpKind::UnwrapUnion {

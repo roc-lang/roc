@@ -884,10 +884,8 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
 
                 let struct_type = str_type;
 
-                let mut struct_val;
-
                 // Store the pointer
-                struct_val = builder
+                let mut struct_val = builder
                     .build_insert_value(
                         struct_type.get_undef(),
                         ptr,
@@ -2113,8 +2111,7 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
 
     let alignment_bytes = fields
         .iter()
-        .map(|tag| tag.iter().map(|l| l.alignment_bytes(env.target_info)))
-        .flatten()
+        .flat_map(|tag| tag.iter().map(|l| l.alignment_bytes(env.target_info)))
         .max()
         .unwrap_or(0);
 
