@@ -86,9 +86,10 @@ impl WasmLayout {
                 format: StackMemoryFormat::Decimal,
             },
 
+            Layout::LambdaSet(lambda_set) => WasmLayout::new(&lambda_set.runtime_representation()),
+
             Layout::Builtin(Str | Dict(_, _) | Set(_) | List(_))
             | Layout::Struct { .. }
-            | Layout::LambdaSet(_)
             | Layout::Union(NonRecursive(_)) => Self::StackMemory {
                 size,
                 alignment_bytes,
