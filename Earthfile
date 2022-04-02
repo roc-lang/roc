@@ -47,6 +47,10 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     ENV RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     ENV SCCACHE_DIR=/earthbuild/sccache_dir
     ENV CARGO_INCREMENTAL=0 # no need to recompile package when using new function
+    # crystal
+    RUN wget -c https://crystal-lang.org/install.sh -O install-crystal.sh
+    RUN chmod +x install-crystal.sh
+    RUN ./install-crystal.sh --version=1.2
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
