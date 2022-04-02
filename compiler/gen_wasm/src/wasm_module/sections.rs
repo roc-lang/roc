@@ -805,7 +805,7 @@ enum ElementSegmentFormatId {
 
 #[derive(Debug)]
 struct ElementSegment<'a> {
-    offset: ConstExpr,
+    offset: ConstExpr, // The starting table index for the segment
     fn_indices: Vec<'a, u32>,
 }
 
@@ -856,6 +856,9 @@ impl<'a> Serialize for ElementSegment<'a> {
     }
 }
 
+/// An "element" represents an indirectly-callable function the Wasm runtime's function table.
+/// Future Wasm versions might have tables where the elements are DOM references or other things.
+/// Elements can be initialised in groups called "segments". Normally there's just one.
 #[derive(Debug)]
 pub struct ElementSection<'a> {
     segments: Vec<'a, ElementSegment<'a>>,
@@ -867,15 +870,41 @@ impl<'a> ElementSection<'a> {
     pub fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
         let (num_segments, body_bytes) = parse_section(Self::ID, module_bytes, cursor);
 
-        let mut segments = Vec::with_capacity_in(num_segments as usize, arena);
+        if num_segments == 0 {
+            let seg = ElementSegment {
+                offset: ConstExpr::I32(1),
+                fn_indices: bumpalo::vec![in arena],
+            };
+            ElementSection {
+                segments: bumpalo::vec![in arena; seg],
+            }
+        } else {
+            let mut segments = Vec::with_capacity_in(num_segments as usize, arena);
 
-        let mut body_cursor = 0;
-        for _ in 0..num_segments {
-            let seg = ElementSegment::parse(arena, body_bytes, &mut body_cursor);
-            segments.push(seg);
+            let mut body_cursor = 0;
+            for _ in 0..num_segments {
+                let seg = ElementSegment::parse(arena, body_bytes, &mut body_cursor);
+                segments.push(seg);
+            }
+            ElementSection { segments }
         }
+    }
 
-        ElementSection { segments }
+    /// Get a table index for a function (equivalent to a function pointer)
+    /// The function will be inserted into the table if it's not already there.
+    /// This index is what the call_indirect instruction expects
+    /// (It works mostly the same as with pointers, except you can't jump to arbitrary code)
+    pub fn get_fn_table_index(&mut self, fn_index: u32) -> i32 {
+        // In practice there is always one segment. We allow a bit more generality by using the last one.
+        let segment = self.segments.last_mut().unwrap();
+        let pos = segment.fn_indices.iter().position(|f| *f == fn_index);
+        if let Some(existing_table_index) = pos {
+            existing_table_index as i32
+        } else {
+            let new_table_index = segment.fn_indices.len();
+            segment.fn_indices.push(fn_index);
+            new_table_index as i32
+        }
     }
 
     pub fn size(&self) -> usize {

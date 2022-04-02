@@ -170,6 +170,10 @@ impl<'a> WasmBackend<'a> {
     #[cfg(not(debug_assertions))]
     pub fn register_symbol_debug_names(&self) {}
 
+    pub fn get_fn_table_index(&mut self, fn_index: u32) -> i32 {
+        self.module.element.get_fn_table_index(fn_index)
+    }
+
     /// Create an IR Symbol for an anonymous value (such as ListLiteral)
     pub fn create_symbol(&mut self, debug_name: &str) -> Symbol {
         let ident_ids = self

@@ -8,8 +8,7 @@ use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
-use crate::layout::CallConv;
-use crate::layout::{StackMemoryFormat, WasmLayout};
+use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
 use crate::storage::{StackMemoryLocation, StoredValue};
 use crate::wasm_module::{Align, ValueType};
 use crate::TARGET_INFO;
@@ -1010,6 +1009,9 @@ pub fn call_higher_order_lowlevel<'a>(
     let wrapper_fn_idx = backend.register_helper_proc(wrapper_sym, wrapper_layout, source);
     let inc_fn_idx = backend.gen_refcount_inc_for_zig(closure_data_layout);
 
+    let wrapper_fn_ptr = backend.get_fn_table_index(wrapper_fn_idx);
+    let inc_fn_ptr = backend.get_fn_table_index(inc_fn_idx);
+
     match op {
         // List.map : List elem_old, (elem_old -> elem_new) -> List elem_new
         ListMap { xs } => {
@@ -1030,13 +1032,13 @@ pub fn call_higher_order_lowlevel<'a>(
             // Load return pointer & argument values
             backend.storage.load_symbols(cb, &[return_sym]);
             backend.storage.load_symbol_zig(cb, *xs);
-            cb.i32_const(wrapper_fn_idx as i32);
+            cb.i32_const(wrapper_fn_ptr);
             if closure_data_exists {
                 backend.storage.load_symbols(cb, &[*captured_environment]);
             } else {
                 cb.i32_const(0); // null pointer
             }
-            cb.i32_const(inc_fn_idx as i32);
+            cb.i32_const(inc_fn_ptr);
             cb.i32_const(*owns_captured_environment as i32);
             cb.i32_const(elem_new_align as i32); // used for allocating the new list
             cb.i32_const(elem_old_size as i32);
