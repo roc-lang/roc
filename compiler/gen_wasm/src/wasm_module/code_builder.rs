@@ -91,7 +91,7 @@ impl Align {
         if (max_align >= Align::Bytes2) && (offset & 1 == 0) {
             return Align::Bytes2;
         }
-        return Align::Bytes1;
+        Align::Bytes1
     }
 }
 

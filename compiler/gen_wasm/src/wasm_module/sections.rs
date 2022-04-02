@@ -276,33 +276,6 @@ impl<'a> Section<'a> for TypeSection<'a> {
  *
  *******************************************************************/
 
-#[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum RefType {
-    Func = 0x70,
-    Extern = 0x6f,
-}
-
-#[derive(Debug)]
-pub struct TableType {
-    pub ref_type: RefType,
-    pub limits: Limits,
-}
-
-impl Serialize for TableType {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_u8(self.ref_type as u8);
-        self.limits.serialize(buffer);
-    }
-}
-
-impl SkipBytes for TableType {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        u8::skip_bytes(bytes, cursor);
-        Limits::skip_bytes(bytes, cursor);
-    }
-}
-
 #[derive(Debug)]
 pub enum ImportDesc {
     Func { signature_index: u32 },
@@ -459,6 +432,104 @@ section_impl!(FunctionSection, SectionId::Function);
 
 /*******************************************************************
  *
+ * Table section
+ *
+ * Defines tables used for indirect references to host memory.
+ * The table *contents* are elsewhere, in the ElementSection.
+ *
+ *******************************************************************/
+
+#[repr(u8)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum RefType {
+    Func = 0x70,
+    Extern = 0x6f,
+}
+
+#[derive(Debug)]
+pub struct TableType {
+    pub ref_type: RefType,
+    pub limits: Limits,
+}
+
+impl Serialize for TableType {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_u8(self.ref_type as u8);
+        self.limits.serialize(buffer);
+    }
+}
+
+impl SkipBytes for TableType {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+        u8::skip_bytes(bytes, cursor);
+        Limits::skip_bytes(bytes, cursor);
+    }
+}
+
+#[derive(Debug)]
+pub struct TableSection {
+    pub function_table: TableType,
+}
+
+impl TableSection {
+    const ID: SectionId = SectionId::Table;
+
+    pub fn preload(module_bytes: &[u8], mod_cursor: &mut usize) -> Self {
+        let (count, section_bytes) = parse_section(Self::ID, module_bytes, mod_cursor);
+
+        match count {
+            0 => TableSection {
+                function_table: TableType {
+                    ref_type: RefType::Func,
+                    limits: Limits::MinMax(0, 0),
+                },
+            },
+            1 => {
+                if section_bytes[0] != RefType::Func as u8 {
+                    internal_error!("Only funcref tables are supported")
+                }
+                let mut section_cursor = 1;
+                let limits = Limits::parse(section_bytes, &mut section_cursor);
+
+                TableSection {
+                    function_table: TableType {
+                        ref_type: RefType::Func,
+                        limits,
+                    },
+                }
+            }
+            _ => internal_error!("Multiple tables are not supported"),
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        let section_id_bytes = 1;
+        let section_length_bytes = 1;
+        let num_tables_bytes = 1;
+        let ref_type_bytes = 1;
+        let limits_bytes = match self.function_table.limits {
+            Limits::Min(_) => MAX_SIZE_ENCODED_U32,
+            Limits::MinMax(..) => 2 * MAX_SIZE_ENCODED_U32,
+        };
+
+        section_id_bytes + section_length_bytes + num_tables_bytes + ref_type_bytes + limits_bytes
+    }
+}
+
+impl Serialize for TableSection {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        let header_indices = write_section_header(buffer, Self::ID);
+
+        let num_tables: u32 = 1;
+        num_tables.serialize(buffer);
+        self.function_table.serialize(buffer);
+
+        update_section_size(buffer, header_indices);
+    }
+}
+
+/*******************************************************************
+ *
  * Memory section
  *
  *******************************************************************/
@@ -498,6 +569,21 @@ impl SkipBytes for Limits {
         u32::skip_bytes(bytes, cursor); // skip "min"
         if variant_id == LimitsId::MinMax as u8 {
             u32::skip_bytes(bytes, cursor); // skip "max"
+        }
+    }
+}
+
+impl Limits {
+    fn parse(bytes: &[u8], cursor: &mut usize) -> Self {
+        let variant_id = bytes[*cursor];
+        *cursor += 1;
+
+        let min = parse_u32_or_panic(bytes, cursor);
+        if variant_id == LimitsId::MinMax as u8 {
+            let max = parse_u32_or_panic(bytes, cursor);
+            Limits::MinMax(min, max)
+        } else {
+            Limits::Min(min)
         }
     }
 }
@@ -583,6 +669,13 @@ impl ConstExpr {
         *cursor += 1;
 
         value
+    }
+
+    fn unwrap_i32(&self) -> i32 {
+        match self {
+            Self::I32(x) => *x,
+            _ => internal_error!("Expected ConstExpr to be I32"),
+        }
     }
 }
 
@@ -803,6 +896,7 @@ enum ElementSegmentFormatId {
     ActiveImplicitTableIndex = 0x00,
 }
 
+/// A Segment initialises a subrange of elements in a table. Normally there's just one Segment.
 #[derive(Debug)]
 struct ElementSegment<'a> {
     offset: ConstExpr, // The starting table index for the segment
@@ -856,9 +950,8 @@ impl<'a> Serialize for ElementSegment<'a> {
     }
 }
 
-/// An "element" represents an indirectly-callable function the Wasm runtime's function table.
-/// Future Wasm versions might have tables where the elements are DOM references or other things.
-/// Elements can be initialised in groups called "segments". Normally there's just one.
+/// An Element is an entry in a Table (see TableSection)
+/// The only currently supported Element type is a function reference, used for indirect calls.
 #[derive(Debug)]
 pub struct ElementSection<'a> {
     segments: Vec<'a, ElementSegment<'a>>,
@@ -892,21 +985,35 @@ impl<'a> ElementSection<'a> {
 
     /// Get a table index for a function (equivalent to a function pointer)
     /// The function will be inserted into the table if it's not already there.
-    /// This index is what the call_indirect instruction expects
-    /// (It works mostly the same as with pointers, except you can't jump to arbitrary code)
+    /// This index is what the call_indirect instruction expects.
+    /// (This works mostly the same as function pointers, except hackers can't jump to arbitrary code)
     pub fn get_fn_table_index(&mut self, fn_index: u32) -> i32 {
         // In practice there is always one segment. We allow a bit more generality by using the last one.
         let segment = self.segments.last_mut().unwrap();
+        let offset = segment.offset.unwrap_i32();
         let pos = segment.fn_indices.iter().position(|f| *f == fn_index);
         if let Some(existing_table_index) = pos {
-            existing_table_index as i32
+            offset + existing_table_index as i32
         } else {
             let new_table_index = segment.fn_indices.len();
             segment.fn_indices.push(fn_index);
-            new_table_index as i32
+            offset + new_table_index as i32
         }
     }
 
+    /// Number of elements in the table
+    pub fn max_table_index(&self) -> u32 {
+        let mut result = 0;
+        for s in self.segments.iter() {
+            let max_index = s.offset.unwrap_i32() + s.fn_indices.len() as i32;
+            if max_index > result {
+                result = max_index;
+            }
+        }
+        result as u32
+    }
+
+    /// Approximate serialized byte size (for buffer capacity)
     pub fn size(&self) -> usize {
         self.segments.iter().map(|seg| seg.size()).sum()
     }

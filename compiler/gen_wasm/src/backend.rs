@@ -20,7 +20,7 @@ use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{DataSymbol, LinkingSegment, WasmObjectSymbol};
-use crate::wasm_module::sections::{DataMode, DataSegment};
+use crate::wasm_module::sections::{DataMode, DataSegment, Limits};
 use crate::wasm_module::{
     code_builder, CodeBuilder, Export, ExportType, LocalId, Signature, SymInfo, ValueType,
     WasmModule,
@@ -153,7 +153,9 @@ impl<'a> WasmBackend<'a> {
         wasm_fn_index
     }
 
-    pub fn finalize(self) -> (WasmModule<'a>, Vec<'a, u32>) {
+    pub fn finalize(mut self) -> (WasmModule<'a>, Vec<'a, u32>) {
+        let fn_table_size = 1 + self.module.element.max_table_index();
+        self.module.table.function_table.limits = Limits::MinMax(fn_table_size, fn_table_size);
         (self.module, self.called_preload_fns)
     }
 
@@ -293,7 +295,11 @@ impl<'a> WasmBackend<'a> {
     ///
     /// NOTE: If the builtins expected the return pointer first and closure data last, we could eliminate the wrapper
     /// when all args are pass-by-reference and non-zero size. But currently we need it to swap those around.
-    pub fn build_higher_order_wrapper(&mut self, wrapper_lookup_idx: usize, inner_lookup_idx: usize) {
+    pub fn build_higher_order_wrapper(
+        &mut self,
+        wrapper_lookup_idx: usize,
+        inner_lookup_idx: usize,
+    ) {
         use Align::*;
         use ValueType::*;
 
@@ -1591,6 +1597,7 @@ impl<'a> WasmBackend<'a> {
         );
     }
 
+    /// Generate a refcount increment procedure and return its Wasm function index
     pub fn gen_refcount_inc_for_zig(&mut self, layout: Layout<'a>) -> u32 {
         let ident_ids = self
             .interns
@@ -1613,8 +1620,6 @@ impl<'a> WasmBackend<'a> {
             .position(|lookup| lookup.name == proc_symbol && lookup.layout.arguments[0] == layout)
             .unwrap();
 
-        let wasm_fn_index = self.fn_index_offset + proc_index as u32;
-
-        wasm_fn_index
+        self.fn_index_offset + proc_index as u32
     }
 }
