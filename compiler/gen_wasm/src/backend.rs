@@ -319,11 +319,17 @@ impl<'a> WasmBackend<'a> {
 
         let mut n_inner_wasm_args = 0;
         let ret_type_and_size = match inner_ret_layout.return_method() {
-            ReturnMethod::Primitive(ty, size) => Some((ty, size)),
             ReturnMethod::NoReturnValue => None,
-            ReturnMethod::WriteToPointerArg => {
-                n_inner_wasm_args += 1;
+            ReturnMethod::Primitive(ty, size) => {
+                // If the inner function returns a primitive, load the address to store it at
+                // After the call, it will be under the call result in the value stack
                 self.code_builder.get_local(heap_return_ptr_id);
+                Some((ty, size))
+            }
+            ReturnMethod::WriteToPointerArg => {
+                // If the inner function writes to a return pointer, load its address
+                self.code_builder.get_local(heap_return_ptr_id);
+                n_inner_wasm_args += 1;
                 None
             }
         };
@@ -378,11 +384,6 @@ impl<'a> WasmBackend<'a> {
             self.code_builder.get_local(LocalId(0));
         }
 
-        // If the inner function returns a primitive, load the address to store it at
-        if ret_type_and_size.is_some() {
-            self.code_builder.get_local(heap_return_ptr_id);
-        }
-
         // Call the wrapped inner function
         let lookup = &self.proc_lookup[inner_lookup_idx];
         let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
@@ -394,7 +395,7 @@ impl<'a> WasmBackend<'a> {
             has_return_val,
         );
 
-        // If the inner function returns a primitive, store it to the address we loaded earlier
+        // If the inner function returns a primitive, store it to the address we loaded at the very beginning
         if let Some((ty, size)) = ret_type_and_size {
             match (ty, size) {
                 (I64, 8) => self.code_builder.i64_store(Bytes8, 0),
