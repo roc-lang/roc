@@ -34,8 +34,7 @@ use crate::{
 pub enum ProcSource {
     Roc,
     Helper,
-    /// Wrapper function for higher-order calls from Zig to Roc,
-    /// to work around Zig's incorrect implementation of C calling convention in Wasm
+    /// Wrapper function for higher-order calls from Zig to Roc
     HigherOrderWrapper(usize),
 }
 
@@ -1009,16 +1008,13 @@ impl<'a> WasmBackend<'a> {
             CallConv::C,
         );
 
-        for (
-            roc_proc_index,
-            ProcLookupData {
+        for (roc_proc_index, lookup) in self.proc_lookup.iter().enumerate() {
+            let ProcLookupData {
                 name: ir_sym,
                 layout: pl,
                 linker_index: linker_sym_index,
                 ..
-            },
-        ) in self.proc_lookup.iter().enumerate()
-        {
+            } = lookup;
             if *ir_sym == func_sym && pl == proc_layout {
                 let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
                 let num_wasm_args = param_types.len();
