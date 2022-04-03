@@ -8,7 +8,6 @@ use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
-use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
@@ -18,21 +17,9 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
-use roc_target::TargetInfo;
 
 use super::build::load_roc_value;
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
-
-/// "Infinite" reference count, for static values
-/// Ref counts are encoded as negative numbers where isize::MIN represents 1
-pub const REFCOUNT_MAX: usize = 0_usize;
-
-pub fn refcount_1(ctx: &Context, target_info: TargetInfo) -> IntValue<'_> {
-    match target_info.ptr_width() {
-        roc_target::PtrWidth::Bytes4 => ctx.i32_type().const_int(i32::MIN as u64, false),
-        roc_target::PtrWidth::Bytes8 => ctx.i64_type().const_int(i64::MIN as u64, false),
-    }
-}
 
 pub struct PointerToRefcount<'ctx> {
     value: PointerValue<'ctx>,
@@ -96,7 +83,14 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     pub fn is_1<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         let current = self.get_refcount(env);
-        let one = refcount_1(env.context, env.target_info);
+        let one = match env.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => {
+                env.context.i32_type().const_int(i32::MIN as u64, false)
+            }
+            roc_target::PtrWidth::Bytes8 => {
+                env.context.i64_type().const_int(i64::MIN as u64, false)
+            }
+        };
 
         env.builder
             .build_int_compare(IntPredicate::EQ, current, one, "is_one")
@@ -125,38 +119,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
     }
 
     fn increment<'a, 'env>(&self, amount: IntValue<'ctx>, env: &Env<'a, 'ctx, 'env>) {
-        let refcount = self.get_refcount(env);
-        let builder = env.builder;
-        let refcount_type = env.ptr_int();
-
-        let is_static_allocation = builder.build_int_compare(
-            IntPredicate::EQ,
-            refcount,
-            refcount_type.const_int(REFCOUNT_MAX as u64, false),
-            "refcount_max_check",
-        );
-
-        let block = env.builder.get_insert_block().expect("to be in a function");
-        let parent = block.get_parent().unwrap();
-
-        let modify_block = env
-            .context
-            .append_basic_block(parent, "inc_refcount_modify");
-        let cont_block = env.context.append_basic_block(parent, "inc_refcount_cont");
-
-        env.builder
-            .build_conditional_branch(is_static_allocation, cont_block, modify_block);
-
-        {
-            env.builder.position_at_end(modify_block);
-
-            let incremented = builder.build_int_add(refcount, amount, "increment_refcount");
-            self.set_refcount(env, incremented);
-
-            env.builder.build_unconditional_branch(cont_block);
-        }
-
-        env.builder.position_at_end(cont_block);
+        incref_pointer(env, self.value, amount);
     }
 
     pub fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
@@ -230,6 +193,25 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
         builder.build_return(None);
     }
+}
+
+fn incref_pointer<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    pointer: PointerValue<'ctx>,
+    amount: IntValue<'ctx>,
+) {
+    call_void_bitcode_fn(
+        env,
+        &[
+            env.builder.build_bitcast(
+                pointer,
+                env.ptr_int().ptr_type(AddressSpace::Generic),
+                "to_isize_ptr",
+            ),
+            amount.into(),
+        ],
+        roc_builtins::bitcode::UTILS_INCREF,
+    );
 }
 
 fn decref_pointer<'a, 'ctx, 'env>(
