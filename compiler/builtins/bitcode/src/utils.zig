@@ -144,7 +144,7 @@ pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
                     next = std.math.min(refcount + amount, REFCOUNT_MAX_ISIZE);
                 }
             },
-            else => unreachable,
+            Refcount.none => unreachable,
         }
     }
 }
@@ -211,7 +211,7 @@ inline fn decref_ptr_to_refcount(
                 }
             }
         },
-        else => unreachable,
+        Refcount.none => unreachable,
     }
 }
 
