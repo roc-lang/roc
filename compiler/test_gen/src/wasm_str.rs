@@ -270,9 +270,9 @@ use roc_std::{RocList, RocStr};
 #[cfg(any(feature = "gen-wasm"))]
 fn small_str_literal() {
     assert_evals_to!(
-        "\"JJJJJJJ\"",
-        [0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0b1000_0111],
-        [u8; 8]
+        "\"01234567890\"",
+        [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x8b],
+        [u8; 12]
     );
 }
 
@@ -311,8 +311,21 @@ fn small_str_zeroed_literal() {
                     functionWithReusedSpace True
                  "#
         ),
-        [0x4a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0b1000_0001],
-        [u8; 8]
+        [
+            0x4a,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0b1000_0001
+        ],
+        [u8; 12]
     );
 }
 
@@ -328,18 +341,18 @@ fn long_str_literal() {
 #[test]
 fn small_str_concat_empty_first_arg() {
     assert_evals_to!(
-        r#"Str.concat "" "JJJJJJJ""#,
-        [0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0b1000_0111],
-        [u8; 8]
+        r#"Str.concat "" "01234567890""#,
+        [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x8b],
+        [u8; 12]
     );
 }
 
 #[test]
 fn small_str_concat_empty_second_arg() {
     assert_evals_to!(
-        r#"Str.concat "JJJJJJJ" """#,
-        [0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0b1000_0111],
-        [u8; 8]
+        r#"Str.concat "01234567890" """#,
+        [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x8b],
+        [u8; 12]
     );
 }
 
@@ -355,9 +368,9 @@ fn small_str_concat_small_to_big() {
 #[test]
 fn small_str_concat_small_to_small_staying_small() {
     assert_evals_to!(
-        r#"Str.concat "J" "JJJJJJ""#,
-        [0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0x4a, 0b1000_0111],
-        [u8; 8]
+        r#"Str.concat "0" "1234567890""#,
+        [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x8b],
+        [u8; 12]
     );
 }
 

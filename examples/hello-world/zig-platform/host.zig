@@ -77,7 +77,7 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed() RocStr;
+extern fn roc__mainForHost_1_exposed_generic(*RocStr) void;
 
 const Unit = extern struct {};
 
@@ -90,7 +90,8 @@ pub fn main() u8 {
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
     // actually call roc to populate the callresult
-    var callresult = roc__mainForHost_1_exposed();
+    var callresult = RocStr.empty();
+    roc__mainForHost_1_exposed_generic(&callresult);
 
     // end time
     var ts2: std.os.timespec = undefined;
