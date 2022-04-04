@@ -262,11 +262,7 @@ fn check_valid_range(
     range: VariableSubsSlice,
     mode: Mode,
 ) -> Outcome {
-    let slice = subs
-        .get_subs_slice(range)
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
+    let slice = subs.get_subs_slice(range).to_vec();
 
     let mut it = slice.iter().peekable();
     while let Some(&possible_var) = it.next() {
@@ -1432,7 +1428,7 @@ fn unify_recursion(
         } => {
             // NOTE: structure and other_structure may not be unified yet, but will be
             // we should not do that here, it would create an infinite loop!
-            let name = (*opt_name).or_else(|| *other_opt_name);
+            let name = (*opt_name).or(*other_opt_name);
             merge(
                 subs,
                 ctx,

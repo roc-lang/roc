@@ -121,8 +121,7 @@ fn start_phase<'a>(
         Recurse(new) => {
             return new
                 .into_iter()
-                .map(|(module_id, phase)| start_phase(module_id, phase, arena, state))
-                .flatten()
+                .flat_map(|(module_id, phase)| start_phase(module_id, phase, arena, state))
                 .collect()
         }
     }

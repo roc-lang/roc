@@ -1,5 +1,6 @@
 const std = @import("std");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
+const Monotonic = std.builtin.AtomicOrder.Monotonic;
 
 pub fn WithOverflow(comptime T: type) type {
     return extern struct { value: T, has_overflowed: bool };
@@ -120,10 +121,32 @@ pub const IntWidth = enum(u8) {
     I128 = 9,
 };
 
+const Refcount = enum {
+    none,
+    normal,
+    atomic,
+};
+
+const RC_TYPE = Refcount.normal;
+
 pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
+    if (RC_TYPE == Refcount.none) return;
     var refcount = ptr_to_refcount.*;
-    var masked_amount = if (refcount == REFCOUNT_MAX_ISIZE) 0 else amount;
-    ptr_to_refcount.* = refcount + masked_amount;
+    if (refcount < REFCOUNT_MAX_ISIZE) {
+        switch (RC_TYPE) {
+            Refcount.normal => {
+                ptr_to_refcount.* = std.math.min(refcount + amount, REFCOUNT_MAX_ISIZE);
+            },
+            Refcount.atomic => {
+                var next = std.math.min(refcount + amount, REFCOUNT_MAX_ISIZE);
+                while (@cmpxchgWeak(isize, ptr_to_refcount, refcount, next, Monotonic, Monotonic)) |found| {
+                    refcount = found;
+                    next = std.math.min(refcount + amount, REFCOUNT_MAX_ISIZE);
+                }
+            },
+            Refcount.none => unreachable,
+        }
+    }
 }
 
 pub fn decrefC(
@@ -169,71 +192,51 @@ inline fn decref_ptr_to_refcount(
     refcount_ptr: [*]isize,
     alignment: u32,
 ) void {
-    const refcount: isize = refcount_ptr[0];
+    if (RC_TYPE == Refcount.none) return;
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
-
-    if (refcount == REFCOUNT_ONE_ISIZE) {
-        dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
-    } else if (refcount < 0) {
-        refcount_ptr[0] = refcount - 1;
+    switch (RC_TYPE) {
+        Refcount.normal => {
+            const refcount: isize = refcount_ptr[0];
+            if (refcount == REFCOUNT_ONE_ISIZE) {
+                dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+            } else if (refcount < REFCOUNT_MAX_ISIZE) {
+                refcount_ptr[0] = refcount - 1;
+            }
+        },
+        Refcount.atomic => {
+            if (refcount_ptr[0] < REFCOUNT_MAX_ISIZE) {
+                var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, 1, Monotonic);
+                if (last == REFCOUNT_ONE_ISIZE) {
+                    dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+                }
+            }
+        },
+        Refcount.none => unreachable,
     }
+}
+
+pub fn allocateWithRefcountC(
+    data_bytes: usize,
+    element_alignment: u32,
+) callconv(.C) [*]u8 {
+    return allocateWithRefcount(data_bytes, element_alignment);
 }
 
 pub fn allocateWithRefcount(
     data_bytes: usize,
     element_alignment: u32,
 ) [*]u8 {
-    const alignment = std.math.max(@sizeOf(usize), element_alignment);
-    const first_slot_offset = std.math.max(@sizeOf(usize), element_alignment);
+    const ptr_width = @sizeOf(usize);
+    const alignment = std.math.max(ptr_width, element_alignment);
     const length = alignment + data_bytes;
 
-    switch (alignment) {
-        16 => {
-            // TODO handle alloc failing!
-            var new_bytes: [*]align(16) u8 = @alignCast(16, alloc(length, alignment) orelse unreachable);
+    var new_bytes: [*]u8 = alloc(length, alignment) orelse unreachable;
 
-            var as_usize_array = @ptrCast([*]usize, new_bytes);
-            as_usize_array[0] = 0;
-            as_usize_array[1] = REFCOUNT_ONE;
+    const data_ptr = new_bytes + alignment;
+    const refcount_ptr = @ptrCast([*]usize, @alignCast(ptr_width, data_ptr) - ptr_width);
+    refcount_ptr[0] = if (RC_TYPE == Refcount.none) REFCOUNT_MAX_ISIZE else REFCOUNT_ONE;
 
-            var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + first_slot_offset;
-
-            return first_slot;
-        },
-        8 => {
-            // TODO handle alloc failing!
-            var raw = alloc(length, alignment) orelse unreachable;
-            var new_bytes: [*]align(8) u8 = @alignCast(8, raw);
-
-            var as_isize_array = @ptrCast([*]isize, new_bytes);
-            as_isize_array[0] = REFCOUNT_ONE_ISIZE;
-
-            var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + first_slot_offset;
-
-            return first_slot;
-        },
-        4 => {
-            // TODO handle alloc failing!
-            var raw = alloc(length, alignment) orelse unreachable;
-            var new_bytes: [*]align(@alignOf(isize)) u8 = @alignCast(@alignOf(isize), raw);
-
-            var as_isize_array = @ptrCast([*]isize, new_bytes);
-            as_isize_array[0] = REFCOUNT_ONE_ISIZE;
-
-            var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + first_slot_offset;
-
-            return first_slot;
-        },
-        else => {
-            // const stdout = std.io.getStdOut().writer();
-            // stdout.print("alignment: {d}", .{alignment}) catch unreachable;
-            // @panic("allocateWithRefcount with invalid alignment");
-            unreachable;
-        },
-    }
+    return data_ptr;
 }
 
 pub const CSlice = extern struct {
