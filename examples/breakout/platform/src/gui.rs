@@ -176,8 +176,8 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
                 };
 
                 root = roc::app_render(roc::State {
-                    height: 0.0,
-                    width: 0.0,
+                    height: size.height as f32,
+                    width: size.width as f32,
                 });
             }
             //Modifiers Changed
@@ -203,15 +203,11 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                let focus_ancestry: Vec<(*const RocElem, usize)> = Vec::new(); // TODO test that root node can get focus!
-                let focused_elem: *const RocElem = match focus_ancestry.first() {
-                    Some((ptr_ref, _)) => *ptr_ref,
-                    None => std::ptr::null(),
-                };
+                dbg!(&root.tag());
+                dbg!(&root);
 
                 let (_bounds, drawable) = to_drawable(
                     &root,
-                    focused_elem,
                     Bounds {
                         width: size.width as f32,
                         height: size.height as f32,
@@ -233,24 +229,6 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
                         height: size.height as f32,
                     },
                 );
-
-                // for text_section in &rects_and_texts.text_sections_front {
-                //     let borrowed_text = text_section.to_borrowed();
-
-                //     glyph_brush.queue(borrowed_text);
-                // }
-
-                // draw text
-                // glyph_brush
-                //     .draw_queued(
-                //         &gpu_device,
-                //         &mut staging_belt,
-                //         &mut cmd_encoder,
-                //         &view,
-                //         size.width,
-                //         size.height,
-                //     )
-                //     .expect("Failed to draw queued text.");
 
                 staging_belt.finish();
                 cmd_queue.submit(Some(cmd_encoder.finish()));
@@ -341,8 +319,6 @@ enum DrawableContent {
         border_width: f32,
         border_color: Rgba,
     },
-    Multi(Vec<Drawable>),
-    Offset(Vec<(Vector2<f32>, Drawable)>),
 }
 
 fn process_drawable(
@@ -433,118 +409,80 @@ fn draw(
                 load_op,
             );
         }
-        Offset(children) => {
-            for (offset, child) in children.into_iter() {
-                draw(
-                    child.bounds,
-                    child.content,
-                    pos + offset,
-                    staging_belt,
-                    glyph_brush,
-                    cmd_encoder,
-                    texture_view,
-                    gpu_device,
-                    rect_resources,
-                    load_op,
-                    texture_size,
-                );
-            }
-        }
-        Multi(children) => {
-            for child in children.into_iter() {
-                draw(
-                    child.bounds,
-                    child.content,
-                    pos,
-                    staging_belt,
-                    glyph_brush,
-                    cmd_encoder,
-                    texture_view,
-                    gpu_device,
-                    rect_resources,
-                    load_op,
-                    texture_size,
-                );
-            }
-        }
     }
 }
 
 /// focused_elem is the currently-focused element (or NULL if nothing has the focus)
 fn to_drawable(
     elem: &RocElem,
-    focused_elem: *const RocElem,
     bounds: Bounds,
     glyph_brush: &mut GlyphBrush<()>,
 ) -> (Bounds, Drawable) {
     use RocElemTag::*;
 
-    let is_focused = focused_elem == elem as *const RocElem;
-
     match elem.tag() {
         Rect => {
-            let button = unsafe { &elem.entry().button };
-            let styles = button.styles;
-            let (child_bounds, child_drawable) =
-                to_drawable(&*button.child, focused_elem, bounds, glyph_brush);
+            todo!("restore RECT")
+            // let rect = unsafe { &elem.entry().rect };
+            // let styles = rect.styles;
 
-            let button_drawable = Drawable {
-                bounds: child_bounds,
-                content: DrawableContent::FillRect {
-                    color: styles.bg_color,
-                    border_width: styles.border_width,
-                    border_color: styles.border_color,
-                },
-            };
+            // let bounds = Bounds {
+            //     width: 500.0,
+            //     height: 300.0,
+            // };
 
-            let drawable = Drawable {
-                bounds: child_bounds,
-                content: DrawableContent::Multi(vec![button_drawable, child_drawable]),
-            };
+            // let drawable = Drawable {
+            //     bounds,
+            //     content: DrawableContent::FillRect {
+            //         color: styles.bg_color,
+            //         border_width: styles.border_width,
+            //         border_color: styles.border_color,
+            //     },
+            // };
 
-            (child_bounds, drawable)
+            // (bounds, drawable)
         }
         Text => {
-            // TODO let text color and font settings inherit from parent
-            let text = unsafe { &elem.entry().text };
-            let is_centered = true; // TODO don't hardcode this
-            let layout = wgpu_glyph::Layout::default().h_align(if is_centered {
-                wgpu_glyph::HorizontalAlign::Center
-            } else {
-                wgpu_glyph::HorizontalAlign::Left
-            });
+            todo!("restore TEXT")
+            // let text = unsafe { &elem.entry().text };
+            // let is_centered = true; // TODO don't hardcode this
+            // let layout = wgpu_glyph::Layout::default().h_align(if is_centered {
+            //     wgpu_glyph::HorizontalAlign::Center
+            // } else {
+            //     wgpu_glyph::HorizontalAlign::Left
+            // });
 
-            let section = owned_section_from_str(text.as_str(), bounds, layout);
+            // let section = owned_section_from_str(text.as_str(), bounds, layout);
 
-            // Calculate the bounds and offset by measuring glyphs
-            let text_bounds;
-            let offset;
+            // // Calculate the bounds and offset by measuring glyphs
+            // let text_bounds;
+            // let offset;
 
-            match glyph_brush.glyph_bounds(section.to_borrowed()) {
-                Some(glyph_bounds) => {
-                    text_bounds = Bounds {
-                        width: glyph_bounds.max.x - glyph_bounds.min.x,
-                        height: glyph_bounds.max.y - glyph_bounds.min.y,
-                    };
+            // match glyph_brush.glyph_bounds(section.to_borrowed()) {
+            //     Some(glyph_bounds) => {
+            //         text_bounds = Bounds {
+            //             width: glyph_bounds.max.x - glyph_bounds.min.x,
+            //             height: glyph_bounds.max.y - glyph_bounds.min.y,
+            //         };
 
-                    offset = (-glyph_bounds.min.x, -glyph_bounds.min.y).into();
-                }
-                None => {
-                    text_bounds = Bounds {
-                        width: 0.0,
-                        height: 0.0,
-                    };
+            //         offset = (-glyph_bounds.min.x, -glyph_bounds.min.y).into();
+            //     }
+            //     None => {
+            //         text_bounds = Bounds {
+            //             width: 0.0,
+            //             height: 0.0,
+            //         };
 
-                    offset = (0.0, 0.0).into();
-                }
-            }
+            //         offset = (0.0, 0.0).into();
+            //     }
+            // }
 
-            let drawable = Drawable {
-                bounds: text_bounds,
-                content: DrawableContent::Text(section, offset),
-            };
+            // let drawable = Drawable {
+            //     bounds: text_bounds,
+            //     content: DrawableContent::Text(section, offset),
+            // };
 
-            (text_bounds, drawable)
+            // (text_bounds, drawable)
         }
     }
 }

@@ -1,10 +1,11 @@
 use crate::graphics::colors::Rgba;
 use core::alloc::Layout;
 use core::ffi::c_void;
-use core::mem::{self, ManuallyDrop};
-use roc_std::{ReferenceCount, RocList, RocStr};
+use core::mem::ManuallyDrop;
+use roc_std::{ReferenceCount, RocStr};
 use std::ffi::CStr;
 use std::fmt::Debug;
+use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 
 extern "C" {
@@ -12,7 +13,7 @@ extern "C" {
     fn roc_program() -> ();
 
     #[link_name = "roc__programForHost_1_Render_caller"]
-    fn call_Render(state: *const State, closure_data: *const u8, output: *mut u8) -> RocElem;
+    fn call_Render(state: *const State, closure_data: *const u8, output: *mut RocElem);
 
     #[link_name = "roc__programForHost_size"]
     fn roc_program_size() -> i64;
@@ -80,10 +81,24 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ElemId(*const RocElemEntry);
 
-#[repr(transparent)]
+#[repr(C)]
+pub union RocElemEntry {
+    pub rect: ManuallyDrop<Rgba>,
+    pub text: ManuallyDrop<RocStr>,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RocElemTag {
+    Rect = 0,
+    Text = 1,
+}
+
+#[repr(C)]
 #[cfg(target_pointer_width = "64")] // on a 64-bit system, the tag fits in this pointer's spare 3 bits
 pub struct RocElem {
-    entry: *const RocElemEntry,
+    entry: RocElemEntry,
+    tag: RocElemTag,
 }
 
 impl Debug for RocElem {
@@ -91,135 +106,52 @@ impl Debug for RocElem {
         use RocElemTag::*;
 
         match self.tag() {
-            Button => unsafe { &*self.entry().button }.fmt(f),
+            Rect => unsafe { &*self.entry().rect }.fmt(f),
             Text => unsafe { &*self.entry().text }.fmt(f),
         }
     }
 }
 
 impl RocElem {
-    #[allow(unused)]
-    pub fn id(&self) -> ElemId {
-        ElemId(self.entry)
-    }
-
     #[cfg(target_pointer_width = "64")]
     pub fn tag(&self) -> RocElemTag {
-        // On a 64-bit system, the last 3 bits of the pointer store the tag
-        unsafe { mem::transmute::<u8, RocElemTag>((self.entry as u8) & 0b0000_0111) }
+        self.tag
     }
 
     #[allow(unused)]
     pub fn entry(&self) -> &RocElemEntry {
-        unsafe { &*self.entry_ptr() }
+        &self.entry
     }
-
-    pub fn entry_ptr(&self) -> *const RocElemEntry {
-        // On a 64-bit system, the last 3 bits of the pointer store the tag
-        let cleared = self.entry as usize & !0b111;
-
-        cleared as *const RocElemEntry
-    }
-
-    // fn diff(self, other: RocElem, patches: &mut Vec<(usize, Patch)>, index: usize) {
-    //     use RocElemTag::*;
-
-    //     let tag = self.tag();
-
-    //     if tag != other.tag() {
-    //         // They were totally different elem types!
-
-    //         // TODO should we handle Row -> Col or Col -> Row differently?
-    //         // Elm doesn't: https://github.com/elm/virtual-dom/blob/5a5bcf48720bc7d53461b3cd42a9f19f119c5503/src/Elm/Kernel/VirtualDom.js#L714
-    //         return;
-    //     }
-
-    //     match tag {
-    //         Button => unsafe {
-    //             let button_self = &*self.entry().button;
-    //             let button_other = &*other.entry().button;
-
-    //             // TODO compute a diff and patch for the button
-    //         },
-    //         Text => unsafe {
-    //             let str_self = &*self.entry().text;
-    //             let str_other = &*other.entry().text;
-
-    //             if str_self != str_other {
-    //                 todo!("fix this");
-    //                 // let roc_str = other.entry().text;
-    //                 // let patch = Patch::Text(ManuallyDrop::into_inner(roc_str));
-
-    //                 // patches.push((index, patch));
-    //             }
-    //         },
-    //         Row => unsafe {
-    //             let children_self = &self.entry().row_or_col.children;
-    //             let children_other = &other.entry().row_or_col.children;
-
-    //             // TODO diff children
-    //         },
-    //         Col => unsafe {
-    //             let children_self = &self.entry().row_or_col.children;
-    //             let children_other = &other.entry().row_or_col.children;
-
-    //             // TODO diff children
-    //         },
-    //     }
-    // }
 
     #[allow(unused)]
-    pub fn button(styles: ButtonStyles, child: RocElem) -> RocElem {
-        let button = RocButton {
-            child: ManuallyDrop::new(child),
-            styles,
-        };
-        let entry = RocElemEntry {
-            button: ManuallyDrop::new(button),
-        };
+    pub fn rect(styles: ButtonStyles) -> RocElem {
+        todo!("restore rect() method")
+        // let rect = RocRect { styles };
+        // let entry = RocElemEntry {
+        //     rect: ManuallyDrop::new(rect),
+        // };
 
-        Self::elem_from_tag(entry, RocElemTag::Rect)
+        // Self::elem_from_tag(entry, RocElemTag::Rect)
     }
 
     #[allow(unused)]
     pub fn text<T: Into<RocStr>>(into_roc_str: T) -> RocElem {
-        let entry = RocElemEntry {
-            text: ManuallyDrop::new(into_roc_str.into()),
-        };
+        todo!("TODO restore text method")
+        // let entry = RocElemEntry {
+        //     text: ManuallyDrop::new(into_roc_str.into()),
+        // };
 
-        Self::elem_from_tag(entry, RocElemTag::Text)
+        // Self::elem_from_tag(entry, RocElemTag::Text)
     }
 
     fn elem_from_tag(entry: RocElemEntry, tag: RocElemTag) -> Self {
-        let tagged_ptr = unsafe {
-            let entry_ptr = roc_alloc(
-                core::mem::size_of_val(&entry),
-                core::mem::align_of_val(&entry) as u32,
-            ) as *mut RocElemEntry;
-
-            *entry_ptr = entry;
-
-            entry_ptr as usize | tag as usize
-        };
-
-        Self {
-            entry: tagged_ptr as *const RocElemEntry,
-        }
+        Self { entry, tag }
     }
-}
-
-#[repr(u8)]
-#[allow(unused)] // This is actually used, just via a mem::transmute from u8
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RocElemTag {
-    Rect = 0,
-    Text,
 }
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct RocButton {
-    pub child: ManuallyDrop<RocElem>,
+pub struct RocRect {
     pub styles: ButtonStyles,
 }
 
@@ -229,7 +161,7 @@ unsafe impl ReferenceCount for RocElem {
         use RocElemTag::*;
 
         match self.tag() {
-            Rect => unsafe { &*self.entry().button.child }.increment(),
+            Rect => { /* nothing to increment! */ }
             Text => unsafe { &*self.entry().text }.increment(),
         }
     }
@@ -246,7 +178,7 @@ unsafe impl ReferenceCount for RocElem {
         let elem = &*ptr;
 
         match elem.tag() {
-            Rect => ReferenceCount::decrement(&*elem.entry().button.child),
+            Rect => { /* nothing to decrement! */ }
             Text => ReferenceCount::decrement(&*elem.entry().text),
         }
     }
@@ -259,31 +191,6 @@ pub struct ButtonStyles {
     pub border_color: Rgba,
     pub border_width: f32,
     pub text_color: Rgba,
-}
-
-#[repr(C)]
-pub union RocElemEntry {
-    pub button: ManuallyDrop<RocButton>,
-    pub text: ManuallyDrop<RocStr>,
-}
-
-// enum Patch {
-//     Text(RocStr),
-// }
-
-#[test]
-fn make_text() {
-    let text = RocElem::text("blah");
-
-    assert_eq!(text.tag(), RocElemTag::Text);
-}
-
-#[test]
-fn make_button() {
-    let text = RocElem::text("blah");
-    let button = RocElem::button(ButtonStyles::default(), text);
-
-    assert_eq!(button.tag(), RocElemTag::Rect);
 }
 
 pub fn app_render(state: State) -> RocElem {
@@ -306,13 +213,18 @@ pub fn app_render(state: State) -> RocElem {
 }
 
 unsafe fn call_the_closure(state: State, closure_data_ptr: *const u8) -> RocElem {
-    let size = size_Render_result() as usize;
-    let layout = Layout::array::<u8>(size).unwrap();
-    let buffer = std::alloc::alloc(layout) as *mut u8;
+    let mut output = MaybeUninit::uninit();
 
-    let answer = call_Render(&state, closure_data_ptr as *const u8, buffer as *mut u8);
+    call_Render(
+        &state,                        // ({ float, float }* %arg
+        closure_data_ptr as *const u8, // {}* %arg1
+        output.as_mut_ptr(),           // { { [6 x i64], [4 x i8] }, i8 }* %arg2)
+    );
 
-    std::alloc::dealloc(buffer, layout);
+    let answer = output.assume_init();
 
-    answer
+    dbg!(answer);
+
+    todo!("explode");
+    // answer
 }
