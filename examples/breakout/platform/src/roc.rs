@@ -93,20 +93,6 @@ impl Debug for RocElem {
         match self.tag() {
             Button => unsafe { &*self.entry().button }.fmt(f),
             Text => unsafe { &*self.entry().text }.fmt(f),
-            Row => {
-                let row_or_col = unsafe { &*self.entry().row_or_col };
-
-                f.debug_struct("RocRow")
-                    .field("children", &row_or_col.children)
-                    .finish()
-            }
-            Col => {
-                let row_or_col = unsafe { &*self.entry().row_or_col };
-
-                f.debug_struct("RocCol")
-                    .field("children", &row_or_col.children)
-                    .finish()
-            }
         }
     }
 }
@@ -183,35 +169,6 @@ impl RocElem {
     // }
 
     #[allow(unused)]
-    pub fn is_focusable(&self) -> bool {
-        use RocElemTag::*;
-
-        match self.tag() {
-            Button => true,
-            Text | Row | Col => false,
-        }
-    }
-
-    #[allow(unused)]
-    pub fn row<T: Into<RocList<RocElem>>>(children: T) -> RocElem {
-        Self::elem_from_tag(Self::row_or_col(children), RocElemTag::Row)
-    }
-
-    #[allow(unused)]
-    pub fn col<T: Into<RocList<RocElem>>>(children: T) -> RocElem {
-        Self::elem_from_tag(Self::row_or_col(children), RocElemTag::Col)
-    }
-
-    fn row_or_col<T: Into<RocList<RocElem>>>(children: T) -> RocElemEntry {
-        let row_or_col = RocRowOrCol {
-            children: children.into(),
-        };
-        RocElemEntry {
-            row_or_col: ManuallyDrop::new(row_or_col),
-        }
-    }
-
-    #[allow(unused)]
     pub fn button(styles: ButtonStyles, child: RocElem) -> RocElem {
         let button = RocButton {
             child: ManuallyDrop::new(child),
@@ -221,7 +178,7 @@ impl RocElem {
             button: ManuallyDrop::new(button),
         };
 
-        Self::elem_from_tag(entry, RocElemTag::Button)
+        Self::elem_from_tag(entry, RocElemTag::Rect)
     }
 
     #[allow(unused)]
@@ -255,9 +212,7 @@ impl RocElem {
 #[allow(unused)] // This is actually used, just via a mem::transmute from u8
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RocElemTag {
-    Button = 0,
-    Col,
-    Row,
+    Rect = 0,
     Text,
 }
 
@@ -268,26 +223,14 @@ pub struct RocButton {
     pub styles: ButtonStyles,
 }
 
-#[repr(C)]
-pub struct RocRowOrCol {
-    pub children: RocList<RocElem>,
-}
-
 unsafe impl ReferenceCount for RocElem {
     /// Increment the reference count.
     fn increment(&self) {
         use RocElemTag::*;
 
         match self.tag() {
-            Button => unsafe { &*self.entry().button.child }.increment(),
+            Rect => unsafe { &*self.entry().button.child }.increment(),
             Text => unsafe { &*self.entry().text }.increment(),
-            Row | Col => {
-                let children = unsafe { &self.entry().row_or_col.children };
-
-                for child in children.as_slice().iter() {
-                    child.increment();
-                }
-            }
         }
     }
 
@@ -303,15 +246,8 @@ unsafe impl ReferenceCount for RocElem {
         let elem = &*ptr;
 
         match elem.tag() {
-            Button => ReferenceCount::decrement(&*elem.entry().button.child),
+            Rect => ReferenceCount::decrement(&*elem.entry().button.child),
             Text => ReferenceCount::decrement(&*elem.entry().text),
-            Row | Col => {
-                let children = &elem.entry().row_or_col.children;
-
-                for child in children.as_slice().iter() {
-                    ReferenceCount::decrement(child);
-                }
-            }
         }
     }
 }
@@ -329,7 +265,6 @@ pub struct ButtonStyles {
 pub union RocElemEntry {
     pub button: ManuallyDrop<RocButton>,
     pub text: ManuallyDrop<RocStr>,
-    pub row_or_col: ManuallyDrop<RocRowOrCol>,
 }
 
 // enum Patch {
@@ -348,24 +283,7 @@ fn make_button() {
     let text = RocElem::text("blah");
     let button = RocElem::button(ButtonStyles::default(), text);
 
-    assert_eq!(button.tag(), RocElemTag::Button);
-}
-
-#[test]
-fn make_row_with_text() {
-    let text = RocElem::text("");
-    let row = RocElem::row(&[text] as &[_]);
-
-    assert_eq!(row.tag(), RocElemTag::Row);
-}
-
-#[test]
-fn make_row_with_button() {
-    let text = RocElem::text("");
-    let button = RocElem::button(ButtonStyles::default(), text);
-    let row = RocElem::row(&[button] as &[_]);
-
-    assert_eq!(row.tag(), RocElemTag::Row);
+    assert_eq!(button.tag(), RocElemTag::Rect);
 }
 
 pub fn app_render(state: State) -> RocElem {

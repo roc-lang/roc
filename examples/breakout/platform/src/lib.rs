@@ -1,4 +1,3 @@
-mod focus;
 mod graphics;
 mod gui;
 mod roc;

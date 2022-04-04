@@ -482,7 +482,7 @@ fn to_drawable(
     let is_focused = focused_elem == elem as *const RocElem;
 
     match elem.tag() {
-        Button => {
+        Rect => {
             let button = unsafe { &elem.entry().button };
             let styles = button.styles;
             let (child_bounds, child_drawable) =
@@ -545,66 +545,6 @@ fn to_drawable(
             };
 
             (text_bounds, drawable)
-        }
-        Row => {
-            let row = unsafe { &elem.entry().row_or_col };
-            let mut final_bounds = Bounds::default();
-            let mut offset: Vector2<f32> = (0.0, 0.0).into();
-            let mut offset_entries = Vec::with_capacity(row.children.len());
-
-            for child in row.children.as_slice().iter() {
-                let (child_bounds, child_drawable) =
-                    to_drawable(&child, focused_elem, bounds, glyph_brush);
-
-                offset_entries.push((offset, child_drawable));
-
-                // Make sure the final height is enough to fit this child
-                final_bounds.height = final_bounds.height.max(child_bounds.height);
-
-                // Add the child's width to the final width
-                final_bounds.width = final_bounds.width + child_bounds.width;
-
-                // Offset the next child to make sure it appears after this one.
-                offset.x += child_bounds.width;
-            }
-
-            (
-                final_bounds,
-                Drawable {
-                    bounds: final_bounds,
-                    content: DrawableContent::Offset(offset_entries),
-                },
-            )
-        }
-        Col => {
-            let col = unsafe { &elem.entry().row_or_col };
-            let mut final_bounds = Bounds::default();
-            let mut offset: Vector2<f32> = (0.0, 0.0).into();
-            let mut offset_entries = Vec::with_capacity(col.children.len());
-
-            for child in col.children.as_slice().iter() {
-                let (child_bounds, child_drawable) =
-                    to_drawable(&child, focused_elem, bounds, glyph_brush);
-
-                offset_entries.push((offset, child_drawable));
-
-                // Make sure the final width is enough to fit this child
-                final_bounds.width = final_bounds.width.max(child_bounds.width);
-
-                // Add the child's height to the final height
-                final_bounds.height = final_bounds.height + child_bounds.height;
-
-                // Offset the next child to make sure it appears after this one.
-                offset.y += child_bounds.height;
-            }
-
-            (
-                final_bounds,
-                Drawable {
-                    bounds: final_bounds,
-                    content: DrawableContent::Offset(offset_entries),
-                },
-            )
         }
     }
 }
