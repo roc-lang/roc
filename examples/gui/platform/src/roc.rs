@@ -1,10 +1,36 @@
 use crate::graphics::colors::Rgba;
+use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::{self, ManuallyDrop};
 use roc_std::{ReferenceCount, RocList, RocStr};
 use std::ffi::CStr;
 use std::fmt::Debug;
 use std::os::raw::c_char;
+
+extern "C" {
+    #[link_name = "roc__programForHost_1_exposed_generic"]
+    fn roc_program() -> ();
+
+    #[link_name = "roc__programForHost_1_Render_caller"]
+    fn call_Render(state: *const State, closure_data: *const u8, output: *mut u8) -> RocElem;
+
+    #[link_name = "roc__programForHost_size"]
+    fn roc_program_size() -> i64;
+
+    #[allow(dead_code)]
+    #[link_name = "roc__programForHost_1_Render_size"]
+    fn size_Render() -> i64;
+
+    #[link_name = "roc__programForHost_1_Render_result_size"]
+    fn size_Render_result() -> i64;
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct State {
+    pub height: f32,
+    pub width: f32,
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
@@ -340,4 +366,35 @@ fn make_row_with_button() {
     let row = RocElem::row(&[button] as &[_]);
 
     assert_eq!(row.tag(), RocElemTag::Row);
+}
+
+pub fn app_render(state: State) -> RocElem {
+    let size = unsafe { roc_program_size() } as usize;
+    let layout = Layout::array::<u8>(size).unwrap();
+
+    unsafe {
+        roc_program();
+
+        // TODO allocate on the stack if it's under a certain size
+        let buffer = std::alloc::alloc(layout);
+
+        // Call the program's render function
+        let result = call_the_closure(state, buffer);
+
+        std::alloc::dealloc(buffer, layout);
+
+        result
+    }
+}
+
+unsafe fn call_the_closure(state: State, closure_data_ptr: *const u8) -> RocElem {
+    let size = size_Render_result() as usize;
+    let layout = Layout::array::<u8>(size).unwrap();
+    let buffer = std::alloc::alloc(layout) as *mut u8;
+
+    let answer = call_Render(&state, closure_data_ptr as *const u8, buffer as *mut u8);
+
+    std::alloc::dealloc(buffer, layout);
+
+    answer
 }

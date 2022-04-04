@@ -6,12 +6,9 @@
 
 use crate::graphics::colors::Rgba;
 use crate::graphics::style::DEFAULT_FONT_SIZE;
-use ab_glyph::{FontArc, Glyph, InvalidFont};
-use cgmath::{Vector2, Vector4};
-use glyph_brush::OwnedSection;
-use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, Section};
-
-use super::rect::Rect;
+use ab_glyph::{FontArc, InvalidFont};
+use cgmath::Vector2;
+use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder};
 
 #[derive(Debug)]
 pub struct Text<'a> {
