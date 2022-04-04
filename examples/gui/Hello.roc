@@ -10,9 +10,7 @@ render =
 
     styles = { bgColor: rgba 100 50 50 1, borderColor: rgba 10 20 30 1, borderWidth: 10, textColor: rgba 220 220 250 1 }
 
-    onClick = 0
-
-    fn = Box.box \x, y -> x + y
+    onClick = Box.box \x, y -> x + y
 
     Col
         [
