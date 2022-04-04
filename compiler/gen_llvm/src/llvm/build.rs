@@ -2520,7 +2520,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             // What we want to do here is
                             //
                             // let value_ptr = value.into_pointer_value();
-                            // if false && value_ptr.get_first_use().is_some() {
+                            // if value_ptr.get_first_use().is_some() {
                             //   value_ptr.replace_all_uses_with(destination);
                             //
                             // In other words, if the source pointer is used,
@@ -3345,7 +3345,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
     debug_info_init!(env, c_function);
 
-    // drop the final argument, which is the pointer we write the result into
+    // drop the first argument, which is the pointer we write the result into
     let args_vector = c_function.get_params();
     let mut args = args_vector.as_slice();
 
@@ -3376,8 +3376,6 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
                 let loaded = env.builder.build_load(fastcc_ptr, "load_arg");
                 arguments_for_call.push(loaded);
             } else {
-                // todo!("C <-> Fastcc interaction that we haven't seen before")
-
                 let as_cc_type = env.builder.build_pointer_cast(
                     arg.into_pointer_value(),
                     fastcc_type.into_pointer_type(),
@@ -3385,9 +3383,6 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
                 );
                 arguments_for_call.push(as_cc_type.into());
             }
-
-            // let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
-            // arguments_for_call.push(cast);
         }
     }
 

@@ -43,7 +43,7 @@ pub const RocStr = extern struct {
         return RocStr{
             .str_len = 0,
             .str_bytes = null,
-            .str_capacity = 0 | MASK,
+            .str_capacity = MASK,
         };
     }
 
