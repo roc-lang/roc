@@ -2906,3 +2906,17 @@ fn div_of_unsigned() {
         u8
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn dec_float_suffix() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            123.0dec
+            "#
+        ),
+        RocDec::from_str_to_i128_unsafe("123.0"),
+        i128
+    );
+}
