@@ -3896,8 +3896,10 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     let argument_types = match RocReturn::from_layout(env, &return_layout) {
         RocReturn::Return => roc_function_type.get_param_types(),
         RocReturn::ByPointer => {
+            // Our fastcc passes the return pointer as the last parameter.
+            // Remove the return pointer since we now intend to return the result by value.
             let mut types = roc_function_type.get_param_types();
-            types.remove(0);
+            types.pop();
 
             types
         }
