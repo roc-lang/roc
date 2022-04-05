@@ -1287,7 +1287,7 @@ fn integer_type(
             Content::Alias(
                 Symbol::NUM_INTEGER,
                 vars,
-                at_integer_signed64,
+                at_signed64,
                 AliasKind::Structural,
             )
         });
@@ -1532,7 +1532,7 @@ fn float_type(
             Content::Alias(
                 Symbol::NUM_FLOATINGPOINT,
                 vars,
-                at_float_binary64,
+                at_binary64,
                 AliasKind::Structural,
             )
         });
