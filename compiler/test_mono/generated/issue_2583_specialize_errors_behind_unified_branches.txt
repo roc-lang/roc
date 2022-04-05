@@ -1,43 +1,40 @@
-procedure : `List.first` [C Int1, C I64]
-procedure = `List.first` (`#Attr.#arg1`):
-    let `#UserApp.19` : U64 = 0i64;
-    let `#UserApp.20` : U64 = lowlevel ListLen `#Attr.#arg1`;
-    let `#UserApp.15` : Int1 = lowlevel NotEq `#UserApp.19` `#UserApp.20`;
-    if `#UserApp.15` then <no branch info>
-        let `#UserApp.18` : U64 = 0i64;
-        let `#UserApp.17` : I64 = lowlevel ListGetUnsafe `#Attr.#arg1` `#UserApp.18`;
-        let `#UserApp.16` : [C Int1, C I64] = Ok `#UserApp.17`;
-        ret `#UserApp.16`;
-    else <no branch info>
-        let `#UserApp.14` : Int1 = true;
-        let `#UserApp.13` : [C Int1, C I64] = Err `#UserApp.14`;
-        ret `#UserApp.13`;
+procedure List.10 (#Attr.2):
+    let Test.20 : U64 = 0i64;
+    let Test.21 : U64 = lowlevel ListLen #Attr.2;
+    let Test.16 : Int1 = lowlevel NotEq Test.20 Test.21;
+    if Test.16 then
+        let Test.19 : U64 = 0i64;
+        let Test.18 : I64 = lowlevel ListGetUnsafe #Attr.2 Test.19;
+        let Test.17 : [C Int1, C I64] = Ok Test.18;
+        ret Test.17;
+    else
+        let Test.15 : Int1 = true;
+        let Test.14 : [C Int1, C I64] = Err Test.15;
+        ret Test.14;
 
-procedure : `Str.toI64` [C Int1, C I64]
-procedure = `Str.toI64` (`#Attr.#arg1`):
-    let `#Attr.#arg2` : {I64, U8} = lowlevel StrToNum `#Attr.#arg1`;
-    let `#UserApp.8` : U8 = StructAtIndex 1 `#Attr.#arg2`;
-    let `#UserApp.9` : U8 = 0i64;
-    let `#UserApp.5` : Int1 = lowlevel NumGt `#UserApp.8` `#UserApp.9`;
-    if `#UserApp.5` then <no branch info>
-        let `#UserApp.7` : Int1 = false;
-        let `#UserApp.6` : [C Int1, C I64] = Err `#UserApp.7`;
-        ret `#UserApp.6`;
-    else <no branch info>
-        let `#UserApp.4` : I64 = StructAtIndex 0 `#Attr.#arg2`;
-        let `#UserApp.3` : [C Int1, C I64] = Ok `#UserApp.4`;
-        ret `#UserApp.3`;
+procedure Str.28 (#Attr.2):
+    let #Attr.3 : {I64, U8} = lowlevel StrToNum #Attr.2;
+    let Test.9 : U8 = StructAtIndex 1 #Attr.3;
+    let Test.10 : U8 = 0i64;
+    let Test.6 : Int1 = lowlevel NumGt Test.9 Test.10;
+    if Test.6 then
+        let Test.8 : Int1 = false;
+        let Test.7 : [C Int1, C I64] = Err Test.8;
+        ret Test.7;
+    else
+        let Test.5 : I64 = StructAtIndex 0 #Attr.3;
+        let Test.4 : [C Int1, C I64] = Ok Test.5;
+        ret Test.4;
 
-procedure : `#UserApp.main` [C Int1, C I64]
-procedure = `#UserApp.main` ():
-    let `#UserApp.10` : Int1 = true;
-    if `#UserApp.10` then <no branch info>
-        let `#UserApp.12` : List I64 = Array [];
-        let `#UserApp.11` : [C Int1, C I64] = CallByName `List.first` `#UserApp.12`;
-        dec `#UserApp.12`;
-        ret `#UserApp.11`;
-    else <no branch info>
-        let `#UserApp.2` : Str = "";
-        let `#UserApp.1` : [C Int1, C I64] = CallByName `Str.toI64` `#UserApp.2`;
-        dec `#UserApp.2`;
-        ret `#UserApp.1`;
+procedure Test.0 ():
+    let Test.11 : Int1 = true;
+    if Test.11 then
+        let Test.13 : List I64 = Array [];
+        let Test.12 : [C Int1, C I64] = CallByName List.10 Test.13;
+        dec Test.13;
+        ret Test.12;
+    else
+        let Test.3 : Str = "";
+        let Test.2 : [C Int1, C I64] = CallByName Str.28 Test.3;
+        dec Test.3;
+        ret Test.2;

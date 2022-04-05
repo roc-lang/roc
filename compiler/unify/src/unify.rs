@@ -322,6 +322,8 @@ fn unify_alias(
                         .into_iter()
                         .zip(other_args.all_variables().into_iter());
 
+                    let args_unification_snapshot = subs.snapshot();
+
                     for (l, r) in it {
                         let l_var = subs[l];
                         let r_var = subs[r];
@@ -332,13 +334,12 @@ fn unify_alias(
                         problems.extend(merge(subs, ctx, *other_content));
                     }
 
-                    // NOTE: we need to do this unification because unification of type variables
-                    // may have made them larger, which then needs to be reflected in the `real_var`.
-                    //
-                    // We can skip this if we know type variable unification didn't require
-                    // modification of any variables, but we don't have that kind of information
-                    // yet.
-                    if problems.is_empty() {
+                    let args_unification_had_changes = !subs.vars_since_snapshot(&args_unification_snapshot).is_empty();
+                    subs.commit_snapshot(args_unification_snapshot);
+
+                    if !args.is_empty() && args_unification_had_changes && problems.is_empty() {
+                        // We need to unify the real vars because unification of type variables
+                        // may have made them larger, which then needs to be reflected in the `real_var`.
                         problems.extend(unify_pool(subs, pool, real_var, *other_real_var, ctx.mode));
                     }
 

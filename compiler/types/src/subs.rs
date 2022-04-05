@@ -1976,6 +1976,13 @@ impl Subs {
         self.utable.commit(snapshot)
     }
 
+    pub fn vars_since_snapshot(
+        &mut self,
+        snapshot: &Snapshot<InPlace<Variable>>,
+    ) -> core::ops::Range<Variable> {
+        self.utable.vars_since_snapshot(snapshot)
+    }
+
     /// Checks whether the content of `var`, or any nested content, satisfies the `predicate`.
     pub fn var_contains_content<P>(&self, var: Variable, predicate: P) -> bool
     where
