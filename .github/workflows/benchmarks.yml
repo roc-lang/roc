@@ -23,7 +23,7 @@ jobs:
         run: earthly --version
 
       - name: on trunk; prepare a self-contained benchmark folder
-        run: ./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=trunk +prep-bench-folder
+        run: ./ci/safe-earthly.sh  --no-cache --build-arg BENCH_SUFFIX=trunk +prep-bench-folder
 
       - uses: actions/checkout@v2
         with:
