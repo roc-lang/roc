@@ -4,7 +4,7 @@ touch $LOG_FILE
 
 # first arg + everything after
 ARGS=${@:1}
-FULL_CMD="earthly --config ci/earthly-conf.yml $ARGS"
+FULL_CMD="earthly --config ci/earthly-conf.yml  --no-cache $ARGS"
 echo $FULL_CMD
 script -efq $LOG_FILE -c "$FULL_CMD"
 EXIT_CODE=$?
