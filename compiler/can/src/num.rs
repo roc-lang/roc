@@ -144,7 +144,7 @@ pub fn finish_parsing_base(
 }
 
 #[inline(always)]
-pub fn finish_parsing_float(raw: &str) -> Result<(f64, FloatBound), (&str, FloatErrorKind)> {
+pub fn finish_parsing_float(raw: &str) -> Result<(&str, f64, FloatBound), (&str, FloatErrorKind)> {
     let (opt_bound, raw_without_suffix) = parse_literal_suffix(raw);
 
     let bound = match opt_bound {
@@ -155,7 +155,7 @@ pub fn finish_parsing_float(raw: &str) -> Result<(f64, FloatBound), (&str, Float
 
     // Ignore underscores.
     match raw_without_suffix.replace('_', "").parse::<f64>() {
-        Ok(float) if float.is_finite() => Ok((float, bound)),
+        Ok(float) if float.is_finite() => Ok((raw_without_suffix, float, bound)),
         Ok(float) => {
             if float.is_sign_positive() {
                 Err((raw, FloatErrorKind::PositiveInfinity))
