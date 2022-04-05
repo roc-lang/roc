@@ -5622,4 +5622,16 @@ mod solve_expr {
             r#"Outer"#,
         )
     }
+
+    #[test]
+    fn issue_2583_specialize_errors_behind_unified_branches() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                if True then List.first [] else Str.toI64 ""
+                "#
+            ),
+            "Result I64 [ InvalidNumStr, ListWasEmpty ]*",
+        )
+    }
 }

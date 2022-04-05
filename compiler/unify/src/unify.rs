@@ -332,13 +332,15 @@ fn unify_alias(
                         problems.extend(merge(subs, ctx, *other_content));
                     }
 
-                    // THEORY: if two aliases or opaques have the same name and arguments, their
-                    // real_var is the same and we don't need to check it.
-                    // See https://github.com/rtfeldman/roc/pull/1510
+                    // NOTE: we need to do this unification because unification of type variables
+                    // may have made them larger, which then needs to be reflected in the `real_var`.
                     //
-                    // if problems.is_empty() && either_is_opaque {
-                    //     problems.extend(unify_pool(subs, pool, real_var, *other_real_var, ctx.mode));
-                    // }
+                    // We can skip this if we know type variable unification didn't require
+                    // modification of any variables, but we don't have that kind of information
+                    // yet.
+                    if problems.is_empty() {
+                        problems.extend(unify_pool(subs, pool, real_var, *other_real_var, ctx.mode));
+                    }
 
                     problems
                 } else {

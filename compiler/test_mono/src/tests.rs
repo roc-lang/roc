@@ -1273,6 +1273,15 @@ fn issue_2725_alias_polymorphic_lambda() {
     )
 }
 
+#[mono_test]
+fn issue_2583_specialize_errors_behind_unified_branches() {
+    indoc!(
+        r#"
+        if True then List.first [] else Str.toI64 ""
+        "#
+    )
+}
+
 // #[ignore]
 // #[mono_test]
 // fn static_str_closure() {
