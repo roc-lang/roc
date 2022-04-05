@@ -876,7 +876,8 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
             match value_type {
-                ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(1), // always true for integers
+                // Integers are always finite. Just return True.
+                ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(1),
                 ValueType::F32 => {
                     backend.code_builder.i32_reinterpret_f32();
                     backend.code_builder.i32_const(0x7f80_0000);
@@ -899,7 +900,10 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
             let (local_id, offset) = location.local_and_offset(backend.storage.stack_frame_pointer);
 
             match format {
-                StackMemoryFormat::Int128 => backend.code_builder.i32_const(1),
+                // Integers and fixed-point numbers are always finite. Just return True.
+                StackMemoryFormat::Int128 | StackMemoryFormat::Decimal => {
+                    backend.code_builder.i32_const(1)
+                }
 
                 // f128 is not supported anywhere else but it's easy to support it here, so why not...
                 StackMemoryFormat::Float128 => {
@@ -908,15 +912,6 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
                     backend.code_builder.i64_const(0x7fff_0000_0000_0000);
                     backend.code_builder.i64_and();
                     backend.code_builder.i64_const(0x7fff_0000_0000_0000);
-                    backend.code_builder.i64_ne();
-                }
-
-                StackMemoryFormat::Decimal => {
-                    backend.code_builder.get_local(local_id);
-                    backend.code_builder.i64_load(Align::Bytes4, offset + 8);
-                    backend.code_builder.i64_const(0x7100_0000_0000_0000);
-                    backend.code_builder.i64_and();
-                    backend.code_builder.i64_const(0x7100_0000_0000_0000);
                     backend.code_builder.i64_ne();
                 }
 
