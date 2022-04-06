@@ -1,31 +1,43 @@
 Defs(
     [
-        @0-24 Ability {
+        @0-37 Ability {
             header: TypeHeader {
                 name: @0-4 "Hash",
                 vars: [],
             },
             loc_has: @5-8 Has,
-            demands: [
-                AbilityDemand {
+            members: [
+                AbilityMember {
                     name: @9-13 "hash",
-                    typ: @21-24 Function(
-                        [
-                            @16-17 BoundVariable(
-                                "a",
+                    typ: @21-37 Where(
+                        @21-24 Function(
+                            [
+                                @16-17 BoundVariable(
+                                    "a",
+                                ),
+                            ],
+                            @21-24 Apply(
+                                "",
+                                "U64",
+                                [],
                             ),
-                        ],
-                        @21-24 Apply(
-                            "",
-                            "U64",
-                            [],
                         ),
+                        [
+                            @27-37 HasClause {
+                                var: @27-28 "a",
+                                ability: @33-37 Apply(
+                                    "",
+                                    "Hash",
+                                    [],
+                                ),
+                            },
+                        ],
                     ),
                 },
             ],
         },
     ],
-    @26-27 SpaceBefore(
+    @39-40 SpaceBefore(
         Num(
             "1",
         ),

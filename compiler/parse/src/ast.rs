@@ -273,7 +273,7 @@ pub enum Has<'a> {
 /// An ability demand is a value defining the ability; for example `hash : a -> U64 | a has Hash`
 /// for a `Hash` ability.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AbilityDemand<'a> {
+pub struct AbilityMember<'a> {
     pub name: Loc<Spaced<'a, &'a str>>,
     pub typ: Loc<TypeAnnotation<'a>>,
 }
@@ -305,7 +305,7 @@ pub enum Def<'a> {
     Ability {
         header: TypeHeader<'a>,
         loc_has: Loc<Has<'a>>,
-        demands: &'a [AbilityDemand<'a>],
+        members: &'a [AbilityMember<'a>],
     },
 
     // TODO in canonicalization, check to see if there are any newlines after the

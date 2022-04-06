@@ -2,7 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, INDENT};
 use crate::Buf;
-use roc_parse::ast::{AbilityDemand, Def, Expr, ExtractSpaces, Pattern, TypeHeader};
+use roc_parse::ast::{AbilityMember, Def, Expr, ExtractSpaces, Pattern, TypeHeader};
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
@@ -22,7 +22,7 @@ impl<'a> Formattable for Def<'a> {
             SpaceBefore(sub_def, spaces) | SpaceAfter(sub_def, spaces) => {
                 spaces.iter().any(|s| s.is_comment()) || sub_def.is_multiline()
             }
-            Ability { demands, .. } => demands.iter().any(|d| d.is_multiline()),
+            Ability { members, .. } => members.iter().any(|d| d.is_multiline()),
             NotYetImplemented(s) => todo!("{}", s),
         }
     }
@@ -87,7 +87,7 @@ impl<'a> Formattable for Def<'a> {
             Ability {
                 header: TypeHeader { name, vars },
                 loc_has: _,
-                demands,
+                members,
             } => {
                 buf.indent(indent);
                 buf.push_str(name.value);
@@ -99,11 +99,11 @@ impl<'a> Formattable for Def<'a> {
                 buf.push_str(" has");
 
                 if !self.is_multiline() {
-                    debug_assert_eq!(demands.len(), 1);
+                    debug_assert_eq!(members.len(), 1);
                     buf.push_str(" ");
-                    demands[0].format(buf, indent + INDENT);
+                    members[0].format(buf, indent + INDENT);
                 } else {
-                    for demand in demands.iter() {
+                    for demand in members.iter() {
                         buf.newline();
                         buf.indent(indent + INDENT);
                         demand.format(buf, indent + INDENT);
@@ -195,7 +195,7 @@ pub fn fmt_body<'a, 'buf>(
     }
 }
 
-impl<'a> Formattable for AbilityDemand<'a> {
+impl<'a> Formattable for AbilityMember<'a> {
     fn is_multiline(&self) -> bool {
         self.name.value.is_multiline() || self.typ.is_multiline()
     }

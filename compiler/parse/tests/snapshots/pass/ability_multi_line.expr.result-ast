@@ -6,8 +6,8 @@ Defs(
                 vars: [],
             },
             loc_has: @5-8 Has,
-            demands: [
-                AbilityDemand {
+            members: [
+                AbilityMember {
                     name: @11-15 SpaceBefore(
                         "hash",
                         [
@@ -27,7 +27,7 @@ Defs(
                         ),
                     ),
                 },
-                AbilityDemand {
+                AbilityMember {
                     name: @29-34 SpaceBefore(
                         "hash2",
                         [
