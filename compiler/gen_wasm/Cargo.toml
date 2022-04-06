@@ -12,5 +12,5 @@ roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
-roc_std = { path = "../../roc_std" }
+roc_std = { path = "../../roc_std", default-features = false }
 roc_error_macros = { path = "../../error_macros" }

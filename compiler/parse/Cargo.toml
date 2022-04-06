@@ -16,7 +16,7 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 encode_unicode = "0.3.6"
 
 [dev-dependencies]
-criterion = { version = "0.3", features = ["html_reports"] }
+criterion = { version = "0.3.5", features = ["html_reports"] }
 pretty_assertions = "1.0.0"
 indoc = "1.0.3"
 quickcheck = "1.0.3"

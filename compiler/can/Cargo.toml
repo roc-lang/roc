@@ -7,6 +7,7 @@ edition = "2018"
 
 [dependencies]
 roc_collections = { path = "../collections" }
+roc_error_macros = { path = "../../error_macros" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
@@ -15,6 +16,7 @@ roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
 ven_graph = { path = "../../vendor/pathfinding" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
+static_assertions = "1.1.0"
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"

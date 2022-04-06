@@ -12,7 +12,8 @@ use roc_types::subs::{
     SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
-    gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory, RecordField,
+    gather_fields_unsorted_iter, Alias, AliasKind, Category, ErrorType, PatternCategory,
+    RecordField,
 };
 use roc_unify::unify::unify;
 use roc_unify::unify::Mode;
@@ -892,7 +893,9 @@ fn type_to_variable<'a>(
             let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, []);
 
             let alias_var = type_to_variable(arena, mempool, subs, rank, pools, cached, alias_type);
-            let content = Content::Alias(*symbol, arg_vars, alias_var);
+
+            // TODO(opaques): take opaques into account
+            let content = Content::Alias(*symbol, arg_vars, alias_var, AliasKind::Structural);
 
             let result = register(subs, rank, pools, content);
 
@@ -1384,10 +1387,10 @@ fn adjust_rank_content(
             }
         }
 
-        Alias(_, args, real_var) => {
+        Alias(_, args, real_var, _) => {
             let mut rank = Rank::toplevel();
 
-            for var_index in args.variables() {
+            for var_index in args.all_variables() {
                 let var = subs[var_index];
                 rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }
@@ -1544,8 +1547,8 @@ fn instantiate_rigids_help(
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
         }
 
-        Alias(_, args, real_type_var) => {
-            for var_index in args.variables() {
+        Alias(_, args, real_type_var, _) => {
+            for var_index in args.all_variables() {
                 let var = subs[var_index];
                 instantiate_rigids_help(subs, max_rank, pools, var);
             }
@@ -1794,10 +1797,10 @@ fn deep_copy_var_help(
             copy
         }
 
-        Alias(symbol, mut args, real_type_var) => {
-            let mut new_args = Vec::with_capacity(args.variables().len());
+        Alias(symbol, mut args, real_type_var, kind) => {
+            let mut new_args = Vec::with_capacity(args.all_variables().len());
 
-            for var_index in args.variables() {
+            for var_index in args.all_variables() {
                 let var = subs[var_index];
                 let new_var = deep_copy_var_help(subs, max_rank, pools, var);
                 new_args.push(new_var);
@@ -1806,7 +1809,7 @@ fn deep_copy_var_help(
             args.replace_variables(subs, new_args);
 
             let new_real_type_var = deep_copy_var_help(subs, max_rank, pools, real_type_var);
-            let new_content = Alias(symbol, args, new_real_type_var);
+            let new_content = Alias(symbol, args, new_real_type_var, kind);
 
             subs.set(copy, make_descriptor(new_content));
 

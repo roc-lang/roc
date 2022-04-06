@@ -1063,6 +1063,22 @@ mod test_can {
         assert_eq!(problems, Vec::new());
     }
 
+    #[test]
+    fn issue_2534() {
+        let src = indoc!(
+            r#"
+            x = { a: 1 }
+            {
+                x & a: 2
+            }
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
     //#[test]
     //fn closing_over_locals() {
     //    // "local" should be used, because the closure used it.

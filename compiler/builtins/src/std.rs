@@ -3,15 +3,24 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
-    bool_type, dec_type, dict_type, f32_type, f64_type, float_type, i128_type, i16_type, i32_type,
-    i64_type, i8_type, int_type, list_type, nat_type, num_type, ordering_type, result_type,
-    set_type, str_type, str_utf8_byte_problem_type, u128_type, u16_type, u32_type, u64_type,
-    u8_type,
+    bool_type, box_type, dec_type, dict_type, f32_type, f64_type, float_type, i128_type, i16_type,
+    i32_type, i64_type, i8_type, int_type, list_type, nat_type, num_type, ordering_type,
+    result_type, set_type, str_type, str_utf8_byte_problem_type, u128_type, u16_type, u32_type,
+    u64_type, u8_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
 use roc_types::types::RecordField;
 use std::collections::HashMap;
+
+lazy_static::lazy_static! {
+    static ref STDLIB: StdLib = standard_stdlib();
+}
+
+/// A global static that stores our initialized standard library definitions
+pub fn borrow_stdlib() -> &'static StdLib {
+    &STDLIB
+}
 
 /// Example:
 ///
@@ -444,6 +453,170 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // maxI128 : I128
     add_type!(Symbol::NUM_MAX_I128, i128_type());
+
+    // toI8 : Int * -> I8
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I8,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i8_type()),
+    );
+
+    let out_of_bounds = SolvedType::TagUnion(
+        vec![(TagName::Global("OutOfBounds".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    // toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I8_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i8_type(), out_of_bounds.clone())),
+    );
+
+    // toI16 : Int * -> I16
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I16,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i16_type()),
+    );
+
+    // toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I16_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i16_type(), out_of_bounds.clone())),
+    );
+
+    // toI32 : Int * -> I32
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I32,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i32_type()),
+    );
+
+    // toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I32_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i32_type(), out_of_bounds.clone())),
+    );
+
+    // toI64 : Int * -> I64
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I64,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i64_type()),
+    );
+
+    // toI64Checked : Int * -> Result I64 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I64_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i64_type(), out_of_bounds.clone())),
+    );
+
+    // toI128 : Int * -> I128
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I128,
+        vec![int_type(flex(TVAR1))],
+        Box::new(i128_type()),
+    );
+
+    // toI128Checked : Int * -> Result I128 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_I128_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(i128_type(), out_of_bounds)),
+    );
+
+    // toU8 : Int * -> U8
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U8,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u8_type()),
+    );
+
+    let out_of_bounds = SolvedType::TagUnion(
+        vec![(TagName::Global("OutOfBounds".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    // toU8Checked : Int * -> Result U8 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U8_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u8_type(), out_of_bounds.clone())),
+    );
+
+    // toU16 : Int * -> U16
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U16,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u16_type()),
+    );
+
+    // toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U16_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u16_type(), out_of_bounds.clone())),
+    );
+
+    // toU32 : Int * -> U32
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U32,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u32_type()),
+    );
+
+    // toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U32_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u32_type(), out_of_bounds.clone())),
+    );
+
+    // toU64 : Int * -> U64
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U64,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u64_type()),
+    );
+
+    // toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U64_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u64_type(), out_of_bounds.clone())),
+    );
+
+    // toU128 : Int * -> U128
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U128,
+        vec![int_type(flex(TVAR1))],
+        Box::new(u128_type()),
+    );
+
+    // toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_U128_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(u128_type(), out_of_bounds.clone())),
+    );
+
+    // toNat : Int * -> Nat
+    add_top_level_function_type!(
+        Symbol::NUM_TO_NAT,
+        vec![int_type(flex(TVAR1))],
+        Box::new(nat_type()),
+    );
+
+    // toNatChecked : Int * -> Result Nat [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_NAT_CHECKED,
+        vec![int_type(flex(TVAR1))],
+        Box::new(result_type(nat_type(), out_of_bounds)),
+    );
 
     // toStr : Num a -> Str
     add_top_level_function_type!(
@@ -904,6 +1077,19 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::LIST_LAST,
         vec![list_type(flex(TVAR1))],
         Box::new(result_type(flex(TVAR1), list_was_empty.clone())),
+    );
+
+    // replace : List elem, Nat, elem -> { list: List elem, value: elem }
+    add_top_level_function_type!(
+        Symbol::LIST_REPLACE,
+        vec![list_type(flex(TVAR1)), nat_type(), flex(TVAR1)],
+        Box::new(SolvedType::Record {
+            fields: vec![
+                ("list".into(), RecordField::Required(list_type(flex(TVAR1)))),
+                ("value".into(), RecordField::Required(flex(TVAR1))),
+            ],
+            ext: Box::new(SolvedType::EmptyRecord),
+        }),
     );
 
     // set : List elem, Nat, elem -> List elem
@@ -1617,6 +1803,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::RESULT_IS_ERR,
         vec![result_type(flex(TVAR1), flex(TVAR3))],
         Box::new(bool_type()),
+    );
+
+    // Box.box : a -> Box a
+    add_top_level_function_type!(
+        Symbol::BOX_BOX_FUNCTION,
+        vec![flex(TVAR1)],
+        Box::new(box_type(flex(TVAR1))),
+    );
+
+    // Box.unbox : Box a -> a
+    add_top_level_function_type!(
+        Symbol::BOX_UNBOX,
+        vec![box_type(flex(TVAR1))],
+        Box::new(flex(TVAR1)),
     );
 
     types

@@ -1,8 +1,7 @@
 #[macro_use]
 extern crate pretty_assertions;
-#[macro_use]
-extern crate indoc;
 extern crate bumpalo;
+extern crate indoc;
 extern crate roc_reporting;
 
 mod helpers;
@@ -12,14 +11,14 @@ mod test_reporting {
     use crate::helpers::test_home;
     use crate::helpers::{can_expr, infer_expr, CanExprOut, ParseErrOut};
     use bumpalo::Bump;
+    use indoc::indoc;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_mono::ir::{Procs, Stmt, UpdateModeIds};
     use roc_mono::layout::LayoutCache;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
-        can_problem, mono_problem, parse_problem, type_problem, Report, Severity, BLUE_CODE,
-        BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE,
-        UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
+        can_problem, mono_problem, parse_problem, type_problem, Report, Severity, ANSI_STYLE_CODES,
+        DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
@@ -35,7 +34,7 @@ mod test_reporting {
         filename
     }
 
-    fn to_simple_report<'b>(doc: RocDocBuilder<'b>) -> Report<'b> {
+    fn to_simple_report(doc: RocDocBuilder) -> Report {
         Report {
             title: "".to_string(),
             doc,
@@ -62,24 +61,38 @@ mod test_reporting {
             output,
             var_store,
             var,
+            constraints,
             constraint,
             home,
-            mut interns,
+            interns,
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
         let mut subs = Subs::new_from_varstore(var_store);
 
-        for (var, name) in output.introduced_variables.name_by_var {
-            subs.rigid_var(var, name);
+        for named in output.introduced_variables.named {
+            subs.rigid_var(named.variable, named.name);
         }
 
         for var in output.introduced_variables.wildcards {
-            subs.rigid_var(var, "*".into());
+            subs.rigid_var(var.value, "*".into());
+        }
+
+        let mut solve_aliases = roc_solve::solve::Aliases::default();
+
+        for (name, alias) in output.aliases {
+            solve_aliases.insert(name, alias);
         }
 
         let mut unify_problems = Vec::new();
-        let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+        let (_content, mut subs) = infer_expr(
+            subs,
+            &mut unify_problems,
+            &constraints,
+            &constraint,
+            &mut solve_aliases,
+            var,
+        );
 
         name_all_type_vars(var, &mut subs);
 
@@ -92,7 +105,7 @@ mod test_reporting {
 
             // Compile and add all the Procs before adding main
             let mut procs = Procs::new_in(&arena);
-            let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
+            let mut ident_ids = interns.all_ident_ids.get(&home).unwrap().clone();
             let mut update_mode_ids = UpdateModeIds::new();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
@@ -286,16 +299,16 @@ mod test_reporting {
     }
 
     fn human_readable(str: &str) -> String {
-        str.replace(RED_CODE, "<red>")
-            .replace(WHITE_CODE, "<white>")
-            .replace(BLUE_CODE, "<blue>")
-            .replace(YELLOW_CODE, "<yellow>")
-            .replace(GREEN_CODE, "<green>")
-            .replace(CYAN_CODE, "<cyan>")
-            .replace(MAGENTA_CODE, "<magenta>")
-            .replace(RESET_CODE, "<reset>")
-            .replace(BOLD_CODE, "<bold>")
-            .replace(UNDERLINE_CODE, "<underline>")
+        str.replace(ANSI_STYLE_CODES.red, "<red>")
+            .replace(ANSI_STYLE_CODES.white, "<white>")
+            .replace(ANSI_STYLE_CODES.blue, "<blue>")
+            .replace(ANSI_STYLE_CODES.yellow, "<yellow>")
+            .replace(ANSI_STYLE_CODES.green, "<green>")
+            .replace(ANSI_STYLE_CODES.cyan, "<cyan>")
+            .replace(ANSI_STYLE_CODES.magenta, "<magenta>")
+            .replace(ANSI_STYLE_CODES.reset, "<reset>")
+            .replace(ANSI_STYLE_CODES.bold, "<bold>")
+            .replace(ANSI_STYLE_CODES.underline, "<underline>")
     }
 
     #[test]
@@ -424,8 +437,8 @@ mod test_reporting {
 
                 `Booly` is not used anywhere in your code.
 
-                3│  Booly : [ Yes, No, Maybe ]
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                1│  Booly : [ Yes, No ]
+                    ^^^^^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `Booly` then remove it so future readers
                 of your code don't wonder why it is there.
@@ -434,8 +447,8 @@ mod test_reporting {
 
                 `Booly` is not used anywhere in your code.
 
-                1│  Booly : [ Yes, No ]
-                    ^^^^^^^^^^^^^^^^^^^
+                3│  Booly : [ Yes, No, Maybe ]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `Booly` then remove it so future readers
                 of your code don't wonder why it is there.
@@ -1542,10 +1555,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
+                    Box
                     Bool
                     U8
                     F64
-                    Nat
                 "#
             ),
         )
@@ -2001,8 +2014,8 @@ mod test_reporting {
 
                     Ok
                     U8
+                    Box
                     f
-                    I8
                "#
             ),
         )
@@ -3135,6 +3148,32 @@ mod test_reporting {
     }
 
     #[test]
+    fn invalid_opaque_rigid_var_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age 1 := I64
+
+                a : Age
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This pattern in the definition of `Age` is not what I expect:
+
+                1│  Age 1 := I64
+                        ^
+
+                Only type variables like `a` or `value` can occur in this position.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn invalid_num() {
         report_problem_as(
             indoc!(
@@ -3699,10 +3738,10 @@ mod test_reporting {
                 Is there an import missing? Perhaps there is a typo. Did you mean one
                 of these?
 
+                    Box
                     Bool
                     Num
                     Set
-                    Str
                 "#
             ),
         )
@@ -4459,32 +4498,6 @@ mod test_reporting {
 
                 I was expecting to see a closing curly brace before this, so try
                 adding a } and see if that helps?
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn record_type_indent_end() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { a: Int
-                }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a record type, but I got stuck here:
-
-                1│  f : { a: Int
-                2│  }
-                    ^
-
-                I need this curly brace to be indented more. Try adding more spaces
-                before it!
             "#
             ),
         )
@@ -5426,36 +5439,6 @@ mod test_reporting {
     }
 
     #[test]
-    fn list_bad_indent() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = [ 1, 2,
-                ]
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
-
-                I cannot find the end of this list:
-
-                1│  x = [ 1, 2,
-                               ^
-
-                You could change it to something like [ 1, 2, 3 ] or even just [].
-                Anything where there is an open and a close square bracket, and where
-                the elements of the list are separated by commas.
-
-                Note: I may be confused by indentation
-            "#
-            ),
-        )
-    }
-
-    #[test]
     fn number_double_dot() {
         report_problem_as(
             indoc!(
@@ -5821,6 +5804,29 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
+    fn opaque_ref_field_access() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $UUID.bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am very confused by this field access:
+
+                1│  $UUID.bar
+                         ^^^^
+
+                It looks like a record field access on an opaque reference.
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn weird_accessor() {
         report_problem_as(
             indoc!(
@@ -6133,6 +6139,32 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
+    fn missing_imports() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                interface Foobar
+                    exposes [ main, Foo ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD IMPORTS ───────────────────────────────────────────────────────────────
+
+                I am partway through parsing a header, but I got stuck here:
+
+                2│      exposes [ main, Foo ]
+                                             ^
+
+                I am expecting the `imports` keyword next, like 
+
+                    imports [ Animal, default, tame ]
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn exposes_identifier() {
         report_header_problem_as(
             indoc!(
@@ -6421,38 +6453,6 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn outdented_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Box item : [
-                    Box item,
-                    Items item item
-                ]
-
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a tag union type, but I got stuck here:
-
-                1│  Box item : [
-                2│      Box item,
-                3│      Items item item
-                4│  ]
-                    ^
-
-                I need this square bracket to be indented more. Try adding more spaces
-                before it!
-            "#
-            ),
-        )
-    }
-
-    #[test]
     fn outdented_in_parens() {
         report_problem_as(
             indoc!(
@@ -6477,36 +6477,6 @@ I need all branches in an `if` to have the same type!
                     ^
 
                 I need this parenthesis to be indented more. Try adding more spaces
-                before it!
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn outdented_record() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Box : {
-                    id: Str
-                }
-
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a record type, but I got stuck here:
-
-                1│  Box : {
-                2│      id: Str
-                3│  }
-                    ^
-
-                I need this curly brace to be indented more. Try adding more spaces
                 before it!
             "#
             ),
@@ -7372,11 +7342,11 @@ I need all branches in an `if` to have the same type!
                                 {}
 
                         The first pattern is trying to match {}:
-        
+
                             {}
-        
+
                         But the expression between `when` and `is` has the type:
-        
+
                             {}
                         "#
                     ), number, $suffix, carets, kind, typ, bad_type),
@@ -8050,21 +8020,21 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
-
-                The `Bar` alias is recursive in an invalid way:
-
-                2│  Bar a : [ Stuff (Foo a) ]
-                    ^^^^^
-
-                The `Bar` alias depends on itself through the following chain of
+                
+                The `Foo` alias is recursive in an invalid way:
+                
+                1│  Foo a : [ Thing (Bar a) ]
+                    ^^^
+                
+                The `Foo` alias depends on itself through the following chain of
                 definitions:
-
+                
                     ┌─────┐
-                    │     Bar
-                    │     ↓
                     │     Foo
+                    │     ↓
+                    │     Bar
                     └─────┘
-
+                
                 Recursion in aliases is only allowed if recursion happens behind a
                 tagged union, at least one variant of which is not recursive.
                 "#
@@ -8085,6 +8055,845 @@ I need all branches in an `if` to have the same type!
                 "#
             ),
             "",
+        )
+    }
+
+    #[test]
+    fn opaque_type_not_in_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                1│  $Age 21
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_reference_not_opaque_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age : U8
+
+                $Age 21
+                "#
+            ),
+            indoc!(
+                r#"
+                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                3│  $Age 21
+                    ^^^^
+
+                Note: There is an alias of the same name:
+
+                1│  Age : U8
+                    ^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                1│  Age : U8
+                    ^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn qualified_opaque_reference() {
+        report_problem_as(
+            indoc!(
+                r#"
+                OtherModule.$Age 21
+                "#
+            ),
+            // TODO: get rid of the first error. Consider parsing OtherModule.$Age to completion
+            // and checking it during can. The reason the error appears is because it is parsed as
+            // Apply(Error(OtherModule), [ $Age, 21 ])
+            indoc!(
+                r#"
+                ── OPAQUE TYPE NOT APPLIED ─────────────────────────────────────────────────────
+
+                This opaque type is not applied to an argument:
+
+                1│  OtherModule.$Age 21
+                                ^^^^
+
+                Note: Opaque types always wrap exactly one argument!
+
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am trying to parse a qualified name here:
+
+                1│  OtherModule.$Age 21
+                                ^
+
+                I was expecting to see an identifier next, like height. A complete
+                qualified name looks something like Json.Decode.string.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_used_outside_declaration_scope() {
+        report_problem_as(
+            indoc!(
+                r#"
+                age =
+                    Age := U8
+                    21u8
+
+                $Age age
+                "#
+            ),
+            // TODO(opaques): there is a potential for a better error message here, if the usage of
+            // `$Age` can be linked to the declaration of `Age` inside `age`, and a suggestion to
+            // raise that declaration to the outer scope.
+            indoc!(
+                r#"
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Age` is not used anywhere in your code.
+
+                2│      Age := U8
+                        ^^^^^^^^^
+
+                If you didn't intend on using `Age` then remove it so future readers of
+                your code don't wonder why it is there.
+
+                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────────────────────────────
+
+                The opaque type Age referenced here is not defined:
+
+                5│  $Age age
+                    ^^^^
+
+                Note: It looks like there are no opaque types declared in this scope yet!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unimported_modules_reported() {
+        report_problem_as(
+            indoc!(
+                r#"
+                main : Task.Task {} []
+                main = "whatever man you don't even know my type"
+                main
+                "#
+            ),
+            indoc!(
+                r#"
+                ── MODULE NOT IMPORTED ─────────────────────────────────────────────────────────
+
+                The `Task` module is not imported:
+
+                1│  main : Task.Task {} []
+                           ^^^^^^^^^^^^^^^
+
+                Is there an import missing? Perhaps there is a typo. Did you mean one
+                of these?
+
+                    Test
+                    List
+                    Num
+                    Box
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_check() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age := U8
+
+                n : Age
+                n = $Age ""
+
+                n
+                "#
+            ),
+            // TODO(opaques): error could be improved by saying that the opaque definition demands
+            // that the argument be a U8, and linking to the definitin!
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This expression is used in an unexpected way:
+
+                4│  n = $Age ""
+                             ^^
+
+                This argument to an opaque type has type:
+
+                    Str
+
+                But you are trying to use it as:
+
+                    U8
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_infer() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                if True
+                then $F ""
+                else $F {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This expression is used in an unexpected way:
+
+                5│  else $F {}
+                            ^^
+
+                This argument to an opaque type has type:
+
+                    {}
+
+                But you are trying to use it as:
+
+                    Str
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_creation_is_not_wrapped() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F Str
+                v = ""
+
+                v
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `v` definition:
+
+                3│  v : F Str
+                4│  v = ""
+                        ^^
+
+                The body is a string of type:
+
+                    Str
+
+                But the type annotation on `v` says it should be:
+
+                    F Str
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_pattern_check() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Age := U8
+
+                f : Age -> U8
+                f = \Age n -> n
+
+                f
+                "#
+            ),
+            // TODO(opaques): error could be improved by saying that the user-provided pattern
+            // probably wants to change "Age" to "@Age"!
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This pattern is being used in an unexpected way:
+
+                4│  f = \Age n -> n
+                         ^^^^^
+
+                It is a `Age` tag of type:
+
+                    [ Age a ]
+
+                But it needs to match:
+
+                    Age
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_mismatch_pattern_infer() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                \x ->
+                    when x is
+                        $F A -> ""
+                        $F {} -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd pattern in this `when` does not match the previous ones:
+
+                6│          $F {} -> ""
+                            ^^^^^
+
+                The 2nd pattern is trying to matchF unwrappings of type:
+
+                    F {}a
+
+                But all the previous branches match:
+
+                    F [ A ]a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_pattern_match_not_exhaustive_tag() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F [ A, B, C ]
+
+                when v is
+                    $F A -> ""
+                    $F B -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                5│>  when v is
+                6│>      $F A -> ""
+                7│>      $F B -> ""
+
+                Other possibilities include:
+
+                    $F C
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn opaque_pattern_match_not_exhaustive_int() {
+        report_problem_as(
+            indoc!(
+                r#"
+                F n := n
+
+                v : F U8
+
+                when v is
+                    $F 1 -> ""
+                    $F 2 -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                5│>  when v is
+                6│>      $F 1 -> ""
+                7│>      $F 2 -> ""
+
+                Other possibilities include:
+
+                    $F _
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn let_polymorphism_with_scoped_type_variables() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> a
+                f = \x ->
+                    y : a -> a
+                    y = \z -> z
+
+                    n = y 1u8
+                    x1 = y x
+                    (\_ -> x1) n
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `y` is not what I expect:
+
+                6│      n = y 1u8
+                              ^^^
+
+                This argument is an integer of type:
+
+                    U8
+
+                But `y` needs the 1st argument to be:
+
+                    a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `U8` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn non_exhaustive_with_guard() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : [A]
+                when x is
+                    A if True -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+
+                This `when` does not cover all the possibilities:
+
+                2│>  when x is
+                3│>      A if True -> ""
+
+                Other possibilities include:
+
+                    A    (note the lack of an if clause)
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_record_extension_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Nat }U32
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INVALID_EXTENSION_TYPE ──────────────────────────────────────────────────────
+
+                This record extension type is invalid:
+
+                1│  f : { x : Nat }U32
+                                   ^^^
+
+                Note: A record extension variable can only contain a type variable or
+                another record.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_tag_extension_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ A ]Str
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INVALID_EXTENSION_TYPE ──────────────────────────────────────────────────────
+
+                This tag union extension type is invalid:
+
+                1│  f : [ A ]Str
+                             ^^^
+
+                Note: A tag union extension variable can only contain a type variable
+                or another tag union.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unknown_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Type : [ Constructor UnknownType ]
+                
+                insertHelper : UnknownType, Type -> Type
+                insertHelper = \h, m ->
+                    when m is
+                        Constructor _ -> Constructor h 
+
+                insertHelper
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                I cannot find a `UnknownType` value
+
+                1│  Type : [ Constructor UnknownType ]
+                                         ^^^^^^^^^^^
+
+                Did you mean one of these?
+
+                    Type
+                    Unsigned8
+                    Unsigned32
+                    Unsigned16
+
+                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                I cannot find a `UnknownType` value
+
+                3│  insertHelper : UnknownType, Type -> Type
+                                                        ^^^^
+
+                Did you mean one of these?
+
+                    Type
+                    Unsigned8
+                    Unsigned32
+                    Unsigned16
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_first_demand_not_indented_enough() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                eq : a, a -> U64 | a has Eq
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                1│  Eq has
+                2│  eq : a, a -> U64 | a has Eq
+                    ^
+
+                I suspect this line is not indented enough (by 1 spaces)
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_demands_not_indented_with_first() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                    eq : a, a -> U64 | a has Eq
+                        neq : a, a -> U64 | a has Eq
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                2│      eq : a, a -> U64 | a has Eq
+                3│          neq : a, a -> U64 | a has Eq
+                            ^
+
+                I suspect this line is indented too much (by 4 spaces)
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_demand_value_has_args() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                    eq b c : a, a -> U64 | a has Eq
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                2│      eq b c : a, a -> U64 | a has Eq
+                           ^
+
+                I was expecting to see a : annotating the signature of this value
+                next.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_non_signature_expression() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has
+                    123
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ABILITY ──────────────────────────────────────────────────────────
+
+                I was partway through parsing an ability definition, but I got stuck
+                here:
+
+                1│  Eq has
+                2│      123
+                        ^
+
+                I was expecting to see a value signature next.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn wildcard_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : Int *
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I : Int *
+                            ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn wildcard_in_opaque() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I := Int *
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I := Int *
+                             ^
+
+                Tip: Type variables must be bound before the `:=`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn multiple_wildcards_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : [ A (Int *), B (Int *) ]
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has 2 unbound type variables.
+
+                Here is one occurrence:
+
+                1│  I : [ A (Int *), B (Int *) ]
+                                 ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn inference_var_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : Int _
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I : Int _
+                            ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unbound_var_in_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                I : Int a
+                a : I
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNBOUND TYPE VARIABLE ───────────────────────────────────────────────────────
+
+                The definition of `I` has an unbound type variable:
+
+                1│  I : Int a
+                            ^
+
+                Tip: Type variables must be bound before the `:`. Perhaps you intended
+                to add a type parameter to this type?
+                "#
+            ),
         )
     }
 }

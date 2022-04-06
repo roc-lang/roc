@@ -3,9 +3,15 @@ use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text as gr_text;
 use cgmath::Vector2;
-use roc_code_markup::markup::nodes::{MarkupNode, BLANK_PLACEHOLDER};
-use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
-use roc_code_markup::syntax_highlight::HighlightStyle;
+use roc_code_markup::{
+    markup::{
+        attribute::Attribute,
+        nodes::{MarkupNode, BLANK_PLACEHOLDER},
+    },
+    slow_pool::{MarkNodeId, SlowPool},
+    syntax_highlight::HighlightStyle,
+    underline_style::UnderlineStyle,
+};
 use winit::dpi::PhysicalSize;
 
 use crate::{editor::config::Config, graphics::colors};
@@ -94,9 +100,11 @@ fn markup_to_wgpu_helper<'a>(
     txt_row_col: &mut (usize, usize),
     mark_node_pool: &'a SlowPool,
 ) -> EdResult<()> {
+    let char_width = code_style.glyph_dim_rect.width;
+    let char_height = code_style.glyph_dim_rect.height;
+
     match markup_node {
         MarkupNode::Nested {
-            ast_node_id: _,
             children_ids,
             parent_id_opt: _,
             newlines_at_end,
@@ -122,19 +130,46 @@ fn markup_to_wgpu_helper<'a>(
         }
         MarkupNode::Text {
             content,
-            ast_node_id: _,
             syn_high_style,
-            attributes: _,
+            attributes,
             parent_id_opt: _,
             newlines_at_end,
         } => {
             let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, syn_high_style)?;
 
-            let full_content = markup_node.get_full_content().replace("\n", "\\n"); // any \n left here should be escaped so that it can be shown as \n
+            let full_content = markup_node.get_full_content().replace('\n', "\\n"); // any \n left here should be escaped so that it can be shown as \n
 
-            let glyph_text = glyph_brush::OwnedText::new(full_content)
+            let glyph_text = glyph_brush::OwnedText::new(&full_content)
                 .with_color(colors::to_slice(*highlight_color))
                 .with_scale(code_style.font_size);
+
+            for attribute in &attributes.all {
+                match attribute {
+                    Attribute::Underline { underline_spec: _ } => {
+                        // TODO use underline_spec
+                        let top_left_coords = (
+                            code_style.txt_coords.x + (txt_row_col.1 as f32) * char_width,
+                            code_style.txt_coords.y
+                                + (txt_row_col.0 as f32) * char_height
+                                + 1.0 * char_height,
+                        );
+
+                        let underline_rect = Rect {
+                            top_left_coords: top_left_coords.into(),
+                            width: char_width * (full_content.len() as f32),
+                            height: 5.0,
+                            color: *code_style
+                                .ed_theme
+                                .underline_color_map
+                                .get(&UnderlineStyle::Error)
+                                .unwrap(),
+                        };
+
+                        rects.push(underline_rect);
+                    }
+                    rest => todo!("handle Attribute: {:?}", rest),
+                }
+            }
 
             txt_row_col.1 += content.len();
 
@@ -146,7 +181,6 @@ fn markup_to_wgpu_helper<'a>(
             wgpu_texts.push(glyph_text);
         }
         MarkupNode::Blank {
-            ast_node_id: _,
             attributes: _,
             parent_id_opt: _,
             newlines_at_end,
@@ -159,9 +193,6 @@ fn markup_to_wgpu_helper<'a>(
 
             let highlight_color =
                 map_get(&code_style.ed_theme.syntax_high_map, &HighlightStyle::Blank)?;
-
-            let char_width = code_style.glyph_dim_rect.width;
-            let char_height = code_style.glyph_dim_rect.height;
 
             let blank_rect = Rect {
                 top_left_coords: (

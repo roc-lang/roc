@@ -1,22 +1,22 @@
 procedure Bool.7 (#Attr.2, #Attr.3):
-    let Test.11 : Builtin(Bool) = lowlevel Eq #Attr.2 #Attr.3;
+    let Test.11 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
     ret Test.11;
 
 procedure Test.1 (Test.3):
-    let Test.6 : Builtin(Int(I64)) = 10i64;
+    let Test.6 : I64 = 10i64;
     joinpoint Test.8 Test.13:
         if Test.13 then
-            let Test.7 : Builtin(Int(I64)) = 0i64;
+            let Test.7 : I64 = 0i64;
             ret Test.7;
         else
-            let Test.12 : Builtin(Int(I64)) = 42i64;
+            let Test.12 : I64 = 42i64;
             ret Test.12;
     in
-    let Test.10 : Builtin(Int(I64)) = 5i64;
-    let Test.9 : Builtin(Bool) = CallByName Bool.7 Test.6 Test.10;
+    let Test.10 : I64 = 5i64;
+    let Test.9 : Int1 = CallByName Bool.7 Test.6 Test.10;
     jump Test.8 Test.9;
 
 procedure Test.0 ():
-    let Test.5 : Struct([]) = Struct {};
-    let Test.4 : Builtin(Int(I64)) = CallByName Test.1 Test.5;
+    let Test.5 : {} = Struct {};
+    let Test.4 : I64 = CallByName Test.1 Test.5;
     ret Test.4;

@@ -32,8 +32,9 @@ pub fn eq_generic<'a>(
         }
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_)) => eq_todo(),
         Layout::Builtin(Builtin::List(elem_layout)) => eq_list(root, ident_ids, ctx, elem_layout),
-        Layout::Struct(field_layouts) => eq_struct(root, ident_ids, ctx, field_layouts),
+        Layout::Struct { field_layouts, .. } => eq_struct(root, ident_ids, ctx, field_layouts),
         Layout::Union(union_layout) => eq_tag_union(root, ident_ids, ctx, union_layout),
+        Layout::Boxed(inner_layout) => eq_boxed(root, ident_ids, ctx, inner_layout),
         Layout::LambdaSet(_) => unreachable!("`==` is not defined on functions"),
         Layout::RecursivePointer => {
             unreachable!(
@@ -526,6 +527,15 @@ fn eq_tag_fields<'a>(
         )
     }
     stmt
+}
+
+fn eq_boxed<'a>(
+    _root: &mut CodeGenHelp<'a>,
+    _ident_ids: &mut IdentIds,
+    _ctx: &mut Context<'a>,
+    _inner_layout: &'a Layout<'a>,
+) -> Stmt<'a> {
+    todo!()
 }
 
 /// List equality

@@ -1,4 +1,4 @@
-use roc_std::{RocDec, RocList, RocOrder, RocStr};
+use roc_std::{ReferenceCount, RocDec, RocList, RocOrder, RocStr};
 
 pub trait Wasm32Sized: Sized {
     const SIZE_OF_WASM: usize;
@@ -31,12 +31,12 @@ impl Wasm32Sized for () {
 }
 
 impl Wasm32Sized for RocStr {
-    const SIZE_OF_WASM: usize = 8;
+    const SIZE_OF_WASM: usize = 12;
     const ALIGN_OF_WASM: usize = 4;
 }
 
-impl<T: Wasm32Sized> Wasm32Sized for RocList<T> {
-    const SIZE_OF_WASM: usize = 8;
+impl<T: Wasm32Sized + ReferenceCount> Wasm32Sized for RocList<T> {
+    const SIZE_OF_WASM: usize = 12;
     const ALIGN_OF_WASM: usize = 4;
 }
 

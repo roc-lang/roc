@@ -1,15 +1,15 @@
 procedure Test.0 ():
-    let Test.14 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = Z ;
-    let Test.13 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = S Test.14;
-    let Test.12 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = S Test.13;
-    let Test.2 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = S Test.12;
-    let Test.9 : Builtin(Bool) = 1i64;
-    let Test.10 : Builtin(Bool) = GetTagId Test.2;
+    let Test.14 : TODO = Z ;
+    let Test.13 : TODO = S Test.14;
+    let Test.12 : TODO = S Test.13;
+    let Test.2 : TODO = S Test.12;
+    let Test.9 : Int1 = 1i64;
+    let Test.10 : Int1 = GetTagId Test.2;
     dec Test.2;
-    let Test.11 : Builtin(Bool) = lowlevel Eq Test.9 Test.10;
+    let Test.11 : Int1 = lowlevel Eq Test.9 Test.10;
     if Test.11 then
-        let Test.7 : Builtin(Int(I64)) = 0i64;
+        let Test.7 : I64 = 0i64;
         ret Test.7;
     else
-        let Test.8 : Builtin(Int(I64)) = 1i64;
+        let Test.8 : I64 = 1i64;
         ret Test.8;

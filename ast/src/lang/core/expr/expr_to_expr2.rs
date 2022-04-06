@@ -50,15 +50,16 @@ pub fn expr_to_expr2<'a>(
     region: Region,
 ) -> (Expr2, self::Output) {
     use roc_parse::ast::Expr::*;
+    //dbg!("{:?}", parse_expr);
 
     match parse_expr {
         Float(string) => {
             match finish_parsing_float(string) {
-                Ok((float, _bound)) => {
+                Ok((string_without_suffix, float, _bound)) => {
                     let expr = Expr2::Float {
                         number: FloatVal::F64(float),
                         var: env.var_store.fresh(),
-                        text: PoolStr::new(string, env.pool),
+                        text: PoolStr::new(string_without_suffix, env.pool),
                     };
 
                     (expr, Output::default())

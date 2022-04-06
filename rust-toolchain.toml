@@ -1,0 +1,3 @@
+[toolchain]
+channel = "1.58.0" # make sure to update the rust version in Earthfile as well
+profile = "default"

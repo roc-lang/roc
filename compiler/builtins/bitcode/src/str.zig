@@ -15,9 +15,11 @@ const InPlace = enum(u8) {
     Clone,
 };
 
-const SMALL_STR_MAX_LENGTH = small_string_size - 1;
-const small_string_size = @sizeOf(RocStr);
-const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);
+const MASK_ISIZE: isize = std.math.minInt(isize);
+const MASK: usize = @bitCast(usize, MASK_ISIZE);
+
+const SMALL_STR_MAX_LENGTH = SMALL_STRING_SIZE - 1;
+const SMALL_STRING_SIZE = @sizeOf(RocStr);
 
 fn init_blank_small_string(comptime n: usize) [n]u8 {
     var prime_list: [n]u8 = undefined;
@@ -33,14 +35,15 @@ fn init_blank_small_string(comptime n: usize) [n]u8 {
 pub const RocStr = extern struct {
     str_bytes: ?[*]u8,
     str_len: usize,
+    str_capacity: usize,
 
     pub const alignment = @alignOf(usize);
 
     pub inline fn empty() RocStr {
-        const small_str_flag: isize = std.math.minInt(isize);
         return RocStr{
-            .str_len = @bitCast(usize, small_str_flag),
+            .str_len = 0,
             .str_bytes = null,
+            .str_capacity = MASK,
         };
     }
 
@@ -59,24 +62,22 @@ pub const RocStr = extern struct {
         return RocStr{
             .str_bytes = first_element,
             .str_len = number_of_chars,
+            .str_capacity = number_of_chars,
         };
     }
 
     // allocate space for a (big or small) RocStr, but put nothing in it yet
     pub fn allocate(result_in_place: InPlace, number_of_chars: usize) RocStr {
-        const result_is_big = number_of_chars >= small_string_size;
+        const result_is_big = number_of_chars >= SMALL_STRING_SIZE;
 
         if (result_is_big) {
             return RocStr.initBig(result_in_place, number_of_chars);
         } else {
-            var t = blank_small_string;
+            var string = RocStr.empty();
 
-            const mask: u8 = 0b1000_0000;
-            const final_byte = @truncate(u8, number_of_chars) | mask;
+            string.asU8ptr()[@sizeOf(RocStr) - 1] = @intCast(u8, number_of_chars) | 0b1000_0000;
 
-            t[small_string_size - 1] = final_byte;
-
-            return @bitCast(RocStr, t);
+            return string;
         }
     }
 
@@ -203,23 +204,31 @@ pub const RocStr = extern struct {
 
     // NOTE: returns false for empty string!
     pub fn isSmallStr(self: RocStr) bool {
-        return @bitCast(isize, self.str_len) < 0;
+        return @bitCast(isize, self.str_capacity) < 0;
+    }
+
+    fn asArray(self: RocStr) [@sizeOf(RocStr)]u8 {
+        const as_int = @ptrToInt(&self);
+        const as_ptr = @intToPtr([*]u8, as_int);
+        const slice = as_ptr[0..@sizeOf(RocStr)];
+
+        return slice.*;
     }
 
     pub fn len(self: RocStr) usize {
-        const bytes: [*]const u8 = @ptrCast([*]const u8, &self);
-        const last_byte = bytes[@sizeOf(RocStr) - 1];
-        const small_len = @as(usize, last_byte ^ 0b1000_0000);
-        const big_len = self.str_len;
+        if (self.isSmallStr()) {
+            return self.asArray()[@sizeOf(RocStr) - 1] ^ 0b1000_0000;
+        } else {
+            return self.str_len;
+        }
+    }
 
-        // Since this conditional would be prone to branch misprediction,
-        // make sure it will compile to a cmov.
-        return if (self.isSmallStr()) small_len else big_len;
+    pub fn capacity(self: RocStr) usize {
+        return self.str_capacity ^ MASK;
     }
 
     pub fn isEmpty(self: RocStr) bool {
-        const empty_len = comptime RocStr.empty().str_len;
-        return self.str_len == empty_len;
+        return self.len() == 0;
     }
 
     // If a string happens to be null-terminated already, then we can pass its
@@ -264,36 +273,6 @@ pub const RocStr = extern struct {
                 // This string was refcounted or immortal; we can't safely read
                 // the next byte, so assume the string is not null-terminated.
                 return false;
-            }
-        }
-    }
-
-    // Returns (@sizeOf(RocStr) - 1) for small strings and the empty string.
-    // Returns 0 for refcounted strings and immortal strings.
-    // Returns the stored capacity value for all other strings.
-    pub fn capacity(self: RocStr) usize {
-        const length = self.len();
-        const longest_small_str = @sizeOf(RocStr) - 1;
-
-        if (length <= longest_small_str) {
-            // Note that although empty strings technically have the full
-            // capacity of a small string available, they aren't marked as small
-            // strings, so if you want to make use of that capacity, you need
-            // to first change its flag to mark it as a small string!
-            return longest_small_str;
-        } else {
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
-            const capacity_or_refcount: isize = (ptr - 1)[0];
-
-            if (capacity_or_refcount > 0) {
-                // If capacity_or_refcount is positive, that means it's a
-                // capacity value.
-                return capacity_or_refcount;
-            } else {
-                // This is either a refcount or else this big string is stored
-                // in a readonly section; either way, it has no capacity,
-                // because we cannot mutate it in-place!
-                return 0;
             }
         }
     }
@@ -512,8 +491,12 @@ fn strFromFloatHelp(comptime T: type, float: T) RocStr {
 }
 
 // Str.split
-pub fn strSplitInPlaceC(array: [*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {
-    return @call(.{ .modifier = always_inline }, strSplitInPlace, .{ array, string, delimiter });
+pub fn strSplitInPlaceC(opt_array: ?[*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {
+    if (opt_array) |array| {
+        return @call(.{ .modifier = always_inline }, strSplitInPlace, .{ array, string, delimiter });
+    } else {
+        return;
+    }
 }
 
 fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
@@ -1128,7 +1111,11 @@ fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
 
                 @memcpy(new_source + arg1.len(), arg2.asU8ptr(), arg2.len());
 
-                return RocStr{ .str_bytes = new_source, .str_len = combined_length };
+                return RocStr{
+                    .str_bytes = new_source,
+                    .str_len = combined_length,
+                    .str_capacity = combined_length,
+                };
             }
         }
 
@@ -1174,11 +1161,18 @@ test "RocStr.concat: small concat small" {
 pub const RocListStr = extern struct {
     list_elements: ?[*]RocStr,
     list_length: usize,
+    list_capacity: usize,
 };
 
 // Str.joinWith
-pub fn strJoinWithC(list: RocListStr, separator: RocStr) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, strJoinWith, .{ list, separator });
+pub fn strJoinWithC(list: RocList, separator: RocStr) callconv(.C) RocStr {
+    const roc_list_str = RocListStr{
+        .list_elements = @ptrCast(?[*]RocStr, @alignCast(@alignOf(usize), list.bytes)),
+        .list_length = list.length,
+        .list_capacity = list.capacity,
+    };
+
+    return @call(.{ .modifier = always_inline }, strJoinWith, .{ roc_list_str, separator });
 }
 
 fn strJoinWith(list: RocListStr, separator: RocStr) RocStr {
@@ -1235,7 +1229,11 @@ test "RocStr.joinWith: result is big" {
     var roc_result = RocStr.init(result_ptr, result_len);
 
     var elements: [3]RocStr = .{ roc_elem, roc_elem, roc_elem };
-    const list = RocListStr{ .list_length = 3, .list_elements = @ptrCast([*]RocStr, &elements) };
+    const list = RocListStr{
+        .list_length = 3,
+        .list_capacity = 3,
+        .list_elements = @ptrCast([*]RocStr, &elements),
+    };
 
     defer {
         roc_sep.deinit();
@@ -1264,9 +1262,9 @@ inline fn strToBytes(arg: RocStr) RocList {
 
         @memcpy(ptr, arg.asU8ptr(), length);
 
-        return RocList{ .length = length, .bytes = ptr };
+        return RocList{ .length = length, .bytes = ptr, .capacity = length };
     } else {
-        return RocList{ .length = arg.len(), .bytes = arg.str_bytes };
+        return RocList{ .length = arg.len(), .bytes = arg.str_bytes, .capacity = arg.str_capacity };
     }
 }
 
@@ -1308,7 +1306,11 @@ inline fn fromUtf8(arg: RocList, update_mode: UpdateMode) FromUtf8Result {
         } else {
             const byte_list = arg.makeUniqueExtra(RocStr.alignment, @sizeOf(u8), update_mode);
 
-            const string = RocStr{ .str_bytes = byte_list.bytes, .str_len = byte_list.length };
+            const string = RocStr{
+                .str_bytes = byte_list.bytes,
+                .str_len = byte_list.length,
+                .str_capacity = byte_list.capacity,
+            };
 
             return FromUtf8Result{
                 .is_ok = true,
@@ -1412,7 +1414,7 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8(RocList{ .bytes = bytes, .length = length }, .Immutable);
+    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity = length }, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {
@@ -1824,13 +1826,13 @@ test "strTrim: blank" {
 }
 
 test "strTrim: large to large" {
-    const original_bytes = " hello giant world ";
+    const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = "hello giant world";
+    const expected_bytes = "hello even more giant world";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1842,13 +1844,13 @@ test "strTrim: large to large" {
 }
 
 test "strTrim: large to small" {
-    const original_bytes = "             hello world         ";
+    const original_bytes = "             hello         ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = "hello world";
+    const expected_bytes = "hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1861,13 +1863,13 @@ test "strTrim: large to small" {
 }
 
 test "strTrim: small to small" {
-    const original_bytes = " hello world ";
+    const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(original.isSmallStr());
 
-    const expected_bytes = "hello world";
+    const expected_bytes = "hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1895,13 +1897,13 @@ test "strTrimLeft: blank" {
 }
 
 test "strTrimLeft: large to large" {
-    const original_bytes = " hello giant world ";
+    const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = "hello giant world ";
+    const expected_bytes = "hello even more giant world ";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1913,13 +1915,13 @@ test "strTrimLeft: large to large" {
 }
 
 test "strTrimLeft: large to small" {
-    const original_bytes = "                    hello world ";
+    const original_bytes = "                    hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = "hello world ";
+    const expected_bytes = "hello ";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1932,13 +1934,13 @@ test "strTrimLeft: large to small" {
 }
 
 test "strTrimLeft: small to small" {
-    const original_bytes = " hello world ";
+    const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(original.isSmallStr());
 
-    const expected_bytes = "hello world ";
+    const expected_bytes = "hello ";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1966,13 +1968,13 @@ test "strTrimRight: blank" {
 }
 
 test "strTrimRight: large to large" {
-    const original_bytes = " hello giant world ";
+    const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = " hello giant world";
+    const expected_bytes = " hello even more giant world";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -1984,13 +1986,13 @@ test "strTrimRight: large to large" {
 }
 
 test "strTrimRight: large to small" {
-    const original_bytes = " hello world                    ";
+    const original_bytes = " hello                    ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(!original.isSmallStr());
 
-    const expected_bytes = " hello world";
+    const expected_bytes = " hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 
@@ -2003,13 +2005,13 @@ test "strTrimRight: large to small" {
 }
 
 test "strTrimRight: small to small" {
-    const original_bytes = " hello world ";
+    const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.deinit();
 
     try expect(original.isSmallStr());
 
-    const expected_bytes = " hello world";
+    const expected_bytes = " hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
     defer expected.deinit();
 

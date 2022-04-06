@@ -1,9 +1,9 @@
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Test.4 : Builtin(Int(I64)) = lowlevel NumAdd #Attr.2 #Attr.3;
+    let Test.4 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Test.4;
 
 procedure Test.0 ():
-    let Test.2 : Builtin(Int(I64)) = 1i64;
-    let Test.3 : Builtin(Int(I64)) = 2i64;
-    let Test.1 : Builtin(Int(I64)) = CallByName Num.22 Test.2 Test.3;
+    let Test.2 : I64 = 1i64;
+    let Test.3 : I64 = 2i64;
+    let Test.1 : I64 = CallByName Num.22 Test.2 Test.3;
     ret Test.1;

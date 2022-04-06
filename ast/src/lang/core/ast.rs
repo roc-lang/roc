@@ -15,6 +15,24 @@ pub struct AST {
     pub def_ids: Vec<DefId>,
 }
 
+impl AST {
+    pub fn insert_def_at_index(&mut self, new_def_id: DefId, index: usize) {
+        self.def_ids.insert(index, new_def_id);
+    }
+
+    // TODO print in tree shape, similar to linux tree command
+    pub fn ast_to_string(&self, pool: &Pool) -> String {
+        let mut full_ast_string = String::new();
+
+        for def_id in self.def_ids.iter() {
+            full_ast_string.push_str(&def2_to_string(*def_id, pool));
+            full_ast_string.push_str("\n\n");
+        }
+
+        full_ast_string
+    }
+}
+
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum ASTNodeId {
     ADefId(DefId),

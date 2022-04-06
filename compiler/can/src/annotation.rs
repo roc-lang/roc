@@ -1,12 +1,15 @@
 use crate::env::Env;
 use crate::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
+use roc_error_macros::todo_abilities;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_parse::ast::{AliasHeader, AssignedField, Pattern, Tag, TypeAnnotation};
+use roc_parse::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, LambdaSet, Problem, RecordField, Type};
+use roc_types::types::{
+    Alias, AliasCommon, AliasKind, LambdaSet, Problem, RecordField, Type, TypeExtension,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -16,32 +19,49 @@ pub struct Annotation {
     pub aliases: SendMap<Symbol, Alias>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NamedVariable {
+    pub variable: Variable,
+    pub name: Lowercase,
+    // NB: there may be multiple occurrences of a variable
+    pub first_seen: Region,
+}
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct IntroducedVariables {
-    // NOTE on rigids
-    //
-    // Rigids must be unique within a type annotation.
-    // E.g. in `identity : a -> a`, there should only be one
-    // variable (a rigid one, with name "a").
-    // Hence `rigids : ImMap<Lowercase, Variable>`
-    //
-    // But then between annotations, the same name can occur multiple times,
-    // but a variable can only have one name. Therefore
-    // `ftv : SendMap<Variable, Lowercase>`.
-    pub wildcards: Vec<Variable>,
-    pub var_by_name: SendMap<Lowercase, Variable>,
-    pub name_by_var: SendMap<Variable, Lowercase>,
+    pub wildcards: Vec<Loc<Variable>>,
+    pub lambda_sets: Vec<Variable>,
+    pub inferred: Vec<Loc<Variable>>,
+    pub named: Vec<NamedVariable>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {
-    pub fn insert_named(&mut self, name: Lowercase, var: Variable) {
-        self.var_by_name.insert(name.clone(), var);
-        self.name_by_var.insert(var, name);
+    pub fn insert_named(&mut self, name: Lowercase, var: Loc<Variable>) {
+        debug_assert!(!self
+            .named
+            .iter()
+            .any(|nv| nv.name == name || nv.variable == var.value));
+
+        let named_variable = NamedVariable {
+            name,
+            variable: var.value,
+            first_seen: var.region,
+        };
+
+        self.named.push(named_variable);
     }
 
-    pub fn insert_wildcard(&mut self, var: Variable) {
+    pub fn insert_wildcard(&mut self, var: Loc<Variable>) {
         self.wildcards.push(var);
+    }
+
+    pub fn insert_inferred(&mut self, var: Loc<Variable>) {
+        self.inferred.push(var);
+    }
+
+    fn insert_lambda_set(&mut self, var: Variable) {
+        self.lambda_sets.push(var);
     }
 
     pub fn insert_host_exposed_alias(&mut self, symbol: Symbol, var: Variable) {
@@ -49,19 +69,40 @@ impl IntroducedVariables {
     }
 
     pub fn union(&mut self, other: &Self) {
-        self.wildcards.extend(other.wildcards.iter().cloned());
-        self.var_by_name.extend(other.var_by_name.clone());
-        self.name_by_var.extend(other.name_by_var.clone());
+        self.wildcards.extend(other.wildcards.iter().copied());
+        self.lambda_sets.extend(other.lambda_sets.iter().copied());
+        self.inferred.extend(other.inferred.iter().copied());
         self.host_exposed_aliases
             .extend(other.host_exposed_aliases.clone());
+
+        self.named.extend(other.named.iter().cloned());
+        self.named.sort();
+        self.named.dedup();
+    }
+
+    pub fn union_owned(&mut self, other: Self) {
+        self.wildcards.extend(other.wildcards);
+        self.lambda_sets.extend(other.lambda_sets);
+        self.inferred.extend(other.inferred);
+        self.host_exposed_aliases.extend(other.host_exposed_aliases);
+
+        self.named.extend(other.named);
+        self.named.sort();
+        self.named.dedup();
     }
 
     pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {
-        self.var_by_name.get(name)
+        self.named
+            .iter()
+            .find(|nv| &nv.name == name)
+            .map(|nv| &nv.variable)
     }
 
     pub fn name_by_var(&self, var: Variable) -> Option<&Lowercase> {
-        self.name_by_var.get(&var)
+        self.named
+            .iter()
+            .find(|nv| nv.variable == var)
+            .map(|nv| &nv.name)
     }
 }
 
@@ -130,13 +171,20 @@ fn make_apply_symbol(
                 // it was imported but it doesn't expose this ident.
                 env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
-                Err(Type::Erroneous(Problem::UnrecognizedIdent((*ident).into())))
+                // A failed import should have already been reported through
+                // roc_can::env::Env::qualified_lookup's checks
+                Err(Type::Erroneous(Problem::SolvedTypeError))
             }
         }
     }
 }
 
-pub fn find_alias_symbols(
+/// Retrieves all symbols in an annotations that reference a type definition, that is either an
+/// alias or an opaque type.
+///
+/// For example, in `[ A Age U8, B Str {} ]`, there are three type definition references - `Age`,
+/// `U8`, and `Str`.
+pub fn find_type_def_symbols(
     module_id: ModuleId,
     ident_ids: &mut IdentIds,
     initial_annotation: &roc_parse::ast::TypeAnnotation,
@@ -223,6 +271,7 @@ pub fn find_alias_symbols(
             SpaceBefore(inner, _) | SpaceAfter(inner, _) => {
                 stack.push(inner);
             }
+            Where(..) => todo_abilities!(),
             Inferred | Wildcard | Malformed(_) => {}
         }
     }
@@ -265,7 +314,7 @@ fn can_annotation_help(
             let ret = can_annotation_help(
                 env,
                 &return_type.value,
-                region,
+                return_type.region,
                 scope,
                 var_store,
                 introduced_variables,
@@ -273,7 +322,9 @@ fn can_annotation_help(
                 references,
             );
 
-            let closure = Type::Variable(var_store.fresh());
+            let lambda_set = var_store.fresh();
+            introduced_variables.insert_lambda_set(lambda_set);
+            let closure = Type::Variable(lambda_set);
 
             Type::Function(args, Box::new(closure), Box::new(ret))
         }
@@ -291,7 +342,7 @@ fn can_annotation_help(
                 let arg_ann = can_annotation_help(
                     env,
                     &arg.value,
-                    region,
+                    arg.region,
                     scope,
                     var_store,
                     introduced_variables,
@@ -305,9 +356,6 @@ fn can_annotation_help(
             match scope.lookup_alias(symbol) {
                 Some(alias) => {
                     // use a known alias
-                    let mut actual = alias.typ.clone();
-                    let mut substitutions = ImMap::default();
-                    let mut vars = Vec::new();
 
                     if alias.type_variables.len() != args.len() {
                         let error = Type::Erroneous(Problem::BadTypeArguments {
@@ -319,42 +367,50 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    for (loc_var, arg_ann) in alias.type_variables.iter().zip(args.into_iter()) {
-                        let name = loc_var.value.0.clone();
-                        let var = loc_var.value.1;
+                    let is_structural = alias.kind == AliasKind::Structural;
+                    if is_structural {
+                        let mut type_var_to_arg = Vec::new();
 
-                        substitutions.insert(var, arg_ann.clone());
-                        vars.push((name.clone(), arg_ann));
-                    }
+                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
+                            let name = loc_var.value.0.clone();
 
-                    // make sure the recursion variable is freshly instantiated
-                    if let Type::RecursiveTagUnion(rvar, _, _) = &mut actual {
-                        let new = var_store.fresh();
-                        substitutions.insert(*rvar, Type::Variable(new));
-                        *rvar = new;
-                    }
-
-                    // make sure hidden variables are freshly instantiated
-                    let mut lambda_set_variables =
-                        Vec::with_capacity(alias.lambda_set_variables.len());
-                    for typ in alias.lambda_set_variables.iter() {
-                        if let Type::Variable(var) = typ.0 {
-                            let fresh = var_store.fresh();
-                            substitutions.insert(var, Type::Variable(fresh));
-                            lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
-                        } else {
-                            unreachable!("at this point there should be only vars in there");
+                            type_var_to_arg.push((name, arg_ann));
                         }
-                    }
 
-                    // instantiate variables
-                    actual.substitute(&substitutions);
+                        let mut lambda_set_variables =
+                            Vec::with_capacity(alias.lambda_set_variables.len());
 
-                    Type::Alias {
-                        symbol,
-                        type_arguments: vars,
-                        lambda_set_variables,
-                        actual: Box::new(actual),
+                        for _ in 0..alias.lambda_set_variables.len() {
+                            let lvar = var_store.fresh();
+
+                            introduced_variables.insert_lambda_set(lvar);
+
+                            lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
+                        }
+
+                        Type::DelayedAlias(AliasCommon {
+                            symbol,
+                            type_arguments: type_var_to_arg,
+                            lambda_set_variables,
+                        })
+                    } else {
+                        let (type_arguments, lambda_set_variables, actual) =
+                            instantiate_and_freshen_alias_type(
+                                var_store,
+                                introduced_variables,
+                                &alias.type_variables,
+                                args,
+                                &alias.lambda_set_variables,
+                                alias.typ.clone(),
+                            );
+
+                        Type::Alias {
+                            symbol,
+                            type_arguments,
+                            lambda_set_variables,
+                            actual: Box::new(actual),
+                            kind: alias.kind,
+                        }
                     }
                 }
                 None => Type::Apply(symbol, args, region),
@@ -368,7 +424,7 @@ fn can_annotation_help(
                 None => {
                     let var = var_store.fresh();
 
-                    introduced_variables.insert_named(name, var);
+                    introduced_variables.insert_named(name, Loc::at(region, var));
 
                     Type::Variable(var)
                 }
@@ -377,8 +433,7 @@ fn can_annotation_help(
         As(
             loc_inner,
             _spaces,
-            alias_header
-            @ AliasHeader {
+            alias_header @ TypeHeader {
                 name,
                 vars: loc_vars,
             },
@@ -433,7 +488,8 @@ fn can_annotation_help(
                 } else {
                     let var = var_store.fresh();
 
-                    introduced_variables.insert_named(var_name.clone(), var);
+                    introduced_variables
+                        .insert_named(var_name.clone(), Loc::at(loc_var.region, var));
                     vars.push((var_name.clone(), Type::Variable(var)));
 
                     lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
@@ -488,7 +544,13 @@ fn can_annotation_help(
                 hidden_variables.remove(&loc_var.value.1);
             }
 
-            scope.add_alias(symbol, region, lowercase_vars, alias_actual);
+            scope.add_alias(
+                symbol,
+                region,
+                lowercase_vars,
+                alias_actual,
+                AliasKind::Structural, // aliases in "as" are never opaque
+            );
 
             let alias = scope.lookup_alias(symbol).unwrap();
             local_aliases.insert(symbol, alias.clone());
@@ -511,24 +573,22 @@ fn can_annotation_help(
                     type_arguments: vars,
                     lambda_set_variables: alias.lambda_set_variables.clone(),
                     actual: Box::new(alias.typ.clone()),
+                    kind: alias.kind,
                 }
             }
         }
 
         Record { fields, ext } => {
-            let ext_type = match ext {
-                Some(loc_ann) => can_annotation_help(
-                    env,
-                    &loc_ann.value,
-                    region,
-                    scope,
-                    var_store,
-                    introduced_variables,
-                    local_aliases,
-                    references,
-                ),
-                None => Type::EmptyRec,
-            };
+            let ext_type = can_extension_type(
+                env,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+                ext,
+                roc_problem::can::ExtensionTypeKind::Record,
+            );
 
             if fields.is_empty() {
                 match ext {
@@ -536,7 +596,7 @@ fn can_annotation_help(
                         // just `a` does not mean the same as `{}a`, so even
                         // if there are no fields, still make this a `Record`,
                         // not an EmptyRec
-                        Type::Record(Default::default(), Box::new(ext_type))
+                        Type::Record(Default::default(), TypeExtension::from_type(ext_type))
                     }
 
                     None => Type::EmptyRec,
@@ -553,23 +613,20 @@ fn can_annotation_help(
                     references,
                 );
 
-                Type::Record(field_types, Box::new(ext_type))
+                Type::Record(field_types, TypeExtension::from_type(ext_type))
             }
         }
         TagUnion { tags, ext, .. } => {
-            let ext_type = match ext {
-                Some(loc_ann) => can_annotation_help(
-                    env,
-                    &loc_ann.value,
-                    loc_ann.region,
-                    scope,
-                    var_store,
-                    introduced_variables,
-                    local_aliases,
-                    references,
-                ),
-                None => Type::EmptyTagUnion,
-            };
+            let ext_type = can_extension_type(
+                env,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+                ext,
+                roc_problem::can::ExtensionTypeKind::TagUnion,
+            );
 
             if tags.is_empty() {
                 match ext {
@@ -577,7 +634,7 @@ fn can_annotation_help(
                         // just `a` does not mean the same as `{}a`, so even
                         // if there are no fields, still make this a `Record`,
                         // not an EmptyRec
-                        Type::TagUnion(Default::default(), Box::new(ext_type))
+                        Type::TagUnion(Default::default(), TypeExtension::from_type(ext_type))
                     }
 
                     None => Type::EmptyTagUnion,
@@ -599,7 +656,7 @@ fn can_annotation_help(
                 // in theory we save a lot of time by sorting once here
                 insertion_sort_by(&mut tag_types, |a, b| a.0.cmp(&b.0));
 
-                Type::TagUnion(tag_types, Box::new(ext_type))
+                Type::TagUnion(tag_types, TypeExtension::from_type(ext_type))
             }
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_annotation_help(
@@ -615,7 +672,7 @@ fn can_annotation_help(
         Wildcard => {
             let var = var_store.fresh();
 
-            introduced_variables.insert_wildcard(var);
+            introduced_variables.insert_wildcard(Loc::at(region, var));
 
             Type::Variable(var)
         }
@@ -623,18 +680,183 @@ fn can_annotation_help(
             // Inference variables aren't bound to a rigid or a wildcard, so all we have to do is
             // make a fresh unconstrained variable, and let the type solver fill it in for us 🤠
             let var = var_store.fresh();
+
+            introduced_variables.insert_inferred(Loc::at(region, var));
+
             Type::Variable(var)
         }
+        Where(..) => todo_abilities!(),
         Malformed(string) => {
             malformed(env, region, string);
 
             let var = var_store.fresh();
 
-            introduced_variables.insert_wildcard(var);
+            introduced_variables.insert_wildcard(Loc::at(region, var));
 
             Type::Variable(var)
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn can_extension_type<'a>(
+    env: &mut Env,
+    scope: &mut Scope,
+    var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
+    local_aliases: &mut SendMap<Symbol, Alias>,
+    references: &mut MutSet<Symbol>,
+    opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
+    ext_problem_kind: roc_problem::can::ExtensionTypeKind,
+) -> Type {
+    fn valid_record_ext_type(typ: &Type) -> bool {
+        // Include erroneous types so that we don't overreport errors.
+        matches!(
+            typ,
+            Type::EmptyRec | Type::Record(..) | Type::Variable(..) | Type::Erroneous(..)
+        )
+    }
+    fn valid_tag_ext_type(typ: &Type) -> bool {
+        matches!(
+            typ,
+            Type::EmptyTagUnion | Type::TagUnion(..) | Type::Variable(..) | Type::Erroneous(..)
+        )
+    }
+
+    use roc_problem::can::ExtensionTypeKind;
+
+    let (empty_ext_type, valid_extension_type): (_, fn(&Type) -> bool) = match ext_problem_kind {
+        ExtensionTypeKind::Record => (Type::EmptyRec, valid_record_ext_type),
+        ExtensionTypeKind::TagUnion => (Type::EmptyTagUnion, valid_tag_ext_type),
+    };
+
+    match opt_ext {
+        Some(loc_ann) => {
+            let ext_type = can_annotation_help(
+                env,
+                &loc_ann.value,
+                loc_ann.region,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+            );
+            if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
+                ext_type
+            } else {
+                // Report an error but mark the extension variable to be inferred
+                // so that we're as permissive as possible.
+                //
+                // THEORY: invalid extension types can appear in this position. Otherwise
+                // they would be caught as errors during unification.
+                env.problem(roc_problem::can::Problem::InvalidExtensionType {
+                    region: loc_ann.region,
+                    kind: ext_problem_kind,
+                });
+
+                let var = var_store.fresh();
+
+                introduced_variables.insert_inferred(Loc::at_zero(var));
+
+                Type::Variable(var)
+            }
+        }
+        None => empty_ext_type,
+    }
+}
+
+/// a shallow dealias, continue until the first constructor is not an alias.
+fn shallow_dealias_with_scope<'a>(scope: &'a mut Scope, typ: &'a Type) -> &'a Type {
+    let mut result = typ;
+    loop {
+        match result {
+            Type::Alias { actual, .. } => {
+                // another loop
+                result = actual;
+            }
+            Type::DelayedAlias(AliasCommon { symbol, .. }) => match scope.lookup_alias(*symbol) {
+                None => unreachable!(),
+                Some(alias) => {
+                    result = &alias.typ;
+                }
+            },
+
+            _ => break,
+        }
+    }
+
+    result
+}
+
+pub fn instantiate_and_freshen_alias_type(
+    var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
+    type_variables: &[Loc<(Lowercase, Variable)>],
+    type_arguments: Vec<Type>,
+    lambda_set_variables: &[LambdaSet],
+    mut actual_type: Type,
+) -> (Vec<(Lowercase, Type)>, Vec<LambdaSet>, Type) {
+    let mut substitutions = ImMap::default();
+    let mut type_var_to_arg = Vec::new();
+
+    for (loc_var, arg_ann) in type_variables.iter().zip(type_arguments.into_iter()) {
+        let name = loc_var.value.0.clone();
+        let var = loc_var.value.1;
+
+        substitutions.insert(var, arg_ann.clone());
+        type_var_to_arg.push((name.clone(), arg_ann));
+    }
+
+    // make sure the recursion variable is freshly instantiated
+    if let Type::RecursiveTagUnion(rvar, _, _) = &mut actual_type {
+        let new = var_store.fresh();
+        substitutions.insert(*rvar, Type::Variable(new));
+        *rvar = new;
+    }
+
+    // make sure hidden variables are freshly instantiated
+    let mut new_lambda_set_variables = Vec::with_capacity(lambda_set_variables.len());
+    for typ in lambda_set_variables.iter() {
+        if let Type::Variable(var) = typ.0 {
+            let fresh = var_store.fresh();
+            substitutions.insert(var, Type::Variable(fresh));
+            introduced_variables.insert_lambda_set(fresh);
+            new_lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
+        } else {
+            unreachable!("at this point there should be only vars in there");
+        }
+    }
+
+    // instantiate variables
+    actual_type.substitute(&substitutions);
+
+    (type_var_to_arg, new_lambda_set_variables, actual_type)
+}
+
+pub fn freshen_opaque_def(
+    var_store: &mut VarStore,
+    opaque: &Alias,
+) -> (Vec<(Lowercase, Type)>, Vec<LambdaSet>, Type) {
+    debug_assert!(opaque.kind == AliasKind::Opaque);
+
+    let fresh_arguments = opaque
+        .type_variables
+        .iter()
+        .map(|_| Type::Variable(var_store.fresh()))
+        .collect();
+
+    // TODO this gets ignored; is that a problem
+    let mut introduced_variables = IntroducedVariables::default();
+
+    instantiate_and_freshen_alias_type(
+        var_store,
+        &mut introduced_variables,
+        &opaque.type_variables,
+        fresh_arguments,
+        &opaque.lambda_set_variables,
+        opaque.typ.clone(),
+    )
 }
 
 fn insertion_sort_by<T, F>(arr: &mut [T], mut compare: F)
@@ -727,7 +949,10 @@ fn can_assigned_fields<'a>(
                             Type::Variable(*var)
                         } else {
                             let field_var = var_store.fresh();
-                            introduced_variables.insert_named(field_name.clone(), field_var);
+                            introduced_variables.insert_named(
+                                field_name.clone(),
+                                Loc::at(loc_field_name.region, field_var),
+                            );
                             Type::Variable(field_var)
                         }
                     };

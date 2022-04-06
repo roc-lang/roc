@@ -117,7 +117,7 @@ fn insert_jumps<'a>(
 
             if opt_remainder.is_some() || opt_continuation.is_some() {
                 let remainder = opt_remainder.unwrap_or(remainder);
-                let continuation = opt_continuation.unwrap_or_else(|| *continuation);
+                let continuation = opt_continuation.unwrap_or(*continuation);
 
                 Some(arena.alloc(Join {
                     id: *id,

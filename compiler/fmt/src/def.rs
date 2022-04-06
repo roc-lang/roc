@@ -2,7 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, INDENT};
 use crate::Buf;
-use roc_parse::ast::{AliasHeader, Def, Expr, Pattern};
+use roc_parse::ast::{AbilityDemand, Def, Expr, ExtractSpaces, Pattern, TypeHeader};
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
@@ -12,6 +12,7 @@ impl<'a> Formattable for Def<'a> {
 
         match self {
             Alias { ann, .. } => ann.is_multiline(),
+            Opaque { typ, .. } => typ.is_multiline(),
             Annotation(loc_pattern, loc_annotation) => {
                 loc_pattern.is_multiline() || loc_annotation.is_multiline()
             }
@@ -21,6 +22,7 @@ impl<'a> Formattable for Def<'a> {
             SpaceBefore(sub_def, spaces) | SpaceAfter(sub_def, spaces) => {
                 spaces.iter().any(|s| s.is_comment()) || sub_def.is_multiline()
             }
+            Ability { demands, .. } => demands.iter().any(|d| d.is_multiline()),
             NotYetImplemented(s) => todo!("{}", s),
         }
     }
@@ -58,8 +60,12 @@ impl<'a> Formattable for Def<'a> {
                 }
             }
             Alias {
-                header: AliasHeader { name, vars },
+                header: TypeHeader { name, vars },
                 ann,
+            }
+            | Opaque {
+                header: TypeHeader { name, vars },
+                typ: ann,
             } => {
                 buf.indent(indent);
                 buf.push_str(name.value);
@@ -69,10 +75,40 @@ impl<'a> Formattable for Def<'a> {
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
                 }
 
-                buf.push_str(" :");
+                buf.push_str(match self {
+                    Alias { .. } => " :",
+                    Opaque { .. } => " :=",
+                    _ => unreachable!(),
+                });
                 buf.spaces(1);
 
                 ann.format(buf, indent + INDENT)
+            }
+            Ability {
+                header: TypeHeader { name, vars },
+                loc_has: _,
+                demands,
+            } => {
+                buf.indent(indent);
+                buf.push_str(name.value);
+                for var in *vars {
+                    buf.spaces(1);
+                    fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
+                }
+
+                buf.push_str(" has");
+
+                if !self.is_multiline() {
+                    debug_assert_eq!(demands.len(), 1);
+                    buf.push_str(" ");
+                    demands[0].format(buf, indent + INDENT);
+                } else {
+                    for demand in demands.iter() {
+                        buf.newline();
+                        buf.indent(indent + INDENT);
+                        demand.format(buf, indent + INDENT);
+                    }
+                }
             }
             Body(loc_pattern, loc_expr) => {
                 fmt_body(buf, &loc_pattern.value, &loc_expr.value, indent);
@@ -156,5 +192,17 @@ pub fn fmt_body<'a, 'buf>(
     } else {
         buf.spaces(1);
         body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+    }
+}
+
+impl<'a> Formattable for AbilityDemand<'a> {
+    fn is_multiline(&self) -> bool {
+        self.name.value.is_multiline() || self.typ.is_multiline()
+    }
+
+    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+        buf.push_str(self.name.value.extract_spaces().item);
+        buf.push_str(" : ");
+        self.typ.value.format(buf, indent + INDENT);
     }
 }

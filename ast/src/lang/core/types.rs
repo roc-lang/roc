@@ -3,6 +3,7 @@
 #![allow(unused_imports)]
 // use roc_can::expr::Output;
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::todo_abilities;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -329,9 +330,9 @@ pub fn to_type2<'a>(
     annotation: &roc_parse::ast::TypeAnnotation<'a>,
     region: Region,
 ) -> Type2 {
-    use roc_parse::ast::AliasHeader;
     use roc_parse::ast::Pattern;
     use roc_parse::ast::TypeAnnotation::*;
+    use roc_parse::ast::TypeHeader;
 
     match annotation {
         Apply(module_name, ident, targs) => {
@@ -455,7 +456,7 @@ pub fn to_type2<'a>(
         As(
             loc_inner,
             _spaces,
-            AliasHeader {
+            TypeHeader {
                 name,
                 vars: loc_vars,
             },
@@ -570,6 +571,7 @@ pub fn to_type2<'a>(
             //                    }
             Type2::AsAlias(symbol, vars, alias.actual)
         }
+        Where { .. } => todo_abilities!(),
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
             to_type2(env, scope, references, nested, region)
         }

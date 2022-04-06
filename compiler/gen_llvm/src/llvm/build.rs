@@ -1,7 +1,10 @@
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::path::Path;
 
-use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
+use crate::llvm::bitcode::{
+    call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
+    call_str_bitcode_fn, call_void_bitcode_fn,
+};
 use crate::llvm::build_dict::{
     self, dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
     dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk, set_from_list,
@@ -11,19 +14,16 @@ use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_all, list_any, list_append, list_concat,
     list_contains, list_drop_at, list_find_unsafe, list_get_unsafe, list_join, list_keep_errs,
     list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4,
-    list_map_with_index, list_prepend, list_range, list_repeat, list_reverse, list_set,
-    list_single, list_sort_with, list_sublist, list_swap,
+    list_map_with_index, list_prepend, list_range, list_repeat, list_replace_unsafe, list_reverse,
+    list_single, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_to_c_abi,
 };
 use crate::llvm::build_str::{
-    str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
-    str_from_utf8_range, str_join_with, str_number_of_bytes, str_repeat, str_split,
-    str_starts_with, str_starts_with_code_point, str_to_utf8, str_trim, str_trim_left,
-    str_trim_right,
+    str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_split,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    self, basic_type_from_builtin, basic_type_from_layout, basic_type_from_layout_1,
-    block_of_memory_slices,
+    self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
+    block_of_memory_slices, zig_str_type,
 };
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -53,7 +53,7 @@ use morphic_lib::{
     CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
 };
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth, IntrinsicName};
-use roc_builtins::{float_intrinsic, int_intrinsic};
+use roc_builtins::{float_intrinsic, llvm_int_intrinsic};
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
@@ -202,16 +202,21 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         }
     }
 
-    /// The integer type representing a RocList or RocStr when following the C ABI
+    /// The integer type representing twice the width of a pointer
     ///
     /// on 64-bit systems, this is i128
     /// on 32-bit systems, this is i64
-    pub fn str_list_c_abi(&self) -> IntType<'ctx> {
-        crate::llvm::convert::str_list_int(self.context, self.target_info)
+    pub fn twice_ptr_int(&self) -> IntType<'ctx> {
+        let ctx = self.context;
+
+        match self.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => ctx.i64_type(),
+            roc_target::PtrWidth::Bytes8 => ctx.i128_type(),
+        }
     }
 
     pub fn small_str_bytes(&self) -> u32 {
-        self.target_info.ptr_width() as u32 * 2
+        self.target_info.ptr_width() as u32 * 3
     }
 
     pub fn build_intrinsic_call(
@@ -609,14 +614,14 @@ static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";
 pub static LLVM_LONGJMP: &str = "llvm.eh.sjlj.longjmp";
 
 const LLVM_ADD_WITH_OVERFLOW: IntrinsicName =
-    int_intrinsic!("llvm.sadd.with.overflow", "llvm.uadd.with.overflow");
+    llvm_int_intrinsic!("llvm.sadd.with.overflow", "llvm.uadd.with.overflow");
 const LLVM_SUB_WITH_OVERFLOW: IntrinsicName =
-    int_intrinsic!("llvm.ssub.with.overflow", "llvm.usub.with.overflow");
+    llvm_int_intrinsic!("llvm.ssub.with.overflow", "llvm.usub.with.overflow");
 const LLVM_MUL_WITH_OVERFLOW: IntrinsicName =
-    int_intrinsic!("llvm.smul.with.overflow", "llvm.umul.with.overflow");
+    llvm_int_intrinsic!("llvm.smul.with.overflow", "llvm.umul.with.overflow");
 
-const LLVM_ADD_SATURATED: IntrinsicName = int_intrinsic!("llvm.sadd.sat", "llvm.uadd.sat");
-const LLVM_SUB_SATURATED: IntrinsicName = int_intrinsic!("llvm.ssub.sat", "llvm.usub.sat");
+const LLVM_ADD_SATURATED: IntrinsicName = llvm_int_intrinsic!("llvm.sadd.sat", "llvm.uadd.sat");
+const LLVM_SUB_SATURATED: IntrinsicName = llvm_int_intrinsic!("llvm.ssub.sat", "llvm.usub.sat");
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -655,33 +660,41 @@ pub fn construct_optimization_passes<'a>(
         OptLevel::Development | OptLevel::Normal => {
             pmb.set_optimization_level(OptimizationLevel::None);
         }
+        OptLevel::Size => {
+            pmb.set_optimization_level(OptimizationLevel::Default);
+            // TODO: For some usecase, like embedded, it is useful to expose this and tune it.
+            pmb.set_inliner_with_threshold(50);
+        }
         OptLevel::Optimize => {
             pmb.set_optimization_level(OptimizationLevel::Aggressive);
             // this threshold seems to do what we want
             pmb.set_inliner_with_threshold(275);
-
-            // TODO figure out which of these actually help
-
-            // function passes
-
-            fpm.add_cfg_simplification_pass();
-            mpm.add_cfg_simplification_pass();
-
-            fpm.add_jump_threading_pass();
-            mpm.add_jump_threading_pass();
-
-            fpm.add_memcpy_optimize_pass(); // this one is very important
-
-            fpm.add_licm_pass();
-
-            // turn invoke into call
-            mpm.add_prune_eh_pass();
-
-            // remove unused global values (often the `_wrapper` can be removed)
-            mpm.add_global_dce_pass();
-
-            mpm.add_function_inlining_pass();
         }
+    }
+
+    // Add optimization passes for Size and Optimize.
+    if matches!(opt_level, OptLevel::Size | OptLevel::Optimize) {
+        // TODO figure out which of these actually help
+
+        // function passes
+
+        fpm.add_cfg_simplification_pass();
+        mpm.add_cfg_simplification_pass();
+
+        fpm.add_jump_threading_pass();
+        mpm.add_jump_threading_pass();
+
+        fpm.add_memcpy_optimize_pass(); // this one is very important
+
+        fpm.add_licm_pass();
+
+        // turn invoke into call
+        mpm.add_prune_eh_pass();
+
+        // remove unused global values (often the `_wrapper` can be removed)
+        mpm.add_global_dce_pass();
+
+        mpm.add_function_inlining_pass();
     }
 
     pmb.populate_module_pass_manager(&mpm);
@@ -700,7 +713,7 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     top_level: ProcLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let it = top_level.arguments.iter().copied();
-    let bytes = roc_mono::alias_analysis::func_name_bytes_help(symbol, it, &top_level.result);
+    let bytes = roc_alias_analysis::func_name_bytes_help(symbol, it, &top_level.result);
     let func_name = FuncName(&bytes);
     let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
@@ -712,8 +725,7 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     );
 
     // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn =
-        function_value_by_func_spec(env, *func_spec, symbol, &[], &Layout::Struct(&[]));
+    let roc_main_fn = function_value_by_func_spec(env, *func_spec, symbol, &[], &Layout::UNIT);
 
     let main_fn_name = "$Test.main";
 
@@ -760,6 +772,7 @@ fn float_with_precision<'a, 'ctx, 'env>(
 
 pub fn build_exp_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     layout: &Layout<'_>,
     literal: &roc_mono::ir::Literal<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -785,120 +798,106 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             _ => panic!("Invalid layout for float literal = {:?}", layout),
         },
 
-        Decimal(int) => env
-            .context
-            .i128_type()
-            .const_int(int.0 as u64, false)
-            .into(),
+        Decimal(int) => {
+            let (upper_bits, lower_bits) = int.as_bits();
+            env.context
+                .i128_type()
+                .const_int_arbitrary_precision(&[lower_bits, upper_bits as u64])
+                .into()
+        }
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
-            let ctx = env.context;
-            let builder = env.builder;
-            let number_of_chars = str_literal.len() as u64;
-
-            let str_type = super::convert::zig_str_type(env);
-
-            if str_literal.len() < env.small_str_bytes() as usize {
-                // TODO support big endian systems
-
-                let array_alloca = builder.build_array_alloca(
-                    ctx.i8_type(),
-                    ctx.i8_type().const_int(env.small_str_bytes() as u64, false),
-                    "alloca_small_str",
-                );
-
-                // Zero out all the bytes. If we don't do this, then
-                // small strings would have uninitialized bytes, which could
-                // cause string equality checks to fail randomly.
-                //
-                // We're running memset over *all* the bytes, even though
-                // the final one is about to be manually overridden, on
-                // the theory that LLVM will optimize the memset call
-                // into two instructions to move appropriately-sized
-                // zero integers into the appropriate locations instead
-                // of doing any iteration.
-                //
-                // TODO: look at the compiled output to verify this theory!
-                env.call_memset(
-                    array_alloca,
-                    ctx.i8_type().const_zero(),
-                    env.ptr_int().const_int(env.small_str_bytes() as u64, false),
-                );
-
-                let final_byte = (str_literal.len() as u8) | 0b1000_0000;
-
-                let final_byte_ptr = unsafe {
-                    builder.build_in_bounds_gep(
-                        array_alloca,
-                        &[ctx
-                            .i8_type()
-                            .const_int(env.small_str_bytes() as u64 - 1, false)],
-                        "str_literal_final_byte",
-                    )
-                };
-
-                builder.build_store(
-                    final_byte_ptr,
-                    ctx.i8_type().const_int(final_byte as u64, false),
-                );
-
-                // Copy the elements from the list literal into the array
-                for (index, character) in str_literal.as_bytes().iter().enumerate() {
-                    let val = env
-                        .context
-                        .i8_type()
-                        .const_int(*character as u64, false)
-                        .as_basic_value_enum();
-                    let index_val = ctx.i64_type().const_int(index as u64, false);
-                    let elem_ptr =
-                        unsafe { builder.build_in_bounds_gep(array_alloca, &[index_val], "index") };
-
-                    builder.build_store(elem_ptr, val);
+            let global = if str_literal.len() < env.small_str_bytes() as usize {
+                match env.small_str_bytes() {
+                    24 => small_str_ptr_width_8(env, parent, str_literal),
+                    12 => small_str_ptr_width_4(env, parent, str_literal),
+                    _ => unreachable!("incorrect small_str_bytes"),
                 }
-
-                builder.build_load(
-                    builder
-                        .build_bitcast(
-                            array_alloca,
-                            str_type.ptr_type(AddressSpace::Generic),
-                            "cast_collection",
-                        )
-                        .into_pointer_value(),
-                    "small_str_array",
-                )
             } else {
                 let ptr = define_global_str_literal_ptr(env, *str_literal);
-                let number_of_elements = env.ptr_int().const_int(number_of_chars, false);
+                let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
 
-                let struct_type = str_type;
+                const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements)
+            };
 
-                let mut struct_val;
-
-                // Store the pointer
-                struct_val = builder
-                    .build_insert_value(
-                        struct_type.get_undef(),
-                        ptr,
-                        Builtin::WRAPPER_PTR,
-                        "insert_ptr_str_literal",
-                    )
-                    .unwrap();
-
-                // Store the length
-                struct_val = builder
-                    .build_insert_value(
-                        struct_val,
-                        number_of_elements,
-                        Builtin::WRAPPER_LEN,
-                        "insert_len",
-                    )
-                    .unwrap();
-
-                builder.build_bitcast(struct_val.into_struct_value(), str_type, "cast_collection")
-            }
+            global.into()
         }
     }
+}
+
+fn const_str_alloca_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    ptr: PointerValue<'ctx>,
+    len: IntValue<'ctx>,
+    cap: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let typ = zig_str_type(env);
+
+    let value = typ.const_named_struct(&[ptr.into(), len.into(), cap.into()]);
+
+    let alloca = create_entry_block_alloca(env, parent, typ.into(), "const_str_store");
+
+    env.builder.build_store(alloca, value);
+
+    alloca
+}
+
+fn small_str_ptr_width_8<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    str_literal: &str,
+) -> PointerValue<'ctx> {
+    debug_assert_eq!(env.target_info.ptr_width() as u8, 8);
+
+    let mut array = [0u8; 24];
+
+    array[..str_literal.len()].copy_from_slice(str_literal.as_bytes());
+
+    array[env.small_str_bytes() as usize - 1] = str_literal.len() as u8 | roc_std::RocStr::MASK;
+
+    let word1 = u64::from_ne_bytes(array[0..8].try_into().unwrap());
+    let word2 = u64::from_ne_bytes(array[8..16].try_into().unwrap());
+    let word3 = u64::from_ne_bytes(array[16..24].try_into().unwrap());
+
+    let ptr = env.ptr_int().const_int(word1, false);
+    let len = env.ptr_int().const_int(word2, false);
+    let cap = env.ptr_int().const_int(word3, false);
+
+    let address_space = AddressSpace::Generic;
+    let ptr_type = env.context.i8_type().ptr_type(address_space);
+    let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
+
+    const_str_alloca_ptr(env, parent, ptr, len, cap)
+}
+
+fn small_str_ptr_width_4<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    str_literal: &str,
+) -> PointerValue<'ctx> {
+    debug_assert_eq!(env.target_info.ptr_width() as u8, 4);
+
+    let mut array = [0u8; 12];
+
+    array[..str_literal.len()].copy_from_slice(str_literal.as_bytes());
+
+    array[env.small_str_bytes() as usize - 1] = str_literal.len() as u8 | roc_std::RocStr::MASK;
+
+    let word1 = u32::from_ne_bytes(array[0..4].try_into().unwrap());
+    let word2 = u32::from_ne_bytes(array[4..8].try_into().unwrap());
+    let word3 = u32::from_ne_bytes(array[8..12].try_into().unwrap());
+
+    let ptr = env.ptr_int().const_int(word1 as u64, false);
+    let len = env.ptr_int().const_int(word2 as u64, false);
+    let cap = env.ptr_int().const_int(word3 as u64, false);
+
+    let address_space = AddressSpace::Generic;
+    let ptr_type = env.context.i8_type().ptr_type(address_space);
+    let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
+
+    const_str_alloca_ptr(env, parent, ptr, len, cap)
 }
 
 pub fn build_exp_call<'a, 'ctx, 'env>(
@@ -1010,7 +1009,7 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
     input_pointer: PointerValue<'ctx>,
     values: I,
 ) where
-    I: Iterator<Item = (usize, BasicValueEnum<'ctx>)>,
+    I: Iterator<Item = (usize, (Layout<'a>, BasicValueEnum<'ctx>))>,
 {
     let struct_ptr = env
         .builder
@@ -1022,13 +1021,13 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
         .into_pointer_value();
 
     // Insert field exprs into struct_val
-    for (index, field_val) in values {
+    for (index, (field_layout, field_value)) in values {
         let field_ptr = env
             .builder
             .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
             .unwrap();
 
-        env.builder.build_store(field_ptr, field_val);
+        store_roc_value(env, field_layout, field_ptr, field_value);
     }
 }
 
@@ -1044,7 +1043,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     use roc_mono::ir::Expr::*;
 
     match expr {
-        Literal(literal) => build_exp_literal(env, layout, literal),
+        Literal(literal) => build_exp_literal(env, parent, layout, literal),
 
         Call(call) => build_exp_call(
             env,
@@ -1071,7 +1070,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 if !field_layout.is_dropped_because_empty() {
                     field_types.push(basic_type_from_layout(env, field_layout));
 
-                    if field_layout.is_passed_by_reference() {
+                    if field_layout.is_passed_by_reference(env.target_info) {
                         let field_value = env.builder.build_load(
                             field_expr.into_pointer_value(),
                             "load_tag_to_put_in_struct",
@@ -1116,6 +1115,29 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_id,
             ..
         } => build_tag(env, scope, union_layout, *tag_id, arguments, None, parent),
+
+        ExprBox { symbol } => {
+            let (value, layout) = load_symbol_and_layout(scope, symbol);
+            let basic_type = basic_type_from_layout(env, layout);
+            let allocation = reserve_with_refcount_help(
+                env,
+                basic_type,
+                layout.stack_size(env.target_info),
+                layout.alignment_bytes(env.target_info),
+            );
+
+            store_roc_value(env, *layout, allocation, value);
+
+            allocation.into()
+        }
+
+        ExprUnbox { symbol } => {
+            let value = load_symbol(scope, symbol);
+
+            debug_assert!(value.is_pointer_value());
+
+            load_roc_value(env, *layout, value.into_pointer_value(), "load_boxed_value")
+        }
 
         Reset { symbol, .. } => {
             let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
@@ -1186,8 +1208,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             // extract field from a record
             match (value, layout) {
-                (StructValue(argument), Layout::Struct(fields)) => {
-                    debug_assert!(!fields.is_empty());
+                (StructValue(argument), Layout::Struct { field_layouts, .. }) => {
+                    debug_assert!(!field_layouts.is_empty());
 
                     let field_value = env
                         .builder
@@ -1199,14 +1221,14 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         )
                         .unwrap();
 
-                    let field_layout = fields[*index as usize];
+                    let field_layout = field_layouts[*index as usize];
                     use_roc_value(env, field_layout, field_value, "struct_field_tag")
                 }
                 (
                     PointerValue(argument),
                     Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
                 ) => {
-                    let struct_layout = Layout::Struct(fields);
+                    let struct_layout = Layout::struct_no_name_order(fields);
                     let struct_type = basic_type_from_layout(env, &struct_layout);
 
                     let cast_argument = env
@@ -1240,7 +1262,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         }
 
         EmptyArray => empty_polymorphic_list(env),
-        Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
+        Array { elem_layout, elems } => list_literal(env, parent, scope, elem_layout, elems),
         RuntimeErrorFunction(_) => todo!(),
 
         UnionAtIndex {
@@ -1290,7 +1312,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     )
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    let struct_layout = Layout::Struct(field_layouts);
+                    let struct_layout = Layout::struct_no_name_order(field_layouts);
 
                     let struct_type = basic_type_from_layout(env, &struct_layout);
 
@@ -1339,7 +1361,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     debug_assert_ne!(*tag_id != 0, *nullable_id);
 
                     let field_layouts = other_fields;
-                    let struct_layout = Layout::Struct(field_layouts);
+                    let struct_layout = Layout::struct_no_name_order(field_layouts);
 
                     let struct_type = basic_type_from_layout(env, &struct_layout);
 
@@ -1380,53 +1402,11 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
     reuse_allocation: Option<PointerValue<'ctx>>,
     parent: FunctionValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
     let builder = env.builder;
 
     let tag_id_layout = union_layout.tag_id_layout();
 
-    // Determine types
-    let num_fields = arguments.len() + 1;
-    let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-    let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-    for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-        let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
-
-        let field_type = basic_type_from_layout(env, tag_field_layout);
-
-        field_types.push(field_type);
-
-        if let Layout::RecursivePointer = tag_field_layout {
-            debug_assert!(val.is_pointer_value());
-
-            // we store recursive pointers as `i64*`
-            let ptr = env.builder.build_bitcast(
-                val,
-                ctx.i64_type().ptr_type(AddressSpace::Generic),
-                "cast_recursive_pointer",
-            );
-
-            field_vals.push(ptr);
-        } else if matches!(
-            tag_field_layout,
-            Layout::Union(UnionLayout::NonRecursive(_))
-        ) {
-            debug_assert!(val.is_pointer_value());
-
-            // We store non-recursive unions without any indirection.
-            let reified = env
-                .builder
-                .build_load(val.into_pointer_value(), "load_non_recursive");
-
-            field_vals.push(reified);
-        } else {
-            // this check fails for recursive tag unions, but can be helpful while debugging
-            // debug_assert_eq!(tag_field_layout, val_layout);
-
-            field_vals.push(val);
-        }
-    }
+    let (field_types, field_values) = build_tag_fields(env, scope, tag_field_layouts, arguments);
 
     // Create the struct_type
     let raw_data_ptr = allocate_tag(env, parent, reuse_allocation, union_layout, tags);
@@ -1450,7 +1430,7 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
             env,
             struct_type,
             opaque_struct_ptr,
-            field_vals.into_iter().enumerate(),
+            field_values.into_iter().enumerate(),
         );
 
         raw_data_ptr.into()
@@ -1459,14 +1439,14 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
             env,
             struct_type,
             raw_data_ptr,
-            field_vals.into_iter().enumerate(),
+            field_values.into_iter().enumerate(),
         );
 
         tag_pointer_set_tag_id(env, tag_id, raw_data_ptr).into()
     }
 }
 
-pub fn tag_alloca<'a, 'ctx, 'env>(
+pub fn entry_block_alloca_zerofill<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     basic_type: BasicTypeEnum<'ctx>,
     name: &str,
@@ -1477,32 +1457,67 @@ pub fn tag_alloca<'a, 'ctx, 'env>(
         .unwrap()
         .get_parent()
         .unwrap();
-    let result_alloca = create_entry_block_alloca(env, parent, basic_type, name);
 
-    // Initialize all memory of the alloca. This _should_ not be required, but currently
-    // LLVM can access uninitialized memory after applying some optimizations. Hopefully
-    // we can in the future adjust code gen so this is no longer an issue.
-    //
-    // An example is
-    //
-    // main : Task.Task {} []
-    // main =
-    //     when List.len [ Ok "foo", Err 42, Ok "spam" ] is
-    //         n -> Task.putLine (Str.fromInt n)
-    //
-    // Here the decrement function of result must first check it's an Ok tag,
-    // then defers to string decrement, which must check is the string is small or large
-    //
-    // After inlining, those checks are combined. That means that even if the tag is Err,
-    // a check is done on the "string" to see if it is big or small, which will touch the
-    // uninitialized memory.
-    let all_zeros = basic_type.const_zero();
-    env.builder.build_store(result_alloca, all_zeros);
-
-    result_alloca
+    create_entry_block_alloca(env, parent, basic_type, name)
 }
 
-pub fn build_tag<'a, 'ctx, 'env>(
+fn build_tag_field_value<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: BasicValueEnum<'ctx>,
+    tag_field_layout: Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    if let Layout::RecursivePointer = tag_field_layout {
+        debug_assert!(value.is_pointer_value());
+
+        // we store recursive pointers as `i64*`
+        env.builder.build_bitcast(
+            value,
+            env.context.i64_type().ptr_type(AddressSpace::Generic),
+            "cast_recursive_pointer",
+        )
+    } else if tag_field_layout.is_passed_by_reference(env.target_info) {
+        debug_assert!(value.is_pointer_value());
+
+        // NOTE: we rely on this being passed to `store_roc_value` so that
+        // the value is memcpy'd
+        value
+    } else {
+        // this check fails for recursive tag unions, but can be helpful while debugging
+        // debug_assert_eq!(tag_field_layout, val_layout);
+
+        value
+    }
+}
+
+fn build_tag_fields<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    fields: &[Layout<'a>],
+    arguments: &[Symbol],
+) -> (
+    Vec<'a, BasicTypeEnum<'ctx>>,
+    Vec<'a, (Layout<'a>, BasicValueEnum<'ctx>)>,
+) {
+    debug_assert_eq!(fields.len(), arguments.len());
+
+    let capacity = fields.len();
+    let mut field_types = Vec::with_capacity_in(capacity, env.arena);
+    let mut field_values = Vec::with_capacity_in(capacity, env.arena);
+
+    for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
+        let field_type = basic_type_from_layout(env, tag_field_layout);
+        field_types.push(field_type);
+
+        let raw_value = load_symbol(scope, field_symbol);
+        let field_value = build_tag_field_value(env, raw_value, *tag_field_layout);
+
+        field_values.push((*tag_field_layout, field_value));
+    }
+
+    (field_types, field_values)
+}
+
+fn build_tag<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     union_layout: &UnionLayout<'a>,
@@ -1524,7 +1539,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
             let wrapper_type = env
                 .context
                 .struct_type(&[internal_type, tag_id_type.into()], false);
-            let result_alloca = tag_alloca(env, wrapper_type.into(), "opaque_tag");
+            let result_alloca = entry_block_alloca_zerofill(env, wrapper_type.into(), "opaque_tag");
 
             // Determine types
             let num_fields = arguments.len() + 1;
@@ -1653,49 +1668,21 @@ pub fn build_tag<'a, 'ctx, 'env>(
             debug_assert_eq!(tag_id, 0);
             debug_assert_eq!(arguments.len(), fields.len());
 
-            let ctx = env.context;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
-                let val = load_symbol(scope, field_symbol);
-
-                let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                field_types.push(field_type);
-
-                if let Layout::RecursivePointer = tag_field_layout {
-                    debug_assert!(val.is_pointer_value());
-
-                    // we store recursive pointers as `i64*`
-                    let ptr = env.builder.build_bitcast(
-                        val,
-                        ctx.i64_type().ptr_type(AddressSpace::Generic),
-                        "cast_recursive_pointer",
-                    );
-
-                    field_vals.push(ptr);
-                } else {
-                    // this check fails for recursive tag unions, but can be helpful while debugging
-
-                    field_vals.push(val);
-                }
-            }
+            let (field_types, field_values) = build_tag_fields(env, scope, fields, arguments);
 
             // Create the struct_type
             let data_ptr =
                 reserve_with_refcount_union_as_block_of_memory(env, *union_layout, &[fields]);
 
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_type = env
+                .context
+                .struct_type(field_types.into_bump_slice(), false);
 
             struct_pointer_from_fields(
                 env,
                 struct_type,
                 data_ptr,
-                field_vals.into_iter().enumerate(),
+                field_values.into_iter().enumerate(),
             );
 
             data_ptr.into()
@@ -1719,56 +1706,22 @@ pub fn build_tag<'a, 'ctx, 'env>(
 
             debug_assert!(union_size == 2);
 
-            let ctx = env.context;
-
             // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            debug_assert_eq!(arguments.len(), other_fields.len());
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(other_fields.iter()) {
-                let val = load_symbol(scope, field_symbol);
-
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                    field_types.push(field_type);
-
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        debug_assert!(val.is_pointer_value());
-
-                        // we store recursive pointers as `i64*`
-                        let ptr = env.builder.build_bitcast(
-                            val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic),
-                            "cast_recursive_pointer",
-                        );
-
-                        field_vals.push(ptr);
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
-                        // debug_assert_eq!(tag_field_layout, val_layout);
-
-                        field_vals.push(val);
-                    }
-                }
-            }
+            let (field_types, field_values) = build_tag_fields(env, scope, other_fields, arguments);
 
             // Create the struct_type
             let data_ptr =
                 allocate_tag(env, parent, reuse_allocation, union_layout, &[other_fields]);
 
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_type = env
+                .context
+                .struct_type(field_types.into_bump_slice(), false);
 
             struct_pointer_from_fields(
                 env,
                 struct_type,
                 data_ptr,
-                field_vals.into_iter().enumerate(),
+                field_values.into_iter().enumerate(),
             );
 
             data_ptr.into()
@@ -1815,7 +1768,7 @@ pub fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
     let masked = env.builder.build_and(as_int, mask_intval, "mask");
 
     env.builder
-        .build_int_cast(masked, env.context.i8_type(), "to_u8")
+        .build_int_cast_sign_flag(masked, env.context.i8_type(), false, "to_u8")
 }
 
 pub fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
@@ -1994,7 +1947,8 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
         .build_struct_gep(ptr, index as u32, "at_index_struct_gep")
         .unwrap();
 
-    let result = builder.build_load(elem_ptr, "load_at_index_ptr");
+    let field_layout = field_layouts[index];
+    let result = load_roc_value(env, field_layout, elem_ptr, "load_at_index_ptr_old");
 
     if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
         // a recursive field is stored as a `i64*`, to use it we must cast it to
@@ -2022,7 +1976,7 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let struct_layout = Layout::Struct(field_layouts);
+    let struct_layout = Layout::struct_no_name_order(field_layouts);
     let struct_type = basic_type_from_layout(env, &struct_layout);
 
     let wrapper_type = env
@@ -2039,33 +1993,15 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         .into_pointer_value();
 
     let data_ptr = builder
-        .build_struct_gep(ptr, TAG_DATA_INDEX, "at_index_struct_gep")
+        .build_struct_gep(ptr, TAG_DATA_INDEX, "at_index_struct_gep_tag")
         .unwrap();
 
     let elem_ptr = builder
-        .build_struct_gep(data_ptr, index as u32, "at_index_struct_gep")
+        .build_struct_gep(data_ptr, index as u32, "at_index_struct_gep_data")
         .unwrap();
 
     let field_layout = field_layouts[index];
-    let result = if field_layout.is_passed_by_reference() {
-        let field_type = basic_type_from_layout(env, &field_layout);
-
-        let align_bytes = field_layout.alignment_bytes(env.target_info);
-        let alloca = tag_alloca(env, field_type, "copied_tag");
-        if align_bytes > 0 {
-            let size = env
-                .ptr_int()
-                .const_int(field_layout.stack_size(env.target_info) as u64, false);
-
-            env.builder
-                .build_memcpy(alloca, align_bytes, elem_ptr, align_bytes, size)
-                .unwrap();
-        }
-
-        alloca.into()
-    } else {
-        builder.build_load(elem_ptr, "load_at_index_ptr")
-    };
+    let result = load_roc_value(env, field_layout, elem_ptr, "load_at_index_ptr");
 
     if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
         // a recursive field is stored as a `i64*`, to use it we must cast it to
@@ -2127,8 +2063,7 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
 
     let alignment_bytes = fields
         .iter()
-        .map(|tag| tag.iter().map(|l| l.alignment_bytes(env.target_info)))
-        .flatten()
+        .flat_map(|tag| tag.iter().map(|l| l.alignment_bytes(env.target_info)))
         .max()
         .unwrap_or(0);
 
@@ -2141,15 +2076,11 @@ fn reserve_with_refcount_help<'a, 'ctx, 'env>(
     stack_size: u32,
     alignment_bytes: u32,
 ) -> PointerValue<'ctx> {
-    let ctx = env.context;
-
     let len_type = env.ptr_int();
 
     let value_bytes_intvalue = len_type.const_int(stack_size as u64, false);
 
-    let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.target_info);
-
-    allocate_with_refcount_help(env, basic_type, alignment_bytes, value_bytes_intvalue, rc1)
+    allocate_with_refcount_help(env, basic_type, alignment_bytes, value_bytes_intvalue)
 }
 
 pub fn allocate_with_refcount<'a, 'ctx, 'env>(
@@ -2170,74 +2101,22 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     value_type: impl BasicType<'ctx>,
     alignment_bytes: u32,
     number_of_data_bytes: IntValue<'ctx>,
-    initial_refcount: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {
-    let builder = env.builder;
+    let ptr = call_bitcode_fn(
+        env,
+        &[
+            number_of_data_bytes.into(),
+            env.alignment_const(alignment_bytes).into(),
+        ],
+        roc_builtins::bitcode::UTILS_ALLOCATE_WITH_REFCOUNT,
+    )
+    .into_pointer_value();
 
-    let len_type = env.ptr_int();
-    let ptr_width_u32 = env.target_info.ptr_width() as u32;
+    let ptr_type = value_type.ptr_type(AddressSpace::Generic);
 
-    let extra_bytes = alignment_bytes.max(ptr_width_u32);
-
-    let ptr = {
-        // number of bytes we will allocated
-        let number_of_bytes = builder.build_int_add(
-            len_type.const_int(extra_bytes as u64, false),
-            number_of_data_bytes,
-            "add_extra_bytes",
-        );
-
-        env.call_alloc(number_of_bytes, alignment_bytes)
-    };
-
-    // We must return a pointer to the first element:
-    let data_ptr = {
-        let int_type = env.ptr_int();
-        let as_usize_ptr = builder
-            .build_bitcast(
-                ptr,
-                int_type.ptr_type(AddressSpace::Generic),
-                "to_usize_ptr",
-            )
-            .into_pointer_value();
-
-        let index = match extra_bytes {
-            n if n == ptr_width_u32 => 1,
-            n if n == 2 * ptr_width_u32 => 2,
-            _ => unreachable!("invalid extra_bytes, {}", extra_bytes),
-        };
-
-        let index_intvalue = int_type.const_int(index, false);
-
-        let ptr_type = value_type.ptr_type(AddressSpace::Generic);
-
-        unsafe {
-            builder.build_pointer_cast(
-                env.builder
-                    .build_in_bounds_gep(as_usize_ptr, &[index_intvalue], "get_data_ptr"),
-                ptr_type,
-                "alloc_cast_to_desired",
-            )
-        }
-    };
-
-    let refcount_ptr = match extra_bytes {
-        n if n == ptr_width_u32 => {
-            // the allocated pointer is the same as the refcounted pointer
-            unsafe { PointerToRefcount::from_ptr(env, ptr) }
-        }
-        n if n == 2 * ptr_width_u32 => {
-            // the refcount is stored just before the start of the actual data
-            // but in this case (because of alignment) not at the start of the allocated buffer
-            PointerToRefcount::from_ptr_to_data(env, data_ptr)
-        }
-        n => unreachable!("invalid extra_bytes {}", n),
-    };
-
-    // let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
-    refcount_ptr.set_refcount(env, initial_refcount);
-
-    data_ptr
+    env.builder
+        .build_bitcast(ptr, ptr_type, "alloc_cast_to_desired")
+        .into_pointer_value()
 }
 
 macro_rules! dict_key_value_layout {
@@ -2260,6 +2139,7 @@ macro_rules! list_element_layout {
 
 fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     scope: &Scope<'a, 'ctx>,
     element_layout: &Layout<'a>,
     elems: &[ListLiteralElement],
@@ -2312,7 +2192,7 @@ fn list_literal<'a, 'ctx, 'env>(
             for (index, element) in elems.iter().enumerate() {
                 match element {
                     ListLiteralElement::Literal(literal) => {
-                        let val = build_exp_literal(env, element_layout, literal);
+                        let val = build_exp_literal(env, parent, element_layout, literal);
                         global_elements.push(val.into_int_value());
                     }
                     ListLiteralElement::Symbol(symbol) => {
@@ -2397,7 +2277,7 @@ fn list_literal<'a, 'ctx, 'env>(
         for (index, element) in elems.iter().enumerate() {
             let val = match element {
                 ListLiteralElement::Literal(literal) => {
-                    build_exp_literal(env, element_layout, literal)
+                    build_exp_literal(env, parent, element_layout, literal)
                 }
                 ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
             };
@@ -2417,8 +2297,8 @@ pub fn load_roc_value<'a, 'ctx, 'env>(
     source: PointerValue<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    if layout.is_passed_by_reference() {
-        let alloca = tag_alloca(env, basic_type_from_layout(env, &layout), name);
+    if layout.is_passed_by_reference(env.target_info) {
+        let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
 
         store_roc_value(env, layout, alloca, source.into());
 
@@ -2434,8 +2314,8 @@ pub fn use_roc_value<'a, 'ctx, 'env>(
     source: BasicValueEnum<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    if layout.is_passed_by_reference() {
-        let alloca = tag_alloca(env, basic_type_from_layout(env, &layout), name);
+    if layout.is_passed_by_reference(env.target_info) {
+        let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
 
         env.builder.build_store(alloca, source);
 
@@ -2465,7 +2345,9 @@ pub fn store_roc_value<'a, 'ctx, 'env>(
     destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
 ) {
-    if layout.is_passed_by_reference() {
+    if layout.is_passed_by_reference(env.target_info) {
+        debug_assert!(value.is_pointer_value());
+
         let align_bytes = layout.alignment_bytes(env.target_info);
 
         if align_bytes > 0 {
@@ -2566,32 +2448,51 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
 
                     let destination = out_parameter.into_pointer_value();
-                    if layout.is_passed_by_reference() {
+                    if layout.is_passed_by_reference(env.target_info) {
                         let align_bytes = layout.alignment_bytes(env.target_info);
 
                         if align_bytes > 0 {
-                            let value_ptr = value.into_pointer_value();
+                            debug_assert!(
+                                value.is_pointer_value(),
+                                "{:?}: {:?}\n{:?}",
+                                parent.get_name(),
+                                value,
+                                layout
+                            );
 
-                            // We can only do this if the function itself writes data into this
-                            // pointer. If the pointer is passed as an argument, then we must copy
-                            // from one pointer to our destination pointer
-                            if value_ptr.get_first_use().is_some() {
-                                value_ptr.replace_all_uses_with(destination);
-                            } else {
-                                let size = env
-                                    .ptr_int()
-                                    .const_int(layout.stack_size(env.target_info) as u64, false);
+                            // What we want to do here is
+                            //
+                            // let value_ptr = value.into_pointer_value();
+                            // if value_ptr.get_first_use().is_some() {
+                            //   value_ptr.replace_all_uses_with(destination);
+                            //
+                            // In other words, if the source pointer is used,
+                            // then we just subsitute the source for the input pointer, done.
+                            //
+                            // Only that does not work if the source is not written to.
+                            // A simple example is the identity function
+                            //
+                            // A slightly more complex case that will also make the above not
+                            // work is when the source pointer is only incremented, but not
+                            // written to. Then there is a first_use, but it's still invalid to
+                            // subsitute source with destination
+                            //
+                            // Hence, we explicitly memcpy source to destination, and rely on
+                            // LLVM optimizing away any inefficiencies.
+                            let size = env.ptr_int().const_int(
+                                layout.stack_size_without_alignment(env.target_info) as u64,
+                                false,
+                            );
 
-                                env.builder
-                                    .build_memcpy(
-                                        destination,
-                                        align_bytes,
-                                        value.into_pointer_value(),
-                                        align_bytes,
-                                        size,
-                                    )
-                                    .unwrap();
-                            }
+                            env.builder
+                                .build_memcpy(
+                                    destination,
+                                    align_bytes,
+                                    value.into_pointer_value(),
+                                    align_bytes,
+                                    size,
+                                )
+                                .unwrap();
                         }
                     } else {
                         env.builder.build_store(destination, value);
@@ -2660,7 +2561,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 for param in parameters.iter() {
                     let basic_type = basic_type_from_layout(env, &param.layout);
 
-                    let phi_type = if param.layout.is_passed_by_reference() {
+                    let phi_type = if param.layout.is_passed_by_reference(env.target_info) {
                         basic_type.ptr_type(AddressSpace::Generic).into()
                     } else {
                         basic_type
@@ -2769,6 +2670,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
                     match layout {
+                        Layout::Builtin(Builtin::Str) => todo!(),
                         Layout::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
                             let alignment = element_layout.alignment_bytes(env.target_info);
@@ -2921,7 +2823,7 @@ pub fn complex_bitcast<'ctx>(
 
 /// Check the size of the input and output types. Pretending we have more bytes at a pointer than
 /// we actually do can lead to faulty optimizations and weird segfaults/crashes
-fn complex_bitcast_check_size<'a, 'ctx, 'env>(
+pub fn complex_bitcast_check_size<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: BasicValueEnum<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
@@ -3348,11 +3250,16 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     let c_function_type = match roc_function.get_type().get_return_type() {
         None => {
             // this function already returns by-pointer
-            roc_function.get_type()
+            let output_type = roc_function.get_type().get_param_types().pop().unwrap();
+            argument_types.insert(0, output_type);
+
+            env.context
+                .void_type()
+                .fn_type(&function_arguments(env, &argument_types), false)
         }
         Some(return_type) => {
             let output_type = return_type.ptr_type(AddressSpace::Generic);
-            argument_types.push(output_type.into());
+            argument_types.insert(0, output_type.into());
 
             env.context
                 .void_type()
@@ -3381,12 +3288,12 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
     debug_info_init!(env, c_function);
 
-    // drop the final argument, which is the pointer we write the result into
+    // drop the first argument, which is the pointer we write the result into
     let args_vector = c_function.get_params();
     let mut args = args_vector.as_slice();
-    let args_length = args.len();
 
-    args = &args[..args.len() - 1];
+    // drop the output parameter
+    args = &args[1..];
 
     let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
 
@@ -3397,8 +3304,28 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
             // the C and Fast calling conventions agree
             arguments_for_call.push(*arg);
         } else {
-            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
-            arguments_for_call.push(cast);
+            // not pretty, but seems to cover all our current cases
+            if arg_type.is_pointer_type() && !fastcc_type.is_pointer_type() {
+                // bitcast the ptr
+                let fastcc_ptr = env
+                    .builder
+                    .build_bitcast(
+                        *arg,
+                        fastcc_type.ptr_type(AddressSpace::Generic),
+                        "bitcast_arg",
+                    )
+                    .into_pointer_value();
+
+                let loaded = env.builder.build_load(fastcc_ptr, "load_arg");
+                arguments_for_call.push(loaded);
+            } else {
+                let as_cc_type = env.builder.build_pointer_cast(
+                    arg.into_pointer_value(),
+                    fastcc_type.into_pointer_type(),
+                    "to_cc_type_ptr",
+                );
+                arguments_for_call.push(as_cc_type.into());
+            }
         }
     }
 
@@ -3423,7 +3350,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
         }
     };
 
-    let output_arg_index = args_length - 1;
+    let output_arg_index = 0;
 
     let output_arg = c_function
         .get_nth_param(output_arg_index as u32)
@@ -3520,7 +3447,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
         call_roc_function(
             env,
             roc_wrapper_function,
-            &Layout::Struct(&[Layout::u64(), return_layout]),
+            &Layout::struct_no_name_order(&[Layout::u64(), return_layout]),
             arguments_for_call,
         )
     };
@@ -3610,7 +3537,12 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         _ => (&params[..], &param_types[..]),
     };
 
-    debug_assert_eq!(params.len(), param_types.len());
+    debug_assert!(
+        params.len() == param_types.len(),
+        "when exposing a function to the host, params.len() was {}, but param_types.len() was {}",
+        params.len(),
+        param_types.len()
+    );
 
     let it = params.iter().zip(param_types).map(|(arg, fastcc_type)| {
         let arg_type = arg.get_type();
@@ -3901,7 +3833,7 @@ fn roc_result_layout<'a>(
 ) -> Layout<'a> {
     let elements = [Layout::u64(), Layout::usize(target_info), return_layout];
 
-    Layout::Struct(arena.alloc(elements))
+    Layout::struct_no_name_order(arena.alloc(elements))
 }
 
 fn roc_result_type<'a, 'ctx, 'env>(
@@ -3932,7 +3864,7 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
         .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
         .unwrap();
 
-    let v3 = if return_layout.is_passed_by_reference() {
+    let v3 = if return_layout.is_passed_by_reference(env.target_info) {
         let loaded = env.builder.build_load(
             return_value.into_pointer_value(),
             "load_call_result_passed_by_ptr",
@@ -3964,8 +3896,10 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     let argument_types = match RocReturn::from_layout(env, &return_layout) {
         RocReturn::Return => roc_function_type.get_param_types(),
         RocReturn::ByPointer => {
+            // Our fastcc passes the return pointer as the last parameter.
+            // Remove the return pointer since we now intend to return the result by value.
             let mut types = roc_function_type.get_param_types();
-            types.remove(0);
+            types.pop();
 
             types
         }
@@ -4031,7 +3965,7 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
     // Populate Procs further and get the low-level Expr from the canonical Expr
     let mut headers = Vec::with_capacity_in(procedures.len(), env.arena);
     for ((symbol, layout), proc) in procedures {
-        let name_bytes = roc_mono::alias_analysis::func_name_bytes(&proc);
+        let name_bytes = roc_alias_analysis::func_name_bytes(&proc);
         let func_name = FuncName(&name_bytes);
 
         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
@@ -4073,7 +4007,13 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
-    let mod_solutions = build_procedures_help(env, opt_level, procedures, entry_point, None);
+    let mod_solutions = build_procedures_help(
+        env,
+        opt_level,
+        procedures,
+        entry_point,
+        Some(Path::new("/tmp/test.ll")),
+    );
 
     promote_to_main_function(env, mod_solutions, entry_point.symbol, entry_point.layout)
 }
@@ -4090,7 +4030,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
     let it = procedures.iter().map(|x| x.1);
 
-    let solutions = match roc_mono::alias_analysis::spec_program(opt_level, entry_point, it) {
+    let solutions = match roc_alias_analysis::spec_program(opt_level, entry_point, it) {
         Err(e) => panic!("Error in alias analysis: {}", e),
         Ok(solutions) => solutions,
     };
@@ -4098,7 +4038,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     let solutions = env.arena.alloc(solutions);
 
     let mod_solutions = solutions
-        .mod_solutions(roc_mono::alias_analysis::MOD_APP)
+        .mod_solutions(roc_alias_analysis::MOD_APP)
         .unwrap();
 
     // Add all the Proc headers to the module.
@@ -4203,7 +4143,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
     for (layout, _) in args.iter() {
-        let arg_type = basic_type_from_layout_1(env, layout);
+        let arg_type = argument_type_from_layout(env, layout);
 
         arg_basic_types.push(arg_type);
     }
@@ -4239,6 +4179,24 @@ fn build_proc_header<'a, 'ctx, 'env>(
             arguments.into_bump_slice(),
             proc.ret_layout,
         );
+    }
+
+    if false {
+        use inkwell::attributes::{Attribute, AttributeLoc};
+
+        let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+        debug_assert!(kind_id > 0);
+        let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+        fn_val.add_attribute(AttributeLoc::Function, enum_attr);
+    }
+
+    if false {
+        use inkwell::attributes::{Attribute, AttributeLoc};
+
+        let kind_id = Attribute::get_named_enum_kind_id("noinline");
+        debug_assert!(kind_id > 0);
+        let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+        fn_val.add_attribute(AttributeLoc::Function, enum_attr);
     }
 
     fn_val
@@ -4314,7 +4272,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     let closure_layout = lambda_set.runtime_representation();
     let layouts_it = arguments.iter().chain(std::iter::once(&closure_layout));
     for (param, layout) in evaluator_arguments.iter_mut().zip(layouts_it) {
-        if param.is_pointer_value() && !layout.is_passed_by_reference() {
+        if param.is_pointer_value() && !layout.is_passed_by_reference(env.target_info) {
             *param = builder.build_load(param.into_pointer_value(), "load_param");
         }
     }
@@ -4332,7 +4290,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     } else {
         let call_result = call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
 
-        if return_layout.is_passed_by_reference() {
+        if return_layout.is_passed_by_reference(env.target_info) {
             let align_bytes = return_layout.alignment_bytes(env.target_info);
 
             if align_bytes > 0 {
@@ -4450,11 +4408,8 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         // * roc__mainForHost_1_Update_result_size() -> i64
 
                         let it = top_level.arguments.iter().copied();
-                        let bytes = roc_mono::alias_analysis::func_name_bytes_help(
-                            symbol,
-                            it,
-                            &top_level.result,
-                        );
+                        let bytes =
+                            roc_alias_analysis::func_name_bytes_help(symbol, it, &top_level.result);
                         let func_name = FuncName(&bytes);
                         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
@@ -4645,7 +4600,7 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             let mut arguments = Vec::from_iter_in(it, env.arena);
 
             let result_type = basic_type_from_layout(env, result_layout);
-            let result_alloca = tag_alloca(env, result_type, "result_value");
+            let result_alloca = entry_block_alloca_zerofill(env, result_type, "result_value");
 
             arguments.push(result_alloca.into());
 
@@ -4659,7 +4614,7 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
-            if result_layout.is_passed_by_reference() {
+            if result_layout.is_passed_by_reference(env.target_info) {
                 result_alloca.into()
             } else {
                 env.builder
@@ -5322,40 +5277,53 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.concat : Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_concat(env, scope, args[0], args[1])
+            let string1 = load_symbol(scope, &args[0]);
+            let string2 = load_symbol(scope, &args[1]);
+
+            call_str_bitcode_fn(env, &[string1, string2], bitcode::STR_CONCAT)
         }
         StrJoinWith => {
             // Str.joinWith : List Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_join_with(env, scope, args[0], args[1])
+            let list = list_symbol_to_c_abi(env, scope, args[0]);
+            let string = load_symbol(scope, &args[1]);
+
+            call_str_bitcode_fn(env, &[list.into(), string], bitcode::STR_JOIN_WITH)
         }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            str_starts_with(env, scope, args[0], args[1])
+            let string = load_symbol(scope, &args[0]);
+            let prefix = load_symbol(scope, &args[1]);
+
+            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH)
         }
         StrStartsWithCodePt => {
             // Str.startsWithCodePt : Str, U32 -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            str_starts_with_code_point(env, scope, args[0], args[1])
+            let string = load_symbol(scope, &args[0]);
+            let prefix = load_symbol(scope, &args[1]);
+
+            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH_CODE_PT)
         }
         StrEndsWith => {
             // Str.startsWith : Str, Str -> Bool
             debug_assert_eq!(args.len(), 2);
 
-            str_ends_with(env, scope, args[0], args[1])
+            let string = load_symbol(scope, &args[0]);
+            let prefix = load_symbol(scope, &args[1]);
+
+            call_bitcode_fn(env, &[string, prefix], bitcode::STR_ENDS_WITH)
         }
         StrToNum => {
             // Str.toNum : Str -> Result (Num *) {}
             debug_assert_eq!(args.len(), 1);
 
-            let (string, _string_layout) = load_symbol_and_layout(scope, &args[0]);
-
             let number_layout = match layout {
-                Layout::Struct(fields) => fields[0], // TODO: why is it sometimes a struct?
+                Layout::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
                 _ => unreachable!(),
             };
 
@@ -5367,8 +5335,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!(),
             };
 
-            let string =
-                complex_bitcast(env.builder, string, env.str_list_c_abi().into(), "to_utf8");
+            let string = load_symbol(scope, &args[0]);
 
             call_bitcode_fn(env, &[string], intrinsic)
         }
@@ -5396,33 +5363,29 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.fromUtf8 : List U8 -> Result Str Utf8Problem
             debug_assert_eq!(args.len(), 1);
 
-            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
-
-            str_from_utf8(env, parent, original_wrapper, update_mode)
+            str_from_utf8(env, scope, args[0], update_mode)
         }
         StrFromUtf8Range => {
             debug_assert_eq!(args.len(), 2);
 
-            let list_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let count_and_start = load_symbol(scope, &args[1]).into_struct_value();
 
-            str_from_utf8_range(env, parent, list_wrapper, count_and_start)
+            str_from_utf8_range(env, scope, args[0], count_and_start)
         }
         StrToUtf8 => {
             // Str.fromInt : Str -> List U8
             debug_assert_eq!(args.len(), 1);
 
-            // this is an identity conversion
-            // we just implement it here to subvert the type system
             let string = load_symbol(scope, &args[0]);
-
-            str_to_utf8(env, string.into_struct_value())
+            call_list_bitcode_fn(env, &[string], bitcode::STR_TO_UTF8)
         }
         StrRepeat => {
             // Str.repeat : Str, Nat -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_repeat(env, scope, args[0], args[1])
+            let string = load_symbol(scope, &args[0]);
+            let count = load_symbol(scope, &args[1]);
+            call_str_bitcode_fn(env, &[string, count], bitcode::STR_REPEAT)
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str
@@ -5434,10 +5397,19 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.isEmpty : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let len = str_number_of_bytes(env, scope, args[0]);
+            // the builtin will always return an u64
+            let string = load_symbol(scope, &args[0]);
+            let length =
+                call_bitcode_fn(env, &[string], bitcode::STR_NUMBER_OF_BYTES).into_int_value();
+
+            // cast to the appropriate usize of the current build
+            let byte_count =
+                env.builder
+                    .build_int_cast_sign_flag(length, env.ptr_int(), false, "len_as_usize");
+
             let is_zero = env.builder.build_int_compare(
                 IntPredicate::EQ,
-                len,
+                byte_count,
                 env.ptr_int().const_zero(),
                 "str_len_is_zero",
             );
@@ -5447,25 +5419,29 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.countGraphemes : Str -> Int
             debug_assert_eq!(args.len(), 1);
 
-            str_count_graphemes(env, scope, args[0])
+            let string = load_symbol(scope, &args[0]);
+            call_bitcode_fn(env, &[string], bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
         }
         StrTrim => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
-            str_trim(env, scope, args[0])
+            let string = load_symbol(scope, &args[0]);
+            call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM)
         }
         StrTrimLeft => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
-            str_trim_left(env, scope, args[0])
+            let string = load_symbol(scope, &args[0]);
+            call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM_LEFT)
         }
         StrTrimRight => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
-            str_trim_right(env, scope, args[0])
+            let string = load_symbol(scope, &args[0]);
+            call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM_RIGHT)
         }
         ListLen => {
             // List.len : List * -> Int
@@ -5646,12 +5622,12 @@ fn run_low_level<'a, 'ctx, 'env>(
                 wrapper_struct,
             )
         }
-        ListSet => {
+        ListReplaceUnsafe => {
             let list = load_symbol(scope, &args[0]);
             let index = load_symbol(scope, &args[1]);
             let (element, element_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            list_set(
+            list_replace_unsafe(
                 env,
                 layout_ids,
                 list,
@@ -5680,7 +5656,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
-        | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
+        | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin
+        | NumToIntChecked => {
             debug_assert_eq!(args.len(), 1);
 
             let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -5692,7 +5669,14 @@ fn run_low_level<'a, 'ctx, 'env>(
                     match arg_builtin {
                         Int(int_width) => {
                             let int_type = convert::int_type_from_int_width(env, *int_width);
-                            build_int_unary_op(env, arg.into_int_value(), int_type, op, layout)
+                            build_int_unary_op(
+                                env,
+                                arg.into_int_value(),
+                                *int_width,
+                                int_type,
+                                op,
+                                layout,
+                            )
                         }
                         Float(float_width) => build_float_unary_op(
                             env,
@@ -5716,37 +5700,21 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         NumBytesToU16 => {
             debug_assert_eq!(args.len(), 2);
-            let list = load_symbol(scope, &args[0]).into_struct_value();
+            let list = load_symbol(scope, &args[0]);
             let position = load_symbol(scope, &args[1]);
             call_bitcode_fn(
                 env,
-                &[
-                    complex_bitcast(
-                        env.builder,
-                        list.into(),
-                        env.str_list_c_abi().into(),
-                        "to_i128",
-                    ),
-                    position,
-                ],
+                &[list_to_c_abi(env, list).into(), position],
                 bitcode::NUM_BYTES_TO_U16,
             )
         }
         NumBytesToU32 => {
             debug_assert_eq!(args.len(), 2);
-            let list = load_symbol(scope, &args[0]).into_struct_value();
+            let list = load_symbol(scope, &args[0]);
             let position = load_symbol(scope, &args[1]);
             call_bitcode_fn(
                 env,
-                &[
-                    complex_bitcast(
-                        env.builder,
-                        list.into(),
-                        env.str_list_c_abi().into(),
-                        "to_i128",
-                    ),
-                    position,
-                ],
+                &[list_to_c_abi(env, list).into(), position],
                 bitcode::NUM_BYTES_TO_U32,
             )
         }
@@ -5891,8 +5859,11 @@ fn run_low_level<'a, 'ctx, 'env>(
             let arg = load_symbol(scope, &args[0]).into_int_value();
 
             let to = basic_type_from_layout(env, layout).into_int_type();
+            let to_signed = intwidth_from_layout(*layout).is_signed();
 
-            env.builder.build_int_cast(arg, to, "inc_cast").into()
+            env.builder
+                .build_int_cast_sign_flag(arg, to, to_signed, "inc_cast")
+                .into()
         }
         Eq => {
             debug_assert_eq!(args.len(), 2);
@@ -6118,6 +6089,10 @@ fn run_low_level<'a, 'ctx, 'env>(
             unreachable!("these are higher order, and are handled elsewhere")
         }
 
+        BoxExpr | UnboxExpr => {
+            unreachable!("The {:?} operation is turned into mono Expr", op)
+        }
+
         PtrCast | RefCountInc | RefCountDec => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
@@ -6149,7 +6124,18 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
         Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
             basic_type_from_builtin(env, builtin)
         }
-        Builtin::Str | Builtin::List(_) => env.str_list_c_abi().into(),
+        Builtin::Str | Builtin::List(_) => {
+            let address_space = AddressSpace::Generic;
+            let field_types: [BasicTypeEnum; 3] = [
+                env.context.i8_type().ptr_type(address_space).into(),
+                env.ptr_int().into(),
+                env.ptr_int().into(),
+            ];
+
+            let struct_type = env.context.struct_type(&field_types, false);
+
+            struct_type.ptr_type(address_space).into()
+        }
         Builtin::Dict(_, _) | Builtin::Set(_) => {
             // TODO verify this is what actually happens
             basic_type_from_builtin(env, builtin)
@@ -6166,18 +6152,30 @@ enum RocReturn {
 }
 
 impl RocReturn {
-    fn roc_return_by_pointer(layout: Layout) -> bool {
+    fn roc_return_by_pointer(target_info: TargetInfo, layout: Layout) -> bool {
         match layout {
+            Layout::Builtin(builtin) => {
+                use Builtin::*;
+
+                match target_info.ptr_width() {
+                    roc_target::PtrWidth::Bytes4 => false,
+
+                    roc_target::PtrWidth::Bytes8 => {
+                        //
+                        matches!(builtin, Str)
+                    }
+                }
+            }
             Layout::Union(UnionLayout::NonRecursive(_)) => true,
             Layout::LambdaSet(lambda_set) => {
-                RocReturn::roc_return_by_pointer(lambda_set.runtime_representation())
+                RocReturn::roc_return_by_pointer(target_info, lambda_set.runtime_representation())
             }
             _ => false,
         }
     }
 
-    fn from_layout<'a, 'ctx, 'env>(_env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> Self {
-        if Self::roc_return_by_pointer(*layout) {
+    fn from_layout<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> Self {
+        if Self::roc_return_by_pointer(env.target_info, *layout) {
             RocReturn::ByPointer
         } else {
             RocReturn::Return
@@ -6186,7 +6184,7 @@ impl RocReturn {
 }
 
 #[derive(Debug)]
-enum CCReturn {
+pub enum CCReturn {
     /// Return as normal
     Return,
     /// require an extra argument, a pointer
@@ -6228,7 +6226,7 @@ impl CCReturn {
 }
 
 /// According to the C ABI, how should we return a value with the given layout?
-fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> CCReturn {
+pub fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> CCReturn {
     let return_size = layout.stack_size(env.target_info);
     let pass_result_by_pointer = return_size > 2 * env.target_info.ptr_width() as u32;
 
@@ -6297,7 +6295,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
 
                 cc_argument_types.push(to_cc_type(env, layout));
 
-                let basic_type = basic_type_from_layout(env, layout);
+                let basic_type = argument_type_from_layout(env, layout);
                 fastcc_argument_types.push(basic_type);
 
                 arguments.push(value);
@@ -6350,9 +6348,34 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                     if param.get_type() == *cc_type {
                         cc_arguments.push(param.into());
                     } else {
-                        let as_cc_type =
-                            complex_bitcast(env.builder, param, *cc_type, "to_cc_type");
-                        cc_arguments.push(as_cc_type.into());
+                        // not pretty, but seems to cover all our current case
+                        if cc_type.is_pointer_type() && !param.get_type().is_pointer_type() {
+                            // we need to pass this value by-reference; put it into an alloca
+                            // and bitcast the reference
+
+                            let param_alloca =
+                                env.builder.build_alloca(param.get_type(), "param_alloca");
+                            env.builder.build_store(param_alloca, param);
+
+                            let as_cc_type = env.builder.build_bitcast(
+                                param_alloca,
+                                cc_type.into_pointer_type(),
+                                "to_cc_type_ptr",
+                            );
+
+                            cc_arguments.push(as_cc_type.into());
+                        } else {
+                            // eprintln!("C type: {:?}", cc_type);
+                            // eprintln!("Fastcc type: {:?}", param.get_type());
+                            // todo!("C <-> Fastcc interaction that we haven't seen before")
+
+                            let as_cc_type = env.builder.build_pointer_cast(
+                                param.into_pointer_value(),
+                                cc_type.into_pointer_type(),
+                                "to_cc_type_ptr",
+                            );
+                            cc_arguments.push(as_cc_type.into());
+                        }
                     }
                 }
 
@@ -6499,7 +6522,13 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
         NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
-        NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
+        NumRemUnchecked => {
+            if int_width.is_signed() {
+                bd.build_int_signed_rem(lhs, rhs, "rem_int").into()
+            } else {
+                bd.build_int_unsigned_rem(lhs, rhs, "rem_uint").into()
+            }
+        }
         NumIsMultipleOf => {
             // this builds the following construct
             //
@@ -6573,7 +6602,13 @@ fn build_int_binop<'a, 'ctx, 'env>(
             &[lhs.into(), rhs.into()],
             &bitcode::NUM_POW_INT[int_width],
         ),
-        NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
+        NumDivUnchecked => {
+            if int_width.is_signed() {
+                bd.build_int_signed_div(lhs, rhs, "div_int").into()
+            } else {
+                bd.build_int_unsigned_div(lhs, rhs, "div_uint").into()
+            }
+        }
         NumDivCeilUnchecked => call_bitcode_fn(
             env,
             &[lhs.into(), rhs.into()],
@@ -6590,12 +6625,12 @@ fn build_int_binop<'a, 'ctx, 'env>(
         }
         NumShiftRightBy => {
             // NOTE arguments are flipped;
-            bd.build_right_shift(rhs, lhs, false, "int_shift_right")
+            bd.build_right_shift(rhs, lhs, true, "int_shift_right")
                 .into()
         }
         NumShiftRightZfBy => {
             // NOTE arguments are flipped;
-            bd.build_right_shift(rhs, lhs, true, "int_shift_right_zf")
+            bd.build_right_shift(rhs, lhs, false, "int_shift_right_zf")
                 .into()
         }
 
@@ -6922,7 +6957,8 @@ fn int_type_signed_min(int_type: IntType) -> IntValue {
 fn build_int_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: IntValue<'ctx>,
-    int_type: IntType<'ctx>,
+    arg_width: IntWidth,
+    arg_int_type: IntType<'ctx>,
     op: LowLevel,
     return_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -6933,11 +6969,11 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
     match op {
         NumNeg => {
             // integer abs overflows when applied to the minimum value of a signed type
-            int_neg_raise_on_overflow(env, arg, int_type)
+            int_neg_raise_on_overflow(env, arg, arg_int_type)
         }
         NumAbs => {
             // integer abs overflows when applied to the minimum value of a signed type
-            int_abs_raise_on_overflow(env, arg, int_type)
+            int_abs_raise_on_overflow(env, arg, arg_int_type)
         }
         NumToFloat => {
             // This is an Int, so we need to convert it.
@@ -6955,6 +6991,80 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 target_float_type,
                 "i64_to_f64",
             )
+        }
+        NumToIntChecked => {
+            // return_layout : Result N [ OutOfBounds ]* ~ { result: N, out_of_bounds: bool }
+
+            let target_int_width = match return_layout {
+                Layout::Struct { field_layouts, .. } if field_layouts.len() == 2 => {
+                    debug_assert!(matches!(field_layouts[1], Layout::Builtin(Builtin::Bool)));
+                    match field_layouts[0] {
+                        Layout::Builtin(Builtin::Int(iw)) => iw,
+                        layout => internal_error!(
+                            "There can only be an int layout here, found {:?}!",
+                            layout
+                        ),
+                    }
+                }
+                layout => internal_error!(
+                    "There can only be a result layout here, found {:?}!",
+                    layout
+                ),
+            };
+
+            let arg_always_fits_in_target = (arg_width.stack_size() < target_int_width.stack_size()
+                && (
+                    // If the arg is unsigned, it will always fit in either a signed or unsigned
+                    // int of a larger width.
+                    !arg_width.is_signed()
+                    ||
+                    // Otherwise if the arg is signed, it will always fit in a signed int of a
+                    // larger width.
+                    (target_int_width.is_signed() )
+                )                )
+                || // Or if the two types are the same, they trivially fit.
+                arg_width == target_int_width;
+
+            if arg_always_fits_in_target {
+                // This is guaranteed to succeed so we can just make it an int cast and let LLVM
+                // optimize it away.
+                let target_int_type = convert::int_type_from_int_width(env, target_int_width);
+                let target_int_val: BasicValueEnum<'ctx> = env
+                    .builder
+                    .build_int_cast_sign_flag(
+                        arg,
+                        target_int_type,
+                        target_int_width.is_signed(),
+                        "int_cast",
+                    )
+                    .into();
+
+                let return_type =
+                    convert::basic_type_from_layout(env, return_layout).into_struct_type();
+                let r = return_type.const_zero();
+                let r = bd
+                    .build_insert_value(r, target_int_val, 0, "converted_int")
+                    .unwrap();
+                let r = bd
+                    .build_insert_value(r, env.context.bool_type().const_zero(), 1, "out_of_bounds")
+                    .unwrap();
+
+                r.into_struct_value().into()
+            } else {
+                let bitcode_fn = if !arg_width.is_signed() {
+                    // We are trying to convert from unsigned to signed/unsigned of same or lesser width, e.g.
+                    // u16 -> i16, u16 -> i8, or u16 -> u8. We only need to check that the argument
+                    // value fits in the MAX target type value.
+                    &bitcode::NUM_INT_TO_INT_CHECKING_MAX[target_int_width][arg_width]
+                } else {
+                    // We are trying to convert from signed to signed/unsigned of same or lesser width, e.g.
+                    // i16 -> u16, i16 -> i8, or i16 -> u8. We need to check that the argument value fits in
+                    // the MAX and MIN target type.
+                    &bitcode::NUM_INT_TO_INT_CHECKING_MAX_AND_MIN[target_int_width][arg_width]
+                };
+
+                call_bitcode_fn_fixing_for_convention(env, &[arg.into()], return_layout, bitcode_fn)
+            }
         }
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);

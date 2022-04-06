@@ -6,8 +6,9 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use wasmer::{Memory, WasmPtr};
 
+use super::RefCount;
 use crate::helpers::from_wasmer_memory::FromWasmerMemory;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
 
@@ -17,6 +18,7 @@ const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
+const PANIC_MSG_NAME: &str = "panic_msg";
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -35,13 +37,12 @@ fn promote_expr_to_module(src: &str) -> String {
 pub fn compile_and_load<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: &'a roc_builtins::std::StdLib,
     _test_wrapper_type_info: PhantomData<T>,
 ) -> wasmer::Instance {
     let platform_bytes = load_platform_and_builtins();
 
     let compiled_bytes =
-        compile_roc_to_wasm_bytes(arena, stdlib, &platform_bytes, src, _test_wrapper_type_info);
+        compile_roc_to_wasm_bytes(arena, &platform_bytes, src, _test_wrapper_type_info);
 
     if DEBUG_LOG_SETTINGS.keep_test_binary {
         let build_dir_hash = src_hash(src);
@@ -65,7 +66,6 @@ fn src_hash(src: &str) -> u64 {
 
 fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
-    stdlib: &'a roc_builtins::std::StdLib,
     preload_bytes: &[u8],
     src: &str,
     _test_wrapper_type_info: PhantomData<T>,
@@ -84,20 +84,18 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         module_src = &temp;
     }
 
-    let exposed_types = MutMap::default();
-    let loaded = roc_load::file::load_and_monomorphize_from_str(
+    let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
-        stdlib,
         src_dir,
-        exposed_types,
+        Default::default(),
         roc_target::TargetInfo::default_wasm32(),
     );
 
     let loaded = loaded.expect("failed to load module");
 
-    use roc_load::file::MonomorphizedModule;
+    use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         module_id,
         procedures,
@@ -176,28 +174,28 @@ fn load_bytes_into_runtime(bytes: Vec<u8>) -> wasmer::Instance {
 }
 
 #[allow(dead_code)]
-pub fn assert_wasm_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
+pub fn assert_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
 where
     T: FromWasmerMemory + Wasm32Result,
 {
     let arena = bumpalo::Bump::new();
 
-    // NOTE the stdlib must be in the arena; just taking a reference will segfault
-    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
     let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
 
     match test_wrapper.call(&[]) {
-        Err(e) => Err(format!("{:?}", e)),
+        Err(e) => {
+            if let Some(msg) = get_roc_panic_msg(&instance, memory) {
+                Err(msg)
+            } else {
+                Err(e.to_string())
+            }
+        }
         Ok(result) => {
-            let address = match result[0] {
-                wasmer::Value::I32(a) => a,
-                _ => panic!(),
-            };
+            let address = result[0].unwrap_i32();
 
             if false {
                 println!("test_wrapper returned 0x{:x}", address);
@@ -216,21 +214,43 @@ where
     }
 }
 
+/// Our test roc_panic stores a pointer to its message in a global variable so we can find it.
+fn get_roc_panic_msg(instance: &wasmer::Instance, memory: &Memory) -> Option<String> {
+    let memory_bytes = unsafe { memory.data_unchecked() };
+
+    // We need to dereference twice!
+    // The Wasm Global only points at the memory location of the C global value
+    let panic_msg_global = instance.exports.get_global(PANIC_MSG_NAME).unwrap();
+    let global_addr = panic_msg_global.get().unwrap_i32() as usize;
+    let global_ptr = memory_bytes[global_addr..].as_ptr() as *const u32;
+
+    // Dereference again to find the bytes of the message string
+    let msg_addr = unsafe { *global_ptr };
+    if msg_addr == 0 {
+        return None;
+    }
+    let msg_index = msg_addr as usize;
+    let msg_len = memory_bytes[msg_index..]
+        .iter()
+        .position(|c| *c == 0)
+        .unwrap();
+    let msg_bytes = memory_bytes[msg_index..][..msg_len].to_vec();
+    let msg = unsafe { String::from_utf8_unchecked(msg_bytes) };
+    Some(msg)
+}
+
 #[allow(dead_code)]
 pub fn assert_wasm_refcounts_help<T>(
     src: &str,
     phantom: PhantomData<T>,
     num_refcounts: usize,
-) -> Result<Vec<u32>, String>
+) -> Result<Vec<RefCount>, String>
 where
     T: FromWasmerMemory + Wasm32Result,
 {
     let arena = bumpalo::Bump::new();
 
-    // NOTE the stdlib must be in the arena; just taking a reference will segfault
-    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, stdlib, phantom);
+    let instance = crate::helpers::wasm::compile_and_load(&arena, src, phantom);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -239,10 +259,7 @@ where
     let init_result = init_refcount_test.call(&[wasmer::Value::I32(expected_len)]);
     let refcount_vector_addr = match init_result {
         Err(e) => return Err(format!("{:?}", e)),
-        Ok(result) => match result[0] {
-            wasmer::Value::I32(a) => a,
-            _ => panic!(),
-        },
+        Ok(result) => result[0].unwrap_i32(),
     };
 
     // Run the test
@@ -270,12 +287,15 @@ where
     for i in 0..num_refcounts {
         let rc_ptr = refcount_ptrs[i].get();
         let rc = if rc_ptr.offset() == 0 {
-            // RC pointer has been set to null, which means the value has been freed.
-            // In tests, we simply represent this as zero refcount.
-            0
+            RefCount::Deallocated
         } else {
-            let rc_encoded = rc_ptr.deref(memory).unwrap().get();
-            (rc_encoded - i32::MIN + 1) as u32
+            let rc_encoded: i32 = rc_ptr.deref(memory).unwrap().get();
+            if rc_encoded == 0 {
+                RefCount::Constant
+            } else {
+                let rc = rc_encoded - i32::MIN + 1;
+                RefCount::Live(rc as u32)
+            }
         };
         refcounts.push(rc);
     }
@@ -313,42 +333,44 @@ pub fn debug_memory_hex(memory: &Memory, address: i32, size: usize) {
 }
 
 #[allow(unused_macros)]
-macro_rules! assert_wasm_evals_to {
+macro_rules! assert_evals_to {
+    ($src:expr, $expected:expr, $ty:ty) => {
+        $crate::helpers::wasm::assert_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $crate::helpers::wasm::identity,
+            false
+        )
+    };
+
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+        $crate::helpers::wasm::assert_evals_to!($src, $expected, $ty, $transform, false);
+    };
+
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems: expr) => {{
         let phantom = std::marker::PhantomData;
-        match $crate::helpers::wasm::assert_wasm_evals_to_help::<$ty>($src, phantom) {
-            Err(msg) => panic!("{:?}", msg),
+        let _ = $ignore_problems; // Always ignore "problems"! One backend (LLVM) is enough to cover them.
+        match $crate::helpers::wasm::assert_evals_to_help::<$ty>($src, phantom) {
+            Err(msg) => panic!("{}", msg),
             Ok(actual) => {
                 assert_eq!($transform(actual), $expected)
             }
         }
-    };
-
-    ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::helpers::wasm::assert_wasm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $crate::helpers::wasm::identity
-        );
-    };
-
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::helpers::wasm::assert_wasm_evals_to!($src, $expected, $ty, $transform);
-    };
+    }};
 }
 
 #[allow(unused_macros)]
-macro_rules! assert_evals_to {
-    ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, $crate::helpers::wasm::identity);
+macro_rules! expect_runtime_error_panic {
+    ($src:expr) => {{
+        $crate::helpers::wasm::assert_evals_to!(
+            $src,
+            false, // fake value/type for eval
+            bool,
+            $crate::helpers::wasm::identity,
+            true // ignore problems
+        );
     }};
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        // Same as above, except with an additional transformation argument.
-        {
-            $crate::helpers::wasm::assert_wasm_evals_to!($src, $expected, $ty, $transform);
-        }
-    };
 }
 
 #[allow(dead_code)]
@@ -377,8 +399,9 @@ macro_rules! assert_refcounts {
 
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
+
 #[allow(unused_imports)]
-pub(crate) use assert_wasm_evals_to;
+pub(crate) use expect_runtime_error_panic;
 
 #[allow(unused_imports)]
 pub(crate) use assert_refcounts;

@@ -5,14 +5,15 @@ use std::cmp::{max_by_key, min_by_key};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::called_via::CalledVia;
-use roc_module::ident::TagName;
+use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant, WrappedVariant,
+    union_sorted_tags_help, Builtin, Layout, LayoutCache, UnionLayout, UnionVariant, WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
+use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
 
@@ -70,6 +71,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     }
 }
 
+#[derive(Debug)]
 enum NewtypeKind<'a> {
     Tag(&'a TagName),
     RecordField(&'a str),
@@ -89,10 +91,11 @@ fn unroll_newtypes<'a>(
     mut content: &'a Content,
 ) -> (Vec<'a, NewtypeKind<'a>>, &'a Content) {
     let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
+    let mut force_alias_content = None;
     loop {
         match content {
             Content::Structure(FlatType::TagUnion(tags, _))
-                if tags.is_newtype_wrapper(env.subs) =>
+                if tags.is_newtype_wrapper_of_global_tag(env.subs) =>
             {
                 let (tag_name, vars): (&TagName, &[Variable]) = tags
                     .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
@@ -113,7 +116,20 @@ fn unroll_newtypes<'a>(
                 let field_var = *field.as_inner();
                 content = env.subs.get_content_without_compacting(field_var);
             }
-            _ => return (newtype_containers, content),
+            Content::Alias(_, _, real_var, _) => {
+                // We need to pass through aliases too, because their underlying types may have
+                // unrolled newtypes. In such cases return the list of unrolled newtypes, but keep
+                // the content as the alias for readability. For example,
+                //   T : { a : Str }
+                //   v : T
+                //   v = { a : "value" }
+                //   v
+                // Here we need the newtype container to be `[RecordField(a)]`, but the content to
+                // remain as the alias `T`.
+                force_alias_content = Some(content);
+                content = env.subs.get_content_without_compacting(*real_var);
+            }
+            _ => return (newtype_containers, force_alias_content.unwrap_or(content)),
         }
     }
 }
@@ -147,7 +163,7 @@ fn apply_newtypes<'a>(
 }
 
 fn unroll_aliases<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
-    while let Content::Alias(_, _, real) = content {
+    while let Content::Alias(_, _, real, _) = content {
         content = env.subs.get_content_without_compacting(*real);
     }
     content
@@ -264,6 +280,15 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
 ) -> Result<Expr<'a>, ToAstProblem> {
     let (newtype_containers, content) = unroll_newtypes(env, content);
     let content = unroll_aliases(env, content);
+
+    macro_rules! num_helper {
+        ($ty:ty) => {
+            app.call_function(main_fn_name, |_, num: $ty| {
+                num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+            })
+        };
+    }
+
     let result = match layout {
         Layout::Builtin(Builtin::Bool) => Ok(app
             .call_function(main_fn_name, |mem: &A::Memory, num: bool| {
@@ -272,29 +297,24 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         Layout::Builtin(Builtin::Int(int_width)) => {
             use IntWidth::*;
 
-            macro_rules! helper {
-                ($ty:ty) => {
-                    app.call_function(main_fn_name, |_, num: $ty| {
-                        num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-                    })
-                };
-            }
-
-            let result = match int_width {
-                U8 | I8 => {
-                    // NOTE: `helper!` does not handle 8-bit numbers yet
+            let result = match (content, int_width) {
+                (Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _)), U8) => num_helper!(u8),
+                (_, U8) => {
+                    // This is not a number, it's a tag union or something else
                     app.call_function(main_fn_name, |mem: &A::Memory, num: u8| {
                         byte_to_ast(env, mem, num, content)
                     })
                 }
-                U16 => helper!(u16),
-                U32 => helper!(u32),
-                U64 => helper!(u64),
-                U128 => helper!(u128),
-                I16 => helper!(i16),
-                I32 => helper!(i32),
-                I64 => helper!(i64),
-                I128 => helper!(i128),
+                // The rest are numbers... for now
+                (_, U16) => num_helper!(u16),
+                (_, U32) => num_helper!(u32),
+                (_, U64) => num_helper!(u64),
+                (_, U128) => num_helper!(u128),
+                (_, I8) => num_helper!(i8),
+                (_, I16) => num_helper!(i16),
+                (_, I32) => num_helper!(i32),
+                (_, I64) => num_helper!(i64),
+                (_, I128) => num_helper!(i128),
             };
 
             Ok(result)
@@ -302,26 +322,25 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         Layout::Builtin(Builtin::Float(float_width)) => {
             use FloatWidth::*;
 
-            macro_rules! helper {
-                ($ty:ty) => {
-                    app.call_function(main_fn_name, |_, num: $ty| {
-                        num_to_ast(env, number_literal_to_ast(env.arena, num), content)
-                    })
-                };
-            }
-
             let result = match float_width {
-                F32 => helper!(f32),
-                F64 => helper!(f64),
+                F32 => num_helper!(f32),
+                F64 => num_helper!(f64),
                 F128 => todo!("F128 not implemented"),
             };
 
             Ok(result)
         }
-        Layout::Builtin(Builtin::Str) => Ok(app
-            .call_function(main_fn_name, |_, string: &'static str| {
-                str_to_ast(env.arena, env.arena.alloc(string))
-            })),
+        Layout::Builtin(Builtin::Decimal) => Ok(num_helper!(RocDec)),
+        Layout::Builtin(Builtin::Str) => {
+            let size = layout.stack_size(env.target_info) as usize;
+            Ok(
+                app.call_function_dynamic_size(main_fn_name, size, |mem: &A::Memory, addr| {
+                    let string = mem.deref_str(addr);
+                    let arena_str = env.arena.alloc_str(string);
+                    Expr::Str(StrLiteral::PlainLine(arena_str))
+                }),
+            )
+        }
         Layout::Builtin(Builtin::List(elem_layout)) => Ok(app.call_function(
             main_fn_name,
             |mem: &A::Memory, (addr, len): (usize, usize)| {
@@ -331,18 +350,14 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
         }
-        Layout::Struct(field_layouts) => {
+        Layout::Struct { field_layouts, .. } => {
             let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
-                    Ok(struct_to_ast(env, mem, addr, field_layouts, *fields))
+                    Ok(struct_to_ast(env, mem, addr, *fields))
                 }
-                Content::Structure(FlatType::EmptyRecord) => Ok(struct_to_ast(
-                    env,
-                    mem,
-                    addr,
-                    field_layouts,
-                    RecordFields::empty(),
-                )),
+                Content::Structure(FlatType::EmptyRecord) => {
+                    Ok(struct_to_ast(env, mem, addr, RecordFields::empty()))
+                }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     debug_assert_eq!(tags.len(), 1);
 
@@ -382,7 +397,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             };
 
             let fields = [Layout::u64(), *layout];
-            let layout = Layout::Struct(&fields);
+            let layout = Layout::struct_no_name_order(&fields);
 
             let result_stack_size = layout.stack_size(env.target_info);
 
@@ -426,6 +441,16 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             unreachable!("RecursivePointers can only be inside structures")
         }
         Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
+        Layout::Boxed(_) => {
+            let size = layout.stack_size(env.target_info);
+            Ok(app.call_function_dynamic_size(
+                main_fn_name,
+                size as usize,
+                |mem: &A::Memory, addr| {
+                    addr_to_ast(env, mem, addr, layout, WhenRecursive::Unreachable, content)
+                },
+            ))
+        }
     };
     result.map(|e| apply_newtypes(env, newtype_containers, e))
 }
@@ -512,13 +537,13 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             list_to_ast(env, mem, elem_addr, len, elem_layout, content)
         }
         (_, Layout::Builtin(Builtin::Str)) => {
-            let arena_str = mem.deref_str(addr);
-
-            str_to_ast(env.arena, arena_str)
+            let string = mem.deref_str(addr);
+            let arena_str = env.arena.alloc_str(string);
+            Expr::Str(StrLiteral::PlainLine(arena_str))
         }
-        (_, Layout::Struct(field_layouts)) => match content {
+        (_, Layout::Struct{field_layouts, ..}) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
-                struct_to_ast(env, mem, addr, field_layouts, *fields)
+                struct_to_ast(env, mem, addr, *fields)
             }
             Content::Structure(FlatType::TagUnion(tags, _)) => {
                 debug_assert_eq!(tags.len(), 1);
@@ -531,7 +556,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
-                struct_to_ast(env, mem, addr, &[], RecordFields::empty())
+                struct_to_ast(env, mem, addr, RecordFields::empty())
             }
             other => {
                 unreachable!(
@@ -717,6 +742,25 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 )
             }
         }
+        (Content::Structure(FlatType::Apply(Symbol::BOX_BOX_TYPE, args)), Layout::Boxed(inner_layout)) => {
+            debug_assert_eq!(args.len(), 1);
+
+            let inner_var_index = args.into_iter().next().unwrap();
+            let inner_var = env.subs[inner_var_index];
+            let inner_content = env.subs.get_content_without_compacting(inner_var);
+
+            let addr_of_inner = mem.deref_usize(addr);
+            let inner_expr = addr_to_ast(env, mem, addr_of_inner, inner_layout, WhenRecursive::Unreachable, inner_content);
+
+            let box_box = env.arena.alloc(Loc::at_zero(Expr::Var {
+                module_name: "Box", ident: "box"
+            }));
+            let box_box_arg = &*env.arena.alloc(Loc::at_zero(inner_expr));
+            let box_box_args = env.arena.alloc([box_box_arg]);
+
+            Expr::Apply(box_box, box_box_args, CalledVia::Space)
+        }
+        (_, Layout::Boxed(_)) => unreachable!("Box layouts can only be behind a `Box.Box` application"),
         other => {
             todo!(
                 "TODO add support for rendering pointer to {:?} in the REPL",
@@ -796,7 +840,7 @@ fn single_tag_union_to_ast<'a, M: ReplAppMemory>(
         sequence_of_expr(env, mem, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else if field_layouts.is_empty() && !payload_vars.is_empty() {
         // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
-        let it = payload_vars.iter().copied().zip([&Layout::Struct(&[])]);
+        let it = payload_vars.iter().copied().zip([&Layout::UNIT]);
         sequence_of_expr(env, mem, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else {
         unreachable!()
@@ -841,30 +885,46 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
     env: &Env<'a, 'a>,
     mem: &'a M,
     addr: usize,
-    field_layouts: &'a [Layout<'a>],
     record_fields: RecordFields,
 ) -> Expr<'a> {
     let arena = env.arena;
     let subs = env.subs;
-    let mut output = Vec::with_capacity_in(field_layouts.len(), arena);
+    let mut output = Vec::with_capacity_in(record_fields.len(), arena);
 
     let sorted_fields: Vec<_> = Vec::from_iter_in(
         record_fields.sorted_iterator(env.subs, Variable::EMPTY_RECORD),
-        env.arena,
+        arena,
     );
+
+    let mut layout_cache = LayoutCache::new(env.target_info);
+    // We recalculate the layouts here because we will have compiled the record so that its fields
+    // are sorted by descending alignment, and then alphabetic, but the type of the record is
+    // always only sorted alphabetically. We want to arrange the rendered record in the order of
+    // the type.
+    let field_to_layout: MutMap<Lowercase, Layout> = sorted_fields
+        .iter()
+        .map(|(label, field)| {
+            let layout = layout_cache
+                .from_var(arena, *field.as_inner(), env.subs)
+                .unwrap();
+            (label.clone(), layout)
+        })
+        .collect();
 
     if sorted_fields.len() == 1 {
         // this is a 1-field wrapper record around another record or 1-tag tag union
         let (label, field) = sorted_fields.into_iter().next().unwrap();
 
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
+        debug_assert_eq!(field_to_layout.len(), 1);
+        let inner_layouts = arena.alloc([field_to_layout.into_values().next().unwrap()]);
 
         let loc_expr = &*arena.alloc(Loc {
             value: addr_to_ast(
                 env,
                 mem,
                 addr,
-                &Layout::Struct(field_layouts),
+                &Layout::struct_no_name_order(inner_layouts),
                 WhenRecursive::Unreachable,
                 inner_content,
             ),
@@ -880,19 +940,20 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
             region: Region::zero(),
         };
 
-        let output = env.arena.alloc([loc_field]);
+        let output = arena.alloc([loc_field]);
 
         Expr::Record(Collection::with_items(output))
     } else {
-        debug_assert_eq!(sorted_fields.len(), field_layouts.len());
+        debug_assert_eq!(sorted_fields.len(), field_to_layout.len());
 
         // We'll advance this as we iterate through the fields
         let mut field_addr = addr;
 
-        for ((label, field), field_layout) in sorted_fields.into_iter().zip(field_layouts.iter()) {
+        for (label, field) in sorted_fields.into_iter() {
             let var = field.into_inner();
 
             let content = subs.get_content_without_compacting(var);
+            let field_layout = field_to_layout.get(&label).unwrap();
 
             let loc_expr = &*arena.alloc(Loc {
                 value: addr_to_ast(
@@ -1029,7 +1090,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
                 }
             }
         }
-        Alias(_, _, var) => {
+        Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
             bool_to_ast(env, mem, value, content)
@@ -1126,7 +1187,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                 }
             }
         }
-        Alias(_, _, var) => {
+        Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
             byte_to_ast(env, mem, value, content)
@@ -1195,7 +1256,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                 }
             }
         }
-        Alias(_, _, var) => {
+        Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
             num_to_ast(env, num_expr, content)
@@ -1212,43 +1273,9 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
 fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_> {
-    Expr::Num(arena.alloc(format!("{}", num)))
-}
+    use std::fmt::Write;
 
-#[cfg(target_endian = "little")]
-/// NOTE: As of this writing, we don't have big-endian small strings implemented yet!
-fn str_to_ast<'a>(arena: &'a Bump, string: &'a str) -> Expr<'a> {
-    const STR_SIZE: usize = 2 * std::mem::size_of::<usize>();
-
-    let bytes: [u8; STR_SIZE] = unsafe { std::mem::transmute(string) };
-    let is_small = (bytes[STR_SIZE - 1] & 0b1000_0000) != 0;
-
-    if is_small {
-        let len = (bytes[STR_SIZE - 1] & 0b0111_1111) as usize;
-        let mut string = bumpalo::collections::String::with_capacity_in(len, arena);
-
-        for byte in bytes.iter().take(len) {
-            string.push(*byte as char);
-        }
-
-        str_slice_to_ast(arena, arena.alloc(string))
-    } else {
-        // Roc string literals are stored inside the constant section of the program
-        // That means this memory is gone when the jit function is done
-        // (as opposed to heap memory, which we can leak and then still use after)
-        // therefore we must make an owned copy of the string here
-        let string = bumpalo::collections::String::from_str_in(string, arena).into_bump_str();
-        str_slice_to_ast(arena, string)
-    }
-}
-
-fn str_slice_to_ast<'a>(_arena: &'a Bump, string: &'a str) -> Expr<'a> {
-    if string.contains('\n') {
-        todo!(
-            "this string contains newlines, so render it as a multiline string: {:?}",
-            Expr::Str(StrLiteral::PlainLine(string))
-        );
-    } else {
-        Expr::Str(StrLiteral::PlainLine(string))
-    }
+    let mut string = bumpalo::collections::String::with_capacity_in(64, arena);
+    write!(string, "{}", num).unwrap();
+    Expr::Num(string.into_bump_str())
 }

@@ -1,8 +1,8 @@
 procedure Test.0 ():
-    let Test.3 : Builtin(Bool) = true;
+    let Test.3 : Int1 = true;
     if Test.3 then
-        let Test.4 : Builtin(Int(I64)) = 1i64;
+        let Test.4 : I64 = 1i64;
         ret Test.4;
     else
-        let Test.2 : Builtin(Int(I64)) = 2i64;
+        let Test.2 : I64 = 2i64;
         ret Test.2;

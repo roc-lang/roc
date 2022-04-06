@@ -1,23 +1,23 @@
 procedure Test.1 (Test.5):
-    let Test.2 : Builtin(Int(U8)) = 0u8;
+    let Test.2 : U8 = 0u8;
     joinpoint Test.9 Test.3:
         ret Test.3;
     in
     switch Test.2:
         case 1:
-            let Test.10 : Builtin(Int(I64)) = 1i64;
+            let Test.10 : I64 = 1i64;
             jump Test.9 Test.10;
     
         case 2:
-            let Test.11 : Builtin(Int(I64)) = 2i64;
+            let Test.11 : I64 = 2i64;
             jump Test.9 Test.11;
     
         default:
-            let Test.12 : Builtin(Int(I64)) = 3i64;
+            let Test.12 : I64 = 3i64;
             jump Test.9 Test.12;
     
 
 procedure Test.0 ():
-    let Test.7 : Struct([]) = Struct {};
-    let Test.6 : Builtin(Int(I64)) = CallByName Test.1 Test.7;
+    let Test.7 : {} = Struct {};
+    let Test.6 : I64 = CallByName Test.1 Test.7;
     ret Test.6;

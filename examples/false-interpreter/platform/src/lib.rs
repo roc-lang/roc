@@ -13,7 +13,7 @@ use std::os::raw::c_char;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(args: RocStr, output: *mut u8) -> ();
+    fn roc_main(output: *mut u8, args: &RocStr);
 
     #[link_name = "roc__mainForHost_size"]
     fn roc_main_size() -> i64;
@@ -74,8 +74,8 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    let arg = env::args().skip(1).next().unwrap();
-    let arg = RocStr::from_slice(arg.as_bytes());
+    let arg = env::args().nth(1).unwrap();
+    let arg = RocStr::from(arg.as_str());
 
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
@@ -84,7 +84,11 @@ pub extern "C" fn rust_main() -> i32 {
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        roc_main(arg, buffer);
+        roc_main(buffer, &arg);
+
+        // arg has been passed to roc now, and it assumes ownership.
+        // so we must not touch its refcount now
+        std::mem::forget(arg);
 
         let result = call_the_closure(buffer);
 
@@ -121,7 +125,7 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
     let stdin = io::stdin();
     let line1 = stdin.lock().lines().next().unwrap().unwrap();
 
-    RocStr::from_slice(line1.as_bytes())
+    RocStr::from(line1.as_str())
 }
 
 #[no_mangle]
@@ -141,17 +145,15 @@ pub extern "C" fn roc_fx_getChar() -> u8 {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putLine(line: ManuallyDrop<RocStr>) {
-    let bytes = line.as_slice();
-    let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+pub extern "C" fn roc_fx_putLine(line: &RocStr) {
+    let string = line.as_str();
     println!("{}", string);
     std::io::stdout().lock().flush();
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_putRaw(line: ManuallyDrop<RocStr>) {
-    let bytes = line.as_slice();
-    let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+pub extern "C" fn roc_fx_putRaw(line: &RocStr) {
+    let string = line.as_str();
     print!("{}", string);
     std::io::stdout().lock().flush();
 }
@@ -164,7 +166,7 @@ pub extern "C" fn roc_fx_getFileLine(br_ptr: *mut BufReader<File>) -> RocStr {
     br.read_line(&mut line1)
         .expect("Failed to read line from file");
 
-    RocStr::from_slice(line1.as_bytes())
+    RocStr::from(line1.as_str())
 }
 
 #[no_mangle]
@@ -187,8 +189,9 @@ pub extern "C" fn roc_fx_closeFile(br_ptr: *mut BufReader<File>) {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_openFile(name: ManuallyDrop<RocStr>) -> *mut BufReader<File> {
-    match File::open(name.as_str()) {
+pub extern "C" fn roc_fx_openFile(name: &RocStr) -> *mut BufReader<File> {
+    let string = name.as_str();
+    match File::open(string) {
         Ok(f) => {
             let br = BufReader::new(f);
 
@@ -201,7 +204,7 @@ pub extern "C" fn roc_fx_openFile(name: ManuallyDrop<RocStr>) -> *mut BufReader<
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_withFileOpen(name: ManuallyDrop<RocStr>, buffer: *const u8) {
+pub extern "C" fn roc_fx_withFileOpen(name: &RocStr, buffer: *const u8) {
     // TODO: figure out accepting a closure in an fx and passing data to it.
     // let f = File::open(name.as_str()).expect("Unable to open file");
     // let mut br = BufReader::new(f);

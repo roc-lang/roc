@@ -1,6 +1,6 @@
 use crate::solved_types::{BuiltinAlias, SolvedType};
 use crate::subs::VarId;
-use crate::types::RecordField;
+use crate::types::{AliasKind, RecordField};
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
@@ -367,6 +367,7 @@ pub fn num_type(range: SolvedType) -> SolvedType {
         vec![("range".into(), range.clone())],
         vec![],
         Box::new(num_alias_content(range)),
+        AliasKind::Structural,
     )
 }
 
@@ -384,6 +385,7 @@ pub fn floatingpoint_type(range: SolvedType) -> SolvedType {
         vec![("range".into(), range.clone())],
         vec![],
         Box::new(floatingpoint_alias_content(range)),
+        AliasKind::Structural,
     )
 }
 
@@ -401,6 +403,7 @@ pub fn float_type(range: SolvedType) -> SolvedType {
         vec![("range".into(), range.clone())],
         vec![],
         Box::new(float_alias_content(range)),
+        AliasKind::Structural,
     )
 }
 
@@ -418,6 +421,7 @@ pub fn f64_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(f64_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -435,6 +439,7 @@ pub fn f32_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(f32_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -452,6 +457,7 @@ pub fn nat_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(nat_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -469,6 +475,7 @@ pub fn i128_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(i128_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -486,6 +493,7 @@ pub fn u128_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(u128_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -503,6 +511,7 @@ pub fn u64_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(u64_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -520,6 +529,7 @@ pub fn i64_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(i64_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -537,6 +547,7 @@ pub fn u32_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(u32_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -554,6 +565,7 @@ pub fn i32_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(i32_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -571,6 +583,7 @@ pub fn u16_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(u16_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -588,6 +601,7 @@ pub fn i16_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(i16_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -600,7 +614,13 @@ fn i16_alias_content() -> SolvedType {
 
 #[inline(always)]
 pub fn u8_type() -> SolvedType {
-    SolvedType::Alias(Symbol::NUM_U8, vec![], vec![], Box::new(u8_alias_content()))
+    SolvedType::Alias(
+        Symbol::NUM_U8,
+        vec![],
+        vec![],
+        Box::new(u8_alias_content()),
+        AliasKind::Structural,
+    )
 }
 
 #[inline(always)]
@@ -612,7 +632,13 @@ fn u8_alias_content() -> SolvedType {
 
 #[inline(always)]
 pub fn i8_type() -> SolvedType {
-    SolvedType::Alias(Symbol::NUM_I8, vec![], vec![], Box::new(i8_alias_content()))
+    SolvedType::Alias(
+        Symbol::NUM_I8,
+        vec![],
+        vec![],
+        Box::new(i8_alias_content()),
+        AliasKind::Structural,
+    )
 }
 
 #[inline(always)]
@@ -629,6 +655,7 @@ pub fn int_type(range: SolvedType) -> SolvedType {
         vec![("range".into(), range.clone())],
         vec![],
         Box::new(int_alias_content(range)),
+        AliasKind::Structural,
     )
 }
 
@@ -646,6 +673,7 @@ pub fn integer_type(range: SolvedType) -> SolvedType {
         vec![("range".into(), range.clone())],
         vec![],
         Box::new(integer_alias_content(range)),
+        AliasKind::Structural,
     )
 }
 
@@ -661,6 +689,7 @@ pub fn binary64_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(binary64_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -676,6 +705,7 @@ pub fn binary32_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(binary32_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -691,6 +721,7 @@ pub fn natural_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(natural_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -706,6 +737,7 @@ pub fn signed128_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(signed128_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -721,6 +753,7 @@ pub fn signed64_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(signed64_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -736,6 +769,7 @@ pub fn signed32_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(signed32_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -751,6 +785,7 @@ pub fn signed16_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(signed16_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -766,6 +801,7 @@ pub fn signed8_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(signed8_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -781,6 +817,7 @@ pub fn unsigned128_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(unsigned128_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -796,6 +833,7 @@ pub fn unsigned64_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(unsigned64_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -811,6 +849,7 @@ pub fn unsigned32_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(unsigned32_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -826,6 +865,7 @@ pub fn unsigned16_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(unsigned16_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -841,6 +881,7 @@ pub fn unsigned8_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(unsigned8_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -863,6 +904,7 @@ pub fn dec_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(dec_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -878,6 +920,7 @@ pub fn decimal_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(decimal_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -888,6 +931,7 @@ pub fn bool_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(bool_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -921,7 +965,13 @@ pub fn result_type(a: SolvedType, e: SolvedType) -> SolvedType {
         vec![("ok".into(), a.clone()), ("err".into(), e.clone())],
         vec![],
         Box::new(result_alias_content(a, e)),
+        AliasKind::Structural,
     )
+}
+
+#[inline(always)]
+pub fn box_type(a: SolvedType) -> SolvedType {
+    SolvedType::Apply(Symbol::BOX_BOX_TYPE, vec![a])
 }
 
 #[inline(always)]
@@ -952,6 +1002,7 @@ pub fn str_utf8_problem_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(str_utf8_problem_alias_content()),
+        AliasKind::Structural,
     )
 }
 
@@ -976,6 +1027,7 @@ pub fn str_utf8_byte_problem_type() -> SolvedType {
         vec![],
         vec![],
         Box::new(str_utf8_byte_problem_alias_content()),
+        AliasKind::Structural,
     )
 }
 

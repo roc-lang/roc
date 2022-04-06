@@ -1,7 +1,8 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
 use crate::llvm::build::{
-    load_roc_value, struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX,
+    complex_bitcast_check_size, load_roc_value, struct_from_fields, to_cc_return, CCReturn, Env,
+    C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX,
 };
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
@@ -11,8 +12,13 @@ use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue};
 use inkwell::AddressSpace;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{LambdaSet, Layout, LayoutIds, UnionLayout};
+
+use super::build::create_entry_block_alloca;
+
+use std::convert::TryInto;
 
 pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -35,15 +41,24 @@ pub fn call_list_bitcode_fn<'a, 'ctx, 'env>(
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_help(env, args, fn_name)
-        .try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| {
-            panic!(
-                "LLVM error: Did not get return value from bitcode function {:?}",
-                fn_name
-            )
-        })
+    use bumpalo::collections::Vec;
+
+    let parent = env
+        .builder
+        .get_insert_block()
+        .and_then(|b| b.get_parent())
+        .unwrap();
+
+    let list_type = super::convert::zig_list_type(env);
+    let result = create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
+    let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len() + 1, env.arena);
+
+    arguments.push(result.into());
+    arguments.extend(args);
+
+    call_void_bitcode_fn(env, &arguments, fn_name);
+
+    env.builder.build_load(result, "load_list")
 }
 
 pub fn call_str_bitcode_fn<'a, 'ctx, 'env>(
@@ -51,15 +66,35 @@ pub fn call_str_bitcode_fn<'a, 'ctx, 'env>(
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_help(env, args, fn_name)
-        .try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| {
-            panic!(
-                "LLVM error: Did not get return value from bitcode function {:?}",
-                fn_name
-            )
-        })
+    use bumpalo::collections::Vec;
+
+    let parent = env
+        .builder
+        .get_insert_block()
+        .and_then(|b| b.get_parent())
+        .unwrap();
+
+    let str_type = super::convert::zig_str_type(env);
+
+    match env.target_info.ptr_width() {
+        roc_target::PtrWidth::Bytes4 => {
+            // 3 machine words actually fit into 2 registers
+            call_bitcode_fn(env, args, fn_name)
+        }
+        roc_target::PtrWidth::Bytes8 => {
+            let result =
+                create_entry_block_alloca(env, parent, str_type.into(), "return_str_alloca");
+            let mut arguments: Vec<BasicValueEnum> =
+                Vec::with_capacity_in(args.len() + 1, env.arena);
+
+            arguments.push(result.into());
+            arguments.extend(args);
+
+            call_void_bitcode_fn(env, &arguments, fn_name);
+
+            result.into()
+        }
+    }
 }
 
 pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
@@ -88,8 +123,90 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
 
     let call = env.builder.build_call(fn_val, &arguments, "call_builtin");
 
+    // Attributes that we propagate from the zig builtin parameters, to the arguments we give to the
+    // call. It is undefined behavior in LLVM to have an attribute on a parameter, and then call
+    // the function where that parameter is not present. For many (e.g. nonnull) it can be inferred
+    // but e.g. byval and sret cannot and must be explicitly provided.
+    let propagate = [
+        Attribute::get_named_enum_kind_id("nonnull"),
+        Attribute::get_named_enum_kind_id("nocapture"),
+        Attribute::get_named_enum_kind_id("readonly"),
+        Attribute::get_named_enum_kind_id("noalias"),
+        Attribute::get_named_enum_kind_id("sret"),
+        Attribute::get_named_enum_kind_id("byval"),
+    ];
+
+    for i in 0..fn_val.count_params() {
+        let attributes = fn_val.attributes(AttributeLoc::Param(i));
+
+        for attribute in attributes {
+            let kind_id = attribute.get_enum_kind_id();
+
+            if propagate.contains(&kind_id) {
+                call.add_attribute(AttributeLoc::Param(i), attribute)
+            }
+        }
+    }
+
     call.set_call_convention(fn_val.get_call_conventions());
     call
+}
+
+pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    return_layout: &Layout<'_>,
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    // Calling zig bitcode, so we must follow C calling conventions.
+    let cc_return = to_cc_return(env, return_layout);
+    match cc_return {
+        CCReturn::Return => {
+            // We'll get a return value
+            call_bitcode_fn(env, args, fn_name)
+        }
+        CCReturn::ByPointer => {
+            // We need to pass the return value by pointer.
+            let roc_return_type = basic_type_from_layout(env, return_layout);
+
+            let cc_ptr_return_type = env
+                .module
+                .get_function(fn_name)
+                .unwrap()
+                .get_type()
+                .get_param_types()[0]
+                .into_pointer_type();
+            let cc_return_type: BasicTypeEnum<'ctx> = cc_ptr_return_type
+                .get_element_type()
+                .try_into()
+                .expect("Zig bitcode return type is not a basic type!");
+
+            let cc_return_value_ptr = env.builder.build_alloca(cc_return_type, "return_value");
+            let fixed_args: Vec<BasicValueEnum<'ctx>> = [cc_return_value_ptr.into()]
+                .iter()
+                .chain(args)
+                .copied()
+                .collect();
+            call_void_bitcode_fn(env, &fixed_args, fn_name);
+
+            let cc_return_value = env.builder.build_load(cc_return_value_ptr, "read_result");
+            if roc_return_type.size_of() == cc_return_type.size_of() {
+                cc_return_value
+            } else {
+                // We need to convert the C-callconv return type, which may be larger than the Roc
+                // return type, into the Roc return type.
+                complex_bitcast_check_size(
+                    env,
+                    cc_return_value,
+                    roc_return_type,
+                    "c_value_to_roc_value",
+                )
+            }
+        }
+        CCReturn::Void => {
+            internal_error!("Tried to call valued bitcode function, but it has no return type")
+        }
+    }
 }
 
 const ARGUMENT_SYMBOLS: [Symbol; 8] = [
@@ -179,8 +296,12 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
                     tag_value.into(),
                 );
 
-                env.builder
-                    .build_int_cast(tag_id_i64, env.context.i16_type(), "to_i16")
+                env.builder.build_int_cast_sign_flag(
+                    tag_id_i64,
+                    env.context.i16_type(),
+                    true,
+                    "to_i16",
+                )
             };
 
             let answer = env.builder.build_int_compare(
@@ -292,7 +413,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
         let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
-        let argument = if layout.is_passed_by_reference() {
+        let argument = if layout.is_passed_by_reference(env.target_info) {
             env.builder
                 .build_pointer_cast(
                     argument_ptr.into_pointer_value(),
@@ -313,7 +434,9 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     }
 
     match closure_data_layout.runtime_representation() {
-        Layout::Struct(&[]) => {
+        Layout::Struct {
+            field_layouts: &[], ..
+        } => {
             // nothing to add
         }
         other => {
@@ -444,7 +567,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
             let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
-            let value = if layout.is_passed_by_reference() {
+            let value = if layout.is_passed_by_reference(env.target_info) {
                 env.builder
                     .build_pointer_cast(value_ptr, value_type, "cast_ptr_to_tag_build_rc_wrapper")
                     .into()
@@ -633,7 +756,9 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             let default = [value1.into(), value2.into()];
 
             let arguments_cast = match closure_data_layout.runtime_representation() {
-                Layout::Struct(&[]) => {
+                Layout::Struct {
+                    field_layouts: &[], ..
+                } => {
                     // nothing to add
                     &default
                 }

@@ -65,3 +65,47 @@ macro_rules! assert_sizeof_all {
         static_assertions::assert_eq_size!($t, [u8; $expected_size]);
     };
 }
+
+// LARGE SCALE PROJECTS
+//
+// This section is for "todo!"-style macros enabled in sections where large-scale changes to the
+// language are in progress.
+
+#[macro_export]
+macro_rules! _incomplete_project {
+    ($project_name:literal, $tracking_issue_no:literal) => {
+        panic!(
+            "[{}] not yet implemented. Tracking issue: https://github.com/rtfeldman/roc/issues/{}",
+            $project_name, $tracking_issue_no,
+        )
+    };
+    ($project_name:literal, $tracking_issue_no:literal, $($arg:tt)+) => {
+        panic!(
+            "[{}] not yet implemented. Tracking issue: https://github.com/rtfeldman/roc/issues/{}.\nAdditional information: {}",
+            $project_name, $tracking_issue_no,
+            format_args!($($arg)+),
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! todo_abilities {
+    () => {
+        $crate::_incomplete_project!("Abilities", 2463)
+    };
+    ($($arg:tt)+) => {
+        $crate::_incomplete_project!("Abilities", 2463, $($arg)+)
+    };
+}
+
+#[macro_export]
+macro_rules! todo_opaques {
+    () => {
+        $crate::_incomplete_project!("Abilities (opaques)", 2463)
+    };
+    ($($arg:tt)+) => {
+        $crate::_incomplete_project!("Abilities (opaques)", 2463, $($arg)+)
+    };
+}
+
+// END LARGE SCALE PROJECTS

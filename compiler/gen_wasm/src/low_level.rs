@@ -188,11 +188,17 @@ impl<'a> LowLevelCall<'a> {
             // Str
             StrConcat => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT),
             StrJoinWith => self.load_args_and_call_zig(backend, bitcode::STR_JOIN_WITH),
-            StrIsEmpty => {
-                self.load_args(backend);
-                backend.code_builder.i64_const(i64::MIN);
-                backend.code_builder.i64_eq();
-            }
+            StrIsEmpty => match backend.storage.get(&self.arguments[0]) {
+                StoredValue::StackMemory { location, .. } => {
+                    let (local_id, offset) =
+                        location.local_and_offset(backend.storage.stack_frame_pointer);
+                    backend.code_builder.get_local(local_id);
+                    backend.code_builder.i32_load8_u(Align::Bytes1, offset + 11);
+                    backend.code_builder.i32_const(0x80);
+                    backend.code_builder.i32_eq();
+                }
+                _ => internal_error!("invalid storage for Str"),
+            },
             StrStartsWith => self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH),
             StrStartsWithCodePt => {
                 self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_CODE_PT)
@@ -212,7 +218,7 @@ impl<'a> LowLevelCall<'a> {
             }
             StrToNum => {
                 let number_layout = match self.ret_layout {
-                    Layout::Struct(fields) => fields[0],
+                    Layout::Struct { field_layouts, .. } => field_layouts[0],
                     _ => {
                         internal_error!("Unexpected mono layout {:?} for StrToNum", self.ret_layout)
                     }
@@ -224,7 +230,7 @@ impl<'a> LowLevelCall<'a> {
                         &bitcode::STR_TO_FLOAT[float_width]
                     }
                     Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
-                    rest => internal_error!("Unexpected builtin {:?} for StrToNum", rest),
+                    rest => internal_error!("Unexpected layout {:?} for StrToNum", rest),
                 };
 
                 self.load_args_and_call_zig(backend, intrinsic);
@@ -260,14 +266,14 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
-            ListGetUnsafe | ListSet | ListSingle | ListRepeat | ListReverse | ListConcat
-            | ListContains | ListAppend | ListPrepend | ListJoin | ListRange | ListMap
-            | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
-            | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
-            | ListSublist | ListDropAt | ListSwap | ListAny | ListAll | ListFindUnsafe
-            | DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
-            | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference | DictWalk
-            | SetFromList => {
+            ListGetUnsafe | ListReplaceUnsafe | ListSingle | ListRepeat | ListReverse
+            | ListConcat | ListContains | ListAppend | ListPrepend | ListJoin | ListRange
+            | ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf
+            | ListWalk | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs
+            | ListSortWith | ListSublist | ListDropAt | ListSwap | ListAny | ListAll
+            | ListFindUnsafe | DictSize | DictEmpty | DictInsert | DictRemove | DictContains
+            | DictGetUnsafe | DictKeys | DictValues | DictUnion | DictIntersection
+            | DictDifference | DictWalk | SetFromList => {
                 todo!("{:?}", self.lowlevel);
             }
 
@@ -610,7 +616,10 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftRightBy => {
-                self.load_args(backend);
+                backend.storage.load_symbols(
+                    &mut backend.code_builder,
+                    &[self.arguments[1], self.arguments[0]],
+                );
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => backend.code_builder.i32_shr_s(),
                     I64 => backend.code_builder.i64_shr_s(),
@@ -619,7 +628,10 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftRightZfBy => {
-                self.load_args(backend);
+                backend.storage.load_symbols(
+                    &mut backend.code_builder,
+                    &[self.arguments[1], self.arguments[0]],
+                );
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => backend.code_builder.i32_shr_u(),
                     I64 => backend.code_builder.i64_shr_u(),
@@ -655,6 +667,9 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
             }
+            NumToIntChecked => {
+                todo!()
+            }
             And => {
                 self.load_args(backend);
                 backend.code_builder.i32_and();
@@ -679,6 +694,10 @@ impl<'a> LowLevelCall<'a> {
             Hash => todo!("{:?}", self.lowlevel),
 
             Eq | NotEq => self.eq_or_neq(backend),
+
+            BoxExpr | UnboxExpr => {
+                unreachable!("The {:?} operation is turned into mono Expr", self.lowlevel)
+            }
         }
     }
 
@@ -708,7 +727,7 @@ impl<'a> LowLevelCall<'a> {
 
             // Empty record is always equal to empty record.
             // There are no runtime arguments to check, so just emit true or false.
-            Layout::Struct(fields) if fields.is_empty() => {
+            Layout::Struct { field_layouts, .. } if field_layouts.is_empty() => {
                 backend.code_builder.i32_const(!invert_result as i32);
             }
 
@@ -719,7 +738,7 @@ impl<'a> LowLevelCall<'a> {
             }
 
             Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
-            | Layout::Struct(_)
+            | Layout::Struct { .. }
             | Layout::Union(_)
             | Layout::LambdaSet(_) => {
                 // Don't want Zig calling convention here, we're calling internal Roc functions
@@ -738,6 +757,8 @@ impl<'a> LowLevelCall<'a> {
                     backend.code_builder.i32_eqz();
                 }
             }
+
+            Layout::Boxed(_) => todo!(),
 
             Layout::RecursivePointer => {
                 internal_error!(
@@ -855,7 +876,8 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
             match value_type {
-                ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(1), // always true for integers
+                // Integers are always finite. Just return True.
+                ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(1),
                 ValueType::F32 => {
                     backend.code_builder.i32_reinterpret_f32();
                     backend.code_builder.i32_const(0x7f80_0000);
@@ -878,7 +900,10 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
             let (local_id, offset) = location.local_and_offset(backend.storage.stack_frame_pointer);
 
             match format {
-                StackMemoryFormat::Int128 => backend.code_builder.i32_const(1),
+                // Integers and fixed-point numbers are always finite. Just return True.
+                StackMemoryFormat::Int128 | StackMemoryFormat::Decimal => {
+                    backend.code_builder.i32_const(1)
+                }
 
                 // f128 is not supported anywhere else but it's easy to support it here, so why not...
                 StackMemoryFormat::Float128 => {
@@ -887,15 +912,6 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
                     backend.code_builder.i64_const(0x7fff_0000_0000_0000);
                     backend.code_builder.i64_and();
                     backend.code_builder.i64_const(0x7fff_0000_0000_0000);
-                    backend.code_builder.i64_ne();
-                }
-
-                StackMemoryFormat::Decimal => {
-                    backend.code_builder.get_local(local_id);
-                    backend.code_builder.i64_load(Align::Bytes4, offset + 8);
-                    backend.code_builder.i64_const(0x7100_0000_0000_0000);
-                    backend.code_builder.i64_and();
-                    backend.code_builder.i64_const(0x7100_0000_0000_0000);
                     backend.code_builder.i64_ne();
                 }
 

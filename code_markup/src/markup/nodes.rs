@@ -4,7 +4,10 @@ use crate::{
     syntax_highlight::HighlightStyle,
 };
 
-use super::{attribute::Attributes, common_nodes::new_comma_mn_ast};
+use super::{
+    attribute::Attributes, common_nodes::new_comma_mn, convert::from_def2::add_node,
+    mark_id_ast_id_map::MarkIdAstIdMap,
+};
 
 use crate::markup_error::{ExpectedTextNode, NestedNodeMissingChild, NestedNodeRequired};
 use itertools::Itertools;
@@ -18,42 +21,29 @@ use std::fmt;
 #[derive(Debug)]
 pub enum MarkupNode {
     Nested {
-        ast_node_id: ASTNodeId,
         children_ids: Vec<MarkNodeId>,
         parent_id_opt: Option<MarkNodeId>,
         newlines_at_end: usize,
     },
     Text {
         content: String,
-        ast_node_id: ASTNodeId,
         syn_high_style: HighlightStyle,
         attributes: Attributes,
         parent_id_opt: Option<MarkNodeId>,
         newlines_at_end: usize,
     },
     Blank {
-        ast_node_id: ASTNodeId,
         attributes: Attributes,
         parent_id_opt: Option<MarkNodeId>,
         newlines_at_end: usize,
     },
     Indent {
-        ast_node_id: ASTNodeId,
         indent_level: usize,
         parent_id_opt: Option<MarkNodeId>,
     },
 }
 
 impl MarkupNode {
-    pub fn get_ast_node_id(&self) -> ASTNodeId {
-        match self {
-            MarkupNode::Nested { ast_node_id, .. } => *ast_node_id,
-            MarkupNode::Text { ast_node_id, .. } => *ast_node_id,
-            MarkupNode::Blank { ast_node_id, .. } => *ast_node_id,
-            MarkupNode::Indent { ast_node_id, .. } => *ast_node_id,
-        }
-    }
-
     pub fn get_parent_id_opt(&self) -> Option<MarkNodeId> {
         match self {
             MarkupNode::Nested { parent_id_opt, .. } => *parent_id_opt,
@@ -85,24 +75,24 @@ impl MarkupNode {
     // return (index of child in list of children, closest ast index of child corresponding to ast node)
     pub fn get_child_indices(
         &self,
-        child_id: MarkNodeId,
-        mark_node_pool: &SlowPool,
+        mark_node_id: MarkNodeId,
+        ast_node_id: ASTNodeId,
+        mark_id_ast_id_map: &MarkIdAstIdMap,
     ) -> MarkResult<(usize, usize)> {
         match self {
             MarkupNode::Nested { children_ids, .. } => {
                 let mut mark_child_index_opt: Option<usize> = None;
                 let mut child_ids_with_ast: Vec<MarkNodeId> = Vec::new();
-                let self_ast_id = self.get_ast_node_id();
 
                 for (indx, &mark_child_id) in children_ids.iter().enumerate() {
-                    if mark_child_id == child_id {
+                    if mark_child_id == mark_node_id {
                         mark_child_index_opt = Some(indx);
                     }
 
-                    let child_mark_node = mark_node_pool.get(mark_child_id);
+                    let child_ast_node_id = mark_id_ast_id_map.get(mark_child_id)?;
                     // a node that points to the same ast_node as the parent is a ',', '[', ']'
                     // those are not "real" ast children
-                    if child_mark_node.get_ast_node_id() != self_ast_id {
+                    if child_ast_node_id != ast_node_id {
                         child_ids_with_ast.push(mark_child_id)
                     }
                 }
@@ -145,7 +135,7 @@ impl MarkupNode {
                     }
                 } else {
                     NestedNodeMissingChild {
-                        node_id: child_id,
+                        node_id: mark_node_id,
                         children_ids: children_ids.clone(),
                     }
                     .fail()
@@ -258,6 +248,14 @@ impl MarkupNode {
     }
 }
 
+pub fn make_nested_mn(children_ids: Vec<MarkNodeId>, newlines_at_end: usize) -> MarkupNode {
+    MarkupNode::Nested {
+        children_ids,
+        parent_id_opt: None,
+        newlines_at_end,
+    }
+}
+
 pub fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
     pool_str.as_str(env.pool).to_owned()
 }
@@ -269,6 +267,7 @@ pub const LEFT_SQUARE_BR: &str = "[ ";
 pub const RIGHT_SQUARE_BR: &str = " ]";
 pub const COLON: &str = ": ";
 pub const COMMA: &str = ", ";
+pub const DOT: &str = ".";
 pub const STRING_QUOTES: &str = "\"\"";
 pub const EQUALS: &str = " = ";
 pub const ARROW: &str = " -> ";
@@ -279,36 +278,34 @@ pub fn new_markup_node(
     node_id: ASTNodeId,
     highlight_style: HighlightStyle,
     mark_node_pool: &mut SlowPool,
+    mark_id_ast_id_map: &mut MarkIdAstIdMap,
     indent_level: usize,
 ) -> MarkNodeId {
     let content_node = MarkupNode::Text {
         content: text,
-        ast_node_id: node_id,
         syn_high_style: highlight_style,
         attributes: Attributes::default(),
         parent_id_opt: None,
         newlines_at_end: 0,
     };
 
-    let content_node_id = mark_node_pool.add(content_node);
+    let content_node_id = add_node(content_node, node_id, mark_node_pool, mark_id_ast_id_map);
 
     if indent_level > 0 {
         let indent_node = MarkupNode::Indent {
-            ast_node_id: node_id,
             indent_level,
             parent_id_opt: None,
         };
 
-        let indent_node_id = mark_node_pool.add(indent_node);
+        let indent_node_id = add_node(indent_node, node_id, mark_node_pool, mark_id_ast_id_map);
 
         let nested_node = MarkupNode::Nested {
-            ast_node_id: node_id,
             children_ids: vec![indent_node_id, content_node_id],
             parent_id_opt: None,
             newlines_at_end: 0,
         };
 
-        mark_node_pool.add(nested_node)
+        add_node(nested_node, node_id, mark_node_pool, mark_id_ast_id_map)
     } else {
         content_node_id
     }
@@ -318,7 +315,6 @@ pub fn set_parent_for_all(markup_node_id: MarkNodeId, mark_node_pool: &mut SlowP
     let node = mark_node_pool.get(markup_node_id);
 
     if let MarkupNode::Nested {
-        ast_node_id: _,
         children_ids,
         parent_id_opt: _,
         newlines_at_end: _,
@@ -399,7 +395,7 @@ fn tree_as_string_helper(
             .to_owned();
 
         let child = mark_node_pool.get(child_id);
-        let child_str = format!("{}", mark_node_pool.get(child_id)).replace("\n", "\\n");
+        let child_str = format!("{}", mark_node_pool.get(child_id)).replace('\n', "\\n");
 
         full_str.push_str(&format!("{} mn_id {}\n", child_str, child_id));
 
@@ -426,7 +422,6 @@ pub fn get_root_mark_node_id(mark_node_id: MarkNodeId, mark_node_pool: &SlowPool
 pub fn join_mark_nodes_spaces(
     mark_nodes_ids: Vec<MarkNodeId>,
     with_prepend: bool,
-    ast_node_id: ASTNodeId,
     mark_node_pool: &mut SlowPool,
 ) -> Vec<MarkNodeId> {
     let space_range_max = if with_prepend {
@@ -439,7 +434,6 @@ pub fn join_mark_nodes_spaces(
         .map(|_| {
             let space_node = MarkupNode::Text {
                 content: " ".to_string(),
-                ast_node_id,
                 syn_high_style: HighlightStyle::Blank,
                 attributes: Attributes::default(),
                 parent_id_opt: None,
@@ -458,13 +452,41 @@ pub fn join_mark_nodes_spaces(
 }
 
 // put comma mark nodes between each node in mark_nodes
-pub fn join_mark_nodes_commas(
-    mark_nodes: Vec<MarkupNode>,
-    ast_node_id: ASTNodeId,
-) -> Vec<MarkupNode> {
+pub fn join_mark_nodes_commas(mark_nodes: Vec<MarkupNode>) -> Vec<MarkupNode> {
     let join_nodes: Vec<MarkupNode> = (0..(mark_nodes.len() - 1))
-        .map(|_| new_comma_mn_ast(ast_node_id, None))
+        .map(|_| new_comma_mn())
         .collect();
 
     mark_nodes.into_iter().interleave(join_nodes).collect()
+}
+
+pub fn mark_nodes_to_string(markup_node_ids: &[MarkNodeId], mark_node_pool: &SlowPool) -> String {
+    let mut all_code_string = String::new();
+
+    for mark_node_id in markup_node_ids.iter() {
+        node_to_string_w_children(*mark_node_id, &mut all_code_string, mark_node_pool)
+    }
+
+    all_code_string
+}
+
+pub fn node_to_string_w_children(
+    node_id: MarkNodeId,
+    str_buffer: &mut String,
+    mark_node_pool: &SlowPool,
+) {
+    let node = mark_node_pool.get(node_id);
+
+    if node.is_nested() {
+        for child_id in node.get_children_ids() {
+            node_to_string_w_children(child_id, str_buffer, mark_node_pool);
+        }
+        for _ in 0..node.get_newlines_at_end() {
+            str_buffer.push('\n')
+        }
+    } else {
+        let node_content_str = node.get_full_content();
+
+        str_buffer.push_str(&node_content_str);
+    }
 }

@@ -13,13 +13,15 @@ use roc_build::link::module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-use roc_load::file::MonomorphizedModule;
+use roc_load::MonomorphizedModule;
 use roc_mono::ir::OptLevel;
 use roc_parse::ast::Expr;
 use roc_parse::parser::{EExpr, ELambda, SyntaxError};
 use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{compile_to_mono, format_answer, ReplOutput};
 use roc_repl_eval::{ReplApp, ReplAppMemory};
+use roc_reporting::report::DEFAULT_PALETTE;
+use roc_std::RocStr;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 
@@ -183,7 +185,8 @@ impl ReplAppMemory for CliMemory {
     deref_number!(deref_f64, f64);
 
     fn deref_str(&self, addr: usize) -> &str {
-        unsafe { *(addr as *const &'static str) }
+        let reference: &RocStr = unsafe { std::mem::transmute(addr) };
+        reference.as_str()
     }
 }
 
@@ -195,7 +198,7 @@ fn gen_and_eval_llvm<'a>(
     let arena = Bump::new();
     let target_info = TargetInfo::from(&target);
 
-    let loaded = match compile_to_mono(&arena, src, target_info) {
+    let loaded = match compile_to_mono(&arena, src, target_info, DEFAULT_PALETTE) {
         Ok(x) => x,
         Err(prob_strings) => {
             return Ok(ReplOutput::Problems(prob_strings));

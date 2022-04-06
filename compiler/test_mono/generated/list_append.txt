@@ -1,9 +1,9 @@
 procedure List.5 (#Attr.2, #Attr.3):
-    let Test.4 : Builtin(List(Builtin(Int(I64)))) = lowlevel ListAppend #Attr.2 #Attr.3;
+    let Test.4 : List I64 = lowlevel ListAppend #Attr.2 #Attr.3;
     ret Test.4;
 
 procedure Test.0 ():
-    let Test.2 : Builtin(List(Builtin(Int(I64)))) = Array [1i64];
-    let Test.3 : Builtin(Int(I64)) = 2i64;
-    let Test.1 : Builtin(List(Builtin(Int(I64)))) = CallByName List.5 Test.2 Test.3;
+    let Test.2 : List I64 = Array [1i64];
+    let Test.3 : I64 = 2i64;
+    let Test.1 : List I64 = CallByName List.5 Test.2 Test.3;
     ret Test.1;

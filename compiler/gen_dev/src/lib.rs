@@ -14,7 +14,7 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds};
+use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, UnionLayout};
 
 mod generic64;
 mod object_builder;
@@ -233,7 +233,7 @@ trait Backend<'a> {
     fn build_jump(
         &mut self,
         id: &JoinPointId,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     );
@@ -277,13 +277,7 @@ trait Backend<'a> {
                             self.load_literal_symbols(arguments);
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                         } else {
-                            self.build_inline_builtin(
-                                sym,
-                                *func_sym,
-                                arguments,
-                                arg_layouts,
-                                ret_layout,
-                            )
+                            self.build_builtin(sym, *func_sym, arguments, arg_layouts, ret_layout)
                         }
                     }
 
@@ -320,6 +314,29 @@ trait Backend<'a> {
                 structure,
             } => {
                 self.load_struct_at_index(sym, structure, *index, field_layouts);
+            }
+            Expr::UnionAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => {
+                self.load_union_at_index(sym, structure, *tag_id, *index, union_layout);
+            }
+            Expr::GetTagId {
+                structure,
+                union_layout,
+            } => {
+                self.get_tag_id(sym, structure, union_layout);
+            }
+            Expr::Tag {
+                tag_layout,
+                tag_id,
+                arguments,
+                ..
+            } => {
+                self.load_literal_symbols(arguments);
+                self.tag(sym, arguments, tag_layout, *tag_id);
             }
             x => todo!("the expression, {:?}", x),
         }
@@ -501,6 +518,23 @@ trait Backend<'a> {
                 );
                 self.build_num_to_float(sym, &args[0], &arg_layouts[0], ret_layout)
             }
+            LowLevel::NumLte => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumLte: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumLte: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::Builtin(Builtin::Bool),
+                    *ret_layout,
+                    "NumLte: expected to have return layout of type Bool"
+                );
+                self.build_num_lte(sym, &args[0], &args[1], &arg_layouts[0])
+            }
             LowLevel::NumGte => {
                 debug_assert_eq!(
                     2,
@@ -525,6 +559,30 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::ListLen => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "ListLen: expected to have exactly one argument"
+                );
+                self.build_list_len(sym, &args[0])
+            }
+            LowLevel::ListGetUnsafe => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "ListGetUnsafe: expected to have exactly two arguments"
+                );
+                self.build_list_get_unsafe(sym, &args[0], &args[1], ret_layout)
+            }
+            LowLevel::ListReplaceUnsafe => {
+                debug_assert_eq!(
+                    3,
+                    args.len(),
+                    "ListReplaceUnsafe: expected to have exactly three arguments"
+                );
+                self.build_list_replace_unsafe(sym, args, arg_layouts, ret_layout)
+            }
             LowLevel::StrConcat => self.build_fn_call(
                 sym,
                 bitcode::STR_CONCAT.to_string(),
@@ -558,8 +616,9 @@ trait Backend<'a> {
         }
     }
 
-    // inlines simple builtin functions that do not map directly to a low level
-    fn build_inline_builtin(
+    /// Builds a builtin functions that do not map directly to a low level
+    /// If the builtin is simple enough, it will be inlined.
+    fn build_builtin(
         &mut self,
         sym: &Symbol,
         func_sym: Symbol,
@@ -585,6 +644,14 @@ trait Backend<'a> {
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
+            Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE => {
+                // TODO: This is probably simple enough to be worth inlining.
+                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
+                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                // Now that the arguments are needed, load them if they are literals.
+                self.load_literal_symbols(args);
+                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
+            }
             _ => todo!("the function, {:?}", func_sym),
         }
     }
@@ -595,7 +662,7 @@ trait Backend<'a> {
         &mut self,
         dst: &Symbol,
         fn_name: String,
-        args: &'a [Symbol],
+        args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     );
@@ -633,6 +700,15 @@ trait Backend<'a> {
         ret_layout: &Layout<'a>,
     );
 
+    /// build_num_lte stores the result of `src1 <= src2` into dst.
+    fn build_num_lte(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &Layout<'a>,
+    );
+
     /// build_num_gte stores the result of `src1 >= src2` into dst.
     fn build_num_gte(
         &mut self,
@@ -640,6 +716,27 @@ trait Backend<'a> {
         src1: &Symbol,
         src2: &Symbol,
         arg_layout: &Layout<'a>,
+    );
+
+    /// build_list_len returns the length of a list.
+    fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);
+
+    /// build_list_get_unsafe loads the element from the list at the index.
+    fn build_list_get_unsafe(
+        &mut self,
+        dst: &Symbol,
+        list: &Symbol,
+        index: &Symbol,
+        ret_layout: &Layout<'a>,
+    );
+
+    /// build_list_replace_unsafe returns the old element and new list with the list having the new element inserted.
+    fn build_list_replace_unsafe(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[Layout<'a>],
+        ret_layout: &Layout<'a>,
     );
 
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
@@ -677,6 +774,28 @@ trait Backend<'a> {
         field_layouts: &'a [Layout<'a>],
     );
 
+    /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
+    fn load_union_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        tag_id: TagIdIntType,
+        index: u64,
+        union_layout: &UnionLayout<'a>,
+    );
+
+    /// get_tag_id loads the tag id from a the union.
+    fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>);
+
+    /// tag sets the tag for a union.
+    fn tag(
+        &mut self,
+        sym: &Symbol,
+        args: &'a [Symbol],
+        tag_layout: &UnionLayout<'a>,
+        tag_id: TagIdIntType,
+    );
+
     /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
     fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>);
 
@@ -694,16 +813,8 @@ trait Backend<'a> {
     fn free_symbol(&mut self, sym: &Symbol);
 
     /// set_last_seen sets the statement a symbol was last seen in.
-    fn set_last_seen(
-        &mut self,
-        sym: Symbol,
-        stmt: &Stmt<'a>,
-        owning_symbol: &MutMap<Symbol, Symbol>,
-    ) {
+    fn set_last_seen(&mut self, sym: Symbol, stmt: &Stmt<'a>) {
         self.last_seen_map().insert(sym, stmt);
-        if let Some(parent) = owning_symbol.get(&sym) {
-            self.last_seen_map().insert(*parent, stmt);
-        }
     }
 
     /// last_seen_map gets the map from symbol to when it is last seen in the function.
@@ -749,45 +860,45 @@ trait Backend<'a> {
     /// scan_ast runs through the ast and fill the last seen map.
     /// This must iterate through the ast in the same way that build_stmt does. i.e. then before else.
     fn scan_ast(&mut self, stmt: &Stmt<'a>) {
-        // This keeps track of symbols that depend on other symbols.
-        // The main case of this is data in structures and tagged unions.
-        // This data must extend the lifetime of the original structure or tagged union.
-        // For arrays the loading is always done through low levels and does not depend on the underlying array's lifetime.
-        let mut owning_symbol: MutMap<Symbol, Symbol> = MutMap::default();
+        // Join map keeps track of join point parameters so that we can keep them around while they still might be jumped to.
+        let mut join_map: MutMap<JoinPointId, &'a [Param<'a>]> = MutMap::default();
         match stmt {
             Stmt::Let(sym, expr, _, following) => {
-                self.set_last_seen(*sym, stmt, &owning_symbol);
+                self.set_last_seen(*sym, stmt);
                 match expr {
                     Expr::Literal(_) => {}
 
-                    Expr::Call(call) => self.scan_ast_call(call, stmt, &owning_symbol),
+                    Expr::Call(call) => self.scan_ast_call(call, stmt),
 
                     Expr::Tag { arguments, .. } => {
                         for sym in *arguments {
-                            self.set_last_seen(*sym, stmt, &owning_symbol);
+                            self.set_last_seen(*sym, stmt);
                         }
+                    }
+                    Expr::ExprBox { symbol } => {
+                        self.set_last_seen(*symbol, stmt);
+                    }
+                    Expr::ExprUnbox { symbol } => {
+                        self.set_last_seen(*symbol, stmt);
                     }
                     Expr::Struct(syms) => {
                         for sym in *syms {
-                            self.set_last_seen(*sym, stmt, &owning_symbol);
+                            self.set_last_seen(*sym, stmt);
                         }
                     }
                     Expr::StructAtIndex { structure, .. } => {
-                        self.set_last_seen(*structure, stmt, &owning_symbol);
-                        owning_symbol.insert(*sym, *structure);
+                        self.set_last_seen(*structure, stmt);
                     }
                     Expr::GetTagId { structure, .. } => {
-                        self.set_last_seen(*structure, stmt, &owning_symbol);
-                        owning_symbol.insert(*sym, *structure);
+                        self.set_last_seen(*structure, stmt);
                     }
                     Expr::UnionAtIndex { structure, .. } => {
-                        self.set_last_seen(*structure, stmt, &owning_symbol);
-                        owning_symbol.insert(*sym, *structure);
+                        self.set_last_seen(*structure, stmt);
                     }
                     Expr::Array { elems, .. } => {
                         for elem in *elems {
                             if let ListLiteralElement::Symbol(sym) = elem {
-                                self.set_last_seen(*sym, stmt, &owning_symbol);
+                                self.set_last_seen(*sym, stmt);
                             }
                         }
                     }
@@ -797,22 +908,22 @@ trait Backend<'a> {
                         tag_name,
                         ..
                     } => {
-                        self.set_last_seen(*symbol, stmt, &owning_symbol);
+                        self.set_last_seen(*symbol, stmt);
                         match tag_name {
                             TagName::Closure(sym) => {
-                                self.set_last_seen(*sym, stmt, &owning_symbol);
+                                self.set_last_seen(*sym, stmt);
                             }
                             TagName::Private(sym) => {
-                                self.set_last_seen(*sym, stmt, &owning_symbol);
+                                self.set_last_seen(*sym, stmt);
                             }
                             TagName::Global(_) => {}
                         }
                         for sym in *arguments {
-                            self.set_last_seen(*sym, stmt, &owning_symbol);
+                            self.set_last_seen(*sym, stmt);
                         }
                     }
                     Expr::Reset { symbol, .. } => {
-                        self.set_last_seen(*symbol, stmt, &owning_symbol);
+                        self.set_last_seen(*symbol, stmt);
                     }
                     Expr::EmptyArray => {}
                     Expr::RuntimeErrorFunction(_) => {}
@@ -826,56 +937,59 @@ trait Backend<'a> {
                 default_branch,
                 ..
             } => {
-                self.set_last_seen(*cond_symbol, stmt, &owning_symbol);
+                self.set_last_seen(*cond_symbol, stmt);
                 for (_, _, branch) in *branches {
                     self.scan_ast(branch);
                 }
                 self.scan_ast(default_branch.1);
             }
             Stmt::Ret(sym) => {
-                self.set_last_seen(*sym, stmt, &owning_symbol);
+                self.set_last_seen(*sym, stmt);
             }
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
 
-                self.set_last_seen(sym, stmt, &owning_symbol);
+                self.set_last_seen(sym, stmt);
                 self.scan_ast(following);
             }
             Stmt::Join {
                 parameters,
                 body: continuation,
                 remainder,
+                id: JoinPointId(sym),
                 ..
             } => {
+                self.set_last_seen(*sym, stmt);
+                join_map.insert(JoinPointId(*sym), parameters);
                 for param in *parameters {
-                    self.set_last_seen(param.symbol, stmt, &owning_symbol);
+                    self.set_last_seen(param.symbol, stmt);
                 }
-                self.scan_ast(continuation);
                 self.scan_ast(remainder);
+                self.scan_ast(continuation);
             }
             Stmt::Jump(JoinPointId(sym), symbols) => {
-                self.set_last_seen(*sym, stmt, &owning_symbol);
+                if let Some(parameters) = join_map.get(&JoinPointId(*sym)) {
+                    // Keep the parameters around. They will be overwritten when jumping.
+                    for param in *parameters {
+                        self.set_last_seen(param.symbol, stmt);
+                    }
+                }
                 for sym in *symbols {
-                    self.set_last_seen(*sym, stmt, &owning_symbol);
+                    self.set_last_seen(*sym, stmt);
                 }
             }
             Stmt::RuntimeError(_) => {}
         }
     }
 
-    fn scan_ast_call(
-        &mut self,
-        call: &roc_mono::ir::Call,
-        stmt: &roc_mono::ir::Stmt<'a>,
-        owning_symbol: &MutMap<Symbol, Symbol>,
-    ) {
+    fn scan_ast_call(&mut self, call: &roc_mono::ir::Call, stmt: &roc_mono::ir::Stmt<'a>) {
         let roc_mono::ir::Call {
             call_type,
             arguments,
         } = call;
 
         for sym in *arguments {
-            self.set_last_seen(*sym, stmt, owning_symbol);
+            self.set_last_seen(*sym, stmt);
         }
 
         match call_type {

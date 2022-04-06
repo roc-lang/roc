@@ -30,7 +30,7 @@ packed_struct = "0.10.0"
 [dev-dependencies]
 roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
-roc_std = { path = "../../roc_std" }
+roc_std = { path = "../../roc_std", default-features = false }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 
 [features]

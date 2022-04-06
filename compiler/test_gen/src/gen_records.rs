@@ -1,17 +1,17 @@
 #[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::assert_evals_to;
-
-#[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::expect_runtime_error_panic;
+use crate::helpers::llvm::{assert_evals_to, expect_runtime_error_panic};
 
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
-use crate::helpers::wasm::assert_evals_to;
+use crate::helpers::wasm::{assert_evals_to, expect_runtime_error_panic};
 
 // use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
+
+#[cfg(test)]
+use roc_std::{RocList, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
@@ -272,7 +272,7 @@ fn empty_record() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn i64_record2_literal() {
     assert_evals_to!(
         indoc!(
@@ -299,7 +299,7 @@ fn i64_record2_literal() {
 //     );
 // }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn f64_record2_literal() {
     assert_evals_to!(
         indoc!(
@@ -401,7 +401,7 @@ fn bool_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record() {
     assert_evals_to!(
         indoc!(
@@ -652,7 +652,7 @@ fn optional_field_empty_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_2() {
     assert_evals_to!(
         indoc!(
@@ -666,7 +666,7 @@ fn return_record_2() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_3() {
     assert_evals_to!(
         indoc!(
@@ -680,7 +680,7 @@ fn return_record_3() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_4() {
     assert_evals_to!(
         indoc!(
@@ -694,7 +694,7 @@ fn return_record_4() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_5() {
     assert_evals_to!(
         indoc!(
@@ -708,7 +708,7 @@ fn return_record_5() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_6() {
     assert_evals_to!(
         indoc!(
@@ -722,7 +722,7 @@ fn return_record_6() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_record_7() {
     assert_evals_to!(
         indoc!(
@@ -792,7 +792,7 @@ fn return_record_float_float_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_nested_record() {
     assert_evals_to!(
         indoc!(
@@ -1008,9 +1008,40 @@ fn both_have_unique_fields() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// https://github.com/rtfeldman/roc/issues/2535
+fn different_proc_types_specialized_to_same_layout() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ nums ] to "./platform"
+
+            # Top-level values compile to procedure calls with no args
+            # alpha has the generic type { a: Num *, b: Num * }
+            # and gets specialized to two procedure calls below
+            alpha = { a: 1, b: 2 }
+
+            # The wider number always comes first in the layout,
+            # which makes the two specializations look very similar.
+            # Test that the compiler doesn't get them mixed up!
+            nums : List U8
+            nums =
+                [
+                    alpha.a,   # alpha specialized to layout { b: I64, a: U8 }
+                    alpha.b,   # alpha specialized to layout { a: I64, b: U8 }
+                ]
+            "#
+        ),
+        RocList::from_slice(&[1, 2]),
+        RocList<u8>
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(
     // TODO: something upstream is escaping the '
+    // NOTE: Are we sure it's upstream? It's not escaped in gen-wasm version below!
     expected = r#"Roc failed with message: "Can\'t create record with improper layout""#
 )]
 fn call_with_bad_record_runtime_error() {
@@ -1024,4 +1055,36 @@ fn call_with_bad_record_runtime_error() {
                 get {b: ""}
             "#
     ))
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+#[should_panic(expected = r#"Can't create record with improper layout"#)]
+fn call_with_bad_record_runtime_error() {
+    expect_runtime_error_panic!(indoc!(
+        r#"
+            app "test" provides [ main ] to "./platform"
+
+            main =
+                get : {a: Bool} -> Bool
+                get = \{a} -> a
+                get {b: ""}
+            "#
+    ))
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn generalized_accessor() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            returnFoo = .foo
+
+            returnFoo { foo: "foo" }
+            "#
+        ),
+        RocStr::from("foo"),
+        RocStr
+    );
 }

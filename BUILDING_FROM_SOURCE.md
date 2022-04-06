@@ -1,7 +1,97 @@
 # Building the Roc compiler from source
 
+## Using Nix
 
-## Installing LLVM, Zig, valgrind, and Python
+### On NixOS
+
+[For NixOS only Linux x86_64 is supported for now](https://github.com/rtfeldman/roc/issues/2734).
+
+NixOS users should make use of the nix flake by [enabling nix flakes](https://nixos.wiki/wiki/Flakes). Shell creation can be done by executing `nix develop` from the root of the repo. NixOS users that do not make use of this flake will get stuck on issue #1846.
+
+### On Linux/MacOS x86_64/aarch64
+
+#### Install
+
+Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.
+
+Anyone having trouble installing the proper version of LLVM themselves might also prefer this method.
+
+If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
+
+Install nix:
+
+`curl -L https://nixos.org/nix/install | sh`
+
+You will need to start a fresh terminal session to use nix.
+
+#### Usage
+
+Now with nix installed, you just need to run one command:
+
+`nix-shell`
+
+> This may not output anything for a little while. This is normal, hang in there. Also make sure you are in the roc project root.
+
+> Also, if you're on NixOS you'll need to enable opengl at the system-wide level. You can do this in configuration.nix with `hardware.opengl.enable = true;`. If you don't do this, nix-shell will fail!
+
+You should be in a shell with everything needed to build already installed.
+Use `cargo run help` to see all subcommands.
+To use the `repl` subcommand, execute `cargo run repl`.
+Use `cargo build` to build the whole project.
+
+#### Extra tips
+
+If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependencies into your current shell, so you never have to run nix-shell directly!
+
+### Editor
+
+The editor is a :construction:WIP:construction: and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
+`cargo run edit` should work from NixOS, if you use a nix-shell from inside another OS, follow the instructions below.
+
+#### Nvidia GPU
+
+Outside of a nix shell, execute the following:
+```
+nix-channel --add https://github.com/guibou/nixGL/archive/main.tar.gz nixgl && nix-channel --update
+nix-env -iA nixgl.auto.nixVulkanNvidia
+```
+Running the editor does not work with `nix-shell --pure`.
+```
+nix-shell
+```
+460.91.03 may be different for you, type nixVulkanNvidia and press tab to autocomplete for your version.
+```
+nixVulkanNvidia-460.91.03 cargo run edit
+```
+
+#### Integrated Intel Graphics
+
+:exclamation: ** Our Nix setup currently cannot run the editor with integrated intel graphics, see #1856 ** :exclamation:
+
+Outside of a nix shell, run:
+
+```bash
+git clone https://github.com/guibou/nixGL
+cd nixGL
+nix-env -f ./ -iA nixVulkanIntel
+```
+
+cd to the roc repo, and run (without --pure):
+```
+nix-shell
+nixVulkanIntel cargo run edit
+```
+
+#### Other configs
+
+Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations.
+
+## Troubleshooting
+
+Create an issue if you run into problems not listed here.
+That will help us improve this document for everyone who reads it in the future!
+
+## Manual Install
 
 To build the compiler, you need these installed:
 
@@ -85,89 +175,6 @@ Use `cargo build` to build the whole project.
 Use `cargo run help` to see all subcommands.
 To use the `repl` subcommand, execute `cargo run repl`.
 
-## Using Nix
-
-### Install
-
-Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.
-
-Anyone having trouble installing the proper version of LLVM themselves might also prefer this method.
-
-If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
-
-Install nix:
-
-`curl -L https://nixos.org/nix/install | sh`
-
-You will need to start a fresh terminal session to use nix.
-
-### Usage
-
-Now with nix installed, you just need to run one command:
-
-`nix-shell`
-
-> This may not output anything for a little while. This is normal, hang in there. Also make sure you are in the roc project root.
-
-> Also, if you're on NixOS you'll need to enable opengl at the system-wide level. You can do this in configuration.nix with `hardware.opengl.enable = true;`. If you don't do this, nix-shell will fail!
-
-You should be in a shell with everything needed to build already installed.
-Use `cargo run help` to see all subcommands.
-To use the `repl` subcommand, execute `cargo run repl`.
-Use `cargo build` to build the whole project.
-
-### Extra tips
-
-If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependencies into your current shell, so you never have to run nix-shell directly!
-
-### Editor
-
-The editor is a WIP and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
-`cargo run edit` should work from NixOS, if you use a nix-shell from inside another OS, follow the instructions below.
-
-#### Nvidia GPU
-
-Outside of a nix shell, execute the following:
-```
-nix-channel --add https://github.com/guibou/nixGL/archive/main.tar.gz nixgl && nix-channel --update
-nix-env -iA nixgl.auto.nixVulkanNvidia
-```
-Running the editor does not work with `nix-shell --pure`.
-```
-nix-shell
-```
-460.91.03 may be different for you, type nixVulkanNvidia and press tab to autocomplete for your version.
-```
-nixVulkanNvidia-460.91.03 cargo run edit
-```
-
-#### Integrated Intel Graphics
-
-:exclamation: ** Our Nix setup currently cannot run the editor with integrated intel graphics, see #1856 ** :exclamation:
-
-Outside of a nix shell, run:
-
-```bash
-git clone https://github.com/guibou/nixGL
-cd nixGL
-nix-env -f ./ -iA nixVulkanIntel
-```
-
-cd to the roc repo, and run (without --pure):
-```
-nix-shell
-nixVulkanIntel cargo run edit
-```
-
-#### Other configs
-
-Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations.
-
-## Troubleshooting
-
-Create an issue if you run into problems not listed here.
-That will help us improve this document for everyone who reads it in the future!
-
 ### LLVM installation on Linux
 
 For a current list of all dependency versions and their names in apt, see the Earthfile.
@@ -197,20 +204,24 @@ export CPPFLAGS="-I/usr/local/opt/llvm/include"
 
 ### LLVM installation on Windows
 
-Installing LLVM's prebuilt binaries doesn't seem to be enough for the `llvm-sys` crate that Roc depends on, so I had to build LLVM from source
-on Windows. After lots of help from [**@IanMacKenzie**](https://github.com/IanMacKenzie) (thank you, Ian!), here's what worked for me:
+**Warning** While `cargo build` works on windows, linking roc programs does not yet, see issue #2608. This also means the repl, the editor and many tests will not work on windows.
+Installing LLVM's prebuilt binaries doesn't seem to be enough for the `llvm-sys` crate that Roc depends on, so I had to follow the steps below:
 
-1. I downloaded and installed [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16) (a full Visual Studio install should work tool; the Build Tools are just the CLI tools, which is all I wanted)
-1. In the installation configuration, under "additional components" I had to check both "C++ ATL for latest v142 build tools (x86 & x64)" and also "C++/CLI support for v142 build tools" [note: as of September 2021 this should no longer be necessary - the next time anyone tries this, please try it without this step and make a PR to delete this step if it's no longer needed!]
-1. I launched the "x64 Native Tools Command Prompt for Visual Studio 2019" application (note: not the similarly-named "x86" one!)
-1. Make sure [Python 2.7](https://www.python.org/) and [CMake 3.17](http://cmake.org/) are installed on your system.
-1. I followed most of the steps under LLVM's [building from source instructions](https://github.com/llvm/llvm-project#getting-the-source-code-and-building-llvm) up to the `cmake -G ...` command, which didn't work for me. Instead, at that point I did the following step.
-1. I ran `cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ../llvm` to generate a NMake makefile.
-1. Once that completed, I ran `nmake` to build LLVM. (This took about 2 hours on my laptop.)
-1. Finally, I set an environment variable `LLVM_SYS_100_PREFIX` to point to the `build` directory where I ran the `cmake` command.
+1. I downloaded and installed [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16) (a full Visual Studio install should work too; the Build Tools are just the CLI tools, which is all I wanted)
+1. Download the custom LLVM 7z archive [here](https://github.com/PLC-lang/llvm-package-windows/releases/tag/v12.0.1).
+1. [Download 7-zip](https://www.7-zip.org/) to be able to extract this archive.
+1. Extract the 7z file to where you want to permanently keep the folder.
+1. In powershell, set the `LLVM_SYS_120_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-changes-to-environment-variables) to make this a permanent environment variable):
+```
+[Environment]::SetEnvironmentVariable(
+   "Path",
+   [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\anton\Downloads\LLVM-12.0.1-win64\bin",
+   "User"
+)
+```
 
 
-Once all that was done, `cargo` ran successfully for Roc!
+Once all that was done, `cargo build` ran successfully for Roc!
 
 ### Build speed on WSL/WSL2
 

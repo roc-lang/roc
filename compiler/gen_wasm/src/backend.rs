@@ -1,4 +1,5 @@
 use bumpalo::{self, collections::Vec};
+use std::fmt::Write;
 
 use code_builder::Align;
 use roc_builtins::bitcode::IntWidth;
@@ -29,11 +30,6 @@ use crate::{
     PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME, TARGET_INFO,
 };
 
-/// The memory address where the constants data will be loaded during module instantiation.
-/// We avoid address zero and anywhere near it. They're valid addresses but maybe bug-prone.
-/// Follow Emscripten's example by leaving 1kB unused (though 4 bytes would probably do!)
-const CONST_SEGMENT_BASE_ADDR: u32 = 1024;
-
 pub struct WasmBackend<'a> {
     pub env: &'a Env<'a>,
     interns: &'a mut Interns,
@@ -44,7 +40,7 @@ pub struct WasmBackend<'a> {
     next_constant_addr: u32,
     fn_index_offset: u32,
     called_preload_fns: Vec<'a, u32>,
-    proc_symbols: Vec<'a, (Symbol, u32)>,
+    proc_lookup: Vec<'a, (Symbol, ProcLayout<'a>, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
 
     // Function-level data
@@ -57,12 +53,11 @@ pub struct WasmBackend<'a> {
 }
 
 impl<'a> WasmBackend<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: &'a Env<'a>,
         interns: &'a mut Interns,
         layout_ids: LayoutIds<'a>,
-        proc_symbols: Vec<'a, (Symbol, u32)>,
+        proc_lookup: Vec<'a, (Symbol, ProcLayout<'a>, u32)>,
         mut module: WasmModule<'a>,
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
@@ -78,6 +73,11 @@ impl<'a> WasmBackend<'a> {
             index: STACK_POINTER_GLOBAL_ID,
         });
 
+        // The preloaded binary has a global to tell us where its data section ends
+        // Note: We need this to account for zero data (.bss), which doesn't have an explicit DataSegment!
+        let data_end_idx = module.export.globals_lookup["__data_end".as_bytes()];
+        let next_constant_addr = module.global.parse_u32_at_index(data_end_idx);
+
         WasmBackend {
             env,
             interns,
@@ -86,10 +86,10 @@ impl<'a> WasmBackend<'a> {
             module,
 
             layout_ids,
-            next_constant_addr: CONST_SEGMENT_BASE_ADDR,
+            next_constant_addr,
             fn_index_offset,
             called_preload_fns: Vec::with_capacity_in(2, env.arena),
-            proc_symbols,
+            proc_lookup,
             helper_proc_gen,
 
             // Function-level data
@@ -106,7 +106,7 @@ impl<'a> WasmBackend<'a> {
 
     fn register_helper_proc(&mut self, new_proc_info: (Symbol, ProcLayout<'a>)) {
         let (new_proc_sym, new_proc_layout) = new_proc_info;
-        let wasm_fn_index = self.proc_symbols.len() as u32;
+        let wasm_fn_index = self.proc_lookup.len() as u32;
         let linker_sym_index = self.module.linking.symbol_table.len() as u32;
 
         let name = self
@@ -114,7 +114,8 @@ impl<'a> WasmBackend<'a> {
             .get_toplevel(new_proc_sym, &new_proc_layout)
             .to_symbol_string(new_proc_sym, self.interns);
 
-        self.proc_symbols.push((new_proc_sym, linker_sym_index));
+        self.proc_lookup
+            .push((new_proc_sym, new_proc_layout, linker_sym_index));
         let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
             flags: 0,
             index: wasm_fn_index,
@@ -175,6 +176,8 @@ impl<'a> WasmBackend<'a> {
             println!("\ngenerating procedure {:?}\n", proc.name);
         }
 
+        self.append_proc_debug_name(proc.name);
+
         self.start_proc(proc);
 
         self.stmt(&proc.body);
@@ -233,6 +236,20 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_size,
             self.storage.stack_frame_pointer,
         );
+    }
+
+    fn append_proc_debug_name(&mut self, name: Symbol) {
+        let proc_index = self
+            .proc_lookup
+            .iter()
+            .position(|(n, _, _)| *n == name)
+            .unwrap();
+        let wasm_fn_index = self.fn_index_offset + proc_index as u32;
+
+        let mut debug_name = bumpalo::collections::String::with_capacity_in(64, self.env.arena);
+        write!(debug_name, "{:?}", name).unwrap();
+        let name_bytes = debug_name.into_bytes().into_bump_slice();
+        self.module.names.append_function(wasm_fn_index, name_bytes);
     }
 
     /**********************************************************
@@ -529,7 +546,23 @@ impl<'a> WasmBackend<'a> {
     }
 
     fn stmt_runtime_error(&mut self, msg: &'a str) {
-        todo!("RuntimeError {:?}", msg)
+        // Create a zero-terminated version of the message string
+        let mut bytes = Vec::with_capacity_in(msg.len() + 1, self.env.arena);
+        bytes.extend_from_slice(msg.as_bytes());
+        bytes.push(0);
+
+        // Store it in the app's data section
+        let sym = self.create_symbol(msg);
+        let (linker_sym_index, elements_addr) = self.store_bytes_in_data_section(&bytes, sym);
+
+        // Pass its address to roc_panic
+        let tag_id = 0;
+        self.code_builder
+            .i32_const_mem_addr(elements_addr, linker_sym_index);
+        self.code_builder.i32_const(tag_id);
+        self.call_zig_builtin_after_loading_args("roc_panic", 2, false);
+
+        self.code_builder.unreachable_();
     }
 
     /**********************************************************
@@ -540,7 +573,7 @@ impl<'a> WasmBackend<'a> {
 
     fn expr(&mut self, sym: Symbol, expr: &Expr<'a>, layout: &Layout<'a>, storage: &StoredValue) {
         match expr {
-            Expr::Literal(lit) => self.expr_literal(lit, storage, sym, layout),
+            Expr::Literal(lit) => self.expr_literal(lit, storage, sym),
 
             Expr::Call(roc_mono::ir::Call {
                 call_type,
@@ -564,7 +597,7 @@ impl<'a> WasmBackend<'a> {
                 tag_id,
                 arguments,
                 ..
-            } => self.expr_tag(union_layout, *tag_id, arguments, sym, storage),
+            } => self.expr_tag(union_layout, *tag_id, arguments, sym, storage, None),
 
             Expr::GetTagId {
                 structure,
@@ -578,7 +611,23 @@ impl<'a> WasmBackend<'a> {
                 index,
             } => self.expr_union_at_index(*structure, *tag_id, union_layout, *index, sym),
 
-            _ => todo!("Expression `{}`", expr.to_pretty(100)),
+            Expr::ExprBox { .. } | Expr::ExprUnbox { .. } => {
+                todo!("Expression `{}`", expr.to_pretty(100))
+            }
+
+            Expr::Reuse {
+                tag_layout,
+                tag_id,
+                arguments,
+                symbol: reused,
+                ..
+            } => self.expr_tag(tag_layout, *tag_id, arguments, sym, storage, Some(*reused)),
+
+            Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
+
+            Expr::RuntimeErrorFunction(_) => {
+                todo!("Expression `{}`", expr.to_pretty(100))
+            }
         }
     }
 
@@ -586,13 +635,7 @@ impl<'a> WasmBackend<'a> {
      * Literals
      *******************************************************************/
 
-    fn expr_literal(
-        &mut self,
-        lit: &Literal<'a>,
-        storage: &StoredValue,
-        sym: Symbol,
-        layout: &Layout<'a>,
-    ) {
+    fn expr_literal(&mut self, lit: &Literal<'a>, storage: &StoredValue, sym: Symbol) {
         let invalid_error =
             || internal_error!("Literal value {:?} has invalid storage {:?}", lit, storage);
 
@@ -625,9 +668,8 @@ impl<'a> WasmBackend<'a> {
 
                 match lit {
                     Literal::Decimal(decimal) => {
-                        let lower_bits = (decimal.0 & 0xffff_ffff_ffff_ffff) as i64;
-                        let upper_bits = (decimal.0 >> 64) as i64;
-                        write128(lower_bits, upper_bits);
+                        let (upper_bits, lower_bits) = decimal.as_bits();
+                        write128(lower_bits as i64, upper_bits);
                     }
                     Literal::Int(x) => {
                         let lower_bits = (*x & 0xffff_ffff_ffff_ffff) as i64;
@@ -643,29 +685,45 @@ impl<'a> WasmBackend<'a> {
                             location.local_and_offset(self.storage.stack_frame_pointer);
 
                         let len = string.len();
-                        if len < 8 {
-                            let mut stack_mem_bytes = [0; 8];
-                            stack_mem_bytes[0..len].clone_from_slice(string.as_bytes());
-                            stack_mem_bytes[7] = 0x80 | (len as u8);
-                            let str_as_int = i64::from_le_bytes(stack_mem_bytes);
+                        if len < 12 {
+                            // Construct the bytes of the small string
+                            let mut bytes = [0; 12];
+                            bytes[0..len].clone_from_slice(string.as_bytes());
+                            bytes[11] = 0x80 | (len as u8);
 
-                            // Write all 8 bytes at once using an i64
-                            // Str is normally two i32's, but in this special case, we can get away with fewer instructions
+                            // Transform into two integers, to minimise number of instructions
+                            let bytes_split: &([u8; 8], [u8; 4]) =
+                                unsafe { std::mem::transmute(&bytes) };
+                            let int64 = i64::from_le_bytes(bytes_split.0);
+                            let int32 = i32::from_le_bytes(bytes_split.1);
+
+                            // Write the integers to memory
                             self.code_builder.get_local(local_id);
-                            self.code_builder.i64_const(str_as_int);
+                            self.code_builder.i64_const(int64);
                             self.code_builder.i64_store(Align::Bytes4, offset);
+                            self.code_builder.get_local(local_id);
+                            self.code_builder.i32_const(int32);
+                            self.code_builder.i32_store(Align::Bytes4, offset + 8);
                         } else {
+                            let bytes = string.as_bytes();
                             let (linker_sym_index, elements_addr) =
-                                self.expr_literal_big_str(string, sym, layout);
+                                self.store_bytes_in_data_section(bytes, sym);
 
+                            // ptr
                             self.code_builder.get_local(local_id);
                             self.code_builder
                                 .i32_const_mem_addr(elements_addr, linker_sym_index);
                             self.code_builder.i32_store(Align::Bytes4, offset);
 
+                            // len
                             self.code_builder.get_local(local_id);
                             self.code_builder.i32_const(string.len() as i32);
                             self.code_builder.i32_store(Align::Bytes4, offset + 4);
+
+                            // capacity
+                            self.code_builder.get_local(local_id);
+                            self.code_builder.i32_const(string.len() as i32);
+                            self.code_builder.i32_store(Align::Bytes4, offset + 8);
                         };
                     }
                     _ => invalid_error(),
@@ -678,16 +736,11 @@ impl<'a> WasmBackend<'a> {
 
     /// Create a string constant in the module data section
     /// Return the data we need for code gen: linker symbol index and memory address
-    fn expr_literal_big_str(
-        &mut self,
-        string: &'a str,
-        sym: Symbol,
-        layout: &Layout<'a>,
-    ) -> (u32, u32) {
+    fn store_bytes_in_data_section(&mut self, bytes: &[u8], sym: Symbol) -> (u32, u32) {
         // Place the segment at a 4-byte aligned offset
         let segment_addr = round_up_to_alignment!(self.next_constant_addr, PTR_SIZE);
         let elements_addr = segment_addr + PTR_SIZE;
-        let length_with_refcount = 4 + string.len();
+        let length_with_refcount = 4 + bytes.len();
         self.next_constant_addr = segment_addr + length_with_refcount as u32;
 
         let mut segment = DataSegment {
@@ -698,14 +751,14 @@ impl<'a> WasmBackend<'a> {
         // Prefix the string bytes with "infinite" refcount
         let refcount_max_bytes: [u8; 4] = (REFCOUNT_MAX as i32).to_le_bytes();
         segment.init.extend_from_slice(&refcount_max_bytes);
-        segment.init.extend_from_slice(string.as_bytes());
+        segment.init.extend_from_slice(bytes);
 
         let segment_index = self.module.data.append_segment(segment);
 
         // Generate linker symbol
         let name = self
             .layout_ids
-            .get(sym, layout)
+            .get(sym, &Layout::Builtin(Builtin::Str))
             .to_symbol_string(sym, self.interns);
 
         let linker_symbol = SymInfo::Data(DataSymbol::Defined {
@@ -713,7 +766,7 @@ impl<'a> WasmBackend<'a> {
             name: name.clone(),
             segment_index,
             segment_offset: 4,
-            size: string.len() as u32,
+            size: bytes.len() as u32,
         });
 
         // Ensure the linker keeps the segment aligned when relocating it
@@ -742,8 +795,24 @@ impl<'a> WasmBackend<'a> {
         ret_storage: &StoredValue,
     ) {
         match call_type {
-            CallType::ByName { name: func_sym, .. } => {
-                self.expr_call_by_name(*func_sym, arguments, ret_sym, ret_layout, ret_storage)
+            CallType::ByName {
+                name: func_sym,
+                arg_layouts,
+                ret_layout: result,
+                ..
+            } => {
+                let proc_layout = ProcLayout {
+                    arguments: arg_layouts,
+                    result: **result,
+                };
+                self.expr_call_by_name(
+                    *func_sym,
+                    &proc_layout,
+                    arguments,
+                    ret_sym,
+                    ret_layout,
+                    ret_storage,
+                )
             }
             CallType::LowLevel { op: lowlevel, .. } => {
                 self.expr_call_low_level(*lowlevel, arguments, ret_sym, ret_layout, ret_storage)
@@ -756,6 +825,7 @@ impl<'a> WasmBackend<'a> {
     fn expr_call_by_name(
         &mut self,
         func_sym: Symbol,
+        proc_layout: &ProcLayout<'a>,
         arguments: &'a [Symbol],
         ret_sym: Symbol,
         ret_layout: &Layout<'a>,
@@ -779,9 +849,10 @@ impl<'a> WasmBackend<'a> {
             CallConv::C,
         );
 
-        for (roc_proc_index, (ir_sym, linker_sym_index)) in self.proc_symbols.iter().enumerate() {
-            let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
-            if *ir_sym == func_sym {
+        let iter = self.proc_lookup.iter().enumerate();
+        for (roc_proc_index, (ir_sym, pl, linker_sym_index)) in iter {
+            if *ir_sym == func_sym && pl == proc_layout {
+                let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
                 let num_wasm_args = param_types.len();
                 let has_return_val = ret_type.is_some();
                 self.code_builder.call(
@@ -795,9 +866,10 @@ impl<'a> WasmBackend<'a> {
         }
 
         internal_error!(
-            "Could not find procedure {:?}\nKnown procedures: {:?}",
+            "Could not find procedure {:?} with proc_layout:\n{:#?}\nKnown procedures:\n{:#?}",
             func_sym,
-            self.proc_symbols
+            proc_layout,
+            self.proc_lookup
         );
     }
 
@@ -884,7 +956,7 @@ impl<'a> WasmBackend<'a> {
         storage: &StoredValue,
         fields: &'a [Symbol],
     ) {
-        if matches!(layout, Layout::Struct(_)) {
+        if matches!(layout, Layout::Struct { .. }) {
             match storage {
                 StoredValue::StackMemory { location, size, .. } => {
                     if *size > 0 {
@@ -906,11 +978,13 @@ impl<'a> WasmBackend<'a> {
                 }
                 _ => internal_error!("Cannot create struct {:?} with storage {:?}", sym, storage),
             };
-        } else {
+        } else if !fields.is_empty() {
             // Struct expression but not Struct layout => single element. Copy it.
             let field_storage = self.storage.get(&fields[0]).to_owned();
             self.storage
                 .clone_value(&mut self.code_builder, storage, &field_storage, fields[0]);
+        } else {
+            // Empty record. Nothing to do.
         }
     }
 
@@ -947,55 +1021,6 @@ impl<'a> WasmBackend<'a> {
         }
         self.storage
             .copy_value_from_memory(&mut self.code_builder, sym, local_id, offset);
-    }
-
-    /*******************************************************************
-     * Heap allocation
-     *******************************************************************/
-
-    /// Allocate heap space and write an initial refcount
-    /// If the data size is known at compile time, pass it in comptime_data_size.
-    /// If size is only known at runtime, push *data* size to the VM stack first.
-    /// Leaves the *data* address on the VM stack
-    fn allocate_with_refcount(
-        &mut self,
-        comptime_data_size: Option<u32>,
-        alignment_bytes: u32,
-        initial_refcount: u32,
-    ) {
-        // Add extra bytes for the refcount
-        let extra_bytes = alignment_bytes.max(PTR_SIZE);
-
-        if let Some(data_size) = comptime_data_size {
-            // Data size known at compile time and passed as an argument
-            self.code_builder
-                .i32_const((data_size + extra_bytes) as i32);
-        } else {
-            // Data size known only at runtime and is on top of VM stack
-            self.code_builder.i32_const(extra_bytes as i32);
-            self.code_builder.i32_add();
-        }
-
-        // Provide a constant for the alignment argument
-        self.code_builder.i32_const(alignment_bytes as i32);
-
-        // Call the foreign function. (Zig and C calling conventions are the same for this signature)
-        self.call_zig_builtin_after_loading_args("roc_alloc", 2, true);
-
-        // Save the allocation address to a temporary local variable
-        let local_id = self.storage.create_anonymous_local(ValueType::I32);
-        self.code_builder.tee_local(local_id);
-
-        // Write the initial refcount
-        let refcount_offset = extra_bytes - PTR_SIZE;
-        let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
-        self.code_builder.i32_const(encoded_refcount);
-        self.code_builder.i32_store(Align::Bytes4, refcount_offset);
-
-        // Put the data address on the VM stack
-        self.code_builder.get_local(local_id);
-        self.code_builder.i32_const(extra_bytes as i32);
-        self.code_builder.i32_add();
     }
 
     /*******************************************************************
@@ -1093,6 +1118,7 @@ impl<'a> WasmBackend<'a> {
         arguments: &'a [Symbol],
         symbol: Symbol,
         stored: &StoredValue,
+        maybe_reused: Option<Symbol>,
     ) {
         if union_layout.tag_is_null(tag_id) {
             self.code_builder.i32_const(0);
@@ -1113,8 +1139,14 @@ impl<'a> WasmBackend<'a> {
                 location.local_and_offset(self.storage.stack_frame_pointer)
             }
             StoredValue::Local { local_id, .. } => {
-                // Tag is stored as a pointer to the heap. Call the allocator to get a memory address.
-                self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                // Tag is stored as a heap pointer.
+                if let Some(reused) = maybe_reused {
+                    // Reuse an existing heap allocation
+                    self.storage.load_symbols(&mut self.code_builder, &[reused]);
+                } else {
+                    // Call the allocator to get a memory address.
+                    self.allocate_with_refcount(Some(data_size), data_alignment, 1);
+                }
                 self.code_builder.set_local(local_id);
                 (local_id, 0)
             }
@@ -1320,5 +1352,81 @@ impl<'a> WasmBackend<'a> {
         let from_offset = tag_offset + field_offset;
         self.storage
             .copy_value_from_memory(&mut self.code_builder, symbol, from_ptr, from_offset);
+    }
+
+    /*******************************************************************
+     * Refcounting & Heap allocation
+     *******************************************************************/
+
+    /// Allocate heap space and write an initial refcount
+    /// If the data size is known at compile time, pass it in comptime_data_size.
+    /// If size is only known at runtime, push *data* size to the VM stack first.
+    /// Leaves the *data* address on the VM stack
+    fn allocate_with_refcount(
+        &mut self,
+        comptime_data_size: Option<u32>,
+        alignment_bytes: u32,
+        initial_refcount: u32,
+    ) {
+        // Add extra bytes for the refcount
+        let extra_bytes = alignment_bytes.max(PTR_SIZE);
+
+        if let Some(data_size) = comptime_data_size {
+            // Data size known at compile time and passed as an argument
+            self.code_builder
+                .i32_const((data_size + extra_bytes) as i32);
+        } else {
+            // Data size known only at runtime and is on top of VM stack
+            self.code_builder.i32_const(extra_bytes as i32);
+            self.code_builder.i32_add();
+        }
+
+        // Provide a constant for the alignment argument
+        self.code_builder.i32_const(alignment_bytes as i32);
+
+        // Call the foreign function. (Zig and C calling conventions are the same for this signature)
+        self.call_zig_builtin_after_loading_args("roc_alloc", 2, true);
+
+        // Save the allocation address to a temporary local variable
+        let local_id = self.storage.create_anonymous_local(ValueType::I32);
+        self.code_builder.tee_local(local_id);
+
+        // Write the initial refcount
+        let refcount_offset = extra_bytes - PTR_SIZE;
+        let encoded_refcount = (initial_refcount as i32) - 1 + i32::MIN;
+        self.code_builder.i32_const(encoded_refcount);
+        self.code_builder.i32_store(Align::Bytes4, refcount_offset);
+
+        // Put the data address on the VM stack
+        self.code_builder.get_local(local_id);
+        self.code_builder.i32_const(extra_bytes as i32);
+        self.code_builder.i32_add();
+    }
+
+    fn expr_reset(&mut self, argument: Symbol, ret_symbol: Symbol, ret_storage: &StoredValue) {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        // Get an IR expression for the call to the specialized procedure
+        let layout = self.storage.symbol_layouts[&argument];
+        let (specialized_call_expr, new_specializations) = self
+            .helper_proc_gen
+            .call_reset_refcount(ident_ids, layout, argument);
+
+        // If any new specializations were created, register their symbol data
+        for spec in new_specializations.into_iter() {
+            self.register_helper_proc(spec);
+        }
+
+        // Generate Wasm code for the IR call expression
+        self.expr(
+            ret_symbol,
+            self.env.arena.alloc(specialized_call_expr),
+            &Layout::Builtin(Builtin::Bool),
+            ret_storage,
+        );
     }
 }

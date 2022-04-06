@@ -1,13 +1,13 @@
 procedure Dict.2 ():
-    let Test.4 : Builtin(Dict(Union(NonRecursive([])), Union(NonRecursive([])))) = lowlevel DictEmpty ;
+    let Test.4 : Dict [] [] = lowlevel DictEmpty ;
     ret Test.4;
 
 procedure Dict.8 (#Attr.2):
-    let Test.3 : Builtin(Int(U64)) = lowlevel DictSize #Attr.2;
+    let Test.3 : U64 = lowlevel DictSize #Attr.2;
     dec #Attr.2;
     ret Test.3;
 
 procedure Test.0 ():
-    let Test.2 : Builtin(Dict(Union(NonRecursive([])), Union(NonRecursive([])))) = CallByName Dict.2;
-    let Test.1 : Builtin(Int(U64)) = CallByName Dict.8 Test.2;
+    let Test.2 : Dict [] [] = CallByName Dict.2;
+    let Test.1 : U64 = CallByName Dict.8 Test.2;
     ret Test.1;

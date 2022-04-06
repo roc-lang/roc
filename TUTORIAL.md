@@ -6,6 +6,10 @@ and more!
 
 Enjoy!
 
+## Getting started
+
+Learn how to install roc on your machine [here](https://github.com/rtfeldman/roc#getting-started).
+
 ## Strings and Numbers
 
 Let’s start by getting acquainted with Roc’s Read Eval Print Loop, or REPL for
@@ -322,7 +326,7 @@ If we were to use `counts.note` inside `addWithStringify`, then we would get an 
 because `total` is calling `addAndStringify` passing a record that doesn't have a `note` field.
 
 Record fields can have any combination of types we want. `totalWithNote` uses a record that
-has a mixture of numbers and strings, but we can also have record fields that other types of
+has a mixture of numbers and strings, but we can also have record fields with other types of
 values - including other records, or even functions!
 
 ```coffee
@@ -523,13 +527,13 @@ stoplightStr =
         Green | Yellow ->
             if contrast > 75 then
                 "not red, but very high contrast"
-            else if saturation > 50 then
+            else if contrast > 50 then
                 "not red, but high contrast"
             else
                 "not red"
 ```
 
-Either style can be a reasonable choice depending on the cirumstances.
+Either style can be a reasonable choice depending on the circumstances.
 
 ### Tags with payloads
 
@@ -587,7 +591,7 @@ List.append names "Jess"
 
 This returns a **new** list with `"Jess"` after `"Ari"`, and doesn't modify the original list at all.
 All values in Roc (including lists, but also records, strings, numbers, and so on) are immutable,
-meaning whenever we want to "change" them, we want to instead pass them a function which returns some
+meaning whenever we want to "change" them, we want to instead pass them to a function which returns some
 variation of what was passed in.
 
 ### List.map
@@ -1071,7 +1075,7 @@ is 0, we can look at `U8` and know that it goes from `0` (since it's unsigned) t
 
 If we change `U8` to `I8`, making it a *signed* 8-bit integer, the range changes. Because it's still 8 bits, it still
 has room to represent 2⁸ (that is, 256) different numbers. However, now in addition to one of those 256 numbers
-being zero, about half of rest will be negative, and the others positive. So instead of ranging from, say -255
+being zero, about half of the rest will be negative, and the others positive. So instead of ranging from, say -255
 to 255 (which, counting zero, would represent 511 different numbers; too many to fit in 8 bits!) an `I8` value
 ranges from -128 to 127.
 
@@ -1082,10 +1086,10 @@ of an 8-bit integer) and dividing it in half (half of 256 is 128, so -128 is `I8
 highest number, take the positive version of the lowest number (so, convert `-128` to `128`) and then subtract 1
 to make room for zero (so, `128` becomes `127`; `I8` ranges from -128 to 127).
 
-Following this pattern, the 16 in `I16` means that it's a signed 16 bit integer.
+Following this pattern, the 16 in `I16` means that it's a signed 16-bit integer.
 That tells us it has room to represent 2¹⁶ (which is equal to 65536) different numbers. Half of 65536 is 32768,
 so the lowest `I16` would be -32768, and the highest would be 32767. Knowing that, we can also quickly tell that
-the lowest `U16` would be zero (since it always is for unsigned integers), and the higeest `U16` would be 65536.
+the lowest `U16` would be zero (since it always is for unsigned integers), and the highest `U16` would be 65535.
 
 Choosing a size depends on your performance needs and the range of numbers you want to represent. Consider:
 
@@ -1153,10 +1157,10 @@ with 18 decimal places of precision.
 
 This means a `Dec` can represent whole numbers up to slightly over 170
 quintillion, along with 18 decimal places. (To be precise, it can store
-numbers betwween `-170_141_183_460_469_231_731.687303715884105728`
+numbers between `-170_141_183_460_469_231_731.687303715884105728`
 and `170_141_183_460_469_231_731.687303715884105727`.) Why 18
 decimal places? It's the highest number of decimal places where you can still
-convert any `U64] to a `Dec` without losing information.
+convert any `U64` to a `Dec` without losing information.
 
 While the fixed-point `Dec` has a fixed range, the floating-point `F32` and `F64` do not.
 Instead, outside of a certain range they start to lose precision instead of immediately overflowing
@@ -1619,12 +1623,11 @@ If you like, you can always annotate your functions as accepting open records. H
 always be the nicest choice. For example, let's say you have a `User` type alias, like so:
 
 ```coffee
-User :
-    {
-        email : Str,
-        firstName : Str,
-        lastName : Str,
-    }
+User : {
+    email : Str,
+    firstName : Str,
+    lastName : Str,
+}
 ```
 
 This defines `User` to be a closed record, which in practice is the most common way records named `User`
@@ -1657,12 +1660,11 @@ Since open records have a type variable (like `*` in `{ email : Str }*` or `a` i
 type variable to the `User` type alias:
 
 ```coffee
-User a :
-    {
-        email : Str,
-        firstName : Str,
-        lastName : Str,
-    }a
+User a : {
+    email : Str,
+    firstName : Str,
+    lastName : Str,
+}a
 ```
 
 Notice that the `a` type variable appears not only in `User a` but also in `}a` at the end of the
@@ -1823,7 +1825,7 @@ which is an open union (like `Ok "foo"`, which has the type `[ Ok Str ]*`) can b
 expecting a tag union (no matter whether it's open or closed), as long as the expected tag union includes at least
 the tags in the open union you're providing.
 
-So if I have an `[ Ok Str ]*` value, I can pass it functions with any of these types (among others):
+So if I have an `[ Ok Str ]*` value, I can pass it to functions with any of these types (among others):
 
 * `[ Ok Str ]* -> Bool`
 * `[ Ok Str ] -> Bool`

@@ -3,7 +3,7 @@ use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
@@ -26,7 +26,6 @@ fn promote_expr_to_module(src: &str) -> String {
 fn create_llvm_module<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: &'a roc_builtins::std::StdLib,
     is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
@@ -51,27 +50,25 @@ fn create_llvm_module<'a>(
         module_src = &temp;
     }
 
-    let exposed_types = MutMap::default();
-    let loaded = roc_load::file::load_and_monomorphize_from_str(
+    let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
-        stdlib,
         src_dir,
-        exposed_types,
+        Default::default(),
         target_info,
     );
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
+        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
             println!("{}", report);
             panic!();
         }
         Err(e) => panic!("{:?}", e),
     };
 
-    use roc_load::file::MonomorphizedModule;
+    use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         procedures,
         entry_point,
@@ -261,7 +258,6 @@ fn create_llvm_module<'a>(
 pub fn helper<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: &'a roc_builtins::std::StdLib,
     is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
@@ -277,7 +273,6 @@ pub fn helper<'a>(
     let (main_fn_name, delayed_errors, module) = create_llvm_module(
         arena,
         src,
-        stdlib,
         is_gen_test,
         ignore_problems,
         context,
@@ -306,7 +301,6 @@ fn wasm32_target_tripple() -> Triple {
 pub fn helper_wasm<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: &'a roc_builtins::std::StdLib,
     _is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
@@ -323,7 +317,6 @@ pub fn helper_wasm<'a>(
     let (_main_fn_name, _delayed_errors, llvm_module) = create_llvm_module(
         arena,
         src,
-        stdlib,
         is_gen_test,
         ignore_problems,
         context,
@@ -465,18 +458,9 @@ where
     let arena = bumpalo::Bump::new();
     let context = inkwell::context::Context::create();
 
-    // NOTE the stdlib must be in the arena; just taking a reference will segfault
-    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
     let is_gen_test = true;
-    let instance = crate::helpers::llvm::helper_wasm(
-        &arena,
-        src,
-        stdlib,
-        is_gen_test,
-        ignore_problems,
-        &context,
-    );
+    let instance =
+        crate::helpers::llvm::helper_wasm(&arena, src, is_gen_test, ignore_problems, &context);
 
     let memory = instance.exports.get_memory("memory").unwrap();
 
@@ -489,10 +473,7 @@ where
     match test_wrapper.call(&[]) {
         Err(e) => Err(format!("call to `test_wrapper`: {:?}", e)),
         Ok(result) => {
-            let address = match result[0] {
-                wasmer::Value::I32(a) => a,
-                _ => panic!(),
-            };
+            let address = result[0].unwrap_i32();
 
             let output = <T as crate::helpers::llvm::FromWasmerMemory>::decode(
                 memory,
@@ -542,18 +523,9 @@ macro_rules! assert_llvm_evals_to {
         let arena = Bump::new();
         let context = Context::create();
 
-        // NOTE the stdlib must be in the arena; just taking a reference will segfault
-        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
         let is_gen_test = true;
-        let (main_fn_name, errors, lib) = $crate::helpers::llvm::helper(
-            &arena,
-            $src,
-            stdlib,
-            is_gen_test,
-            $ignore_problems,
-            &context,
-        );
+        let (main_fn_name, errors, lib) =
+            $crate::helpers::llvm::helper(&arena, $src, is_gen_test, $ignore_problems, &context);
 
         let transform = |success| {
             let expected = $expected;
@@ -582,19 +554,31 @@ macro_rules! assert_llvm_evals_to {
 #[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, $crate::helpers::llvm::identity);
+        assert_evals_to!($src, $expected, $ty, $crate::helpers::llvm::identity, false);
     }};
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {{
         // same as above, except with an additional transformation argument.
-        {
-            #[cfg(feature = "wasm-cli-run")]
-            $crate::helpers::llvm::assert_wasm_evals_to!(
-                $src, $expected, $ty, $transform, false, false
-            );
+        assert_evals_to!($src, $expected, $ty, $transform, false);
+    }};
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems: expr) => {{
+        // same as above, except with ignore_problems.
+        #[cfg(feature = "wasm-cli-run")]
+        $crate::helpers::llvm::assert_wasm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $transform,
+            $ignore_problems
+        );
 
-            $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
-        }
-    };
+        $crate::helpers::llvm::assert_llvm_evals_to!(
+            $src,
+            $expected,
+            $ty,
+            $transform,
+            $ignore_problems
+        );
+    }};
 }
 
 #[allow(unused_macros)]
@@ -607,12 +591,9 @@ macro_rules! assert_expect_failed {
         let arena = Bump::new();
         let context = Context::create();
 
-        // NOTE the stdlib must be in the arena; just taking a reference will segfault
-        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
         let is_gen_test = true;
         let (main_fn_name, errors, lib) =
-            $crate::helpers::llvm::helper(&arena, $src, stdlib, is_gen_test, false, &context);
+            $crate::helpers::llvm::helper(&arena, $src, is_gen_test, false, &context);
 
         let transform = |success| {
             let expected = $expected;

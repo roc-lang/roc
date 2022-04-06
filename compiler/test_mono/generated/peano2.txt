@@ -1,26 +1,26 @@
 procedure Test.0 ():
-    let Test.20 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = Z ;
-    let Test.19 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = S Test.20;
-    let Test.18 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = S Test.19;
-    let Test.2 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = S Test.18;
-    let Test.15 : Builtin(Bool) = 0i64;
-    let Test.16 : Builtin(Bool) = GetTagId Test.2;
-    let Test.17 : Builtin(Bool) = lowlevel Eq Test.15 Test.16;
+    let Test.20 : TODO = Z ;
+    let Test.19 : TODO = S Test.20;
+    let Test.18 : TODO = S Test.19;
+    let Test.2 : TODO = S Test.18;
+    let Test.15 : Int1 = 0i64;
+    let Test.16 : Int1 = GetTagId Test.2;
+    let Test.17 : Int1 = lowlevel Eq Test.15 Test.16;
     if Test.17 then
-        let Test.11 : Union(NullableUnwrapped { nullable_id: true, other_fields: [RecursivePointer] }) = UnionAtIndex (Id 0) (Index 0) Test.2;
+        let Test.11 : TODO = UnionAtIndex (Id 0) (Index 0) Test.2;
         inc Test.11;
         dec Test.2;
-        let Test.12 : Builtin(Bool) = 0i64;
-        let Test.13 : Builtin(Bool) = GetTagId Test.11;
+        let Test.12 : Int1 = 0i64;
+        let Test.13 : Int1 = GetTagId Test.11;
         dec Test.11;
-        let Test.14 : Builtin(Bool) = lowlevel Eq Test.12 Test.13;
+        let Test.14 : Int1 = lowlevel Eq Test.12 Test.13;
         if Test.14 then
-            let Test.7 : Builtin(Int(I64)) = 1i64;
+            let Test.7 : I64 = 1i64;
             ret Test.7;
         else
-            let Test.8 : Builtin(Int(I64)) = 0i64;
+            let Test.8 : I64 = 0i64;
             ret Test.8;
     else
         dec Test.2;
-        let Test.9 : Builtin(Int(I64)) = 0i64;
+        let Test.9 : I64 = 0i64;
         ret Test.9;

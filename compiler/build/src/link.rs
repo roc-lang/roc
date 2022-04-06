@@ -1,4 +1,4 @@
-use crate::target::{arch_str, target_triple_str};
+use crate::target::{arch_str, target_zig_str};
 #[cfg(feature = "llvm")]
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output};
+use std::process::{self, Child, Command, Output};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 fn zig_executable() -> String {
@@ -46,6 +46,10 @@ pub fn link(
             operating_system: OperatingSystem::Darwin,
             ..
         } => link_macos(target, output_path, input_paths, link_type),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            ..
+        } => link_windows(target, output_path, input_paths, link_type),
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
@@ -137,6 +141,8 @@ pub fn build_zig_host_native(
 
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.args(&["-O", "ReleaseSmall"]);
     }
     command.output().unwrap()
 }
@@ -231,6 +237,8 @@ pub fn build_zig_host_native(
     ]);
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.args(&["-O", "ReleaseSmall"]);
     }
     command.output().unwrap()
 }
@@ -282,6 +290,8 @@ pub fn build_zig_host_wasm32(
         ]);
     if matches!(opt_level, OptLevel::Optimize) {
         command.args(&["-O", "ReleaseSafe"]);
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.args(&["-O", "ReleaseSmall"]);
     }
     command.output().unwrap()
 }
@@ -317,7 +327,9 @@ pub fn build_c_host_native(
         command.args(&["-fPIC", "-c"]);
     }
     if matches!(opt_level, OptLevel::Optimize) {
-        command.arg("-O2");
+        command.arg("-O3");
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.arg("-Os");
     }
     command.output().unwrap()
 }
@@ -351,6 +363,8 @@ pub fn build_swift_host_native(
 
     if matches!(opt_level, OptLevel::Optimize) {
         command.arg("-O");
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.arg("-Osize");
     }
 
     command.output().unwrap()
@@ -443,7 +457,7 @@ pub fn rebuild_host(
                     &emit_bin,
                     zig_host_src.to_str().unwrap(),
                     zig_str_path.to_str().unwrap(),
-                    target_triple_str(target),
+                    target_zig_str(target),
                     opt_level,
                     shared_lib_path,
                     target_valgrind,
@@ -456,18 +470,18 @@ pub fn rebuild_host(
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
-        let cargo_out_dir =
-            cargo_dir
-                .join("target")
-                .join(if matches!(opt_level, OptLevel::Optimize) {
-                    "release"
-                } else {
-                    "debug"
-                });
+        let cargo_out_dir = cargo_dir.join("target").join(
+            if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
+                "release"
+            } else {
+                "debug"
+            },
+        );
 
         let mut command = Command::new("cargo");
         command.arg("build").current_dir(cargo_dir);
-        if matches!(opt_level, OptLevel::Optimize) {
+        // Rust doesn't expose size without editing the cargo.toml. Instead just use release.
+        if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
             command.arg("--release");
         }
         let source_file = if shared_lib_path.is_some() {
@@ -533,6 +547,8 @@ pub fn rebuild_host(
         ]);
         if matches!(opt_level, OptLevel::Optimize) {
             command.arg("-O");
+        } else if matches!(opt_level, OptLevel::Size) {
+            command.arg("-C opt-level=s");
         }
         let output = command.output().unwrap();
 
@@ -636,6 +652,33 @@ fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
     }
 }
 
+/// Given a list of library directories and the name of a library, find the 1st match
+///
+/// The provided list of library directories should be in the form of a list of
+/// directories, where each directory is represented by a series of path segments, like
+///
+/// ["/usr", "lib"]
+///
+/// Each directory will be checked for a file with the provided filename, and the first
+/// match will be returned.
+///
+/// If there are no matches, [`None`] will be returned.
+fn look_for_library(lib_dirs: &[&[&str]], lib_filename: &str) -> Option<PathBuf> {
+    lib_dirs
+        .iter()
+        .map(|lib_dir| {
+            lib_dir.iter().fold(PathBuf::new(), |mut path, segment| {
+                path.push(segment);
+                path
+            })
+        })
+        .map(|mut path| {
+            path.push(lib_filename);
+            path
+        })
+        .find(|path| path.exists())
+}
+
 fn link_linux(
     target: &Triple,
     output_path: PathBuf,
@@ -670,28 +713,75 @@ fn link_linux(
         ));
     }
 
-    let libcrt_path =
+    // Some things we'll need to build a list of dirs to check for libraries
+    let maybe_nix_path = nix_path_opt();
+    let usr_lib_arch = ["/usr", "lib", &architecture];
+    let lib_arch = ["/lib", &architecture];
+    let nix_path_segments;
+    let lib_dirs_if_nix: [&[&str]; 5];
+    let lib_dirs_if_nonix: [&[&str]; 4];
+
+    // Build the aformentioned list
+    let lib_dirs: &[&[&str]] =
         // give preference to nix_path if it's defined, this prevents bugs
-        if let Some(nix_path) = nix_path_opt() {
-            library_path([&nix_path])
-            .unwrap()
+        if let Some(nix_path) = &maybe_nix_path {
+            nix_path_segments = [nix_path.as_str()];
+            lib_dirs_if_nix = [
+                &nix_path_segments,
+                &usr_lib_arch,
+                &lib_arch,
+                &["/usr", "lib"],
+                &["/usr", "lib64"],
+            ];
+            &lib_dirs_if_nix
         } else {
-            library_path(["/usr", "lib", &architecture])
-            .or_else(|| library_path(["/usr", "lib"]))
-            .unwrap()
+            lib_dirs_if_nonix = [
+                &usr_lib_arch,
+                &lib_arch,
+                &["/usr", "lib"],
+                &["/usr", "lib64"],
+            ];
+            &lib_dirs_if_nonix
         };
 
+    // Look for the libraries we'll need
+
     let libgcc_name = "libgcc_s.so.1";
-    let libgcc_path =
-        // give preference to nix_path if it's defined, this prevents bugs
-        if let Some(nix_path) = nix_path_opt() {
-            library_path([&nix_path, libgcc_name])
-            .unwrap()
-        } else {
-            library_path(["/lib", &architecture, libgcc_name])
-            .or_else(|| library_path(["/usr", "lib", &architecture, libgcc_name]))
-            .or_else(|| library_path(["/usr", "lib", libgcc_name]))
-            .unwrap()
+    let libgcc_path = look_for_library(lib_dirs, libgcc_name);
+
+    let crti_name = "crti.o";
+    let crti_path = look_for_library(lib_dirs, crti_name);
+
+    let crtn_name = "crtn.o";
+    let crtn_path = look_for_library(lib_dirs, crtn_name);
+
+    let scrt1_name = "Scrt1.o";
+    let scrt1_path = look_for_library(lib_dirs, scrt1_name);
+
+    // Unwrap all the paths at once so we can inform the user of all missing libs at once
+    let (libgcc_path, crti_path, crtn_path, scrt1_path) =
+        match (libgcc_path, crti_path, crtn_path, scrt1_path) {
+            (Some(libgcc), Some(crti), Some(crtn), Some(scrt1)) => (libgcc, crti, crtn, scrt1),
+            (maybe_gcc, maybe_crti, maybe_crtn, maybe_scrt1) => {
+                if maybe_gcc.is_none() {
+                    eprintln!("Couldn't find libgcc_s.so.1!");
+                    eprintln!("You may need to install libgcc\n");
+                }
+                if maybe_crti.is_none() | maybe_crtn.is_none() | maybe_scrt1.is_none() {
+                    eprintln!("Couldn't find the glibc development files!");
+                    eprintln!("We need the objects crti.o, crtn.o, and Scrt1.o");
+                    eprintln!("You may need to install the glibc development package");
+                    eprintln!("(probably called glibc-dev or glibc-devel)\n");
+                }
+
+                let dirs = lib_dirs
+                    .iter()
+                    .map(|segments| segments.join("/"))
+                    .collect::<Vec<String>>()
+                    .join("\n");
+                eprintln!("We looked in the following directories:\n{}", dirs);
+                process::exit(1);
+            }
         };
 
     let ld_linux = match target.architecture {
@@ -717,7 +807,7 @@ fn link_linux(
         LinkType::Executable => (
             // Presumably this S stands for Static, since if we include Scrt1.o
             // in the linking for dynamic builds, linking fails.
-            vec![libcrt_path.join("Scrt1.o").to_str().unwrap().to_string()],
+            vec![scrt1_path.to_string_lossy().into_owned()],
             output_path,
         ),
         LinkType::Dylib => {
@@ -749,8 +839,6 @@ fn link_linux(
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
 
-    init_arch(target);
-
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
 
@@ -772,8 +860,8 @@ fn link_linux(
             "-A",
             arch_str(target),
             "-pie",
-            libcrt_path.join("crti.o").to_str().unwrap(),
-            libcrt_path.join("crtn.o").to_str().unwrap(),
+            &*crti_path.to_string_lossy(),
+            &*crtn_path.to_string_lossy(),
         ])
         .args(&base_args)
         .args(&["-dynamic-linker", ld_linux])
@@ -849,6 +937,18 @@ fn link_macos(
         ld_command.arg(format!("-L{}", sdk_path));
         ld_command.arg(format!("-L{}/swift", sdk_path));
     };
+
+    let roc_link_flags = match env::var("ROC_LINK_FLAGS") {
+        Ok(flags) => {
+            println!("⚠️ CAUTION: The ROC_LINK_FLAGS environment variable is a temporary workaround, and will no longer do anything once surgical linking lands! If you're concerned about what this means for your use case, please ask about it on Zulip.");
+
+            flags
+        }
+        Err(_) => "".to_string(),
+    };
+    for roc_link_flag in roc_link_flags.split_whitespace() {
+        ld_command.arg(roc_link_flag);
+    }
 
     ld_command.args(&[
         // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
@@ -953,6 +1053,15 @@ fn link_wasm32(
     Ok((child, output_path))
 }
 
+fn link_windows(
+    _target: &Triple,
+    _output_path: PathBuf,
+    _input_paths: &[&str],
+    _link_type: LinkType,
+) -> io::Result<(Child, PathBuf)> {
+    todo!("Add windows support to the surgical linker. See issue #2608.")
+}
+
 #[cfg(feature = "llvm")]
 pub fn module_to_dylib(
     module: &inkwell::module::Module,
@@ -1009,14 +1118,4 @@ fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
             ),
         }
     }
-}
-
-#[cfg(feature = "llvm")]
-fn init_arch(target: &Triple) {
-    crate::target::init_arch(target);
-}
-
-#[cfg(not(feature = "llvm"))]
-fn init_arch(_target: &Triple) {
-    panic!("Tried to initialize LLVM when crate was not built with `feature = \"llvm\"` enabled");
 }

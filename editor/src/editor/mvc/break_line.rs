@@ -1,6 +1,5 @@
-use roc_ast::lang::core::ast::ASTNodeId;
 use roc_ast::lang::core::def::def2::Def2;
-use roc_code_markup::markup::common_nodes::new_blank_mn_w_nls;
+use roc_code_markup::markup::common_nodes::NEW_LINES_AFTER_DEF;
 
 use crate::editor::ed_error::EdResult;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -23,73 +22,42 @@ pub fn break_line(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
                 column: caret_pos.column - 1,
             })
         {
-            let new_blank_line_nr = caret_line_nr + 3;
+            let new_blank_line_nr = caret_line_nr + NEW_LINES_AFTER_DEF;
             // if there already is a blank line at new_blank_line_nr just move the caret there, don't add extra lines
             // safe unwrap, we already checked the nr_of_lines
             if !(ed_model.code_lines.nr_of_lines() >= new_blank_line_nr
                 && ed_model.code_lines.line_len(new_blank_line_nr).unwrap() == 0)
             {
-                // two blank lines between top level definitions
-                EdModel::insert_empty_line(
-                    caret_line_nr + 1,
-                    &mut ed_model.code_lines,
-                    &mut ed_model.grid_node_map,
-                )?;
-                EdModel::insert_empty_line(
-                    caret_line_nr + 2,
-                    &mut ed_model.code_lines,
-                    &mut ed_model.grid_node_map,
-                )?;
-                // third "empty" line will be filled by the blank
-                EdModel::insert_empty_line(
-                    caret_line_nr + 3,
-                    &mut ed_model.code_lines,
-                    &mut ed_model.grid_node_map,
-                )?;
+                for i in 1..=NEW_LINES_AFTER_DEF {
+                    EdModel::insert_empty_line(caret_line_nr + i, &mut ed_model.grid_node_map)?;
+                }
 
-                insert_new_blank(ed_model, caret_pos, caret_pos.line + 3)?;
+                insert_new_blank(ed_model, caret_pos.line + NEW_LINES_AFTER_DEF + 1)?;
             }
         }
     }
 
-    ed_model.simple_move_carets_down(3); // two blank lines between top level definitions
+    ed_model.simple_move_carets_down(NEW_LINES_AFTER_DEF); // one blank lines between top level definitions
 
     Ok(InputOutcome::Accepted)
 }
 
-pub fn insert_new_blank(
-    ed_model: &mut EdModel,
-    caret_pos: &TextPos,
-    insert_on_line_nr: usize,
-) -> EdResult<()> {
+pub fn insert_new_blank(ed_model: &mut EdModel, insert_on_line_nr: usize) -> EdResult<()> {
+    // find position of the previous ASTNode to figure out where to add this new Blank ASTNode
+    let def_mark_node_id = ed_model.grid_node_map.get_def_mark_node_id_before_line(
+        insert_on_line_nr,
+        &ed_model.mark_node_pool,
+        &ed_model.mark_id_ast_id_map,
+    )?;
+
     let new_line_blank = Def2::Blank;
     let new_line_blank_id = ed_model.module.env.pool.add(new_line_blank);
 
-    let prev_def_mn_id = ed_model
-        .grid_node_map
-        .get_def_mark_node_id_before_line(caret_pos.line + 1, &ed_model.mark_node_pool)?;
-    let prev_def_mn_id_indx = index_of(prev_def_mn_id, &ed_model.markup_ids)?;
+    let insertion_index = index_of(def_mark_node_id, &ed_model.markup_ids)?;
     ed_model
         .module
         .ast
-        .def_ids
-        .insert(prev_def_mn_id_indx, new_line_blank_id);
-
-    let blank_mn_id = ed_model.add_mark_node(new_blank_mn_w_nls(
-        ASTNodeId::ADefId(new_line_blank_id),
-        None,
-        2,
-    ));
-
-    ed_model
-        .markup_ids
-        .insert(prev_def_mn_id_indx + 1, blank_mn_id); // + 1 because first markup node is header
-
-    ed_model.insert_all_between_line(
-        insert_on_line_nr, // one blank line between top level definitions
-        0,
-        &[blank_mn_id],
-    )?;
+        .insert_def_at_index(new_line_blank_id, insertion_index);
 
     Ok(())
 }

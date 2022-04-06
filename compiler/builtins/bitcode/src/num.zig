@@ -108,6 +108,39 @@ pub fn exportDivCeil(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
+pub fn ToIntCheckedResult(comptime T: type) type {
+    // On the Roc side we sort by alignment; putting the errorcode last
+    // always works out (no number with smaller alignment than 1).
+    return extern struct {
+        value: T,
+        out_of_bounds: bool,
+    };
+}
+
+pub fn exportToIntCheckingMax(comptime From: type, comptime To: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: From) callconv(.C) ToIntCheckedResult(To) {
+            if (input > std.math.maxInt(To)) {
+                return .{ .out_of_bounds = true, .value = 0 };
+            }
+            return .{ .out_of_bounds = false, .value = @intCast(To, input) };
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(From), .linkage = .Strong });
+}
+
+pub fn exportToIntCheckingMaxAndMin(comptime From: type, comptime To: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: From) callconv(.C) ToIntCheckedResult(To) {
+            if (input > std.math.maxInt(To) or input < std.math.minInt(To)) {
+                return .{ .out_of_bounds = true, .value = 0 };
+            }
+            return .{ .out_of_bounds = false, .value = @intCast(To, input) };
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(From), .linkage = .Strong });
+}
+
 pub fn bytesToU16C(arg: RocList, position: usize) callconv(.C) u16 {
     return @call(.{ .modifier = always_inline }, bytesToU16, .{ arg, position });
 }

@@ -1,4 +1,4 @@
-use crate::annotation::IntroducedVariables;
+use crate::annotation::{freshen_opaque_def, IntroducedVariables};
 use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
@@ -9,7 +9,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -19,7 +19,7 @@ use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::Alias;
+use roc_types::types::{Alias, LambdaSet, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
 
@@ -40,7 +40,8 @@ impl Output {
             self.tail_call = Some(later);
         }
 
-        self.introduced_variables.union(&other.introduced_variables);
+        self.introduced_variables
+            .union_owned(other.introduced_variables);
         self.aliases.extend(other.aliases);
         self.non_closures.extend(other.non_closures);
     }
@@ -73,6 +74,7 @@ pub enum Expr {
     Int(Variable, Variable, Box<str>, IntValue, IntBound),
     Float(Variable, Variable, Box<str>, f64, FloatBound),
     Str(Box<str>),
+    SingleQuote(char),
     List {
         elem_var: Variable,
         loc_elems: Vec<Loc<Expr>>,
@@ -137,17 +139,7 @@ pub enum Expr {
         field: Lowercase,
     },
     /// field accessor as a function, e.g. (.foo) expr
-    Accessor {
-        /// accessors are desugared to closures; they need to have a name
-        /// so the closure can have a correct lambda set
-        name: Symbol,
-        function_var: Variable,
-        record_var: Variable,
-        closure_ext_var: Variable,
-        ext_var: Variable,
-        field_var: Variable,
-        field: Lowercase,
-    },
+    Accessor(AccessorData),
 
     Update {
         record_var: Variable,
@@ -172,6 +164,31 @@ pub enum Expr {
         arguments: Vec<(Variable, Loc<Expr>)>,
     },
 
+    /// A wrapping of an opaque type, like `$Age 21`
+    // TODO(opaques): $->@ above when opaques land
+    OpaqueRef {
+        opaque_var: Variable,
+        name: Symbol,
+        argument: Box<(Variable, Loc<Expr>)>,
+
+        // The following help us link this opaque reference to the type specified by its
+        // definition, which we then use during constraint generation. For example
+        // suppose we have
+        //
+        //   Id n := [ Id U64 n ]
+        //   @Id "sasha"
+        //
+        // Then `opaque` is "Id", `argument` is "sasha", but this is not enough for us to
+        // infer the type of the expression as "Id Str" - we need to link the specialized type of
+        // the variable "n".
+        // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
+        // for the expression from the opaque definition. `type_arguments` is something like
+        // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
+        specialized_def_type: Box<Type>,
+        type_arguments: Vec<(Lowercase, Type)>,
+        lambda_set_variables: Vec<LambdaSet>,
+    },
+
     // Test
     Expect(Box<Loc<Expr>>, Box<Loc<Expr>>),
 
@@ -189,6 +206,70 @@ pub struct ClosureData {
     pub recursive: Recursive,
     pub arguments: Vec<(Variable, Loc<Pattern>)>,
     pub loc_body: Box<Loc<Expr>>,
+}
+
+/// A record accessor like `.foo`, which is equivalent to `\r -> r.foo`
+/// Accessors are desugared to closures; they need to have a name
+/// so the closure can have a correct lambda set.
+///
+/// We distinguish them from closures so we can have better error messages
+/// during constraint generation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccessorData {
+    pub name: Symbol,
+    pub function_var: Variable,
+    pub record_var: Variable,
+    pub closure_var: Variable,
+    pub closure_ext_var: Variable,
+    pub ext_var: Variable,
+    pub field_var: Variable,
+    pub field: Lowercase,
+}
+
+impl AccessorData {
+    pub fn to_closure_data(self, record_symbol: Symbol) -> ClosureData {
+        let AccessorData {
+            name,
+            function_var,
+            record_var,
+            closure_var,
+            closure_ext_var,
+            ext_var,
+            field_var,
+            field,
+        } = self;
+
+        // IDEA: convert accessor from
+        //
+        // .foo
+        //
+        // into
+        //
+        // (\r -> r.foo)
+        let body = Expr::Access {
+            record_var,
+            ext_var,
+            field_var,
+            loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol))),
+            field,
+        };
+
+        let loc_body = Loc::at_zero(body);
+
+        let arguments = vec![(record_var, Loc::at_zero(Pattern::Identifier(record_symbol)))];
+
+        ClosureData {
+            function_type: function_var,
+            closure_type: closure_var,
+            closure_ext_var,
+            return_type: field_var,
+            name,
+            captured_symbols: vec![],
+            recursive: Recursive::NotRecursive,
+            arguments,
+            loc_body: Box::new(loc_body),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -234,12 +315,7 @@ pub fn canonicalize_expr<'a>(
             (answer, Output::default())
         }
         &ast::Expr::Float(str) => {
-            let answer = float_expr_from_result(
-                var_store,
-                finish_parsing_float(str).map(|(f, bound)| (str, f, bound)),
-                region,
-                env,
-            );
+            let answer = float_expr_from_result(var_store, finish_parsing_float(str), region, env);
 
             (answer, Output::default())
         }
@@ -318,6 +394,28 @@ pub fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
+
+        ast::Expr::SingleQuote(string) => {
+            let mut it = string.chars().peekable();
+            if let Some(char) = it.next() {
+                if it.peek().is_none() {
+                    (Expr::SingleQuote(char), Output::default())
+                } else {
+                    // multiple chars is found
+                    let error = roc_problem::can::RuntimeError::MultipleCharsInSingleQuote(region);
+                    let answer = Expr::RuntimeError(error);
+
+                    (answer, Output::default())
+                }
+            } else {
+                // no characters found
+                let error = roc_problem::can::RuntimeError::EmptySingleQuote(region);
+                let answer = Expr::RuntimeError(error);
+
+                (answer, Output::default())
+            }
+        }
+
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
                 (
@@ -360,95 +458,132 @@ pub fn canonicalize_expr<'a>(
             // (foo) bar baz
             let fn_region = loc_fn.region;
 
-            // Canonicalize the function expression and its arguments
-            let (fn_expr, mut output) =
-                canonicalize_expr(env, var_store, scope, fn_region, &loc_fn.value);
-
             // The function's return type
             let mut args = Vec::new();
-            let mut outputs = Vec::new();
+            let mut output = Output::default();
 
             for loc_arg in loc_args.iter() {
                 let (arg_expr, arg_out) =
                     canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
 
                 args.push((var_store.fresh(), arg_expr));
-                outputs.push(arg_out);
-            }
-
-            // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
-            output.tail_call = None;
-
-            for arg_out in outputs {
                 output.references = output.references.union(arg_out.references);
             }
 
-            let expr = match fn_expr.value {
-                Var(symbol) => {
-                    output.references.calls.insert(symbol);
+            if let ast::Expr::OpaqueRef(name) = loc_fn.value {
+                // We treat opaques specially, since an opaque can wrap exactly one argument.
 
-                    // we're tail-calling a symbol by name, check if it's the tail-callable symbol
-                    output.tail_call = match &env.tailcallable_symbol {
-                        Some(tc_sym) if *tc_sym == symbol => Some(symbol),
-                        Some(_) | None => None,
-                    };
+                debug_assert!(!args.is_empty());
 
-                    Call(
-                        Box::new((
-                            var_store.fresh(),
-                            fn_expr,
-                            var_store.fresh(),
-                            var_store.fresh(),
-                        )),
-                        args,
-                        *application_style,
-                    )
-                }
-                RuntimeError(_) => {
-                    // We can't call a runtime error; bail out by propagating it!
-                    return (fn_expr, output);
-                }
-                Tag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    ..
-                } => Tag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    arguments: args,
-                },
-                ZeroArgumentTag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    ..
-                } => Tag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    arguments: args,
-                },
-                _ => {
-                    // This could be something like ((if True then fn1 else fn2) arg1 arg2).
-                    Call(
-                        Box::new((
-                            var_store.fresh(),
-                            fn_expr,
-                            var_store.fresh(),
-                            var_store.fresh(),
-                        )),
-                        args,
-                        *application_style,
-                    )
-                }
-            };
+                if args.len() > 1 {
+                    let problem =
+                        roc_problem::can::RuntimeError::OpaqueAppliedToMultipleArgs(region);
+                    env.problem(Problem::RuntimeError(problem.clone()));
+                    (RuntimeError(problem), output)
+                } else {
+                    match scope.lookup_opaque_ref(name, loc_fn.region) {
+                        Err(runtime_error) => {
+                            env.problem(Problem::RuntimeError(runtime_error.clone()));
+                            (RuntimeError(runtime_error), output)
+                        }
+                        Ok((name, opaque_def)) => {
+                            let argument = Box::new(args.pop().unwrap());
+                            output.references.referenced_type_defs.insert(name);
+                            output.references.type_lookups.insert(name);
 
-            (expr, output)
+                            let (type_arguments, lambda_set_variables, specialized_def_type) =
+                                freshen_opaque_def(var_store, opaque_def);
+
+                            let opaque_ref = OpaqueRef {
+                                opaque_var: var_store.fresh(),
+                                name,
+                                argument,
+                                specialized_def_type: Box::new(specialized_def_type),
+                                type_arguments,
+                                lambda_set_variables,
+                            };
+
+                            (opaque_ref, output)
+                        }
+                    }
+                }
+            } else {
+                // Canonicalize the function expression and its arguments
+                let (fn_expr, fn_expr_output) =
+                    canonicalize_expr(env, var_store, scope, fn_region, &loc_fn.value);
+
+                output.union(fn_expr_output);
+
+                // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
+                output.tail_call = None;
+
+                let expr = match fn_expr.value {
+                    Var(symbol) => {
+                        output.references.calls.insert(symbol);
+
+                        // we're tail-calling a symbol by name, check if it's the tail-callable symbol
+                        output.tail_call = match &env.tailcallable_symbol {
+                            Some(tc_sym) if *tc_sym == symbol => Some(symbol),
+                            Some(_) | None => None,
+                        };
+
+                        Call(
+                            Box::new((
+                                var_store.fresh(),
+                                fn_expr,
+                                var_store.fresh(),
+                                var_store.fresh(),
+                            )),
+                            args,
+                            *application_style,
+                        )
+                    }
+                    RuntimeError(_) => {
+                        // We can't call a runtime error; bail out by propagating it!
+                        return (fn_expr, output);
+                    }
+                    Tag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        ..
+                    } => Tag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        arguments: args,
+                    },
+                    ZeroArgumentTag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        ..
+                    } => Tag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        arguments: args,
+                    },
+                    _ => {
+                        // This could be something like ((if True then fn1 else fn2) arg1 arg2).
+                        Call(
+                            Box::new((
+                                var_store.fresh(),
+                                fn_expr,
+                                var_store.fresh(),
+                                var_store.fresh(),
+                            )),
+                            args,
+                            *application_style,
+                        )
+                    }
+                };
+
+                (expr, output)
+            }
         }
         ast::Expr::Var { module_name, ident } => {
-            canonicalize_lookup(env, scope, module_name, ident, region)
+            canonicalize_var_lookup(env, scope, module_name, ident, region)
         }
         ast::Expr::Underscore(name) => {
             // we parse underscores, but they are not valid expression syntax
@@ -522,8 +657,12 @@ pub fn canonicalize_expr<'a>(
                 &loc_body_expr.value,
             );
 
-            let mut captured_symbols: MutSet<Symbol> =
-                new_output.references.lookups.iter().copied().collect();
+            let mut captured_symbols: MutSet<Symbol> = new_output
+                .references
+                .value_lookups
+                .iter()
+                .copied()
+                .collect();
 
             // filter out the closure's name itself
             captured_symbols.remove(&symbol);
@@ -545,7 +684,10 @@ pub fn canonicalize_expr<'a>(
             output.union(new_output);
 
             // filter out aliases
-            captured_symbols.retain(|s| !output.references.referenced_aliases.contains(s));
+            debug_assert!(captured_symbols
+                .iter()
+                .all(|s| !output.references.referenced_type_defs.contains(s)));
+            // captured_symbols.retain(|s| !output.references.referenced_type_defs.contains(s));
 
             // filter out functions that don't close over anything
             captured_symbols.retain(|s| !output.non_closures.contains(s));
@@ -554,7 +696,7 @@ pub fn canonicalize_expr<'a>(
             // went unreferenced. If any did, report them as unused arguments.
             for (sub_symbol, region) in scope.symbols() {
                 if !original_scope.contains_symbol(*sub_symbol) {
-                    if !output.references.has_lookup(*sub_symbol) {
+                    if !output.references.has_value_lookup(*sub_symbol) {
                         // The body never referenced this argument we declared. It's an unused argument!
                         env.problem(Problem::UnusedArgument(symbol, *sub_symbol, *region));
                     }
@@ -562,7 +704,7 @@ pub fn canonicalize_expr<'a>(
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
                     // references the (nonexistent) local variable x!
-                    output.references.lookups.remove(sub_symbol);
+                    output.references.value_lookups.remove(sub_symbol);
                 }
             }
 
@@ -650,15 +792,16 @@ pub fn canonicalize_expr<'a>(
             )
         }
         ast::Expr::AccessorFunction(field) => (
-            Accessor {
+            Accessor(AccessorData {
                 name: env.gen_unique_symbol(),
                 function_var: var_store.fresh(),
                 record_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
+                closure_var: var_store.fresh(),
                 closure_ext_var: var_store.fresh(),
                 field_var: var_store.fresh(),
                 field: (*field).into(),
-            },
+            }),
             Output::default(),
         ),
         ast::Expr::GlobalTag(tag) => {
@@ -695,6 +838,16 @@ pub fn canonicalize_expr<'a>(
                 },
                 Output::default(),
             )
+        }
+        ast::Expr::OpaqueRef(opaque_ref) => {
+            // If we're here, the opaque reference is definitely not wrapping an argument - wrapped
+            // arguments are handled in the Apply branch.
+            let problem = roc_problem::can::RuntimeError::OpaqueNotApplied(Loc::at(
+                region,
+                (*opaque_ref).into(),
+            ));
+            env.problem(Problem::RuntimeError(problem.clone()));
+            (RuntimeError(problem), Output::default())
         }
         ast::Expr::Expect(condition, continuation) => {
             let mut output = Output::default();
@@ -858,10 +1011,6 @@ pub fn canonicalize_expr<'a>(
         }
     };
 
-    if cfg!(debug_assertions) {
-        env.home.register_debug_idents(&env.ident_ids);
-    }
-
     // At the end, diff used_idents and defined_idents to see which were unused.
     // Add warnings for those!
 
@@ -932,8 +1081,10 @@ fn canonicalize_when_branch<'a>(
     for (symbol, region) in scope.symbols() {
         let symbol = *symbol;
 
-        if !output.references.has_lookup(symbol)
-            && !branch_output.references.has_lookup(symbol)
+        if !output.references.has_value_lookup(symbol)
+            && !output.references.has_type_lookup(symbol)
+            && !branch_output.references.has_value_lookup(symbol)
+            && !branch_output.references.has_type_lookup(symbol)
             && !original_scope.contains_symbol(symbol)
         {
             env.problem(Problem::UnusedDef(symbol, *region));
@@ -953,126 +1104,32 @@ fn canonicalize_when_branch<'a>(
     )
 }
 
-pub fn local_successors<'a>(
+pub fn local_successors_with_duplicates<'a>(
     references: &'a References,
     closures: &'a MutMap<Symbol, References>,
-) -> ImSet<Symbol> {
-    let mut answer = references.lookups.clone();
+) -> Vec<Symbol> {
+    let mut answer: Vec<_> = references.value_lookups.iter().copied().collect();
 
-    for call_symbol in references.calls.iter() {
-        answer = answer.union(call_successors(*call_symbol, closures));
-    }
+    let mut stack: Vec<_> = references.calls.iter().copied().collect();
+    let mut seen = Vec::new();
 
-    answer
-}
-
-fn call_successors(call_symbol: Symbol, closures: &MutMap<Symbol, References>) -> ImSet<Symbol> {
-    let mut answer = ImSet::default();
-    let mut seen = MutSet::default();
-    let mut queue = vec![call_symbol];
-
-    while let Some(symbol) = queue.pop() {
+    while let Some(symbol) = stack.pop() {
         if seen.contains(&symbol) {
             continue;
         }
 
         if let Some(references) = closures.get(&symbol) {
-            answer.extend(references.lookups.iter().copied());
-            queue.extend(references.calls.iter().copied());
+            answer.extend(references.value_lookups.iter().copied());
+            stack.extend(references.calls.iter().copied());
 
-            seen.insert(symbol);
+            seen.push(symbol);
         }
     }
+
+    answer.sort();
+    answer.dedup();
 
     answer
-}
-
-pub fn references_from_local<'a, T>(
-    defined_symbol: Symbol,
-    visited: &'a mut MutSet<Symbol>,
-    refs_by_def: &'a MutMap<Symbol, (T, References)>,
-    closures: &'a MutMap<Symbol, References>,
-) -> References
-where
-    T: Debug,
-{
-    let mut answer: References = References::new();
-
-    match refs_by_def.get(&defined_symbol) {
-        Some((_, refs)) => {
-            visited.insert(defined_symbol);
-
-            for local in refs.lookups.iter() {
-                if !visited.contains(local) {
-                    let other_refs: References =
-                        references_from_local(*local, visited, refs_by_def, closures);
-
-                    answer = answer.union(other_refs);
-                }
-
-                answer.lookups.insert(*local);
-            }
-
-            for call in refs.calls.iter() {
-                if !visited.contains(call) {
-                    let other_refs = references_from_call(*call, visited, refs_by_def, closures);
-
-                    answer = answer.union(other_refs);
-                }
-
-                answer.calls.insert(*call);
-            }
-
-            answer
-        }
-        None => answer,
-    }
-}
-
-pub fn references_from_call<'a, T>(
-    call_symbol: Symbol,
-    visited: &'a mut MutSet<Symbol>,
-    refs_by_def: &'a MutMap<Symbol, (T, References)>,
-    closures: &'a MutMap<Symbol, References>,
-) -> References
-where
-    T: Debug,
-{
-    match closures.get(&call_symbol) {
-        Some(references) => {
-            let mut answer = references.clone();
-
-            visited.insert(call_symbol);
-
-            for closed_over_local in references.lookups.iter() {
-                if !visited.contains(closed_over_local) {
-                    let other_refs =
-                        references_from_local(*closed_over_local, visited, refs_by_def, closures);
-
-                    answer = answer.union(other_refs);
-                }
-
-                answer.lookups.insert(*closed_over_local);
-            }
-
-            for call in references.calls.iter() {
-                if !visited.contains(call) {
-                    let other_refs = references_from_call(*call, visited, refs_by_def, closures);
-
-                    answer = answer.union(other_refs);
-                }
-
-                answer.calls.insert(*call);
-            }
-
-            answer
-        }
-        None => {
-            // If the call symbol was not in the closure map, that means we're calling a non-function and
-            // will get a type mismatch later. For now, assume no references as a result of the "call."
-            References::new()
-        }
-    }
 }
 
 enum CanonicalizeRecordProblem {
@@ -1185,7 +1242,7 @@ fn canonicalize_field<'a>(
     }
 }
 
-fn canonicalize_lookup(
+fn canonicalize_var_lookup(
     env: &mut Env<'_>,
     scope: &mut Scope,
     module_name: &str,
@@ -1200,7 +1257,7 @@ fn canonicalize_lookup(
         // Look it up in scope!
         match scope.lookup(&(*ident).into(), region) {
             Ok(symbol) => {
-                output.references.lookups.insert(symbol);
+                output.references.value_lookups.insert(symbol);
 
                 Var(symbol)
             }
@@ -1215,7 +1272,7 @@ fn canonicalize_lookup(
         // Look it up in the env!
         match env.qualified_lookup(module_name, ident, region) {
             Ok(symbol) => {
-                output.references.lookups.insert(symbol);
+                output.references.value_lookups.insert(symbol);
 
                 Var(symbol)
             }
@@ -1245,6 +1302,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Int(..)
         | other @ Float(..)
         | other @ Str { .. }
+        | other @ SingleQuote(_)
         | other @ RuntimeError(_)
         | other @ EmptyRecord
         | other @ Accessor { .. }
@@ -1471,6 +1529,30 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 name,
                 arguments
             );
+        }
+
+        OpaqueRef {
+            opaque_var,
+            name,
+            argument,
+            specialized_def_type,
+            type_arguments,
+            lambda_set_variables,
+        } => {
+            let (var, loc_expr) = *argument;
+            let argument = Box::new((
+                var,
+                loc_expr.map_owned(|expr| inline_calls(var_store, scope, expr)),
+            ));
+
+            OpaqueRef {
+                opaque_var,
+                name,
+                argument,
+                specialized_def_type,
+                type_arguments,
+                lambda_set_variables,
+            }
         }
 
         ZeroArgumentTag {

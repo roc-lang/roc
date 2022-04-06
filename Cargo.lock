@@ -565,6 +565,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if 1.0.0",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "const_format"
 version = "0.2.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -723,7 +733,7 @@ dependencies = [
  "ndk-glue 0.3.0",
  "nix 0.20.0",
  "oboe",
- "parking_lot",
+ "parking_lot 0.11.2",
  "stdweb",
  "thiserror",
  "web-sys",
@@ -1194,6 +1204,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56899898ce76aaf4a0f24d914c97ea6ed976d42fec6ad33fcbb0a1103e07b2b0"
 
 [[package]]
+name = "dunce"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "453440c271cf5577fd2a40e4942540cb7d0d2f85e27c8d07dd0023c925a67541"
+
+[[package]]
+name = "dynasm"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47b1801e630bd336d0bbbdbf814de6cc749c9a400c7e3d995e6adfd455d0c83c"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "lazy_static",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "dynasmrt"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d428afc93ad288f6dffc1fa5f4a78201ad2eec33c5a522e51c181009eb09061"
+dependencies = [
+ "byteorder",
+ "dynasm",
+ "memmap2 0.5.3",
+]
+
+[[package]]
 name = "either"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1294,7 +1336,7 @@ checksum = "a16910e685088843d53132b04e0f10a571fdb193224fc589685b3ba1ce4cb03d"
 dependencies = [
  "cfg-if 1.0.0",
  "libc",
- "windows-sys",
+ "windows-sys 0.28.0",
 ]
 
 [[package]]
@@ -1677,7 +1719,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46e977036f7f5139d580c7f19ad62df9cb8ebd8410bb569e73585226be80a86f"
 dependencies = [
  "lazy_static",
- "static_assertions",
+ "static_assertions 1.1.0",
 ]
 
 [[package]]
@@ -1738,26 +1780,26 @@ dependencies = [
 name = "inkwell"
 version = "0.1.0"
 dependencies = [
- "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1)",
+ "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?branch=master)",
 ]
 
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1#e15d665227b2acad4ca949820d80048e09f3f4e5"
+source = "git+https://github.com/rtfeldman/inkwell?branch=master#accd406858a40ca2a1463ff77d79f3c5e4c96f4e"
 dependencies = [
  "either",
  "inkwell_internals",
  "libc",
  "llvm-sys",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.0",
 ]
 
 [[package]]
 name = "inkwell_internals"
 version = "0.5.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm13-0.release1#e15d665227b2acad4ca949820d80048e09f3f4e5"
+source = "git+https://github.com/rtfeldman/inkwell?branch=master#accd406858a40ca2a1463ff77d79f3c5e4c96f4e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1954,9 +1996,9 @@ checksum = "7fb9b38af92608140b86b693604b9ffcc5824240a484d1ecd4795bacb2fe88f3"
 
 [[package]]
 name = "llvm-sys"
-version = "130.0.1"
+version = "130.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "183612ff1acd400cd4faeb1cbf7cc725a868a46282e5c7b112ec5f0a5a49fae7"
+checksum = "95eb03b4f7ae21f48ef7c565a3e3aa22c50616aea64645fb1fd7f6f56b51c274"
 dependencies = [
  "cc",
  "lazy_static",
@@ -1967,9 +2009,9 @@ dependencies = [
 
 [[package]]
 name = "lock_api"
-version = "0.4.5"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "712a4d093c9976e24e7dbca41db895dabcbac38eb5f4045393d17a95bdfb1109"
+checksum = "88943dd7ef4a2e5a4bfa2753aaab3013e34ce2533d1996fb18ef591e315e2b3b"
 dependencies = [
  "scopeguard",
 ]
@@ -2063,9 +2105,9 @@ dependencies = [
 
 [[package]]
 name = "memmap2"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4647a11b578fead29cdbb34d4adef8dd3dc35b876c9c6d5240d83f205abfe96e"
+checksum = "057a3db23999c867821a7a59feb06a578fcb03685e983dff90daf9e7d24ac08f"
 dependencies = [
  "libc",
 ]
@@ -2661,7 +2703,17 @@ checksum = "7d17b78036a60663b797adeaee46f5c9dfebb86948d1255007a1d6be0271ff99"
 dependencies = [
  "instant",
  "lock_api",
- "parking_lot_core",
+ "parking_lot_core 0.8.5",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87f5ec2493a61ac0506c0f4199f99070cbe83857b0337006a30f3e6719b8ef58"
+dependencies = [
+ "lock_api",
+ "parking_lot_core 0.9.1",
 ]
 
 [[package]]
@@ -2679,10 +2731,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "parking_lot_core"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28141e0cc4143da2443301914478dc976a61ffdb3f043058310c70df2fed8954"
+dependencies = [
+ "cfg-if 1.0.0",
+ "libc",
+ "redox_syscall",
+ "smallvec",
+ "windows-sys 0.32.0",
+]
+
+[[package]]
 name = "peeking_take_while"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b17cddbe7ec3f8bc800887bab5e717348c95ea2ca0b1bf0837fb964dc67099"
+
+[[package]]
+name = "peg"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af728fe826811af3b38c37e93de6d104485953ea373d656eebae53d6987fcd2c"
+dependencies = [
+ "peg-macros",
+ "peg-runtime",
+]
+
+[[package]]
+name = "peg-macros"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4536be147b770b824895cbad934fccce8e49f14b4c4946eaa46a6e4a12fcdc16"
+dependencies = [
+ "peg-runtime",
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
+name = "peg-runtime"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9b0efd3ba03c3a409d44d60425f279ec442bcf0b9e63ff4e410da31c8b0f69f"
 
 [[package]]
 name = "percent-encoding"
@@ -3190,10 +3282,13 @@ name = "repl_test"
 version = "0.1.0"
 dependencies = [
  "indoc",
+ "lazy_static",
  "roc_cli",
  "roc_repl_cli",
  "roc_test_utils",
  "strip-ansi-escapes",
+ "wasmer",
+ "wasmer-wasi",
 ]
 
 [[package]]
@@ -3229,6 +3324,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_alias_analysis"
+version = "0.1.0"
+dependencies = [
+ "morphic_lib",
+ "roc_collections",
+ "roc_module",
+ "roc_mono",
+]
+
+[[package]]
 name = "roc_ast"
 version = "0.1.0"
 dependencies = [
@@ -3251,6 +3356,7 @@ dependencies = [
  "roc_unify",
  "snafu",
  "ven_graph",
+ "winapi",
 ]
 
 [[package]]
@@ -3288,6 +3394,8 @@ dependencies = [
 name = "roc_builtins"
 version = "0.1.0"
 dependencies = [
+ "dunce",
+ "lazy_static",
  "roc_collections",
  "roc_module",
  "roc_region",
@@ -3304,11 +3412,13 @@ dependencies = [
  "pretty_assertions",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_parse",
  "roc_problem",
  "roc_region",
  "roc_types",
+ "static_assertions 1.1.0",
  "ven_graph",
 ]
 
@@ -3378,9 +3488,11 @@ dependencies = [
 name = "roc_constrain"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_parse",
  "roc_region",
@@ -3393,6 +3505,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc",
+ "peg",
  "pretty_assertions",
  "pulldown-cmark",
  "roc_ast",
@@ -3400,6 +3513,7 @@ dependencies = [
  "roc_can",
  "roc_code_markup",
  "roc_collections",
+ "roc_highlight",
  "roc_load",
  "roc_module",
  "roc_parse",
@@ -3465,6 +3579,16 @@ name = "roc_error_macros"
 version = "0.1.0"
 
 [[package]]
+name = "roc_exhaustive"
+version = "0.1.0"
+dependencies = [
+ "roc_collections",
+ "roc_module",
+ "roc_region",
+ "roc_std",
+]
+
+[[package]]
 name = "roc_fmt"
 version = "0.1.0"
 dependencies = [
@@ -3510,6 +3634,7 @@ dependencies = [
  "bumpalo",
  "inkwell 0.1.0",
  "morphic_lib",
+ "roc_alias_analysis",
  "roc_builtins",
  "roc_collections",
  "roc_error_macros",
@@ -3535,8 +3660,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_highlight"
+version = "0.1.0"
+dependencies = [
+ "peg",
+ "roc_code_markup",
+]
+
+[[package]]
 name = "roc_ident"
 version = "0.1.0"
+dependencies = [
+ "arrayvec 0.7.2",
+]
 
 [[package]]
 name = "roc_linker"
@@ -3546,7 +3682,7 @@ dependencies = [
  "bumpalo",
  "clap 3.0.0-beta.5",
  "iced-x86",
- "memmap2 0.5.0",
+ "memmap2 0.5.3",
  "object 0.26.2",
  "roc_build",
  "roc_collections",
@@ -3561,17 +3697,32 @@ name = "roc_load"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "roc_builtins",
+ "roc_collections",
+ "roc_constrain",
+ "roc_load_internal",
+ "roc_module",
+ "roc_target",
+ "roc_types",
+]
+
+[[package]]
+name = "roc_load_internal"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
  "crossbeam",
  "indoc",
  "maplit",
  "morphic_lib",
  "num_cpus",
- "parking_lot",
+ "parking_lot 0.12.0",
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_error_macros",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -3582,6 +3733,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
+ "strip-ansi-escapes",
  "tempfile",
  "ven_pretty",
 ]
@@ -3590,6 +3742,7 @@ dependencies = [
 name = "roc_module"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
  "bumpalo",
  "lazy_static",
  "roc_collections",
@@ -3597,7 +3750,7 @@ dependencies = [
  "roc_ident",
  "roc_region",
  "snafu",
- "static_assertions",
+ "static_assertions 1.1.0",
 ]
 
 [[package]]
@@ -3611,6 +3764,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_error_macros",
+ "roc_exhaustive",
  "roc_module",
  "roc_problem",
  "roc_region",
@@ -3619,7 +3773,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
- "static_assertions",
+ "static_assertions 1.1.0",
  "ven_graph",
  "ven_pretty",
 ]
@@ -3649,13 +3803,14 @@ dependencies = [
  "roc_module",
  "roc_parse",
  "roc_region",
+ "roc_types",
 ]
 
 [[package]]
 name = "roc_region"
 version = "0.1.0"
 dependencies = [
- "static_assertions",
+ "static_assertions 1.1.0",
 ]
 
 [[package]]
@@ -3674,6 +3829,8 @@ dependencies = [
  "roc_mono",
  "roc_parse",
  "roc_repl_eval",
+ "roc_reporting",
+ "roc_std",
  "roc_target",
  "roc_types",
  "rustyline",
@@ -3696,6 +3853,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_reporting",
+ "roc_std",
  "roc_target",
  "roc_types",
 ]
@@ -3705,6 +3863,8 @@ name = "roc_repl_wasm"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "console_error_panic_hook",
+ "futures",
  "js-sys",
  "roc_builtins",
  "roc_collections",
@@ -3712,6 +3872,7 @@ dependencies = [
  "roc_load",
  "roc_parse",
  "roc_repl_eval",
+ "roc_reporting",
  "roc_target",
  "roc_types",
  "wasm-bindgen",
@@ -3730,6 +3891,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_exhaustive",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -3769,10 +3931,7 @@ dependencies = [
 name = "roc_std"
 version = "0.1.0"
 dependencies = [
- "indoc",
- "pretty_assertions",
- "quickcheck",
- "quickcheck_macros",
+ "static_assertions 0.1.1",
 ]
 
 [[package]]
@@ -3798,7 +3957,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_region",
- "static_assertions",
+ "static_assertions 1.1.0",
  "ven_ena",
 ]
 
@@ -3872,7 +4031,7 @@ checksum = "61b3909d758bb75c79f23d4736fac9433868679d3ad2ea7a61e3c25cfda9a088"
 [[package]]
 name = "rustyline"
 version = "9.1.1"
-source = "git+https://github.com/rtfeldman/rustyline?tag=v9.1.1#7053ae0fe0ee710d38ed5845dd979113382994dc"
+source = "git+https://github.com/rtfeldman/rustyline?rev=e74333c#e74333c0d618896b88175bf06645108f996fe6d0"
 dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
@@ -3895,7 +4054,7 @@ dependencies = [
 [[package]]
 name = "rustyline-derive"
 version = "0.6.0"
-source = "git+https://github.com/rtfeldman/rustyline?tag=v9.1.1#7053ae0fe0ee710d38ed5845dd979113382994dc"
+source = "git+https://github.com/rtfeldman/rustyline?rev=e74333c#e74333c0d618896b88175bf06645108f996fe6d0"
 dependencies = [
  "quote",
  "syn",
@@ -4039,7 +4198,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0bccbcf40c8938196944a3da0e133e031a33f4d6b72db3bda3cc556e361905d"
 dependencies = [
  "lazy_static",
- "parking_lot",
+ "parking_lot 0.11.2",
  "serial_test_derive",
 ]
 
@@ -4217,6 +4376,12 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
+name = "static_assertions"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f406d6ee68db6796e11ffd7b4d171864c58b7451e79ef9460ea33c287a1f89a7"
 
 [[package]]
 name = "static_assertions"
@@ -4506,7 +4671,7 @@ checksum = "1f559b464de2e2bdabcac6a210d12e9b5a5973c251e102c44c585c71d51bd78e"
 dependencies = [
  "cfg-if 1.0.0",
  "rand",
- "static_assertions",
+ "static_assertions 1.1.0",
 ]
 
 [[package]]
@@ -4746,6 +4911,7 @@ dependencies = [
  "thiserror",
  "wasmer-compiler",
  "wasmer-compiler-cranelift",
+ "wasmer-compiler-singlepass",
  "wasmer-derive",
  "wasmer-engine",
  "wasmer-engine-dylib",
@@ -4789,6 +4955,25 @@ dependencies = [
  "rayon",
  "smallvec",
  "tracing",
+ "wasmer-compiler",
+ "wasmer-types",
+ "wasmer-vm",
+]
+
+[[package]]
+name = "wasmer-compiler-singlepass"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9429b9f7708c582d855b1787f09c7029ff23fb692550d4a1cc351c8ea84c3014"
+dependencies = [
+ "byteorder",
+ "dynasm",
+ "dynasmrt",
+ "lazy_static",
+ "loupe",
+ "more-asserts",
+ "rayon",
+ "smallvec",
  "wasmer-compiler",
  "wasmer-types",
  "wasmer-vm",
@@ -5116,7 +5301,7 @@ dependencies = [
  "arrayvec 0.7.2",
  "js-sys",
  "log",
- "parking_lot",
+ "parking_lot 0.11.2",
  "raw-window-handle",
  "smallvec",
  "wasm-bindgen",
@@ -5140,7 +5325,7 @@ dependencies = [
  "fxhash",
  "log",
  "naga",
- "parking_lot",
+ "parking_lot 0.11.2",
  "profiling",
  "raw-window-handle",
  "smallvec",
@@ -5175,7 +5360,7 @@ dependencies = [
  "metal",
  "naga",
  "objc",
- "parking_lot",
+ "parking_lot 0.11.2",
  "profiling",
  "range-alloc",
  "raw-window-handle",
@@ -5256,11 +5441,24 @@ version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82ca39602d5cbfa692c4b67e3bcbb2751477355141c1ed434c94da4186836ff6"
 dependencies = [
- "windows_aarch64_msvc",
- "windows_i686_gnu",
- "windows_i686_msvc",
- "windows_x86_64_gnu",
- "windows_x86_64_msvc",
+ "windows_aarch64_msvc 0.28.0",
+ "windows_i686_gnu 0.28.0",
+ "windows_i686_msvc 0.28.0",
+ "windows_x86_64_gnu 0.28.0",
+ "windows_x86_64_msvc 0.28.0",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3df6e476185f92a12c072be4a189a0210dcdcf512a1891d6dff9edb874deadc6"
+dependencies = [
+ "windows_aarch64_msvc 0.32.0",
+ "windows_i686_gnu 0.32.0",
+ "windows_i686_msvc 0.32.0",
+ "windows_x86_64_gnu 0.32.0",
+ "windows_x86_64_msvc 0.32.0",
 ]
 
 [[package]]
@@ -5270,10 +5468,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52695a41e536859d5308cc613b4a022261a274390b25bd29dfff4bf08505f3c2"
 
 [[package]]
+name = "windows_aarch64_msvc"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8e92753b1c443191654ec532f14c199742964a061be25d77d7a96f09db20bf5"
+
+[[package]]
 name = "windows_i686_gnu"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f54725ac23affef038fecb177de6c9bf065787c2f432f79e3c373da92f3e1d8a"
+
+[[package]]
+name = "windows_i686_gnu"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a711c68811799e017b6038e0922cb27a5e2f43a2ddb609fe0b6f3eeda9de615"
 
 [[package]]
 name = "windows_i686_msvc"
@@ -5282,16 +5492,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51d5158a43cc43623c0729d1ad6647e62fa384a3d135fd15108d37c683461f64"
 
 [[package]]
+name = "windows_i686_msvc"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "146c11bb1a02615db74680b32a68e2d61f553cc24c4eb5b4ca10311740e44172"
+
+[[package]]
 name = "windows_x86_64_gnu"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc31f409f565611535130cfe7ee8e6655d3fa99c1c61013981e491921b5ce954"
 
 [[package]]
+name = "windows_x86_64_gnu"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c912b12f7454c6620635bbff3450962753834be2a594819bd5e945af18ec64bc"
+
+[[package]]
 name = "windows_x86_64_msvc"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f2b8c7cbd3bfdddd9ab98769f9746a7fad1bca236554cd032b78d768bc0e89f"
+
+[[package]]
+name = "windows_x86_64_msvc"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "504a2476202769977a040c6364301a3f65d0cc9e3fb08600b2bda150a0488316"
 
 [[package]]
 name = "winit"
@@ -5315,7 +5543,7 @@ dependencies = [
  "ndk-glue 0.3.0",
  "ndk-sys",
  "objc",
- "parking_lot",
+ "parking_lot 0.11.2",
  "percent-encoding",
  "raw-window-handle",
  "scopeguard",

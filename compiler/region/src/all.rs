@@ -311,6 +311,16 @@ impl<T> Loc<T> {
             value: transform(&self.value),
         }
     }
+
+    pub fn map_owned<U, F>(self, transform: F) -> Loc<U>
+    where
+        F: (FnOnce(T) -> U),
+    {
+        Loc {
+            region: self.region,
+            value: transform(self.value),
+        }
+    }
 }
 
 impl<T> fmt::Debug for Loc<T>

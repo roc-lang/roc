@@ -3,8 +3,7 @@ use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::tag_pointer_clear_tag_id;
 use crate::llvm::build::Env;
 use crate::llvm::build::{get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
-use crate::llvm::build_str;
-use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
+use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::values::{
     BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
@@ -12,6 +11,9 @@ use inkwell::values::{
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
+
+use super::build::use_roc_value;
+use super::convert::argument_type_from_union_layout;
 
 #[derive(Clone, Debug)]
 enum WhenRecursive<'a> {
@@ -50,10 +52,10 @@ fn build_hash_layout<'a, 'ctx, 'env>(
             hash_builtin(env, layout_ids, seed, val, layout, builtin, when_recursive)
         }
 
-        Layout::Struct(fields) => build_hash_struct(
+        Layout::Struct { field_layouts, .. } => build_hash_struct(
             env,
             layout_ids,
-            fields,
+            field_layouts,
             when_recursive,
             seed,
             val.into_struct_value(),
@@ -68,8 +70,11 @@ fn build_hash_layout<'a, 'ctx, 'env>(
             when_recursive,
         ),
 
-        Layout::Union(union_layout) => {
-            build_hash_tag(env, layout_ids, layout, union_layout, seed, val)
+        Layout::Union(union_layout) => build_hash_tag(env, layout_ids, union_layout, seed, val),
+
+        Layout::Boxed(_inner_layout) => {
+            // build_hash_box(env, layout_ids, layout, inner_layout, seed, val)
+            todo!()
         }
 
         Layout::RecursivePointer => match when_recursive {
@@ -87,14 +92,7 @@ fn build_hash_layout<'a, 'ctx, 'env>(
                     .build_bitcast(val, bt, "i64_to_opaque")
                     .into_pointer_value();
 
-                build_hash_tag(
-                    env,
-                    layout_ids,
-                    &layout,
-                    &union_layout,
-                    seed,
-                    field_cast.into(),
-                )
+                build_hash_tag(env, layout_ids, &union_layout, seed, field_cast.into())
             }
         },
     }
@@ -129,12 +127,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
         }
         Builtin::Str => {
             // let zig deal with big vs small string
-            call_bitcode_fn(
-                env,
-                &[seed.into(), build_str::str_to_c_abi(env, val).into()],
-                bitcode::DICT_HASH_STR,
-            )
-            .into_int_value()
+            call_bitcode_fn(env, &[seed.into(), val], bitcode::DICT_HASH_STR).into_int_value()
         }
 
         Builtin::Dict(_, _) => {
@@ -166,7 +159,7 @@ fn build_hash_struct<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let struct_layout = Layout::Struct(field_layouts);
+    let struct_layout = Layout::struct_no_name_order(field_layouts);
 
     let symbol = Symbol::GENERIC_HASH;
     let fn_name = layout_ids
@@ -248,7 +241,7 @@ fn hash_struct<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     let ptr_bytes = env.target_info;
 
-    let layout = Layout::Struct(field_layouts);
+    let layout = Layout::struct_no_name_order(field_layouts);
 
     // Optimization: if the bit representation of equal values is the same
     // just hash the bits. Caveat here is tags: e.g. `Nothing` in `Just a`
@@ -261,8 +254,10 @@ fn hash_struct<'a, 'ctx, 'env>(
         for (index, field_layout) in field_layouts.iter().enumerate() {
             let field = env
                 .builder
-                .build_extract_value(value, index as u32, "eq_field")
+                .build_extract_value(value, index as u32, "hash_field")
                 .unwrap();
+
+            let field = use_roc_value(env, *field_layout, field, "store_field_for_hashing");
 
             if let Layout::RecursivePointer = field_layout {
                 match &when_recursive {
@@ -308,7 +303,6 @@ fn hash_struct<'a, 'ctx, 'env>(
 fn build_hash_tag<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
     union_layout: &UnionLayout<'a>,
     seed: IntValue<'ctx>,
     value: BasicValueEnum<'ctx>,
@@ -318,7 +312,7 @@ fn build_hash_tag<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_HASH;
     let fn_name = layout_ids
-        .get(symbol, layout)
+        .get(symbol, &Layout::Union(*union_layout))
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
@@ -326,7 +320,7 @@ fn build_hash_tag<'a, 'ctx, 'env>(
         None => {
             let seed_type = env.context.i64_type();
 
-            let arg_type = basic_type_from_layout_1(env, layout);
+            let arg_type = argument_type_from_union_layout(env, union_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -805,7 +799,7 @@ fn hash_ptr_to_struct<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     use inkwell::types::BasicType;
 
-    let wrapper_type = basic_type_from_layout_1(env, &Layout::Union(*union_layout));
+    let wrapper_type = argument_type_from_union_layout(env, union_layout);
 
     // cast the opaque pointer to a pointer of the correct shape
     let wrapper_ptr = env
@@ -818,7 +812,7 @@ fn hash_ptr_to_struct<'a, 'ctx, 'env>(
         .build_struct_gep(wrapper_ptr, TAG_DATA_INDEX, "get_tag_data")
         .unwrap();
 
-    let struct_layout = Layout::Struct(field_layouts);
+    let struct_layout = Layout::struct_no_name_order(field_layouts);
     let struct_type = basic_type_from_layout(env, &struct_layout);
     let struct_ptr = env
         .builder

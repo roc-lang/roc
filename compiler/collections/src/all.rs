@@ -24,6 +24,8 @@ pub type ImMap<K, V> = im_rc::hashmap::HashMap<K, V, BuildHasher>;
 
 pub type ImSet<K> = im_rc::hashset::HashSet<K, BuildHasher>;
 
+pub type ImEntry<'a, K, V, S> = im_rc::hashmap::Entry<'a, K, V, S>;
+
 pub type SendMap<K, V> = im::hashmap::HashMap<K, V, BuildHasher>;
 
 pub type SendSet<K> = im::hashset::HashSet<K, BuildHasher>;
@@ -161,13 +163,13 @@ where
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Index(usize);
+pub struct HumanIndex(usize);
 
-impl Index {
-    pub const FIRST: Self = Index(0);
+impl HumanIndex {
+    pub const FIRST: Self = HumanIndex(0);
 
     pub fn zero_based(i: usize) -> Self {
-        Index(i)
+        HumanIndex(i)
     }
 
     pub fn to_zero_based(self) -> usize {
@@ -175,7 +177,7 @@ impl Index {
     }
 
     pub fn one_based(i: usize) -> Self {
-        Index(i - 1)
+        HumanIndex(i - 1)
     }
 
     pub fn ordinal(self) -> std::string::String {

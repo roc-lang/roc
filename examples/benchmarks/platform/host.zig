@@ -151,7 +151,7 @@ pub export fn roc_fx_putInt(int: i64) i64 {
     return 0;
 }
 
-export fn roc_fx_putLine(rocPath: str.RocStr) callconv(.C) void {
+export fn roc_fx_putLine(rocPath: *str.RocStr) callconv(.C) void {
     const stdout = std.io.getStdOut().writer();
 
     for (rocPath.asSlice()) |char| {

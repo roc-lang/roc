@@ -1,5 +1,5 @@
 use roc_gen_wasm::wasm32_sized::Wasm32Sized;
-use roc_std::{RocDec, RocList, RocOrder, RocStr};
+use roc_std::{ReferenceCount, RocDec, RocList, RocOrder, RocStr};
 
 pub trait FromWasmerMemory: Wasm32Sized {
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self;
@@ -47,33 +47,33 @@ impl FromWasmerMemory for () {
 }
 
 impl FromWasmerMemory for RocStr {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let bytes = <u64 as FromWasmerMemory>::decode(memory, offset);
+    fn decode(memory: &wasmer::Memory, addr: u32) -> Self {
+        let memory_bytes = unsafe { memory.data_unchecked() };
+        let index = addr as usize;
 
-        let length = (bytes >> 32) as u32;
-        let elements = bytes as u32;
+        let mut str_bytes = [0; 12];
+        str_bytes.copy_from_slice(&memory_bytes[index..][..12]);
 
-        if length == 0 {
-            RocStr::default()
-        } else if (length as i32) < 0 {
-            // this is a small string
-            let last_byte = bytes.to_ne_bytes()[7];
-            let actual_length = (last_byte ^ 0b1000_0000) as usize;
+        let str_words: &[u32; 3] = unsafe { std::mem::transmute(&str_bytes) };
 
-            let slice = &bytes.to_ne_bytes()[..actual_length as usize];
-            RocStr::from_slice(slice)
+        let big_elem_ptr = str_words[0] as usize;
+        let big_length = str_words[1] as usize;
+
+        let last_byte = str_bytes[11];
+        let is_small_str = last_byte >= 0x80;
+
+        let slice = if is_small_str {
+            let small_length = (last_byte & 0x7f) as usize;
+            &str_bytes[0..small_length]
         } else {
-            // this is a big string
-            let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(elements);
-            let foobar = (ptr.deref(memory, 0, length)).unwrap();
-            let wasm_slice = unsafe { std::mem::transmute(foobar) };
+            &memory_bytes[big_elem_ptr..][..big_length]
+        };
 
-            RocStr::from_slice(wasm_slice)
-        }
+        unsafe { RocStr::from_slice(slice) }
     }
 }
 
-impl<T: FromWasmerMemory + Clone> FromWasmerMemory for RocList<T> {
+impl<T: FromWasmerMemory + Clone + ReferenceCount> FromWasmerMemory for RocList<T> {
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
         let bytes = <u64 as FromWasmerMemory>::decode(memory, offset);
 

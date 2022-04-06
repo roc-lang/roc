@@ -236,7 +236,7 @@ impl Interns {
 
         match self.all_ident_ids.get(&module_id) {
             Some(ident_ids) => match ident_ids.get_id(&ident) {
-                Some(ident_id) => Symbol::new(module_id, *ident_id),
+                Some(ident_id) => Symbol::new(module_id, ident_id),
                 None => {
                     panic!("Interns::symbol could not find ident entry for {:?} for module {:?} in Interns {:?}", ident, module_id, self);
                 }
@@ -535,8 +535,6 @@ pub struct IdentId(u32);
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
-    by_ident: MutMap<Ident, IdentId>,
-
     /// Each IdentId is an index into this Vec
     by_id: Vec<Ident>,
 
@@ -555,24 +553,18 @@ impl IdentIds {
         let by_id = &mut self.by_id;
         let ident_id = IdentId(by_id.len() as u32);
 
-        self.by_ident.insert(ident_name.clone(), ident_id);
         by_id.push(ident_name);
 
         ident_id
     }
 
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
-        use std::collections::hash_map::Entry;
+        match self.get_id(name) {
+            Some(id) => id,
+            None => {
+                let ident_id = IdentId(self.by_id.len() as u32);
 
-        match self.by_ident.entry(name.clone()) {
-            Entry::Occupied(occupied) => *occupied.get(),
-            Entry::Vacant(vacant) => {
-                let by_id = &mut self.by_id;
-                let ident_id = IdentId(by_id.len() as u32);
-
-                by_id.push(name.clone());
-
-                vacant.insert(ident_id);
+                self.by_id.push(name.clone());
 
                 ident_id
             }
@@ -580,6 +572,7 @@ impl IdentIds {
     }
 
     // necessary when the name of a value is changed in the editor
+    // TODO fix when same ident_name is present multiple times, see issue #2548
     pub fn update_key(
         &mut self,
         old_ident_name: &str,
@@ -587,14 +580,11 @@ impl IdentIds {
     ) -> Result<IdentId, String> {
         let old_ident: Ident = old_ident_name.into();
 
-        let ident_id_ref_opt = self.by_ident.get(&old_ident);
+        let ident_id_ref_opt = self.get_id(&old_ident);
 
         match ident_id_ref_opt {
             Some(ident_id_ref) => {
-                let ident_id = *ident_id_ref;
-
-                self.by_ident.remove(&old_ident);
-                self.by_ident.insert(new_ident_name.into(), ident_id);
+                let ident_id = ident_id_ref;
 
                 let by_id = &mut self.by_id;
                 let key_index_opt = by_id.iter().position(|x| *x == old_ident);
@@ -620,7 +610,7 @@ impl IdentIds {
             }
             None => Err(format!(
                 "Tried to update key in IdentIds ({:?}) but I could not find the key ({}).",
-                self.by_ident, old_ident_name
+                self.by_id, old_ident_name
             )),
         }
     }
@@ -633,17 +623,29 @@ impl IdentIds {
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique(&mut self) -> IdentId {
-        // TODO convert this directly from u32 into IdentStr,
-        // without allocating an extra string along the way like this.
-        let ident = self.next_generated_name.to_string().into();
+        use std::fmt::Write;
 
+        let index: u32 = self.next_generated_name;
         self.next_generated_name += 1;
+
+        // "4294967296" is 10 characters
+        let mut buffer: arrayvec::ArrayString<10> = arrayvec::ArrayString::new();
+
+        write!(buffer, "{}", index).unwrap();
+        let ident = Ident(IdentStr::from_str(buffer.as_str()));
 
         self.add(ident)
     }
 
-    pub fn get_id(&self, ident_name: &Ident) -> Option<&IdentId> {
-        self.by_ident.get(ident_name)
+    #[inline(always)]
+    pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
+        for (id, ident) in self.idents() {
+            if ident_name == ident {
+                return Some(id);
+            }
+        }
+
+        None
     }
 
     pub fn get_name(&self, id: IdentId) -> Option<&Ident> {
@@ -682,26 +684,41 @@ macro_rules! define_builtins {
                 $(
                     debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), "Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
 
+                    let mut by_id : Vec<Ident> = Vec::new();
                     let ident_ids = {
-                            let by_id = vec! [
-                                $(
-                                    $ident_name.into(),
-                                )+
-                            ];
-                            let mut by_ident = MutMap::with_capacity_and_hasher(by_id.len(), default_hasher());
-
                             $(
-                                debug_assert!(by_ident.len() == $ident_id, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {:?} to {} …: {:?} instead.", $ident_id, $ident_name, $module_id, $module_name, $ident_id, by_ident.len(), $ident_id, $ident_name, by_ident.len(), $ident_name);
+                                debug_assert!(by_id.len() == $ident_id, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {:?} to {} …: {:?} instead.", $ident_id, $ident_name, $module_id, $module_name, $ident_id, by_id.len(), $ident_id, $ident_name, by_id.len(), $ident_name);
 
-                                let exists = by_ident.insert($ident_name.into(), IdentId($ident_id));
-
-                                if let Some(_) = exists {
-                                    debug_assert!(false, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - the Ident name {:?} is already present in the map. Check the map for duplicate ident names within the {:?} module!", $ident_id, $ident_name, $module_id, $module_name, $ident_name, $module_name);
-                                }
+                                by_id.push($ident_name.into());
                             )+
 
+                            #[cfg(debug_assertions)]
+                            {
+                                let mut cloned = by_id.clone();
+                                let before = cloned.len();
+                                cloned.sort();
+                                cloned.dedup();
+                                let after = cloned.len();
+
+
+                                if before != after {
+                                    let mut duplicates : Vec<&Ident> = Vec::new();
+                                    let mut temp : Vec<&Ident> = Vec::new();
+
+                                    for symbol in cloned.iter() {
+                                        if temp.contains(&&symbol) {
+                                            duplicates.push(symbol);
+                                        }
+
+                                        temp.push(&symbol);
+                                    }
+
+
+                                    panic!("duplicate symbols in IdentIds for module {:?}: {:?}", $module_name, duplicates);
+                                }
+                            }
+
                             IdentIds {
-                                by_ident,
                                 by_id,
                                 next_generated_name: 0,
                             }
@@ -883,6 +900,10 @@ define_builtins! {
 
         // used in dev backend
         26 DEV_TMP: "#dev_tmp"
+        27 DEV_TMP2: "#dev_tmp2"
+        28 DEV_TMP3: "#dev_tmp3"
+        29 DEV_TMP4: "#dev_tmp4"
+        30 DEV_TMP5: "#dev_tmp5"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -1010,6 +1031,28 @@ define_builtins! {
         122 NUM_MAX_U64: "maxU64"
         123 NUM_MIN_I128: "minI128"
         124 NUM_MAX_I128: "maxI128"
+        125 NUM_TO_I8: "toI8"
+        126 NUM_TO_I8_CHECKED: "toI8Checked"
+        127 NUM_TO_I16: "toI16"
+        128 NUM_TO_I16_CHECKED: "toI16Checked"
+        129 NUM_TO_I32: "toI32"
+        130 NUM_TO_I32_CHECKED: "toI32Checked"
+        131 NUM_TO_I64: "toI64"
+        132 NUM_TO_I64_CHECKED: "toI64Checked"
+        133 NUM_TO_I128: "toI128"
+        134 NUM_TO_I128_CHECKED: "toI128Checked"
+        135 NUM_TO_U8: "toU8"
+        136 NUM_TO_U8_CHECKED: "toU8Checked"
+        137 NUM_TO_U16: "toU16"
+        138 NUM_TO_U16_CHECKED: "toU16Checked"
+        139 NUM_TO_U32: "toU32"
+        140 NUM_TO_U32_CHECKED: "toU32Checked"
+        141 NUM_TO_U64: "toU64"
+        142 NUM_TO_U64_CHECKED: "toU64Checked"
+        143 NUM_TO_U128: "toU128"
+        144 NUM_TO_U128_CHECKED: "toU128Checked"
+        145 NUM_TO_NAT: "toNat"
+        146 NUM_TO_NAT_CHECKED: "toNatChecked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -1121,6 +1164,7 @@ define_builtins! {
         55 LIST_SORT_ASC: "sortAsc"
         56 LIST_SORT_DESC: "sortDesc"
         57 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
+        58 LIST_REPLACE: "replace"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
@@ -1172,6 +1216,12 @@ define_builtins! {
         13 SET_WALK_USER_FUNCTION: "#walk_user_function"
         14 SET_CONTAINS: "contains"
     }
+    8 BOX: "Box" => {
+        0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
+        1 BOX_BOX_FUNCTION: "box" // Box.box
+        2 BOX_UNBOX: "unbox"
 
-    num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    }
+
+    num_modules: 9 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

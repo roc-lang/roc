@@ -6,7 +6,7 @@ The [tutorial](TUTORIAL.md) is the best place to learn about how to use the lang
 
 There's also a folder of [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) - the [CLI example](https://github.com/rtfeldman/roc/tree/trunk/examples/cli) in particular is a reasonable starting point to build on.
 
-[Roc Zulip chat](https://roc.zulipchat.com) is the best place to ask questions and get help! It's also where we discuss [ideas](https://roc.zulipchat.com/#narrow/stream/304641-ideas) for the language. If you want to get involved in contributing to the language, Zulip is also a great place to ask about good first projects.
+If you have a specific question, the [FAQ](FAQ.md) might have an answer, although [Roc Zulip chat](https://roc.zulipchat.com) is overall the best place to ask questions and get help! It's also where we discuss [ideas](https://roc.zulipchat.com/#narrow/stream/304641-ideas) for the language. If you want to get involved in contributing to the language, Zulip is also a great place to ask about good first projects.
 
 ## State of Roc
 
@@ -23,7 +23,7 @@ Many programs can however be compiled correctly. Check out [examples](examples) 
 
 Run examples as follows:
 ```
-cargo run examples/hello-world/Hello.roc
+cargo run examples/hello-world/helloWorld.roc
 ```
 Some examples like `examples/benchmarks/NQueens.roc` require input after running.
 For NQueens, input 10 in the terminal and press enter.

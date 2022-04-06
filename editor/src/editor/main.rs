@@ -1,4 +1,5 @@
 use super::keyboard_input;
+use super::resources::strings::PLATFORM_NAME;
 use crate::editor::mvc::ed_view;
 use crate::editor::mvc::ed_view::RenderedWgpu;
 use crate::editor::resources::strings::{HELLO_WORLD, NOTHING_OPENED};
@@ -17,10 +18,10 @@ use crate::graphics::{
     primitives::text::{build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text},
 };
 use crate::ui::text::caret_w_select::CaretPos;
-use crate::ui::util::path_to_string;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use fs_extra::dir::{copy, ls, CopyOptions, DirEntryAttr, DirEntryValue};
+use futures::TryFutureExt;
 use pipelines::RectResources;
 use roc_ast::lang::env::Env;
 use roc_ast::mem_pool::pool::Pool;
@@ -30,6 +31,7 @@ use roc_types::subs::VarStore;
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Write;
+use std::path::PathBuf;
 use std::{error::Error, io, path::Path};
 use wgpu::{CommandEncoder, LoadOp, RenderPass, TextureView};
 use wgpu_glyph::GlyphBrush;
@@ -73,28 +75,25 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
     // Initialize GPU
     let (gpu_device, cmd_queue) = futures::executor::block_on(async {
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .expect(r#"Request adapter
-            If you're running this from inside nix, follow the instructions here to resolve this: https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#editor
-            "#);
-
-        adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    features: wgpu::Features::empty(),
-                    limits: wgpu::Limits::default(),
-                },
-                None,
+        create_device(
+            &instance,
+            &surface,
+            wgpu::PowerPreference::HighPerformance,
+            false,
+        )
+        .or_else(|_| create_device(&instance, &surface, wgpu::PowerPreference::LowPower, false))
+        .or_else(|_| {
+            create_device(
+                &instance,
+                &surface,
+                wgpu::PowerPreference::HighPerformance,
+                true,
             )
-            .await
-            .expect("Request device")
+        })
+        .unwrap_or_else(|err| {
+            panic!("Failed to request device: `{}`", err);
+        })
+        .await
     });
 
     // Create staging belt and a local pool
@@ -127,7 +126,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let code_arena = Bump::new();
 
     let (file_path_str, code_str) = read_main_roc_file(project_dir_path_opt);
-    println!("Loading file {}...", file_path_str);
+    println!("Loading file {:?}...", file_path_str);
 
     let file_path = Path::new(&file_path_str);
 
@@ -268,7 +267,6 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
             } => {
                 keyboard_modifiers = modifiers;
             }
-            Event::MainEventsCleared => window.request_redraw(),
             Event::RedrawRequested { .. } => {
                 // Get a command encoder for the current frame
                 let mut encoder =
@@ -395,6 +393,39 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     Ok(())
 }
 
+async fn create_device(
+    instance: &wgpu::Instance,
+    surface: &wgpu::Surface,
+    power_preference: wgpu::PowerPreference,
+    force_fallback_adapter: bool,
+) -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
+    if force_fallback_adapter {
+        log::error!("Falling back to software renderer. GPU acceleration has been disabled.");
+    }
+
+    let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference,
+                compatible_surface: Some(surface),
+                force_fallback_adapter,
+            })
+            .await
+            .expect(r#"Request adapter
+            If you're running this from inside nix, follow the instructions here to resolve this: https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#editor
+            "#);
+
+    adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                label: None,
+                features: wgpu::Features::empty(),
+                limits: wgpu::Limits::default(),
+            },
+            None,
+        )
+        .await
+}
+
 fn draw_rects(
     all_rects: &[Rect],
     encoder: &mut CommandEncoder,
@@ -436,9 +467,7 @@ fn begin_render_pass<'a>(
     })
 }
 
-type PathStr = String;
-
-fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String) {
+fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathBuf, String) {
     if let Some(project_dir_path) = project_dir_path_opt {
         let mut ls_config = HashSet::new();
         ls_config.insert(DirEntryAttr::FullName);
@@ -447,64 +476,58 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathStr, String) 
             .unwrap_or_else(|err| panic!("Failed to list items in project directory: {:?}", err))
             .items;
 
-        let file_names = dir_items
-            .iter()
-            .map(|info_hash_map| {
-                info_hash_map
-                    .values()
-                    .map(|dir_entry_value| {
-                        if let DirEntryValue::String(file_name) = dir_entry_value {
-                            Some(file_name)
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten() // remove None
-                    .collect::<Vec<&String>>()
-            })
-            .flatten();
+        let file_names = dir_items.iter().flat_map(|info_hash_map| {
+            info_hash_map
+                .values()
+                .filter_map(|dir_entry_value| {
+                    if let DirEntryValue::String(file_name) = dir_entry_value {
+                        Some(file_name)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<&String>>()
+        });
 
         let roc_file_names: Vec<&String> = file_names
             .filter(|file_name| file_name.contains(".roc"))
             .collect();
 
-        let project_dir_path_str = path_to_string(project_dir_path);
-
         if let Some(&roc_file_name) = roc_file_names.first() {
-            let full_roc_file_path_str = path_to_string(&project_dir_path.join(roc_file_name));
-            let file_as_str = std::fs::read_to_string(&Path::new(&full_roc_file_path_str))
-                .unwrap_or_else(|err| panic!("In the provided project {:?}, I found the roc file {}, but I failed to read it: {}", &project_dir_path_str, &full_roc_file_path_str, err));
+            let full_roc_file_path = project_dir_path.join(roc_file_name);
+            let file_as_str = std::fs::read_to_string(&Path::new(&full_roc_file_path))
+                .unwrap_or_else(|err| panic!("In the provided project {:?}, I found the roc file {:?}, but I failed to read it: {}", &project_dir_path, full_roc_file_path, err));
 
-            (full_roc_file_path_str, file_as_str)
+            (full_roc_file_path, file_as_str)
         } else {
-            init_new_roc_project(&project_dir_path_str)
+            init_new_roc_project(project_dir_path)
         }
     } else {
-        init_new_roc_project("new-roc-project")
+        init_new_roc_project(Path::new("./new-roc-project"))
     }
 }
 
 // returns path and content of app file
-fn init_new_roc_project(project_dir_path_str: &str) -> (PathStr, String) {
-    let orig_platform_path = Path::new("./examples/hello-world/platform");
+fn init_new_roc_project(project_dir_path: &Path) -> (PathBuf, String) {
+    let orig_platform_path = Path::new("./examples/hello-world").join(PLATFORM_NAME);
 
-    let project_dir_path = Path::new(project_dir_path_str);
-
-    let roc_file_path_str = vec![project_dir_path_str, "/UntitledApp.roc"].join("");
     let roc_file_path = Path::new("./new-roc-project/UntitledApp.roc");
 
-    let project_platform_path_str = vec![project_dir_path_str, "/platform"].join("");
-    let project_platform_path = Path::new(&project_platform_path_str);
+    let project_platform_path = project_dir_path.join(PLATFORM_NAME);
 
     if !project_dir_path.exists() {
         fs::create_dir(project_dir_path).expect("Failed to create dir for roc project.");
     }
 
-    copy_roc_platform_if_not_exists(orig_platform_path, project_platform_path, project_dir_path);
+    copy_roc_platform_if_not_exists(
+        &orig_platform_path,
+        &project_platform_path,
+        project_dir_path,
+    );
 
     let code_str = create_roc_file_if_not_exists(project_dir_path, roc_file_path);
 
-    (roc_file_path_str, code_str)
+    (roc_file_path.to_path_buf(), code_str)
 }
 
 // returns contents of file

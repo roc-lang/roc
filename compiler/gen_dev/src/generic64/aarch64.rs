@@ -1,8 +1,7 @@
-use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage};
+use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
 use crate::Relocation;
 use bumpalo::collections::Vec;
 use packed_struct::prelude::*;
-use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::Layout;
@@ -67,15 +66,17 @@ impl RegTrait for AArch64FloatReg {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct AArch64Assembler {}
 
 // AArch64Call may need to eventually be split by OS,
 // but I think with how we use it, they may all be the same.
+#[derive(Copy, Clone)]
 pub struct AArch64Call {}
 
 const STACK_ALIGNMENT: u8 = 16;
 
-impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
+impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64Call {
     const BASE_PTR_REG: AArch64GeneralReg = AArch64GeneralReg::FP;
     const STACK_PTR_REG: AArch64GeneralReg = AArch64GeneralReg::ZRSP;
 
@@ -160,13 +161,14 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
     #[inline(always)]
     fn setup_stack(
         buf: &mut Vec<'_, u8>,
-        saved_regs: &[AArch64GeneralReg],
+        saved_general_regs: &[AArch64GeneralReg],
+        saved_float_regs: &[AArch64FloatReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
     ) -> i32 {
         // Full size is upcast to i64 to make sure we don't overflow here.
         let full_stack_size = match requested_stack_size
-            .checked_add(8 * saved_regs.len() as i32 + 8) // The extra 8 is space to store the frame pointer.
+            .checked_add(8 * (saved_general_regs.len() + saved_float_regs.len()) as i32 + 8) // The extra 8 is space to store the frame pointer.
             .and_then(|size| size.checked_add(fn_call_stack_size))
         {
             Some(size) => size,
@@ -204,9 +206,13 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
                 AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::FP);
 
                 offset = aligned_stack_size - fn_call_stack_size;
-                for reg in saved_regs {
+                for reg in saved_general_regs {
                     offset -= 8;
                     AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
+                }
+                for reg in saved_float_regs {
+                    offset -= 8;
+                    AArch64Assembler::mov_base32_freg64(buf, offset, *reg);
                 }
                 aligned_stack_size
             } else {
@@ -220,7 +226,8 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
     #[inline(always)]
     fn cleanup_stack(
         buf: &mut Vec<'_, u8>,
-        saved_regs: &[AArch64GeneralReg],
+        saved_general_regs: &[AArch64GeneralReg],
+        saved_float_regs: &[AArch64FloatReg],
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
     ) {
@@ -233,9 +240,13 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
             AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, offset);
 
             offset = aligned_stack_size - fn_call_stack_size;
-            for reg in saved_regs {
+            for reg in saved_general_regs {
                 offset -= 8;
                 AArch64Assembler::mov_reg64_base32(buf, *reg, offset);
+            }
+            for reg in saved_float_regs {
+                offset -= 8;
+                AArch64Assembler::mov_freg64_base32(buf, *reg, offset);
             }
             AArch64Assembler::add_reg64_reg64_imm32(
                 buf,
@@ -249,37 +260,65 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
     #[inline(always)]
     fn load_args<'a>(
         _buf: &mut Vec<'a, u8>,
-        _symbol_map: &mut MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
+        _storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
         _args: &'a [(Layout<'a>, Symbol)],
         _ret_layout: &Layout<'a>,
-        mut _stack_size: u32,
-    ) -> u32 {
+    ) {
         todo!("Loading args for AArch64");
     }
 
     #[inline(always)]
     fn store_args<'a>(
         _buf: &mut Vec<'a, u8>,
-        _symbol_map: &MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
-        _args: &'a [Symbol],
+        _storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
+        _dst: &Symbol,
+        _args: &[Symbol],
         _arg_layouts: &[Layout<'a>],
         _ret_layout: &Layout<'a>,
-    ) -> u32 {
+    ) {
         todo!("Storing args for AArch64");
     }
 
-    fn return_struct<'a>(
+    fn return_complex_symbol<'a>(
         _buf: &mut Vec<'a, u8>,
-        _struct_offset: i32,
-        _struct_size: u32,
-        _field_layouts: &[Layout<'a>],
-        _ret_reg: Option<AArch64GeneralReg>,
+        _storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
+        _sym: &Symbol,
+        _layout: &Layout<'a>,
     ) {
-        todo!("Returning structs for AArch64");
+        todo!("Returning complex symbols for AArch64");
     }
 
-    fn returns_via_arg_pointer(_ret_layout: &Layout) -> bool {
-        todo!("Returning via arg pointer for AArch64");
+    fn load_returned_complex_symbol<'a>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<
+            'a,
+            AArch64GeneralReg,
+            AArch64FloatReg,
+            AArch64Assembler,
+            AArch64Call,
+        >,
+        _sym: &Symbol,
+        _layout: &Layout<'a>,
+    ) {
+        todo!("Loading returned complex symbols for AArch64");
     }
 }
 
@@ -445,6 +484,70 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn mov_reg64_mem64_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
+        offset: i32,
+    ) {
+        if offset < 0 {
+            todo!("negative mem offsets for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            ldr_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
+        } else {
+            todo!("mem offsets over 32k for AArch64");
+        }
+    }
+    #[inline(always)]
+    fn mov_mem64_offset32_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        offset: i32,
+        src: AArch64GeneralReg,
+    ) {
+        if offset < 0 {
+            todo!("negative mem offsets for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            str_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
+        } else {
+            todo!("mem offsets over 32k for AArch64");
+        }
+    }
+
+    #[inline(always)]
+    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32, size: u8) {
+        debug_assert!(size <= 8);
+        if size == 8 {
+            Self::mov_reg64_base32(buf, dst, offset);
+        } else if size == 4 {
+            todo!("sign extending 4 byte values");
+        } else if size == 2 {
+            todo!("sign extending 2 byte values");
+        } else if size == 1 {
+            todo!("sign extending 1 byte values");
+        } else {
+            internal_error!("Invalid size for sign extension: {}", size);
+        }
+    }
+    #[inline(always)]
+    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32, size: u8) {
+        debug_assert!(size <= 8);
+        if size == 8 {
+            Self::mov_reg64_base32(buf, dst, offset);
+        } else if size == 4 {
+            todo!("zero extending 4 byte values");
+        } else if size == 2 {
+            todo!("zero extending 2 byte values");
+        } else if size == 1 {
+            todo!("zero extending 1 byte values");
+        } else {
+            internal_error!("Invalid size for zero extension: {}", size);
+        }
+    }
+
+    #[inline(always)]
     fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
         todo!("loading floating point reg from stack for AArch64");
     }
@@ -568,6 +671,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src: AArch64FloatReg,
     ) {
         todo!("registers to float for AArch64");
+    }
+
+    #[inline(always)]
+    fn lte_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers less than or equal for AArch64");
     }
 
     #[inline(always)]

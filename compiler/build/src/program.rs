@@ -2,12 +2,12 @@
 use roc_gen_llvm::llvm::build::module_from_builtins;
 #[cfg(feature = "llvm")]
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
-use roc_load::file::{LoadedModule, MonomorphizedModule};
+use roc_load::{LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use roc_collections::all::MutMap;
 #[cfg(feature = "target-wasm32")]
@@ -179,7 +179,7 @@ pub fn gen_from_mono_module(
     _emit_debug_info: bool,
 ) -> CodeGenTiming {
     match opt_level {
-        OptLevel::Optimize => {
+        OptLevel::Optimize | OptLevel::Size => {
             todo!("Return this error message in a better way: optimized builds not supported without llvm backend");
         }
         OptLevel::Normal | OptLevel::Development => {
@@ -199,7 +199,7 @@ pub fn gen_from_mono_module(
     emit_debug_info: bool,
 ) -> CodeGenTiming {
     match opt_level {
-        OptLevel::Normal | OptLevel::Optimize => gen_from_mono_module_llvm(
+        OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => gen_from_mono_module_llvm(
             arena,
             loaded,
             roc_file_path,
@@ -230,7 +230,6 @@ pub fn gen_from_mono_module_llvm(
     use inkwell::context::Context;
     use inkwell::module::Linkage;
     use inkwell::targets::{CodeModel, FileType, RelocMode};
-    use std::time::SystemTime;
 
     let code_gen_start = SystemTime::now();
 
@@ -267,6 +266,7 @@ pub fn gen_from_mono_module_llvm(
             || name.starts_with("roc_builtins.dec")
             || name.starts_with("list.RocList")
             || name.starts_with("dict.RocDict")
+            || name.contains("incref")
             || name.contains("decref")
         {
             function.add_attribute(AttributeLoc::Function, enum_attr);
@@ -486,6 +486,7 @@ fn gen_from_mono_module_dev_wasm32(
     loaded: MonomorphizedModule,
     app_o_file: &Path,
 ) -> CodeGenTiming {
+    let code_gen_start = SystemTime::now();
     let MonomorphizedModule {
         module_id,
         procedures,
@@ -519,9 +520,17 @@ fn gen_from_mono_module_dev_wasm32(
         procedures,
     );
 
+    let code_gen = code_gen_start.elapsed().unwrap();
+    let emit_o_file_start = SystemTime::now();
+
     std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
 
-    CodeGenTiming::default()
+    let emit_o_file = emit_o_file_start.elapsed().unwrap();
+
+    CodeGenTiming {
+        code_gen,
+        emit_o_file,
+    }
 }
 
 fn gen_from_mono_module_dev_assembly(
@@ -530,6 +539,8 @@ fn gen_from_mono_module_dev_assembly(
     target: &target_lexicon::Triple,
     app_o_file: &Path,
 ) -> CodeGenTiming {
+    let code_gen_start = SystemTime::now();
+
     let lazy_literals = true;
     let generate_allocators = false; // provided by the platform
 
@@ -551,10 +562,18 @@ fn gen_from_mono_module_dev_assembly(
 
     let module_object = roc_gen_dev::build_module(&env, &mut interns, target, procedures);
 
+    let code_gen = code_gen_start.elapsed().unwrap();
+    let emit_o_file_start = SystemTime::now();
+
     let module_out = module_object
         .write()
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
-    CodeGenTiming::default()
+    let emit_o_file = emit_o_file_start.elapsed().unwrap();
+
+    CodeGenTiming {
+        code_gen,
+        emit_o_file,
+    }
 }

@@ -1,3 +1,4 @@
+use std::env;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
@@ -10,6 +11,15 @@ const PRE_LINKED_BINARY: &str = "data/pre_linked_binary.o";
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/{}.c", PLATFORM_FILENAME);
+
+    // When we build on Netlify, zig is not installed (but also not used,
+    // since all we're doing is generating docs), so we can skip the steps
+    // that require having zig installed.
+    if env::var_os("NO_ZIG_INSTALLED").is_some() {
+        // We still need to do the other things before this point, because
+        // setting the env vars is needed for other parts of the build.
+        return;
+    }
 
     std::fs::create_dir_all("./data").unwrap();
 

@@ -16,8 +16,10 @@ use roc_ast::lang::env::Env;
 use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_ast::parse::parse_ast;
 use roc_code_markup::markup::convert::from_ast::ast_to_mark_nodes;
+use roc_code_markup::markup::mark_id_ast_id_map::MarkIdAstIdMap;
+use roc_code_markup::markup::nodes;
 use roc_code_markup::slow_pool::{MarkNodeId, SlowPool};
-use roc_load::file::LoadedModule;
+use roc_load::LoadedModule;
 use roc_module::symbol::Interns;
 use std::path::Path;
 
@@ -30,6 +32,7 @@ pub struct EdModel<'a> {
     pub grid_node_map: GridNodeMap, // allows us to map window coordinates to MarkNodeId's
     pub markup_ids: Vec<MarkNodeId>, // one root node for every top level definition
     pub mark_node_pool: SlowPool, // all MarkupNodes for this file are saved into this pool and can be retrieved using their MarkNodeId
+    pub mark_id_ast_id_map: MarkIdAstIdMap, // To find the ASTNode that is represented by a MarkNode
     pub glyph_dim_rect_opt: Option<Rect>, // represents the width and height of single monospace glyph(char)
     pub has_focus: bool,
     pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>, // the editor supports multiple carets/cursors and multiple selections
@@ -63,7 +66,7 @@ pub fn init_model<'a>(
 
     let mut mark_node_pool = SlowPool::default();
 
-    let markup_ids = if code_str.is_empty() {
+    let (markup_ids, mark_id_ast_id_map) = if code_str.is_empty() {
         EmptyCodeString {}.fail()
     } else {
         Ok(ast_to_mark_nodes(
@@ -74,7 +77,8 @@ pub fn init_model<'a>(
         )?)
     }?;
 
-    let mut code_lines = CodeLines::default();
+    let code_lines =
+        CodeLines::from_str(&nodes::mark_nodes_to_string(&markup_ids, &mark_node_pool));
     let mut grid_node_map = GridNodeMap::default();
 
     let mut line_nr = 0;
@@ -88,7 +92,6 @@ pub fn init_model<'a>(
             &mut col_nr,
             *mark_node_id,
             &mut grid_node_map,
-            &mut code_lines,
             &mark_node_pool,
         )?
     }
@@ -106,6 +109,7 @@ pub fn init_model<'a>(
         grid_node_map,
         markup_ids,
         mark_node_pool,
+        mark_id_ast_id_map,
         glyph_dim_rect_opt: None,
         has_focus: true,
         caret_w_select_vec: NonEmpty::new((caret, None)),
@@ -159,7 +163,12 @@ impl<'a> EdModel<'a> {
 
             if let Some(parent_id) = curr_mark_node.get_parent_id_opt() {
                 let parent = self.mark_node_pool.get(parent_id);
-                Ok(parent.get_child_indices(curr_mark_node_id, &self.mark_node_pool)?)
+                let ast_node_id = self.mark_id_ast_id_map.get(curr_mark_node_id)?;
+                Ok(parent.get_child_indices(
+                    curr_mark_node_id,
+                    ast_node_id,
+                    &self.mark_id_ast_id_map,
+                )?)
             } else {
                 MissingParent {
                     node_id: curr_mark_node_id,
@@ -211,7 +220,9 @@ impl<'a> EdModule<'a> {
 pub mod test_ed_model {
     use crate::editor::ed_error::EdResult;
     use crate::editor::mvc::ed_model;
-    use crate::editor::resources::strings::{HELLO_WORLD, PLATFORM_STR};
+    use crate::editor::resources::strings::{
+        nr_hello_world_lines, HELLO_WORLD, PLATFORM_NAME, PLATFORM_STR,
+    };
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::caret_w_select::CaretPos;
@@ -223,7 +234,7 @@ pub mod test_ed_model {
     use roc_ast::lang::env::Env;
     use roc_ast::mem_pool::pool::Pool;
     use roc_ast::module::load_module;
-    use roc_load::file::LoadedModule;
+    use roc_load::LoadedModule;
     use roc_module::symbol::IdentIds;
     use roc_module::symbol::ModuleIds;
     use roc_types::subs::VarStore;
@@ -298,7 +309,7 @@ pub mod test_ed_model {
 
         let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
 
-        let platform_dir = temp_dir.path().join("platform");
+        let platform_dir = temp_dir.path().join(PLATFORM_NAME);
         fs::create_dir(platform_dir.clone()).expect("Failed to create platform directory");
         let package_config_path = platform_dir.join("Package-Config.roc");
         let mut package_config_file =
@@ -330,10 +341,9 @@ pub mod test_ed_model {
         )?;
 
         // adjust caret for header and main function
-        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
         let caret_w_select = convert_dsl_to_selection(&code_lines)?;
         let adjusted_caret_pos = TextPos {
-            line: caret_w_select.caret_pos.line + nr_hello_world_lines,
+            line: caret_w_select.caret_pos.line + nr_hello_world_lines(),
             column: caret_w_select.caret_pos.column,
         };
 

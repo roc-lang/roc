@@ -1,13 +1,13 @@
 procedure List.5 (#Attr.2, #Attr.3):
-    let Test.7 : Builtin(List(Builtin(Int(I64)))) = lowlevel ListAppend #Attr.2 #Attr.3;
+    let Test.7 : List I64 = lowlevel ListAppend #Attr.2 #Attr.3;
     ret Test.7;
 
 procedure Test.1 (Test.2):
-    let Test.6 : Builtin(Int(I64)) = 42i64;
-    let Test.5 : Builtin(List(Builtin(Int(I64)))) = CallByName List.5 Test.2 Test.6;
+    let Test.6 : I64 = 42i64;
+    let Test.5 : List I64 = CallByName List.5 Test.2 Test.6;
     ret Test.5;
 
 procedure Test.0 ():
-    let Test.4 : Builtin(List(Builtin(Int(I64)))) = Array [1i64, 2i64];
-    let Test.3 : Builtin(List(Builtin(Int(I64)))) = CallByName Test.1 Test.4;
+    let Test.4 : List I64 = Array [1i64, 2i64];
+    let Test.3 : List I64 = CallByName Test.1 Test.4;
     ret Test.3;

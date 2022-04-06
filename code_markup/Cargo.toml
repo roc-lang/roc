@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
-description = "Our own markup language for Roc code. Used by the editor and (soon) the docs."
+description = "Our own markup language for Roc code. Used by the editor and the docs."
 
 [dependencies]
 roc_ast = { path = "../ast" }

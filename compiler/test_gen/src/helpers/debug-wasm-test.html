@@ -3,7 +3,7 @@
     <style>
       body {
         background-color: #111;
-        color: #00c000;
+        color: #ccc;
         font-family: sans-serif;
         font-size: 18px;
       }
@@ -19,7 +19,7 @@
         margin: 8px;
       }
       code {
-        color: #0080ff;
+        color: #aaa;
         background-color: #000;
         padding: 1px 4px;
         font-size: 16px;
@@ -258,6 +258,7 @@
         function fd_write(fd, iovs_ptr, iovs_len, nwritten_mut_ptr) {
           let string_buffer = "";
           let nwritten = 0;
+          const STDOUT = 1;
 
           for (let i = 0; i < iovs_len; i++) {
             const index32 = iovs_ptr >> 2;
@@ -282,16 +283,18 @@
           }
           wasiLinkObject.memory32[nwritten_mut_ptr >> 2] = nwritten;
           if (string_buffer) {
-            console.log(string_buffer);
+            if (fd === STDOUT) {
+              console.log(string_buffer);
+            } else {
+              console.error(string_buffer);
+            }
           }
           return 0;
         }
 
         // proc_exit : (i32) -> nil
         function proc_exit(exit_code) {
-          if (exit_code) {
-            throw new Error(`Wasm exited with code ${exit_code}`);
-          }
+          throw new Error(`Wasm exited with code ${exit_code}`);
         }
 
         // Signatures from wasm_test_platform.o

@@ -1,10 +1,10 @@
-use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{
     BranchInfo, DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt,
 };
 use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
+use roc_exhaustive::{Ctor, RenderAs, TagId, Union};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
@@ -83,7 +83,7 @@ enum Test<'a> {
     IsCtor {
         tag_id: TagIdIntType,
         tag_name: TagName,
-        union: crate::exhaustive::Union,
+        union: roc_exhaustive::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
     IsInt(i128, IntWidth),
@@ -135,7 +135,7 @@ impl<'a> Hash for Test<'a> {
             IsDecimal(v) => {
                 // TODO: Is this okay?
                 state.write_u8(6);
-                v.0.hash(state);
+                v.hash(state);
             }
             IsU128(v) => {
                 state.write_u8(7);
@@ -565,6 +565,25 @@ fn test_at_path<'a>(
                     union: union.clone(),
                     arguments: arguments.to_vec(),
                 },
+
+                OpaqueUnwrap { opaque, argument } => {
+                    let union = Union {
+                        render_as: RenderAs::Tag,
+                        alternatives: vec![Ctor {
+                            tag_id: TagId(0),
+                            name: TagName::Private(*opaque),
+                            arity: 1,
+                        }],
+                    };
+
+                    IsCtor {
+                        tag_id: 0,
+                        tag_name: TagName::Private(*opaque),
+                        union,
+                        arguments: vec![(**argument).clone()],
+                    }
+                }
+
                 BitLiteral { value, .. } => IsBit(*value),
                 EnumLiteral { tag_id, union, .. } => IsByte {
                     tag_id: *tag_id as _,
@@ -692,6 +711,33 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
+        OpaqueUnwrap { opaque, argument } => match test {
+            IsCtor {
+                tag_name: test_opaque_tag_name,
+                tag_id,
+                ..
+            } => {
+                debug_assert_eq!(test_opaque_tag_name, &TagName::Private(opaque));
+
+                let (argument, _) = *argument;
+
+                let mut new_path = path.to_vec();
+                new_path.push(PathInstruction {
+                    index: 0,
+                    tag_id: *tag_id,
+                });
+
+                start.push((new_path, argument));
+                start.extend(end);
+                Some(Branch {
+                    goal: branch.goal,
+                    guard: branch.guard.clone(),
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
         NewtypeDestructure {
             tag_name,
             arguments,
@@ -747,7 +793,11 @@ fn to_relevant_branch_help<'a>(
 
                     // the test matches the constructor of this pattern
                     match layout {
-                        UnionLayout::NonRecursive([[Layout::Struct([_])]]) => {
+                        UnionLayout::NonRecursive(
+                            [[Layout::Struct {
+                                field_layouts: [_], ..
+                            }]],
+                        ) => {
                             // a one-element record equivalent
                             // Theory: Unbox doesn't have any value for us
                             debug_assert_eq!(arguments.len(), 1);
@@ -856,7 +906,7 @@ fn to_relevant_branch_help<'a>(
         },
 
         DecimalLiteral(dec) => match test {
-            IsDecimal(test_dec) if dec.0 == test_dec.0 => {
+            IsDecimal(test_dec) if dec.eq(test_dec) => {
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
@@ -950,6 +1000,7 @@ fn needs_tests(pattern: &Pattern) -> bool {
         RecordDestructure(_, _)
         | NewtypeDestructure { .. }
         | AppliedTag { .. }
+        | OpaqueUnwrap { .. }
         | BitLiteral { .. }
         | EnumLiteral { .. }
         | IntLiteral(_, _)
@@ -1235,7 +1286,7 @@ fn path_to_expr_help<'a>(
                 layout = inner_layout;
             }
 
-            Layout::Struct(field_layouts) => {
+            Layout::Struct { field_layouts, .. } => {
                 debug_assert!(field_layouts.len() > 1);
 
                 let inner_expr = Expr::StructAtIndex {
@@ -1315,6 +1366,7 @@ fn test_to_equality<'a>(
                 _ => unreachable!("{:?}", (cond_layout, union)),
             }
         }
+
         Test::IsInt(test_int, precision) => {
             // TODO don't downcast i128 here
             debug_assert!(test_int <= i64::MAX as i128);
@@ -1344,7 +1396,7 @@ fn test_to_equality<'a>(
         }
 
         Test::IsDecimal(test_dec) => {
-            let lhs = Expr::Literal(Literal::Int(test_dec.0));
+            let lhs = Expr::Literal(Literal::Decimal(test_dec));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, *cond_layout, lhs));
 

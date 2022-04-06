@@ -5,10 +5,9 @@ use crate::llvm::build::{
     FAST_CALL_CONV, TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{basic_type_from_layout, basic_type_from_layout_1};
+use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
-use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
@@ -18,18 +17,9 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
-use roc_target::TargetInfo;
 
-/// "Infinite" reference count, for static values
-/// Ref counts are encoded as negative numbers where isize::MIN represents 1
-pub const REFCOUNT_MAX: usize = 0_usize;
-
-pub fn refcount_1(ctx: &Context, target_info: TargetInfo) -> IntValue<'_> {
-    match target_info.ptr_width() {
-        roc_target::PtrWidth::Bytes4 => ctx.i32_type().const_int(i32::MIN as u64, false),
-        roc_target::PtrWidth::Bytes8 => ctx.i64_type().const_int(i64::MIN as u64, false),
-    }
-}
+use super::build::load_roc_value;
+use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 
 pub struct PointerToRefcount<'ctx> {
     value: PointerValue<'ctx>,
@@ -93,7 +83,14 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     pub fn is_1<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         let current = self.get_refcount(env);
-        let one = refcount_1(env.context, env.target_info);
+        let one = match env.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => {
+                env.context.i32_type().const_int(i32::MIN as u64, false)
+            }
+            roc_target::PtrWidth::Bytes8 => {
+                env.context.i64_type().const_int(i64::MIN as u64, false)
+            }
+        };
 
         env.builder
             .build_int_compare(IntPredicate::EQ, current, one, "is_one")
@@ -122,38 +119,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
     }
 
     fn increment<'a, 'env>(&self, amount: IntValue<'ctx>, env: &Env<'a, 'ctx, 'env>) {
-        let refcount = self.get_refcount(env);
-        let builder = env.builder;
-        let refcount_type = env.ptr_int();
-
-        let is_static_allocation = builder.build_int_compare(
-            IntPredicate::EQ,
-            refcount,
-            refcount_type.const_int(REFCOUNT_MAX as u64, false),
-            "refcount_max_check",
-        );
-
-        let block = env.builder.get_insert_block().expect("to be in a function");
-        let parent = block.get_parent().unwrap();
-
-        let modify_block = env
-            .context
-            .append_basic_block(parent, "inc_refcount_modify");
-        let cont_block = env.context.append_basic_block(parent, "inc_refcount_cont");
-
-        env.builder
-            .build_conditional_branch(is_static_allocation, cont_block, modify_block);
-
-        {
-            env.builder.position_at_end(modify_block);
-
-            let incremented = builder.build_int_add(refcount, amount, "increment_refcount");
-            self.set_refcount(env, incremented);
-
-            env.builder.build_unconditional_branch(cont_block);
-        }
-
-        env.builder.position_at_end(cont_block);
+        incref_pointer(env, self.value, amount);
     }
 
     pub fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
@@ -229,6 +195,25 @@ impl<'ctx> PointerToRefcount<'ctx> {
     }
 }
 
+fn incref_pointer<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    pointer: PointerValue<'ctx>,
+    amount: IntValue<'ctx>,
+) {
+    call_void_bitcode_fn(
+        env,
+        &[
+            env.builder.build_bitcast(
+                pointer,
+                env.ptr_int().ptr_type(AddressSpace::Generic),
+                "to_isize_ptr",
+            ),
+            amount.into(),
+        ],
+        roc_builtins::bitcode::UTILS_INCREF,
+    );
+}
+
 fn decref_pointer<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer: PointerValue<'ctx>,
@@ -280,7 +265,7 @@ fn modify_refcount_struct<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let layout = Layout::Struct(layouts);
+    let layout = Layout::struct_no_name_order(layouts);
 
     let (_, fn_name) = function_name_from_mode(
         layout_ids,
@@ -440,7 +425,7 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
         }
         Set(element_layout) => {
             let key_layout = element_layout;
-            let value_layout = &Layout::Struct(&[]);
+            let value_layout = &Layout::UNIT;
 
             let function = modify_refcount_dict(
                 env,
@@ -589,6 +574,12 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             modify_refcount_builtin(env, layout_ids, mode, when_recursive, layout, builtin)
         }
 
+        Boxed(inner) => {
+            let function = modify_refcount_boxed(env, layout_ids, mode, inner);
+
+            Some(function)
+        }
+
         Union(variant) => {
             use UnionLayout::*;
 
@@ -619,8 +610,9 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             }
         }
 
-        Struct(layouts) => {
-            let function = modify_refcount_struct(env, layout_ids, layouts, mode, when_recursive);
+        Struct { field_layouts, .. } => {
+            let function =
+                modify_refcount_struct(env, layout_ids, field_layouts, mode, when_recursive);
 
             Some(function)
         }
@@ -678,7 +670,7 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, layout);
+            let basic_type = argument_type_from_layout(env, layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_list_help(
@@ -815,7 +807,7 @@ fn modify_refcount_str<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, layout);
+            let basic_type = argument_type_from_layout(env, layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_str_help(env, mode, layout, function_value);
@@ -855,17 +847,26 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
 
     let parent = fn_val;
 
+    let arg_val = if Layout::Builtin(Builtin::Str).is_passed_by_reference(env.target_info) {
+        env.builder
+            .build_load(arg_val.into_pointer_value(), "load_str_to_stack")
+    } else {
+        // it's already a struct, just do nothing
+        debug_assert!(arg_val.is_struct_value());
+        arg_val
+    };
     let str_wrapper = arg_val.into_struct_value();
-    let len = builder
-        .build_extract_value(str_wrapper, Builtin::WRAPPER_LEN, "read_str_ptr")
+
+    let capacity = builder
+        .build_extract_value(str_wrapper, Builtin::WRAPPER_CAPACITY, "read_str_capacity")
         .unwrap()
         .into_int_value();
 
-    // Small strings have 1 as the first bit of length, making them negative.
+    // Small strings have 1 as the first bit of capacity, making them negative.
     // Thus, to check for big and non empty, just needs a signed len > 0.
     let is_big_and_non_empty = builder.build_int_compare(
         IntPredicate::SGT,
-        len,
+        capacity,
         env.ptr_int().const_zero(),
         "is_big_str",
     );
@@ -884,6 +885,76 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     builder.build_unconditional_branch(cont_block);
 
     builder.position_at_end(cont_block);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
+fn modify_refcount_boxed<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
+    inner_layout: &'a Layout<'a>,
+) -> FunctionValue<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let boxed_layout = env.arena.alloc(Layout::Boxed(inner_layout));
+
+    let (_, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_boxed",
+        "decrement_boxed",
+        boxed_layout,
+        mode,
+    );
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let basic_type = basic_type_from_layout(env, boxed_layout);
+            let function_value = build_header(env, basic_type, mode, &fn_name);
+
+            modify_refcount_box_help(env, mode, inner_layout, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder
+        .set_current_debug_location(env.context, di_location);
+
+    function
+}
+
+fn modify_refcount_box_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    mode: Mode,
+    inner_layout: &Layout<'a>,
+    fn_val: FunctionValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Add a basic block for the entry point
+    let entry = ctx.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, fn_val);
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
+
+    let boxed = arg_val.into_pointer_value();
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, boxed);
+    let call_mode = mode_to_call_mode(fn_val, mode);
+    let boxed_layout = Layout::Boxed(inner_layout);
+    refcount_ptr.modify(call_mode, &boxed_layout, env);
 
     // this function returns void
     builder.build_return(None);
@@ -1312,7 +1383,8 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
 
         env.builder.position_at_end(block);
 
-        let wrapper_type = basic_type_from_layout(env, &Layout::Struct(field_layouts));
+        let wrapper_type =
+            basic_type_from_layout(env, &Layout::struct_no_name_order(field_layouts));
 
         // cast the opaque pointer to a pointer of the correct shape
         let struct_ptr = env
@@ -1354,9 +1426,8 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                     .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
                     .unwrap();
 
-                let field = env
-                    .builder
-                    .build_load(elem_pointer, "decrement_struct_field");
+                let field =
+                    load_roc_value(env, *field_layout, elem_pointer, "decrement_struct_field");
 
                 deferred_nonrec.push((field, field_layout));
             }
@@ -1616,7 +1687,8 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     when_recursive: &WhenRecursive<'a>,
     fields: &'a [&'a [Layout<'a>]],
 ) -> FunctionValue<'ctx> {
-    let layout = Layout::Union(UnionLayout::NonRecursive(fields));
+    let union_layout = UnionLayout::NonRecursive(fields);
+    let layout = Layout::Union(union_layout);
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
@@ -1633,7 +1705,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout_1(env, &layout);
+            let basic_type = argument_type_from_union_layout(env, &union_layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_union_help(
@@ -1697,9 +1769,9 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         .build_load(tag_id_ptr, "load_tag_id")
         .into_int_value();
 
-    let tag_id_u8 = env
-        .builder
-        .build_int_cast(tag_id, env.context.i8_type(), "tag_id_u8");
+    let tag_id_u8 =
+        env.builder
+            .build_int_cast_sign_flag(tag_id, env.context.i8_type(), false, "tag_id_u8");
 
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
@@ -1720,7 +1792,8 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         let block = env.context.append_basic_block(parent, "tag_id_modify");
         env.builder.position_at_end(block);
 
-        let wrapper_type = basic_type_from_layout(env, &Layout::Struct(field_layouts));
+        let wrapper_type =
+            basic_type_from_layout(env, &Layout::struct_no_name_order(field_layouts));
 
         debug_assert!(wrapper_type.is_struct_type());
         let opaque_tag_data_ptr = env
@@ -1743,7 +1816,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
                     .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
                     .unwrap();
 
-                let field_value = if field_layout.is_passed_by_reference() {
+                let field_value = if field_layout.is_passed_by_reference(env.target_info) {
                     field_ptr.into()
                 } else {
                     env.builder.build_load(field_ptr, "field_value")
