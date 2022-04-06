@@ -83,11 +83,12 @@ pub struct ElemId(*const RocElemEntry);
 
 #[repr(C)]
 pub union RocElemEntry {
-    pub rect: ManuallyDrop<Rgba>,
+    pub rect: ManuallyDrop<ButtonStyles>,
     pub text: ManuallyDrop<RocStr>,
 }
 
 #[repr(u8)]
+#[allow(unused)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RocElemTag {
     Rect = 0,
