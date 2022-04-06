@@ -1,9 +1,9 @@
-use crate::ast::Pattern;
+use crate::ast::{Has, Pattern};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, optional, specialize, specialize_ref, word1, EPattern, PInParens, PRecord,
+    backtrackable, optional, specialize, specialize_ref, then, word1, EPattern, PInParens, PRecord,
     ParseResult, Parser,
 };
 use crate::state::State;
@@ -68,30 +68,61 @@ pub fn loc_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>
 fn loc_tag_pattern_args_help<'a>(
     min_indent: u32,
 ) -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
-    zero_or_more!(loc_tag_pattern_arg(min_indent))
+    zero_or_more!(loc_tag_pattern_arg(min_indent, false))
 }
 
-fn loc_tag_pattern_arg<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+/// Like `loc_tag_pattern_args_help`, but stops if a "has" keyword is seen (indicating an ability).
+fn loc_type_def_tag_pattern_args_help<'a>(
+    min_indent: u32,
+) -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
+    zero_or_more!(loc_tag_pattern_arg(min_indent, true))
+}
+
+fn loc_tag_pattern_arg<'a>(
+    min_indent: u32,
+    stop_on_has_kw: bool,
+) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     // Don't parse operators, because they have a higher precedence than function application.
     // If we encounter one, we're done parsing function args!
-    move |arena, state| {
-        let (_, spaces, state) =
-            backtrackable(space0_e(min_indent, EPattern::IndentStart)).parse(arena, state)?;
+    move |arena, original_state: State<'a>| {
+        let (_, spaces, state) = backtrackable(space0_e(min_indent, EPattern::IndentStart))
+            .parse(arena, original_state.clone())?;
 
         let (_, loc_pat, state) = loc_parse_tag_pattern_arg(min_indent, arena, state)?;
 
         let Loc { region, value } = loc_pat;
 
-        Ok((
-            MadeProgress,
-            if spaces.is_empty() {
-                Loc::at(region, value)
-            } else {
-                Loc::at(region, Pattern::SpaceBefore(arena.alloc(value), spaces))
-            },
-            state,
-        ))
+        if stop_on_has_kw && matches!(value, Pattern::Identifier("has")) {
+            Err((
+                NoProgress,
+                EPattern::End(original_state.pos()),
+                original_state,
+            ))
+        } else {
+            Ok((
+                MadeProgress,
+                if spaces.is_empty() {
+                    Loc::at(region, value)
+                } else {
+                    Loc::at(region, Pattern::SpaceBefore(arena.alloc(value), spaces))
+                },
+                state,
+            ))
+        }
     }
+}
+
+pub fn loc_has_parser<'a>(min_indent: u32) -> impl Parser<'a, Loc<Has<'a>>, EPattern<'a>> {
+    then(
+        loc_tag_pattern_arg(min_indent, false),
+        |_arena, state, progress, pattern| {
+            if matches!(pattern.value, Pattern::Identifier("has")) {
+                Ok((progress, Loc::at(pattern.region, Has::Has), state))
+            } else {
+                Err((progress, EPattern::End(state.pos()), state))
+            }
+        },
+    )
 }
 
 fn loc_parse_tag_pattern_arg<'a>(
@@ -191,7 +222,7 @@ fn loc_ident_pattern_help<'a>(
                 // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
                 if can_have_arguments {
                     let (_, loc_args, state) =
-                        loc_tag_pattern_args_help(min_indent).parse(arena, state)?;
+                        loc_type_def_tag_pattern_args_help(min_indent).parse(arena, state)?;
 
                     if loc_args.is_empty() {
                         Ok((MadeProgress, loc_tag, state))

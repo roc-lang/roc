@@ -126,6 +126,7 @@ mod test_parse {
         pass/ability_single_line.expr,
         pass/ability_multi_line.expr,
         pass/ability_demand_signature_is_multiline.expr,
+        pass/ability_two_in_a_row.expr,
         pass/add_var_with_spaces.expr,
         pass/add_with_spaces.expr,
         pass/annotated_record_destructure.expr,

@@ -10,7 +10,7 @@ use crate::parser::{
     trailing_sep_by0, word1, word2, EExpect, EExpr, EIf, EInParens, ELambda, EList, ENumber,
     EPattern, ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
 };
-use crate::pattern::loc_closure_param;
+use crate::pattern::{loc_closure_param, loc_has_parser};
 use crate::state::State;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
@@ -858,55 +858,89 @@ fn parse_defs_end<'a>(
             // a hacky way to get expression-based error messages. TODO fix this
             Ok((NoProgress, def_state, initial))
         }
-        Ok((_, loc_pattern, state)) => match operator().parse(arena, state) {
-            Ok((_, BinOp::Assignment, state)) => {
-                let parse_def_expr = space0_before_e(
-                    move |a, s| parse_loc_expr(min_indent + 1, a, s),
-                    min_indent,
-                    EExpr::IndentEnd,
-                );
-
-                let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state)?;
-
-                append_body_definition(
-                    arena,
-                    &mut def_state.defs,
-                    def_state.spaces_after,
-                    loc_pattern,
-                    loc_def_expr,
-                );
-
-                parse_defs_end(options, column, def_state, arena, state)
-            }
-            Ok((_, op @ (BinOp::IsAliasType | BinOp::IsOpaqueType), state)) => {
-                let (_, ann_type, state) = specialize(
-                    EExpr::Type,
-                    space0_before_e(
-                        type_annotation::located_help(min_indent + 1, false),
-                        min_indent + 1,
-                        EType::TIndentStart,
+        Ok((_, loc_pattern, state)) => {
+            // First let's check whether this is an ability definition.
+            if let Loc {
+                value:
+                    Pattern::Apply(
+                        loc_name @ Loc {
+                            value: Pattern::GlobalTag(name),
+                            ..
+                        },
+                        args,
                     ),
-                )
-                .parse(arena, state)?;
+                ..
+            } = loc_pattern
+            {
+                if let Ok((_, loc_has, state)) =
+                    loc_has_parser(min_indent).parse(arena, state.clone())
+                {
+                    let (_, loc_def, state) = finish_parsing_ability_def(
+                        start_column,
+                        Loc::at(loc_name.region, name),
+                        args,
+                        loc_has,
+                        arena,
+                        state,
+                    )?;
 
-                append_annotation_definition(
-                    arena,
-                    &mut def_state.defs,
-                    def_state.spaces_after,
-                    loc_pattern,
-                    ann_type,
-                    match op {
-                        BinOp::IsAliasType => TypeKind::Alias,
-                        BinOp::IsOpaqueType => TypeKind::Opaque,
-                        _ => unreachable!(),
-                    },
-                );
+                    def_state.defs.push(loc_def);
 
-                parse_defs_end(options, column, def_state, arena, state)
+                    return parse_defs_end(options, column, def_state, arena, state);
+                }
             }
 
-            _ => Ok((MadeProgress, def_state, initial)),
-        },
+            // Otherwise, this is a def or alias.
+            match operator().parse(arena, state) {
+                Ok((_, BinOp::Assignment, state)) => {
+                    let parse_def_expr = space0_before_e(
+                        move |a, s| parse_loc_expr(min_indent + 1, a, s),
+                        min_indent,
+                        EExpr::IndentEnd,
+                    );
+
+                    let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state)?;
+
+                    append_body_definition(
+                        arena,
+                        &mut def_state.defs,
+                        def_state.spaces_after,
+                        loc_pattern,
+                        loc_def_expr,
+                    );
+
+                    parse_defs_end(options, column, def_state, arena, state)
+                }
+                Ok((_, op @ (BinOp::IsAliasType | BinOp::IsOpaqueType), state)) => {
+                    let (_, ann_type, state) = specialize(
+                        EExpr::Type,
+                        space0_before_e(
+                            type_annotation::located_help(min_indent + 1, false),
+                            min_indent + 1,
+                            EType::TIndentStart,
+                        ),
+                    )
+                    .parse(arena, state)?;
+
+                    append_annotation_definition(
+                        arena,
+                        &mut def_state.defs,
+                        def_state.spaces_after,
+                        loc_pattern,
+                        ann_type,
+                        match op {
+                            BinOp::IsAliasType => TypeKind::Alias,
+                            BinOp::IsOpaqueType => TypeKind::Opaque,
+                            _ => unreachable!(),
+                        },
+                    );
+
+                    parse_defs_end(options, column, def_state, arena, state)
+                }
+
+                _ => Ok((MadeProgress, def_state, initial)),
+            }
+        }
     }
 }
 
@@ -1190,15 +1224,14 @@ mod ability {
     }
 }
 
-fn finish_parsing_ability<'a>(
+fn finish_parsing_ability_def<'a>(
     start_column: u32,
-    options: ExprParseOptions,
     name: Loc<&'a str>,
     args: &'a [Loc<Pattern<'a>>],
     loc_has: Loc<Has<'a>>,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+) -> ParseResult<'a, &'a Loc<Def<'a>>, EExpr<'a>> {
     let mut demands = Vec::with_capacity_in(2, arena);
 
     let min_indent_for_demand = start_column + 1;
@@ -1240,9 +1273,24 @@ fn finish_parsing_ability<'a>(
     let def = Def::Ability {
         header: TypeHeader { name, vars: args },
         loc_has,
-        demands: demands.into_bump_slice(),
+        members: demands.into_bump_slice(),
     };
     let loc_def = &*(arena.alloc(Loc::at(def_region, def)));
+
+    Ok((MadeProgress, loc_def, state))
+}
+
+fn finish_parsing_ability<'a>(
+    start_column: u32,
+    options: ExprParseOptions,
+    name: Loc<&'a str>,
+    args: &'a [Loc<Pattern<'a>>],
+    loc_has: Loc<Has<'a>>,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let (_, loc_def, state) =
+        finish_parsing_ability_def(start_column, name, args, loc_has, arena, state)?;
 
     let def_state = DefState {
         defs: bumpalo::vec![in arena; loc_def],
