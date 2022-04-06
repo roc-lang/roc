@@ -81,7 +81,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ElemId(*const RocElemEntry);
 
-#[repr(C)]
+#[repr(packed)] // TODO this should be repr(C) but it's repr(packed) to work around https://github.com/rtfeldman/roc/issues/2803
 pub union RocElemEntry {
     pub rect: ManuallyDrop<ButtonStyles>,
     pub text: ManuallyDrop<RocStr>,
