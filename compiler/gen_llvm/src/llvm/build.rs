@@ -5337,7 +5337,17 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
 
-            call_bitcode_fn(env, &[string], intrinsic)
+            let result = call_bitcode_fn(env, &[string], intrinsic);
+
+            // zig passes the result as a packed integer sometimes, instead of a struct. So we cast
+            let expected_type = basic_type_from_layout(env, layout);
+            let actual_type = result.get_type();
+
+            if expected_type != actual_type {
+                complex_bitcast_check_size(env, result, expected_type, "str_to_num_cast")
+            } else {
+                result
+            }
         }
         StrFromInt => {
             // Str.fromInt : Int -> Str
