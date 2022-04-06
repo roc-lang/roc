@@ -800,7 +800,7 @@ fn list_walk_until_sum() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn list_walk_imlements_position() {
+fn list_walk_implements_position() {
     assert_evals_to!(
         r#"
         Option a : [ Some a, None ]

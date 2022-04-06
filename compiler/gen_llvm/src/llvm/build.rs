@@ -5215,6 +5215,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         argument_layouts,
                         Layout::Builtin(Builtin::Bool),
                     );
+
                     list_find_unsafe(env, layout_ids, roc_function_call, list, element_layout)
                 }
                 _ => unreachable!("invalid list layout"),

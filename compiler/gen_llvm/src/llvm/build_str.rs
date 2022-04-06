@@ -1,5 +1,5 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_str_bitcode_fn, call_void_bitcode_fn};
-use crate::llvm::build::{complex_bitcast, Env, Scope};
+use crate::llvm::build::{Env, Scope};
 use crate::llvm::build_list::{allocate_list, pass_update_mode, store_list};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue, StructValue};
