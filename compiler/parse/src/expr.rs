@@ -1074,14 +1074,14 @@ fn finish_parsing_alias_or_opaque<'a>(
 mod ability {
     use super::*;
     use crate::{
-        ast::{AbilityDemand, Spaceable, Spaced},
+        ast::{AbilityMember, Spaceable, Spaced},
         parser::EAbility,
     };
 
     /// Parses a single ability demand line; see `parse_demand`.
     fn parse_demand_help<'a>(
         start_column: u32,
-    ) -> impl Parser<'a, AbilityDemand<'a>, EAbility<'a>> {
+    ) -> impl Parser<'a, AbilityMember<'a>, EAbility<'a>> {
         map!(
             and!(
                 specialize(|_, pos| EAbility::DemandName(pos), loc!(lowercase_ident())),
@@ -1099,7 +1099,7 @@ mod ability {
                 )
             ),
             |(name, typ): (Loc<&'a str>, Loc<TypeAnnotation<'a>>)| {
-                AbilityDemand {
+                AbilityMember {
                     name: name.map_owned(Spaced::Item),
                     typ,
                 }
@@ -1117,7 +1117,7 @@ mod ability {
     /// This is basically the same as parsing a free-floating annotation, but with stricter rules.
     pub fn parse_demand<'a>(
         indent: IndentLevel,
-    ) -> impl Parser<'a, (u32, AbilityDemand<'a>), EAbility<'a>> {
+    ) -> impl Parser<'a, (u32, AbilityMember<'a>), EAbility<'a>> {
         move |arena, state: State<'a>| {
             let initial = state.clone();
 
