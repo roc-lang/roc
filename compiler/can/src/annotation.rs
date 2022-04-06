@@ -775,7 +775,7 @@ fn can_annotation_help(
                 region: Region::across_all(clauses.iter().map(|clause| &clause.region)),
             });
 
-            return Type::Erroneous(Problem::CanonicalizationProblem);
+            Type::Erroneous(Problem::CanonicalizationProblem)
         }
         Malformed(string) => {
             malformed(env, region, string);
