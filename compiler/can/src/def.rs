@@ -1,4 +1,6 @@
+use crate::abilities::AbilitiesStore;
 use crate::annotation::canonicalize_annotation;
+use crate::annotation::canonicalize_annotation_with_possible_clauses;
 use crate::annotation::IntroducedVariables;
 use crate::env::Env;
 use crate::expr::ClosureData;
@@ -10,10 +12,11 @@ use crate::scope::create_alias;
 use crate::scope::Scope;
 use roc_collections::all::ImSet;
 use roc_collections::all::{default_hasher, ImEntry, ImMap, MutMap, MutSet, SendMap};
-use roc_error_macros::todo_abilities;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
+use roc_parse::ast::AbilityMember;
+use roc_parse::ast::ExtractSpaces;
 use roc_parse::ast::TypeHeader;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{CycleEntry, Problem, RuntimeError};
@@ -86,10 +89,19 @@ enum PendingTypeDef<'a> {
         kind: AliasKind,
     },
 
+    Ability {
+        name: Loc<Symbol>,
+        members: &'a [ast::AbilityMember<'a>],
+    },
+
     /// An invalid alias, that is ignored in the rest of the pipeline
     /// e.g. a shadowed alias, or a definition like `MyAlias 1 : Int`
     /// with an incorrect pattern
     InvalidAlias { kind: AliasKind },
+
+    /// An invalid ability, that is ignored in the rest of the pipeline.
+    /// E.g. a shadowed ability, or with a bad definition.
+    InvalidAbility,
 }
 
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
@@ -239,9 +251,19 @@ pub fn canonicalize_defs<'a>(
         env.home.register_debug_idents(&env.ident_ids);
     }
 
-    let mut aliases = SendMap::default();
+    enum TypeDef<'a> {
+        AliasLike(
+            Loc<Symbol>,
+            Vec<Loc<Lowercase>>,
+            &'a Loc<ast::TypeAnnotation<'a>>,
+            AliasKind,
+        ),
+        Ability(Loc<Symbol>, &'a [AbilityMember<'a>]),
+    }
 
-    let mut alias_defs = MutMap::default();
+    let mut type_defs = MutMap::default();
+    let mut abilities_in_scope = Vec::new();
+
     let mut referenced_type_symbols = MutMap::default();
 
     for pending_def in pending_type_defs.into_iter() {
@@ -260,93 +282,137 @@ pub fn canonicalize_defs<'a>(
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
 
-                alias_defs.insert(name.value, (name, vars, ann, kind));
+                type_defs.insert(name.value, TypeDef::AliasLike(name, vars, ann, kind));
             }
-            PendingTypeDef::InvalidAlias { .. } => { /* ignore */ }
+            PendingTypeDef::Ability { name, members } => {
+                let mut referenced_symbols = Vec::with_capacity(2);
+
+                for member in members.iter() {
+                    // Add the referenced type symbols of each member function. We need to make
+                    // sure those are processed first before we resolve the whole ability
+                    // definition.
+                    referenced_symbols.extend(crate::annotation::find_type_def_symbols(
+                        env.home,
+                        &mut env.ident_ids,
+                        &member.typ.value,
+                    ));
+                }
+
+                referenced_type_symbols.insert(name.value, referenced_symbols);
+                type_defs.insert(name.value, TypeDef::Ability(name, members));
+                abilities_in_scope.push(name.value);
+            }
+            PendingTypeDef::InvalidAlias { .. } | PendingTypeDef::InvalidAbility { .. } => { /* ignore */
+            }
         }
     }
 
     let sorted = sort_type_defs_before_introduction(referenced_type_symbols);
+    let mut aliases = SendMap::default();
+    let mut abilities = MutMap::default();
 
     for type_name in sorted {
-        let (name, vars, ann, kind) = alias_defs.remove(&type_name).unwrap();
+        match type_defs.remove(&type_name).unwrap() {
+            TypeDef::AliasLike(name, vars, ann, kind) => {
+                let symbol = name.value;
+                let can_ann =
+                    canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
 
-        let symbol = name.value;
-        let can_ann = canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
+                // Does this alias reference any abilities? For now, we don't permit that.
+                let ability_references = can_ann
+                    .references
+                    .iter()
+                    .filter_map(|&ty_ref| abilities_in_scope.iter().find(|&&name| name == ty_ref))
+                    .collect::<Vec<_>>();
 
-        // Record all the annotation's references in output.references.lookups
-        for symbol in can_ann.references {
-            output.references.type_lookups.insert(symbol);
-            output.references.referenced_type_defs.insert(symbol);
-        }
-
-        let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
-        let mut is_phantom = false;
-
-        let mut named = can_ann.introduced_variables.named;
-        for loc_lowercase in vars.iter() {
-            match named.iter().position(|nv| nv.name == loc_lowercase.value) {
-                Some(index) => {
-                    // This is a valid lowercase rigid var for the type def.
-                    let named_variable = named.swap_remove(index);
-
-                    can_vars.push(Loc {
-                        value: (named_variable.name, named_variable.variable),
-                        region: loc_lowercase.region,
+                if let Some(one_ability_ref) = ability_references.first() {
+                    env.problem(Problem::AliasUsesAbility {
+                        loc_name: name,
+                        ability: **one_ability_ref,
                     });
                 }
-                None => {
-                    is_phantom = true;
 
-                    env.problems.push(Problem::PhantomTypeArgument {
+                // Record all the annotation's references in output.references.lookups
+                for symbol in can_ann.references {
+                    output.references.type_lookups.insert(symbol);
+                    output.references.referenced_type_defs.insert(symbol);
+                }
+
+                let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
+                let mut is_phantom = false;
+
+                let mut named = can_ann.introduced_variables.named;
+                for loc_lowercase in vars.iter() {
+                    match named.iter().position(|nv| nv.name == loc_lowercase.value) {
+                        Some(index) => {
+                            // This is a valid lowercase rigid var for the type def.
+                            let named_variable = named.swap_remove(index);
+
+                            can_vars.push(Loc {
+                                value: (named_variable.name, named_variable.variable),
+                                region: loc_lowercase.region,
+                            });
+                        }
+                        None => {
+                            is_phantom = true;
+
+                            env.problems.push(Problem::PhantomTypeArgument {
+                                typ: symbol,
+                                variable_region: loc_lowercase.region,
+                                variable_name: loc_lowercase.value.clone(),
+                            });
+                        }
+                    }
+                }
+
+                if is_phantom {
+                    // Bail out
+                    continue;
+                }
+
+                let IntroducedVariables {
+                    wildcards,
+                    inferred,
+                    ..
+                } = can_ann.introduced_variables;
+                let num_unbound = named.len() + wildcards.len() + inferred.len();
+                if num_unbound > 0 {
+                    let one_occurrence = named
+                        .iter()
+                        .map(|nv| Loc::at(nv.first_seen, nv.variable))
+                        .chain(wildcards)
+                        .chain(inferred)
+                        .next()
+                        .unwrap()
+                        .region;
+
+                    env.problems.push(Problem::UnboundTypeVariable {
                         typ: symbol,
-                        variable_region: loc_lowercase.region,
-                        variable_name: loc_lowercase.value.clone(),
+                        num_unbound,
+                        one_occurrence,
+                        kind,
                     });
+
+                    // Bail out
+                    continue;
                 }
+
+                let alias = create_alias(
+                    symbol,
+                    name.region,
+                    can_vars.clone(),
+                    can_ann.typ.clone(),
+                    kind,
+                );
+                aliases.insert(symbol, alias.clone());
+            }
+
+            TypeDef::Ability(name, members) => {
+                // For now we enforce that aliases cannot reference abilities, so let's wait to
+                // resolve ability definitions until aliases are resolved and in scope below.
+                abilities.insert(name.value, (name, members));
             }
         }
-
-        if is_phantom {
-            // Bail out
-            continue;
-        }
-
-        let IntroducedVariables {
-            wildcards,
-            inferred,
-            ..
-        } = can_ann.introduced_variables;
-        let num_unbound = named.len() + wildcards.len() + inferred.len();
-        if num_unbound > 0 {
-            let one_occurrence = named
-                .iter()
-                .map(|nv| Loc::at(nv.first_seen, nv.variable))
-                .chain(wildcards)
-                .chain(inferred)
-                .next()
-                .unwrap()
-                .region;
-
-            env.problems.push(Problem::UnboundTypeVariable {
-                typ: symbol,
-                num_unbound,
-                one_occurrence,
-                kind,
-            });
-
-            // Bail out
-            continue;
-        }
-
-        let alias = create_alias(
-            symbol,
-            name.region,
-            can_vars.clone(),
-            can_ann.typ.clone(),
-            kind,
-        );
-        aliases.insert(symbol, alias.clone());
     }
 
     // Now that we know the alias dependency graph, we can try to insert recursion variables
@@ -360,6 +426,94 @@ pub fn canonicalize_defs<'a>(
             alias.typ.clone(),
             alias.kind,
         );
+    }
+
+    // Now we can go through and resolve all pending abilities, to add them to scope.
+    let mut abilities_store = AbilitiesStore::default();
+    for (loc_ability_name, members) in abilities.into_values() {
+        let mut can_members = Vec::with_capacity(members.len());
+
+        for member in members {
+            let (member_annot, clauses) = canonicalize_annotation_with_possible_clauses(
+                env,
+                &mut scope,
+                &member.typ.value,
+                member.typ.region,
+                var_store,
+                &abilities_in_scope,
+            );
+
+            // Record all the annotation's references in output.references.lookups
+            for symbol in member_annot.references {
+                output.references.type_lookups.insert(symbol);
+                output.references.referenced_type_defs.insert(symbol);
+            }
+
+            let member_name = member.name.extract_spaces().item;
+
+            let member_sym = match scope.introduce(
+                member_name.into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                member.name.region,
+            ) {
+                Ok(sym) => sym,
+                Err((original_region, shadow, _new_symbol)) => {
+                    env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
+                        original_region,
+                        shadow,
+                    });
+                    // Pretend the member isn't a part of the ability
+                    continue;
+                }
+            };
+
+            // What variables in the annotation are bound to the parent ability, and what variables
+            // are bound to some other ability?
+            let (variables_bound_to_ability, variables_bound_to_other_abilities): (Vec<_>, Vec<_>) =
+                clauses
+                    .into_iter()
+                    .partition(|has_clause| has_clause.value.ability == loc_ability_name.value);
+
+            let mut bad_has_clauses = false;
+
+            if variables_bound_to_ability.is_empty() {
+                // There are no variables bound to the parent ability - then this member doesn't
+                // need to be a part of the ability.
+                env.problem(Problem::AbilityMemberMissingHasClause {
+                    member: member_sym,
+                    ability: loc_ability_name.value,
+                    region: member.name.region,
+                });
+                bad_has_clauses = true;
+            }
+
+            if !variables_bound_to_other_abilities.is_empty() {
+                // Disallow variables bound to other abilities, for now.
+                for bad_clause in variables_bound_to_other_abilities.iter() {
+                    env.problem(Problem::AbilityMemberBindsExternalAbility {
+                        member: member_sym,
+                        ability: loc_ability_name.value,
+                        region: bad_clause.region,
+                    });
+                }
+                bad_has_clauses = true;
+            }
+
+            if bad_has_clauses {
+                // Pretend the member isn't a part of the ability
+                continue;
+            }
+
+            let has_clauses = variables_bound_to_ability
+                .into_iter()
+                .map(|clause| clause.value)
+                .collect();
+            can_members.push((member_sym, member_annot.typ, has_clauses));
+        }
+
+        // Store what symbols a type must define implementations for to have this ability.
+        abilities_store.register_ability(loc_ability_name.value, can_members);
     }
 
     // Now that we have the scope completely assembled, and shadowing resolved,
@@ -1551,7 +1705,46 @@ fn to_pending_type_def<'a>(
             }
         }
 
-        Ability { .. } => todo_abilities!(),
+        Ability {
+            header: TypeHeader { name, vars },
+            members,
+            loc_has: _,
+        } => {
+            let name = match scope.introduce_without_shadow_symbol(
+                name.value.into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                name.region,
+            ) {
+                Ok(symbol) => Loc::at(name.region, symbol),
+                Err((original_region, shadowed_symbol)) => {
+                    env.problem(Problem::ShadowingInAnnotation {
+                        original_region,
+                        shadow: shadowed_symbol,
+                    });
+                    return Some((Output::default(), PendingTypeDef::InvalidAbility));
+                }
+            };
+
+            if !vars.is_empty() {
+                // Disallow ability type arguments, at least for now.
+                let variables_region = Region::across_all(vars.iter().map(|v| &v.region));
+
+                env.problem(Problem::AbilityHasTypeVariables {
+                    name: name.value,
+                    variables_region,
+                });
+                return Some((Output::default(), PendingTypeDef::InvalidAbility));
+            }
+
+            let pending_ability = PendingTypeDef::Ability {
+                name,
+                // We'll handle adding the member symbols later on when we do all value defs.
+                members,
+            };
+
+            Some((Output::default(), pending_ability))
+        }
     }
 }
 

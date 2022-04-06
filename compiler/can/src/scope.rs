@@ -19,6 +19,9 @@ pub struct Scope {
     /// The type aliases currently in scope
     pub aliases: SendMap<Symbol, Alias>,
 
+    /// The abilities currently in scope, and their implementors.
+    pub abilities: SendMap<Symbol, Region>,
+
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
     home: ModuleId,
@@ -62,6 +65,8 @@ impl Scope {
             idents: Symbol::default_in_scope(),
             symbols: SendMap::default(),
             aliases,
+            // TODO(abilities): default abilities in scope
+            abilities: SendMap::default(),
         }
     }
 
@@ -176,6 +181,11 @@ impl Scope {
     ///
     /// Returns Err if this would shadow an existing ident, including the
     /// Symbol and Region of the ident we already had in scope under that name.
+    ///
+    /// If this ident shadows an existing one, a new ident is allocated for the shadow. This is
+    /// done so that all identifiers have unique symbols, which is important in particular when
+    /// we generate code for value identifiers.
+    /// If this behavior is undesirable, use [`Self::introduce_without_shadow_symbol`].
     pub fn introduce(
         &mut self,
         ident: Ident,
@@ -198,23 +208,51 @@ impl Scope {
 
                 Err((original_region, shadow, symbol))
             }
-            None => {
-                // If this IdentId was already added previously
-                // when the value was exposed in the module header,
-                // use that existing IdentId. Otherwise, create a fresh one.
-                let ident_id = match exposed_ident_ids.get_id(&ident) {
-                    Some(ident_id) => ident_id,
-                    None => all_ident_ids.add(ident.clone()),
-                };
-
-                let symbol = Symbol::new(self.home, ident_id);
-
-                self.symbols.insert(symbol, region);
-                self.idents.insert(ident, (symbol, region));
-
-                Ok(symbol)
-            }
+            None => Ok(self.commit_introduction(ident, exposed_ident_ids, all_ident_ids, region)),
         }
+    }
+
+    /// Like [Self::introduce], but does not introduce a new symbol for the shadowing symbol.
+    pub fn introduce_without_shadow_symbol(
+        &mut self,
+        ident: Ident,
+        exposed_ident_ids: &IdentIds,
+        all_ident_ids: &mut IdentIds,
+        region: Region,
+    ) -> Result<Symbol, (Region, Loc<Ident>)> {
+        match self.idents.get(&ident) {
+            Some(&(_, original_region)) => {
+                let shadow = Loc {
+                    value: ident.clone(),
+                    region,
+                };
+                Err((original_region, shadow))
+            }
+            None => Ok(self.commit_introduction(ident, exposed_ident_ids, all_ident_ids, region)),
+        }
+    }
+
+    fn commit_introduction(
+        &mut self,
+        ident: Ident,
+        exposed_ident_ids: &IdentIds,
+        all_ident_ids: &mut IdentIds,
+        region: Region,
+    ) -> Symbol {
+        // If this IdentId was already added previously
+        // when the value was exposed in the module header,
+        // use that existing IdentId. Otherwise, create a fresh one.
+        let ident_id = match exposed_ident_ids.get_id(&ident) {
+            Some(ident_id) => ident_id,
+            None => all_ident_ids.add(ident.clone()),
+        };
+
+        let symbol = Symbol::new(self.home, ident_id);
+
+        self.symbols.insert(symbol, region);
+        self.idents.insert(ident, (symbol, region));
+
+        symbol
     }
 
     /// Ignore an identifier.

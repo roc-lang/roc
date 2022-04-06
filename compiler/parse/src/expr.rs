@@ -866,24 +866,26 @@ fn parse_defs_end<'a>(
         }
         Ok((_, loc_pattern, state)) => {
             // First let's check whether this is an ability definition.
-            if let Loc {
-                value:
-                    Pattern::Apply(
-                        loc_name @ Loc {
-                            value: Pattern::GlobalTag(name),
-                            ..
-                        },
-                        args,
-                    ),
-                ..
-            } = loc_pattern
+            let opt_tag_and_args: Option<(&str, Region, &[Loc<Pattern>])> = match loc_pattern.value
             {
+                Pattern::Apply(
+                    Loc {
+                        value: Pattern::GlobalTag(name),
+                        region,
+                    },
+                    args,
+                ) => Some((name, *region, args)),
+                Pattern::GlobalTag(name) => Some((name, loc_pattern.region, &[])),
+                _ => None,
+            };
+
+            if let Some((name, name_region, args)) = opt_tag_and_args {
                 if let Ok((_, loc_has, state)) =
                     loc_has_parser(min_indent).parse(arena, state.clone())
                 {
                     let (_, loc_def, state) = finish_parsing_ability_def(
                         start_column,
-                        Loc::at(loc_name.region, name),
+                        Loc::at(name_region, name),
                         args,
                         loc_has,
                         arena,

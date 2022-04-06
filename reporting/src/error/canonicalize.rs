@@ -38,6 +38,12 @@ const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE TYPE DECLARED OUTSIDE SCOPE"
 const OPAQUE_NOT_APPLIED: &str = "OPAQUE TYPE NOT APPLIED";
 const OPAQUE_OVER_APPLIED: &str = "OPAQUE TYPE APPLIED TO TOO MANY ARGS";
 const INVALID_EXTENSION_TYPE: &str = "INVALID_EXTENSION_TYPE";
+const ABILITY_HAS_TYPE_VARIABLES: &str = "ABILITY HAS TYPE VARIABLES";
+const HAS_CLAUSE_IS_NOT_AN_ABILITY: &str = "HAS CLAUSE IS NOT AN ABILITY";
+const ALIAS_USES_ABILITY: &str = "ALIAS USES ABILITY";
+const ILLEGAL_HAS_CLAUSE: &str = "ILLEGAL HAS CLAUSE";
+const ABILITY_MEMBER_MISSING_HAS_CLAUSE: &str = "ABILITY MEMBER MISSING HAS CLAUSE";
+const ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE: &str = "ABILITY MEMBER HAS EXTRANEOUS HAS CLAUSE";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -560,6 +566,134 @@ pub fn can_problem<'b>(
             ]);
 
             title = INVALID_EXTENSION_TYPE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AbilityHasTypeVariables {
+            name,
+            variables_region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The definition of the "),
+                    alloc.symbol_unqualified(name),
+                    alloc.reflow(" ability includes type variables:"),
+                ]),
+                alloc.region(lines.convert_region(variables_region)),
+                alloc.reflow(
+                    "Abilities cannot depend on type variables, but their member values can!",
+                ),
+            ]);
+            title = ABILITY_HAS_TYPE_VARIABLES.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::HasClauseIsNotAbility {
+            region: clause_region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.reflow(r#"The type referenced in this "has" clause is not an ability:"#),
+                alloc.region(lines.convert_region(clause_region)),
+            ]);
+            title = HAS_CLAUSE_IS_NOT_AN_ABILITY.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AliasUsesAbility {
+            loc_name: Loc {
+                region,
+                value: name,
+            },
+            ability,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The definition of the "),
+                    alloc.symbol_unqualified(name),
+                    alloc.reflow(" aliases references the ability "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+            ]);
+            title = ALIAS_USES_ABILITY.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::IllegalHasClause { region } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("A "),
+                    alloc.keyword("has"),
+                    alloc.reflow(" clause is not allowed here:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat(vec![
+                    alloc.keyword("has"),
+                    alloc.reflow(" clauses can only be specified on the top-level type annotation of an ability member."),
+                ]),
+            ]);
+            title = ILLEGAL_HAS_CLAUSE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AbilityMemberMissingHasClause {
+            member,
+            ability,
+            region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The definition of the ability member "),
+                    alloc.symbol_unqualified(member),
+                    alloc.reflow(" does not include a "),
+                    alloc.keyword("has"),
+                    alloc.reflow(" clause binding a type variable to the ability "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat(vec![
+                    alloc.reflow("Ability members must include a "),
+                    alloc.keyword("has"),
+                    alloc.reflow(" clause binding a type variable to an ability, like"),
+                ]),
+                alloc.type_block(alloc.concat(vec![
+                    alloc.type_variable("a".into()),
+                    alloc.space(),
+                    alloc.keyword("has"),
+                    alloc.space(),
+                    alloc.symbol_unqualified(ability),
+                ])),
+                alloc.concat(vec![alloc.reflow(
+                    "Otherwise, the function does not need to be part of the ability!",
+                )]),
+            ]);
+            title = ABILITY_MEMBER_MISSING_HAS_CLAUSE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AbilityMemberBindsExternalAbility {
+            member,
+            ability,
+            region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The definition of the ability member "),
+                    alloc.symbol_unqualified(member),
+                    alloc.reflow(" includes a has clause binding an ability it is not a part of:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Currently, ability members can only bind variables to the ability they are a part of."),
+                alloc.concat(vec![
+                    alloc.hint(""),
+                    alloc.reflow("Did you mean to bind the "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(" ability instead?"),
+                ]),
+            ]);
+            title = ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE.to_string();
             severity = Severity::RuntimeError;
         }
     };

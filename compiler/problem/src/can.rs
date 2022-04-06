@@ -95,6 +95,30 @@ pub enum Problem {
         region: Region,
         kind: ExtensionTypeKind,
     },
+    AbilityHasTypeVariables {
+        name: Symbol,
+        variables_region: Region,
+    },
+    HasClauseIsNotAbility {
+        region: Region,
+    },
+    IllegalHasClause {
+        region: Region,
+    },
+    AbilityMemberMissingHasClause {
+        member: Symbol,
+        ability: Symbol,
+        region: Region,
+    },
+    AbilityMemberBindsExternalAbility {
+        member: Symbol,
+        ability: Symbol,
+        region: Region,
+    },
+    AliasUsesAbility {
+        loc_name: Loc<Symbol>,
+        ability: Symbol,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
