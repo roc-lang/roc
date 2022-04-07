@@ -1,6 +1,6 @@
 interface Num
-    exposes 
-        [ 
+    exposes
+        [
             Num,
             Int,
             Float,
@@ -144,8 +144,8 @@ interface Num
     imports [ ]
 
 Num range : [ @Num range ]
-Int range : Num (Integer range) 
-Float range : Num (FloatingPoint range) 
+Int range : Num (Integer range)
+Float range : Num (FloatingPoint range)
 
 Signed128 : [ @Signed128 ]
 Signed64 : [ @Signed64 ]
@@ -167,7 +167,7 @@ I128 : Num (Integer Signed128)
 I64 : Num (Integer Signed64)
 I32 : Num (Integer Signed32)
 I16 : Num (Integer Signed16)
-I8 : Int Signed8 
+I8 : Int Signed8
 
 U128 : Num (Integer Unsigned128)
 U64 : Num (Integer Unsigned64)
@@ -187,7 +187,7 @@ F64 : Num (FloatingPoint Binary64)
 F32 : Num (FloatingPoint Binary32)
 Dec : Num (FloatingPoint Decimal)
 
-# ------- Functions 
+# ------- Functions
 
 toStr : Num * -> Str
 intCast : Int a -> Int b

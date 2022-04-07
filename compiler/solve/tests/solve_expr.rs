@@ -5359,7 +5359,7 @@ mod solve_expr {
                 condition : Bool
 
                 v : Id [ Y Str, Z Str ]
-                v = 
+                v =
                     if condition
                     then $Id (Id 21 (Y "sasha"))
                     else $Id (Id 21 (Z "felix"))
