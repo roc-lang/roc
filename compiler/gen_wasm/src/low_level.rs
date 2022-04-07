@@ -1014,38 +1014,40 @@ pub fn call_higher_order_lowlevel<'a>(
     let inc_fn_ptr = backend.get_fn_table_index(inc_fn_idx);
 
     match op {
-        // List.map : List elem_old, (elem_old -> elem_new) -> List elem_new
+        // List.map : List elem_x, (elem_x -> elem_ret) -> List elem_ret
         ListMap { xs } => {
             let list_layout_in = backend.storage.symbol_layouts[xs];
 
-            let (elem_old, elem_new) = match (list_layout_in, return_layout) {
+            let (elem_x, elem_ret) = match (list_layout_in, return_layout) {
                 (
-                    Layout::Builtin(Builtin::List(elem_old)),
-                    Layout::Builtin(Builtin::List(elem_new)),
-                ) => (elem_old, elem_new),
+                    Layout::Builtin(Builtin::List(elem_x)),
+                    Layout::Builtin(Builtin::List(elem_ret)),
+                ) => (elem_x, elem_ret),
                 _ => unreachable!("invalid layout for List.map arguments"),
             };
-            let (elem_old_size, _) = elem_old.stack_size_and_alignment(TARGET_INFO);
-            let (elem_new_size, elem_new_align) = elem_new.stack_size_and_alignment(TARGET_INFO);
+            let elem_x_size = elem_x.stack_size(TARGET_INFO);
+            let (elem_ret_size, elem_ret_align) = elem_ret.stack_size_and_alignment(TARGET_INFO);
 
             let cb = &mut backend.code_builder;
 
             // Load return pointer & argument values
+            // Wasm signature: (i32, i64, i64, i32, i32, i32, i32, i32, i32, i32) -> nil
             backend.storage.load_symbols(cb, &[return_sym]);
-            backend.storage.load_symbol_zig(cb, *xs);
+            backend.storage.load_symbol_zig(cb, *xs); // list with capacity = 2 x i64 args
             cb.i32_const(wrapper_fn_ptr);
             if closure_data_exists {
                 backend.storage.load_symbols(cb, &[*captured_environment]);
             } else {
+                // Normally, a zero-size arg would be eliminated in code gen, but Zig expects one!
                 cb.i32_const(0); // null pointer
             }
             cb.i32_const(inc_fn_ptr);
             cb.i32_const(*owns_captured_environment as i32);
-            cb.i32_const(elem_new_align as i32); // used for allocating the new list
-            cb.i32_const(elem_old_size as i32);
-            cb.i32_const(elem_new_size as i32);
+            cb.i32_const(elem_ret_align as i32); // used for allocating the new list
+            cb.i32_const(elem_x_size as i32);
+            cb.i32_const(elem_ret_size as i32);
 
-            let num_wasm_args = 9;
+            let num_wasm_args = 10; // 1 return pointer + 8 Zig args + list 2nd i64
             let has_return_val = false;
             backend.call_zig_builtin_after_loading_args(
                 bitcode::LIST_MAP,
