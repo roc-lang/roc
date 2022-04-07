@@ -6,6 +6,4 @@ app "breakout"
 program = { render }
 
 render = \state ->
-    x = []
-
-    x
+    []
