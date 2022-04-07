@@ -1103,3 +1103,17 @@ fn issue_2582_specialize_result_value() {
         r"<function> : Num *, List Str -> Result Str [ ListWasEmpty ]*",
     )
 }
+
+#[test]
+#[cfg(not(feature = "wasm"))]
+fn int_to_float() {
+    expect_success("Num.toF32 42", "42 : F32");
+    expect_success("Num.toF64 123", "123 : F64");
+}
+
+#[test]
+#[cfg(not(feature = "wasm"))]
+fn float_to_float() {
+    expect_success("Num.toF32 123.456", "123.456 : F32");
+    expect_success("Num.toF64 123.456", "123.456 : F64");
+}
