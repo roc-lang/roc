@@ -1,28 +1,32 @@
 SpaceBefore(
     Defs(
         [
-            @18-30 Body(
-                @18-26 RecordDestructure(
-                    [
-                        @20-21 Identifier(
-                            "x",
-                        ),
-                        @23-25 Identifier(
-                            "y",
-                        ),
-                    ],
-                ),
-                @29-30 Num(
-                    "5",
+            @18-30 Value(
+                Body(
+                    @18-26 RecordDestructure(
+                        [
+                            @20-21 Identifier(
+                                "x",
+                            ),
+                            @23-25 Identifier(
+                                "y",
+                            ),
+                        ],
+                    ),
+                    @29-30 Num(
+                        "5",
+                    ),
                 ),
             ),
             @31-36 SpaceBefore(
-                Body(
-                    @31-32 Identifier(
-                        "y",
-                    ),
-                    @35-36 Num(
-                        "6",
+                Value(
+                    Body(
+                        @31-32 Identifier(
+                            "y",
+                        ),
+                        @35-36 Num(
+                            "6",
+                        ),
                     ),
                 ),
                 [

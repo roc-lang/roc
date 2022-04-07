@@ -11,7 +11,7 @@ use roc_fmt::Buf;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::ast::{
     AbilityMember, AssignedField, Collection, Expr, Has, HasClause, Pattern, Spaced, StrLiteral,
-    StrSegment, Tag, TypeAnnotation, TypeHeader, WhenBranch,
+    StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
 };
 use roc_parse::header::{
     AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
@@ -445,54 +445,36 @@ impl<'a, T: RemoveSpaces<'a>> RemoveSpaces<'a> for &'a T {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for Def<'a> {
+impl<'a> RemoveSpaces<'a> for TypeDef<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        use TypeDef::*;
+
         match *self {
-            Def::Annotation(a, b) => {
-                Def::Annotation(a.remove_spaces(arena), b.remove_spaces(arena))
-            }
-            Def::Alias {
+            Alias {
                 header: TypeHeader { name, vars },
                 ann,
-            } => Def::Alias {
+            } => Alias {
                 header: TypeHeader {
                     name: name.remove_spaces(arena),
                     vars: vars.remove_spaces(arena),
                 },
                 ann: ann.remove_spaces(arena),
             },
-            Def::Opaque {
+            Opaque {
                 header: TypeHeader { name, vars },
                 typ,
-            } => Def::Opaque {
+            } => Opaque {
                 header: TypeHeader {
                     name: name.remove_spaces(arena),
                     vars: vars.remove_spaces(arena),
                 },
                 typ: typ.remove_spaces(arena),
             },
-            Def::Body(a, b) => Def::Body(
-                arena.alloc(a.remove_spaces(arena)),
-                arena.alloc(b.remove_spaces(arena)),
-            ),
-            Def::AnnotatedBody {
-                ann_pattern,
-                ann_type,
-                comment: _,
-                body_pattern,
-                body_expr,
-            } => Def::AnnotatedBody {
-                ann_pattern: arena.alloc(ann_pattern.remove_spaces(arena)),
-                ann_type: arena.alloc(ann_type.remove_spaces(arena)),
-                comment: None,
-                body_pattern: arena.alloc(body_pattern.remove_spaces(arena)),
-                body_expr: arena.alloc(body_expr.remove_spaces(arena)),
-            },
-            Def::Ability {
+            Ability {
                 header: TypeHeader { name, vars },
                 loc_has,
                 members,
-            } => Def::Ability {
+            } => Ability {
                 header: TypeHeader {
                     name: name.remove_spaces(arena),
                     vars: vars.remove_spaces(arena),
@@ -500,7 +482,43 @@ impl<'a> RemoveSpaces<'a> for Def<'a> {
                 loc_has: loc_has.remove_spaces(arena),
                 members: members.remove_spaces(arena),
             },
-            Def::Expect(a) => Def::Expect(arena.alloc(a.remove_spaces(arena))),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        use ValueDef::*;
+
+        match *self {
+            Annotation(a, b) => Annotation(a.remove_spaces(arena), b.remove_spaces(arena)),
+            Body(a, b) => Body(
+                arena.alloc(a.remove_spaces(arena)),
+                arena.alloc(b.remove_spaces(arena)),
+            ),
+            AnnotatedBody {
+                ann_pattern,
+                ann_type,
+                comment: _,
+                body_pattern,
+                body_expr,
+            } => AnnotatedBody {
+                ann_pattern: arena.alloc(ann_pattern.remove_spaces(arena)),
+                ann_type: arena.alloc(ann_type.remove_spaces(arena)),
+                comment: None,
+                body_pattern: arena.alloc(body_pattern.remove_spaces(arena)),
+                body_expr: arena.alloc(body_expr.remove_spaces(arena)),
+            },
+            Expect(a) => Expect(arena.alloc(a.remove_spaces(arena))),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for Def<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            Def::Type(def) => Def::Type(def.remove_spaces(arena)),
+            Def::Value(def) => Def::Value(def.remove_spaces(arena)),
             Def::NotYetImplemented(a) => Def::NotYetImplemented(a),
             Def::SpaceBefore(a, _) | Def::SpaceAfter(a, _) => a.remove_spaces(arena),
         }

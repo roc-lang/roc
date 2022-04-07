@@ -1,6 +1,6 @@
 use crate::ast::{
     AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Has, Pattern, Spaceable,
-    TypeAnnotation, TypeHeader,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{space0_after_e, space0_around_ee, space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
@@ -576,7 +576,7 @@ fn append_body_definition<'a>(
     if spaces.len() <= 1 {
         let last = defs.pop();
         match last.map(|d| d.value.unroll_spaces_before()) {
-            Some((before_ann_spaces, Def::Annotation(ann_pattern, ann_type))) => {
+            Some((before_ann_spaces, Def::Value(ValueDef::Annotation(ann_pattern, ann_type)))) => {
                 return append_body_definition_help(
                     arena,
                     defs,
@@ -591,10 +591,10 @@ fn append_body_definition<'a>(
             }
             Some((
                 before_ann_spaces,
-                Def::Alias {
+                Def::Type(TypeDef::Alias {
                     header,
                     ann: ann_type,
-                },
+                }),
             )) => {
                 // This is a case like
                 //   UserId x : [ UserId Int ]
@@ -628,7 +628,10 @@ fn append_body_definition<'a>(
     // the previous and current def can't be joined up
     let mut loc_def = Loc::at(
         region,
-        Def::Body(arena.alloc(loc_pattern), &*arena.alloc(loc_def_body)),
+        Def::Value(ValueDef::Body(
+            arena.alloc(loc_pattern),
+            &*arena.alloc(loc_def_body),
+        )),
     );
 
     if !spaces.is_empty() {
@@ -660,13 +663,13 @@ fn append_body_definition_help<'a>(
 
     let mut loc_def = Loc::at(
         region,
-        Def::AnnotatedBody {
+        Def::Value(ValueDef::AnnotatedBody {
             ann_pattern: loc_pattern_ann,
             ann_type: loc_ann,
             comment,
             body_pattern: arena.alloc(loc_pattern_body),
             body_expr: &*arena.alloc(loc_def_body),
-        },
+        }),
     );
 
     if !before_ann_spaces.is_empty() {
@@ -717,7 +720,10 @@ fn append_annotation_definition<'a>(
             kind,
         ),
         _ => {
-            let mut loc_def = Loc::at(region, Def::Annotation(loc_pattern, loc_ann));
+            let mut loc_def = Loc::at(
+                region,
+                Def::Value(ValueDef::Annotation(loc_pattern, loc_ann)),
+            );
             if !spaces.is_empty() {
                 loc_def = arena
                     .alloc(loc_def.value)
@@ -736,7 +742,7 @@ fn append_expect_definition<'a>(
     spaces: &'a [CommentOrNewline<'a>],
     loc_expect_body: Loc<Expr<'a>>,
 ) {
-    let def = Def::Expect(arena.alloc(loc_expect_body));
+    let def: Def = ValueDef::Expect(arena.alloc(loc_expect_body)).into();
 
     let end = loc_expect_body.region.end();
     let region = Region::new(start, end);
@@ -768,16 +774,16 @@ fn append_type_definition<'a>(
         vars: pattern_arguments,
     };
     let def = match kind {
-        TypeKind::Alias => Def::Alias {
+        TypeKind::Alias => TypeDef::Alias {
             header,
             ann: loc_ann,
         },
-        TypeKind::Opaque => Def::Opaque {
+        TypeKind::Opaque => TypeDef::Opaque {
             header,
             typ: loc_ann,
         },
     };
-    let mut loc_def = Loc::at(region, def);
+    let mut loc_def = Loc::at(region, Def::Type(def));
 
     if !spaces.is_empty() {
         loc_def = arena
@@ -1038,17 +1044,17 @@ fn finish_parsing_alias_or_opaque<'a>(
                 vars: type_arguments.into_bump_slice(),
             };
             let type_def = match kind {
-                TypeKind::Alias => Def::Alias {
+                TypeKind::Alias => TypeDef::Alias {
                     header,
                     ann: ann_type,
                 },
-                TypeKind::Opaque => Def::Opaque {
+                TypeKind::Opaque => TypeDef::Opaque {
                     header,
                     typ: ann_type,
                 },
             };
 
-            (&*arena.alloc(Loc::at(def_region, type_def)), state)
+            (&*arena.alloc(Loc::at(def_region, type_def.into())), state)
         }
 
         _ => {
@@ -1077,9 +1083,9 @@ fn finish_parsing_alias_or_opaque<'a>(
 
                             let def_region = Region::span_across(&call.region, &ann_type.region);
 
-                            let alias = Def::Annotation(Loc::at(expr_region, good), ann_type);
+                            let alias = ValueDef::Annotation(Loc::at(expr_region, good), ann_type);
 
-                            (&*arena.alloc(Loc::at(def_region, alias)), state)
+                            (&*arena.alloc(Loc::at(def_region, alias.into())), state)
                         }
                     }
                 }
@@ -1270,11 +1276,12 @@ fn finish_parsing_ability_def<'a>(
     }
 
     let def_region = Region::span_across(&name.region, &demands.last().unwrap().typ.region);
-    let def = Def::Ability {
+    let def = TypeDef::Ability {
         header: TypeHeader { name, vars: args },
         loc_has,
         members: demands.into_bump_slice(),
-    };
+    }
+    .into();
     let loc_def = &*(arena.alloc(Loc::at(def_region, def)));
 
     Ok((MadeProgress, loc_def, state))
@@ -1357,23 +1364,24 @@ fn parse_expr_operator<'a>(
             let (loc_def, state) = {
                 match expr_to_pattern_help(arena, &call.value) {
                     Ok(good) => {
-                        let (_, mut ann_type, state) = parse_loc_expr(indented_more, arena, state)?;
+                        let (_, mut body, state) = parse_loc_expr(indented_more, arena, state)?;
 
                         // put the spaces from after the operator in front of the call
                         if !spaces_after_operator.is_empty() {
-                            ann_type = arena
-                                .alloc(ann_type.value)
-                                .with_spaces_before(spaces_after_operator, ann_type.region);
+                            body = arena
+                                .alloc(body.value)
+                                .with_spaces_before(spaces_after_operator, body.region);
                         }
 
-                        let alias_region = Region::span_across(&call.region, &ann_type.region);
+                        let body_region = Region::span_across(&call.region, &body.region);
 
-                        let alias = Def::Body(
+                        let alias = ValueDef::Body(
                             arena.alloc(Loc::at(expr_region, good)),
-                            arena.alloc(ann_type),
-                        );
+                            arena.alloc(body),
+                        )
+                        .into();
 
-                        (&*arena.alloc(Loc::at(alias_region, alias)), state)
+                        (&*arena.alloc(Loc::at(body_region, alias)), state)
                     }
                     Err(_) => {
                         // this `=` likely occurred inline; treat it as an invalid operator

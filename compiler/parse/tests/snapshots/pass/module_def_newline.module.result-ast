@@ -1,36 +1,40 @@
 [
     @0-24 SpaceAfter(
         SpaceBefore(
-            Body(
-                @0-4 Identifier(
-                    "main",
-                ),
-                @11-24 SpaceBefore(
-                    Defs(
-                        [
-                            @11-17 Body(
-                                @11-12 Identifier(
-                                    "i",
-                                ),
-                                @15-17 Num(
-                                    "64",
-                                ),
-                            ),
-                        ],
-                        @23-24 SpaceBefore(
-                            Var {
-                                module_name: "",
-                                ident: "i",
-                            },
-                            [
-                                Newline,
-                                Newline,
-                            ],
-                        ),
+            Value(
+                Body(
+                    @0-4 Identifier(
+                        "main",
                     ),
-                    [
-                        Newline,
-                    ],
+                    @11-24 SpaceBefore(
+                        Defs(
+                            [
+                                @11-17 Value(
+                                    Body(
+                                        @11-12 Identifier(
+                                            "i",
+                                        ),
+                                        @15-17 Num(
+                                            "64",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                            @23-24 SpaceBefore(
+                                Var {
+                                    module_name: "",
+                                    ident: "i",
+                                },
+                                [
+                                    Newline,
+                                    Newline,
+                                ],
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
                 ),
             ),
             [],

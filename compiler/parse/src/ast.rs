@@ -279,11 +279,7 @@ pub struct AbilityMember<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Def<'a> {
-    // TODO in canonicalization, validate the pattern; only certain patterns
-    // are allowed in annotations.
-    Annotation(Loc<Pattern<'a>>, Loc<TypeAnnotation<'a>>),
-
+pub enum TypeDef<'a> {
     /// A type alias. This is like a standalone annotation, except the pattern
     /// must be a capitalized Identifier, e.g.
     ///
@@ -307,6 +303,13 @@ pub enum Def<'a> {
         loc_has: Loc<Has<'a>>,
         members: &'a [AbilityMember<'a>],
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ValueDef<'a> {
+    // TODO in canonicalization, validate the pattern; only certain patterns
+    // are allowed in annotations.
+    Annotation(Loc<Pattern<'a>>, Loc<TypeAnnotation<'a>>),
 
     // TODO in canonicalization, check to see if there are any newlines after the
     // annotation; if not, and if it's followed by a Body, then the annotation
@@ -323,6 +326,12 @@ pub enum Def<'a> {
     },
 
     Expect(&'a Loc<Expr<'a>>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Def<'a> {
+    Type(TypeDef<'a>),
+    Value(ValueDef<'a>),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after a def.
     // We preserve this for the formatter; canonicalization ignores it.
@@ -340,6 +349,30 @@ impl<'a> Def<'a> {
         };
         debug_assert!(!matches!(def, Def::SpaceBefore(_, _)));
         (spaces, def)
+    }
+
+    pub fn unroll_def(&self) -> Result<&TypeDef<'a>, &ValueDef<'a>> {
+        let mut def = self;
+        loop {
+            match def {
+                Def::Type(type_def) => return Ok(type_def),
+                Def::Value(value_def) => return Err(value_def),
+                Def::SpaceBefore(def1, _) | Def::SpaceAfter(def1, _) => def = def1,
+                Def::NotYetImplemented(s) => todo!("{}", s),
+            }
+        }
+    }
+}
+
+impl<'a> From<TypeDef<'a>> for Def<'a> {
+    fn from(def: TypeDef<'a>) -> Self {
+        Self::Type(def)
+    }
+}
+
+impl<'a> From<ValueDef<'a>> for Def<'a> {
+    fn from(def: ValueDef<'a>) -> Self {
+        Self::Value(def)
     }
 }
 
