@@ -482,6 +482,18 @@ fn num_to_nat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
 }
 
+// Num.toF32 : Num * -> F32
+fn num_to_f32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to NumToFloatCast
+    lowlevel_1(symbol, LowLevel::NumToFloatCast, var_store)
+}
+
+// Num.toF64 : Num * -> F64
+fn num_to_f64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to NumToFloatCast
+    lowlevel_1(symbol, LowLevel::NumToFloatCast, var_store)
+}
+
 fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) -> Def {
     let bool_var = var_store.fresh();
     let num_var_1 = var_store.fresh();
@@ -589,6 +601,8 @@ num_to_checked! {
     num_to_u64_checked
     num_to_u128_checked
     num_to_nat_checked
+    num_to_f32_checked
+    num_to_f64_checked
 }
 
 // Num.toStr : Num a -> Str

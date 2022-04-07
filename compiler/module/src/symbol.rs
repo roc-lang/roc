@@ -1053,6 +1053,10 @@ define_builtins! {
         144 NUM_TO_U128_CHECKED: "toU128Checked"
         145 NUM_TO_NAT: "toNat"
         146 NUM_TO_NAT_CHECKED: "toNatChecked"
+        147 NUM_TO_F32: "toF32"
+        148 NUM_TO_F32_CHECKED: "toF32Checked"
+        149 NUM_TO_F64: "toF64"
+        150 NUM_TO_F64_CHECKED: "toF64Checked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -1103,7 +1107,6 @@ define_builtins! {
         32 STR_TO_I16: "toI16"
         33 STR_TO_U8: "toU8"
         34 STR_TO_I8: "toI8"
-
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

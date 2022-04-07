@@ -5865,6 +5865,23 @@ fn run_low_level<'a, 'ctx, 'env>(
                 .build_int_cast_sign_flag(arg, to, to_signed, "inc_cast")
                 .into()
         }
+        NumToFloatCast => {
+            debug_assert_eq!(args.len(), 1);
+
+            let arg = load_symbol(scope, &args[0]).into_int_value();
+
+            todo!("TODO if it's a float, cast; if it's an int, do either signed_int_to_float or unsigned_int_to_float; if it's Dec, panic for now");
+            // let to = basic_type_from_layout(env, layout).into_int_type();
+            // let to_signed = intwidth_from_layout(*layout).is_signed();
+
+            // env.builder
+            //     .build_int_cast_sign_flag(arg, to, to_signed, "inc_cast")
+            //     .into()
+        }
+        NumToFloatChecked => {
+            // NOTE: For some reason there's no entry here for NumToIntChecked - why is that?
+            todo!("implement checked float conversion");
+        }
         Eq => {
             debug_assert_eq!(args.len(), 2);
 
