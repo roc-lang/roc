@@ -854,30 +854,45 @@ impl<'a> WasmBackend<'a> {
                             location.local_and_offset(self.storage.stack_frame_pointer);
 
                         let len = string.len();
-                        if len < 8 {
-                            let mut stack_mem_bytes = [0; 8];
-                            stack_mem_bytes[0..len].clone_from_slice(string.as_bytes());
-                            stack_mem_bytes[7] = 0x80 | (len as u8);
-                            let str_as_int = i64::from_le_bytes(stack_mem_bytes);
+                        if len < 12 {
+                            // Construct the bytes of the small string
+                            let mut bytes = [0; 12];
+                            bytes[0..len].clone_from_slice(string.as_bytes());
+                            bytes[11] = 0x80 | (len as u8);
 
-                            // Write all 8 bytes at once using an i64
-                            // Str is normally two i32's, but in this special case, we can get away with fewer instructions
+                            // Transform into two integers, to minimise number of instructions
+                            let bytes_split: &([u8; 8], [u8; 4]) =
+                                unsafe { std::mem::transmute(&bytes) };
+                            let int64 = i64::from_le_bytes(bytes_split.0);
+                            let int32 = i32::from_le_bytes(bytes_split.1);
+
+                            // Write the integers to memory
                             self.code_builder.get_local(local_id);
-                            self.code_builder.i64_const(str_as_int);
+                            self.code_builder.i64_const(int64);
                             self.code_builder.i64_store(Align::Bytes4, offset);
+                            self.code_builder.get_local(local_id);
+                            self.code_builder.i32_const(int32);
+                            self.code_builder.i32_store(Align::Bytes4, offset + 8);
                         } else {
                             let bytes = string.as_bytes();
                             let (linker_sym_index, elements_addr) =
                                 self.store_bytes_in_data_section(bytes, sym);
 
+                            // ptr
                             self.code_builder.get_local(local_id);
                             self.code_builder
                                 .i32_const_mem_addr(elements_addr, linker_sym_index);
                             self.code_builder.i32_store(Align::Bytes4, offset);
 
+                            // len
                             self.code_builder.get_local(local_id);
                             self.code_builder.i32_const(string.len() as i32);
                             self.code_builder.i32_store(Align::Bytes4, offset + 4);
+
+                            // capacity
+                            self.code_builder.get_local(local_id);
+                            self.code_builder.i32_const(string.len() as i32);
+                            self.code_builder.i32_store(Align::Bytes4, offset + 8);
                         };
                     }
                     _ => invalid_error(),

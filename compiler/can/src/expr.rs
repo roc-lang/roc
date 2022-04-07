@@ -315,12 +315,7 @@ pub fn canonicalize_expr<'a>(
             (answer, Output::default())
         }
         &ast::Expr::Float(str) => {
-            let answer = float_expr_from_result(
-                var_store,
-                finish_parsing_float(str).map(|(f, bound)| (str, f, bound)),
-                region,
-                env,
-            );
+            let answer = float_expr_from_result(var_store, finish_parsing_float(str), region, env);
 
             (answer, Output::default())
         }

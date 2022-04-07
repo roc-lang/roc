@@ -191,11 +191,17 @@ impl<'a> LowLevelCall<'a> {
             // Str
             StrConcat => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT),
             StrJoinWith => self.load_args_and_call_zig(backend, bitcode::STR_JOIN_WITH),
-            StrIsEmpty => {
-                self.load_args(backend);
-                backend.code_builder.i64_const(i64::MIN);
-                backend.code_builder.i64_eq();
-            }
+            StrIsEmpty => match backend.storage.get(&self.arguments[0]) {
+                StoredValue::StackMemory { location, .. } => {
+                    let (local_id, offset) =
+                        location.local_and_offset(backend.storage.stack_frame_pointer);
+                    backend.code_builder.get_local(local_id);
+                    backend.code_builder.i32_load8_u(Align::Bytes1, offset + 11);
+                    backend.code_builder.i32_const(0x80);
+                    backend.code_builder.i32_eq();
+                }
+                _ => internal_error!("invalid storage for Str"),
+            },
             StrStartsWith => self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH),
             StrStartsWithCodePt => {
                 self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_CODE_PT)
@@ -227,7 +233,7 @@ impl<'a> LowLevelCall<'a> {
                         &bitcode::STR_TO_FLOAT[float_width]
                     }
                     Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
-                    rest => internal_error!("Unexpected builtin {:?} for StrToNum", rest),
+                    rest => internal_error!("Unexpected layout {:?} for StrToNum", rest),
                 };
 
                 self.load_args_and_call_zig(backend, intrinsic);
@@ -880,7 +886,8 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
             match value_type {
-                ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(1), // always true for integers
+                // Integers are always finite. Just return True.
+                ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(1),
                 ValueType::F32 => {
                     backend.code_builder.i32_reinterpret_f32();
                     backend.code_builder.i32_const(0x7f80_0000);
@@ -903,7 +910,10 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
             let (local_id, offset) = location.local_and_offset(backend.storage.stack_frame_pointer);
 
             match format {
-                StackMemoryFormat::Int128 => backend.code_builder.i32_const(1),
+                // Integers and fixed-point numbers are always finite. Just return True.
+                StackMemoryFormat::Int128 | StackMemoryFormat::Decimal => {
+                    backend.code_builder.i32_const(1)
+                }
 
                 // f128 is not supported anywhere else but it's easy to support it here, so why not...
                 StackMemoryFormat::Float128 => {
@@ -912,15 +922,6 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
                     backend.code_builder.i64_const(0x7fff_0000_0000_0000);
                     backend.code_builder.i64_and();
                     backend.code_builder.i64_const(0x7fff_0000_0000_0000);
-                    backend.code_builder.i64_ne();
-                }
-
-                StackMemoryFormat::Decimal => {
-                    backend.code_builder.get_local(local_id);
-                    backend.code_builder.i64_load(Align::Bytes4, offset + 8);
-                    backend.code_builder.i64_const(0x7100_0000_0000_0000);
-                    backend.code_builder.i64_and();
-                    backend.code_builder.i64_const(0x7100_0000_0000_0000);
                     backend.code_builder.i64_ne();
                 }
 

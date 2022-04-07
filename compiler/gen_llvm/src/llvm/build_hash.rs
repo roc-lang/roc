@@ -3,7 +3,6 @@ use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::tag_pointer_clear_tag_id;
 use crate::llvm::build::Env;
 use crate::llvm::build::{get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
-use crate::llvm::build_str;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::values::{
@@ -13,6 +12,7 @@ use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
+use super::build::use_roc_value;
 use super::convert::argument_type_from_union_layout;
 
 #[derive(Clone, Debug)]
@@ -127,12 +127,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
         }
         Builtin::Str => {
             // let zig deal with big vs small string
-            call_bitcode_fn(
-                env,
-                &[seed.into(), build_str::str_to_c_abi(env, val).into()],
-                bitcode::DICT_HASH_STR,
-            )
-            .into_int_value()
+            call_bitcode_fn(env, &[seed.into(), val], bitcode::DICT_HASH_STR).into_int_value()
         }
 
         Builtin::Dict(_, _) => {
@@ -259,8 +254,10 @@ fn hash_struct<'a, 'ctx, 'env>(
         for (index, field_layout) in field_layouts.iter().enumerate() {
             let field = env
                 .builder
-                .build_extract_value(value, index as u32, "eq_field")
+                .build_extract_value(value, index as u32, "hash_field")
                 .unwrap();
+
+            let field = use_roc_value(env, *field_layout, field, "store_field_for_hashing");
 
             if let Layout::RecursivePointer = field_layout {
                 match &when_recursive {

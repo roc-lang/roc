@@ -847,17 +847,26 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
 
     let parent = fn_val;
 
+    let arg_val = if Layout::Builtin(Builtin::Str).is_passed_by_reference(env.target_info) {
+        env.builder
+            .build_load(arg_val.into_pointer_value(), "load_str_to_stack")
+    } else {
+        // it's already a struct, just do nothing
+        debug_assert!(arg_val.is_struct_value());
+        arg_val
+    };
     let str_wrapper = arg_val.into_struct_value();
-    let len = builder
-        .build_extract_value(str_wrapper, Builtin::WRAPPER_LEN, "read_str_ptr")
+
+    let capacity = builder
+        .build_extract_value(str_wrapper, Builtin::WRAPPER_CAPACITY, "read_str_capacity")
         .unwrap()
         .into_int_value();
 
-    // Small strings have 1 as the first bit of length, making them negative.
+    // Small strings have 1 as the first bit of capacity, making them negative.
     // Thus, to check for big and non empty, just needs a signed len > 0.
     let is_big_and_non_empty = builder.build_int_compare(
         IntPredicate::SGT,
-        len,
+        capacity,
         env.ptr_int().const_zero(),
         "is_big_str",
     );
@@ -1807,7 +1816,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
                     .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
                     .unwrap();
 
-                let field_value = if field_layout.is_passed_by_reference() {
+                let field_value = if field_layout.is_passed_by_reference(env.target_info) {
                     field_ptr.into()
                 } else {
                     env.builder.build_load(field_ptr, "field_value")

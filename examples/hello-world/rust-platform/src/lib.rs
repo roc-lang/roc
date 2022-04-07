@@ -6,8 +6,8 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed"]
-    fn roc_main() -> RocStr;
+    #[link_name = "roc__mainForHost_1_exposed_generic"]
+    fn roc_main(_: &mut RocStr);
 }
 
 #[no_mangle]
@@ -56,7 +56,8 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     unsafe {
-        let roc_str = roc_main();
+        let mut roc_str = RocStr::default();
+        roc_main(&mut roc_str);
 
         let len = roc_str.len();
         let str_bytes = roc_str.as_bytes().as_ptr() as *const libc::c_void;

@@ -14,7 +14,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
-use super::build::load_roc_value;
+use super::build::{load_roc_value, use_roc_value};
 use super::convert::argument_type_from_union_layout;
 
 #[derive(Clone, Debug)]
@@ -755,8 +755,8 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
             build_eq(
                 env,
                 layout_ids,
-                field1,
-                field2,
+                use_roc_value(env, *field_layout, field1, "field1"),
+                use_roc_value(env, *field_layout, field2, "field2"),
                 field_layout,
                 field_layout,
                 when_recursive.clone(),

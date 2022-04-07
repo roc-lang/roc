@@ -598,7 +598,7 @@ pub fn dictKeys(
         }
     }
 
-    return RocList{ .bytes = ptr, .length = length };
+    return RocList{ .bytes = ptr, .length = length, .capacity = length };
 }
 
 pub fn dictValues(
@@ -644,14 +644,25 @@ pub fn dictValues(
         }
     }
 
-    return RocList{ .bytes = ptr, .length = length };
+    return RocList{ .bytes = ptr, .length = length, .capacity = length };
 }
 
 fn doNothing(_: Opaque) callconv(.C) void {
     return;
 }
 
-pub fn dictUnion(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_key: Inc, inc_value: Inc, output: *RocDict) callconv(.C) void {
+pub fn dictUnion(
+    dict1: RocDict,
+    dict2: RocDict,
+    alignment: Alignment,
+    key_width: usize,
+    value_width: usize,
+    hash_fn: HashFn,
+    is_eq: EqFn,
+    inc_key: Inc,
+    inc_value: Inc,
+    output: *RocDict,
+) callconv(.C) void {
     output.* = dict1.makeUnique(alignment, key_width, value_width);
 
     var i: usize = 0;

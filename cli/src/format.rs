@@ -10,7 +10,7 @@ use roc_fmt::module::fmt_module;
 use roc_fmt::Buf;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::ast::{
-    AbilityDemand, AssignedField, Collection, Expr, Has, HasClause, Pattern, Spaced, StrLiteral,
+    AbilityMember, AssignedField, Collection, Expr, Has, HasClause, Pattern, Spaced, StrLiteral,
     StrSegment, Tag, TypeAnnotation, TypeHeader, WhenBranch,
 };
 use roc_parse::header::{
@@ -491,14 +491,14 @@ impl<'a> RemoveSpaces<'a> for Def<'a> {
             Def::Ability {
                 header: TypeHeader { name, vars },
                 loc_has,
-                demands,
+                members,
             } => Def::Ability {
                 header: TypeHeader {
                     name: name.remove_spaces(arena),
                     vars: vars.remove_spaces(arena),
                 },
                 loc_has: loc_has.remove_spaces(arena),
-                demands: demands.remove_spaces(arena),
+                members: members.remove_spaces(arena),
             },
             Def::Expect(a) => Def::Expect(arena.alloc(a.remove_spaces(arena))),
             Def::NotYetImplemented(a) => Def::NotYetImplemented(a),
@@ -513,9 +513,9 @@ impl<'a> RemoveSpaces<'a> for Has<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for AbilityDemand<'a> {
+impl<'a> RemoveSpaces<'a> for AbilityMember<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        AbilityDemand {
+        AbilityMember {
             name: self.name.remove_spaces(arena),
             typ: self.typ.remove_spaces(arena),
         }
