@@ -9,7 +9,7 @@ Rgba : { r : F32, g : F32, b : F32, a : F32 }
 
 Bounds : { width : F32, height : F32 }
 
-Elem : [ Rect { borderWidth : F32, color : Rgba, left : F32, top : F32, width : F32, height : F32 }, Text Str ]
+Elem : [ Rect { color : Rgba, left : F32, top : F32, width : F32, height : F32 }, Text Str ]
 
 State : { width : F32, height : F32 }
 

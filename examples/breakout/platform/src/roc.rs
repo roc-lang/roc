@@ -153,7 +153,6 @@ impl RocElem {
 #[repr(C)]
 #[derive(Debug)]
 pub struct RocRect {
-    pub border_width: f32,
     pub color: Rgba,
 
     // These must be in this order for alphabetization!

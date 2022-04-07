@@ -16,5 +16,6 @@ render = \state ->
     # Rect { r: 1, g: 2, b: 3, a: 4 }
     # [ Text "Hello!" ]
     [
-        Rect { left: 10, top: 20, width: 200, height: 300, borderWidth: 2.0, color: rgba 10 20 30 1 },
+        Rect { left: 10, top: 20, width: 200, height: 300, color: rgba 10 20 30 1 },
+        Rect { left: 10, top: 20, width: 200, height: 300, color: rgba 10 20 30 1 },
     ]
