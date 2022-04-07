@@ -240,6 +240,7 @@ impl Scope {
     ///
     /// If the ident does not match an ability name, the behavior of this function is exactly that
     /// of `introduce`.
+    #[allow(clippy::type_complexity)]
     pub fn introduce_or_shadow_ability_member(
         &mut self,
         ident: Ident,
