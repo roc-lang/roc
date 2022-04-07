@@ -652,7 +652,7 @@ toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
 toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
 toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
 
-toF32Checked : Num * -> Result F32 [ OutOfBounds ]
+toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
 toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 
 ## Convert a number to a [Str].
