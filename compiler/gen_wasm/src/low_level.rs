@@ -3,6 +3,7 @@ use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
+use roc_mono::code_gen_help::HelperOp;
 use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_mono::low_level::HigherOrder;
@@ -1014,22 +1015,20 @@ pub fn call_higher_order_lowlevel<'a>(
     };
 
     let wrapper_fn_idx = backend.register_helper_proc(wrapper_sym, wrapper_layout, source);
-    let inc_fn_idx = backend.gen_refcount_inc_for_zig(closure_data_layout);
-
     let wrapper_fn_ptr = backend.get_fn_table_index(wrapper_fn_idx);
-    let inc_fn_ptr = backend.get_fn_table_index(inc_fn_idx);
+    let inc_fn_ptr = backend.get_refcount_fn_ptr(closure_data_layout, HelperOp::Inc);
 
     match op {
         // List.map : List elem_x, (elem_x -> elem_ret) -> List elem_ret
         ListMap { xs } => {
-            let list_layout_in = backend.storage.symbol_layouts[xs];
+            let list_x = backend.storage.symbol_layouts[xs];
 
-            let (elem_x, elem_ret) = match (list_layout_in, return_layout) {
+            let (elem_x, elem_ret) = match (list_x, return_layout) {
                 (
                     Layout::Builtin(Builtin::List(elem_x)),
                     Layout::Builtin(Builtin::List(elem_ret)),
                 ) => (elem_x, elem_ret),
-                _ => unreachable!("invalid layout for List.map arguments"),
+                _ => unreachable!("invalid arguments layout for {:?}", op),
             };
             let elem_x_size = elem_x.stack_size(TARGET_INFO);
             let (elem_ret_size, elem_ret_align) = elem_ret.stack_size_and_alignment(TARGET_INFO);
@@ -1039,7 +1038,7 @@ pub fn call_higher_order_lowlevel<'a>(
             // Load return pointer & argument values
             // Wasm signature: (i32, i64, i64, i32, i32, i32, i32, i32, i32, i32) -> nil
             backend.storage.load_symbols(cb, &[return_sym]);
-            backend.storage.load_symbol_zig(cb, *xs); // list with capacity = 2 x i64 args
+            backend.storage.load_symbol_zig(cb, *xs); // 2 x i64
             cb.i32_const(wrapper_fn_ptr);
             if closure_data_exists {
                 backend.storage.load_symbols(cb, &[*captured_environment]);
@@ -1062,8 +1061,70 @@ pub fn call_higher_order_lowlevel<'a>(
             );
         }
 
-        ListMap2 { .. }
-        | ListMap3 { .. }
+        ListMap2 { xs, ys } => {
+            let list_x = backend.storage.symbol_layouts[xs];
+            let list_y = backend.storage.symbol_layouts[ys];
+
+            let (elem_x, elem_y, elem_ret) = match (list_x, list_y, return_layout) {
+                (
+                    Layout::Builtin(Builtin::List(x)),
+                    Layout::Builtin(Builtin::List(y)),
+                    Layout::Builtin(Builtin::List(ret)),
+                ) => (x, y, ret),
+                _ => unreachable!("invalid arguments layout for {:?}", op),
+            };
+            let elem_x_size = elem_x.stack_size(TARGET_INFO);
+            let elem_y_size = elem_y.stack_size(TARGET_INFO);
+            let (elem_ret_size, elem_ret_align) = elem_ret.stack_size_and_alignment(TARGET_INFO);
+
+            let dec_x_fn_ptr = backend.get_refcount_fn_ptr(*elem_x, HelperOp::Dec);
+            let dec_y_fn_ptr = backend.get_refcount_fn_ptr(*elem_y, HelperOp::Dec);
+
+            let cb = &mut backend.code_builder;
+
+            /* Load Wasm arguments
+                return ptr: RocList, // i32
+                list1: RocList,      // i64, i64
+                list2: RocList,      // i64, i64
+                caller: Caller2,     // i32
+                data: Opaque,        // i32
+                inc_n_data: IncN,    // i32
+                data_is_owned: bool, // i32
+                alignment: u32,      // i32
+                a_width: usize,      // i32
+                b_width: usize,      // i32
+                c_width: usize,      // i32
+                dec_a: Dec,          // i32
+                dec_b: Dec,          // i32
+            */
+            backend.storage.load_symbols(cb, &[return_sym]);
+            backend.storage.load_symbol_zig(cb, *xs);
+            backend.storage.load_symbol_zig(cb, *ys);
+            cb.i32_const(wrapper_fn_ptr);
+            if closure_data_exists {
+                backend.storage.load_symbols(cb, &[*captured_environment]);
+            } else {
+                cb.i32_const(0); // null pointer
+            }
+            cb.i32_const(inc_fn_ptr);
+            cb.i32_const(*owns_captured_environment as i32);
+            cb.i32_const(elem_ret_align as i32);
+            cb.i32_const(elem_x_size as i32);
+            cb.i32_const(elem_y_size as i32);
+            cb.i32_const(elem_ret_size as i32);
+            cb.i32_const(dec_x_fn_ptr);
+            cb.i32_const(dec_y_fn_ptr);
+
+            let num_wasm_args = 15;
+            let has_return_val = false;
+            backend.call_zig_builtin_after_loading_args(
+                bitcode::LIST_MAP2,
+                num_wasm_args,
+                has_return_val,
+            );
+        }
+
+        ListMap3 { .. }
         | ListMap4 { .. }
         | ListMapWithIndex { .. }
         | ListKeepIf { .. }

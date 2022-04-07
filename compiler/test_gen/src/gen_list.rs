@@ -1169,7 +1169,7 @@ fn list_map3_different_length() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map2_pair() {
     assert_evals_to!(
         indoc!(
@@ -1184,13 +1184,13 @@ fn list_map2_pair() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map2_different_lengths() {
     assert_evals_to!(
         indoc!(
             r#"
             List.map2
-                ["a", "b", "lllllllllllllongnggg" ]
+                ["a", "b", "lllllllllllllooooooooongnggg" ]
                 ["b"]
                 (\a, b -> Str.concat a b)
             "#

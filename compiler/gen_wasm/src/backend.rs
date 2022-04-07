@@ -1616,8 +1616,9 @@ impl<'a> WasmBackend<'a> {
         );
     }
 
-    /// Generate a refcount increment procedure and return its Wasm function index
-    pub fn gen_refcount_inc_for_zig(&mut self, layout: Layout<'a>) -> u32 {
+    /// Generate a refcount helper procedure and return a pointer (table index) to it
+    /// This allows it to be indirectly called from Zig code
+    pub fn get_refcount_fn_ptr(&mut self, layout: Layout<'a>, op: HelperOp) -> i32 {
         let ident_ids = self
             .interns
             .all_ident_ids
@@ -1626,7 +1627,7 @@ impl<'a> WasmBackend<'a> {
 
         let (proc_symbol, new_specializations) = self
             .helper_proc_gen
-            .gen_refcount_inc_proc(ident_ids, layout);
+            .gen_refcount_proc(ident_ids, layout, op);
 
         // If any new specializations were created, register their symbol data
         for (spec_sym, spec_layout) in new_specializations.into_iter() {
@@ -1639,6 +1640,7 @@ impl<'a> WasmBackend<'a> {
             .position(|lookup| lookup.name == proc_symbol && lookup.layout.arguments[0] == layout)
             .unwrap();
 
-        self.fn_index_offset + proc_index as u32
+        let wasm_fn_index = self.fn_index_offset + proc_index as u32;
+        self.get_fn_table_index(wasm_fn_index)
     }
 }
