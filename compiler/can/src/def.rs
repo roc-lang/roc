@@ -222,10 +222,13 @@ pub fn canonicalize_defs<'a>(
     }
 
     // We need to canonicalize all the type defs first.
+    // Clippy is wrong - we do need the collect, otherwise "env" and "scope" are captured for
+    // longer than we'd like.
+    #[allow(clippy::needless_collect)]
     let pending_type_defs = type_defs
         .into_iter()
         .filter_map(|loc_def| {
-            to_pending_type_def(env, &loc_def.value, &mut scope).map(|(new_output, pending_def)| {
+            to_pending_type_def(env, loc_def.value, &mut scope).map(|(new_output, pending_def)| {
                 output.union(new_output);
                 pending_def
             })
@@ -367,7 +370,7 @@ pub fn canonicalize_defs<'a>(
     // once we've finished assembling the entire scope.
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
     for loc_def in value_defs.into_iter() {
-        match to_pending_value_def(env, var_store, &loc_def.value, &mut scope, pattern_type) {
+        match to_pending_value_def(env, var_store, loc_def.value, &mut scope, pattern_type) {
             None => { /* skip */ }
             Some((new_output, pending_def)) => {
                 // store the top-level defs, used to ensure that closures won't capture them
