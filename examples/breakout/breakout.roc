@@ -12,10 +12,21 @@ render = \state ->
 
     styles = { bgColor: rgba 100 50 50 1, borderColor: rgba 10 20 30 1, borderWidth: 10, textColor: rgba 220 220 250 1 }
 
-    #Text "Hello!"
-    # Rect { r: 1, g: 2, b: 3, a: 4 }
-    # [ Text "Hello!" ]
-    [
-        Rect { left: 10, top: 20, width: 200, height: 300, color: rgba 10 20 30 1 },
-        Rect { left: 10, top: 20, width: 200, height: 300, color: rgba 10 20 30 1 },
-    ]
+    numRows = 4
+    numCols = 8
+
+    blocks = List.map (List.range 0 (numRows * numCols)) \index ->
+        { col: index, row: (index // 5 |> Result.withDefault 0) }
+
+    blockWidth = 100
+    blockHeight = 50
+
+    blockRects =
+        List.map blocks \{ row, col } ->
+            left = Num.toF32 (col * blockWidth)
+            top = Num.toF32 (row * blockHeight)
+            color = rgba 10 20 30 1 # TODO different colors for each block!
+
+            Rect { left, top, width: blockWidth, height: blockHeight, color }
+
+    blockRects
