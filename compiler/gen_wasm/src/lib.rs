@@ -264,5 +264,5 @@ pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
     let_stmt_ir: false && cfg!(debug_assertions),
     instructions: false && cfg!(debug_assertions),
     storage_map: false && cfg!(debug_assertions),
-    keep_test_binary: false && cfg!(debug_assertions),
+    keep_test_binary: true && cfg!(debug_assertions),
 };

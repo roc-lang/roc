@@ -1137,7 +1137,7 @@ fn list_map4_different_length() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map3_group() {
     assert_evals_to!(
         indoc!(
@@ -1151,7 +1151,7 @@ fn list_map3_group() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map3_different_length() {
     assert_evals_to!(
         indoc!(
