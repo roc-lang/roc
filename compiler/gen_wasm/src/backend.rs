@@ -7,7 +7,7 @@ use roc_collections::all::MutMap;
 use roc_module::ident::Ident;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::code_gen_help::{CodeGenHelp, REFCOUNT_MAX};
+use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
 use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Param, Proc,
     ProcLayout, Stmt,
@@ -270,6 +270,13 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_size,
             self.storage.stack_frame_pointer,
         );
+
+        if DEBUG_LOG_SETTINGS.storage_map {
+            println!("\nStorage:");
+            for (sym, storage) in self.storage.symbol_storage_map.iter() {
+                println!("{:?} => {:?}", sym, storage);
+            }
+        }
     }
 
     fn append_proc_debug_name(&mut self, sym: Symbol) {
