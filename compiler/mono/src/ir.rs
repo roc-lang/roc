@@ -2088,6 +2088,13 @@ fn pattern_to_when<'a>(
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
         }
+
+        AbilityMemberSpecialization { .. } => {
+            unreachable!(
+                "Ability member specialization {:?} should never appear in a when!",
+                pattern.value
+            )
+        }
     }
 }
 
@@ -7787,6 +7794,7 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
+        AbilityMemberSpecialization { ident, .. } => Ok(Pattern::Identifier(*ident)),
         IntLiteral(_, precision_var, _, int, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, false) {
                 IntOrFloat::Int(precision) => {

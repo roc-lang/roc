@@ -6,7 +6,7 @@ use crate::env::Env;
 use crate::expr::ClosureData;
 use crate::expr::Expr::{self, *};
 use crate::expr::{canonicalize_expr, local_successors_with_duplicates, Output, Recursive};
-use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
+use crate::pattern::{bindings_from_patterns, canonicalize_def_header_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::Scope;
@@ -524,7 +524,14 @@ pub fn canonicalize_defs<'a>(
     // once we've finished assembling the entire scope.
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
     for loc_def in value_defs.into_iter() {
-        match to_pending_value_def(env, var_store, loc_def.value, &mut scope, pattern_type) {
+        match to_pending_value_def(
+            env,
+            var_store,
+            loc_def.value,
+            &mut scope,
+            &abilities_store,
+            pattern_type,
+        ) {
             None => { /* skip */ }
             Some((new_output, pending_def)) => {
                 // store the top-level defs, used to ensure that closures won't capture them
@@ -1009,6 +1016,13 @@ fn pattern_to_vars_by_symbol(
     match pattern {
         Identifier(symbol) | Shadowed(_, _, symbol) => {
             vars_by_symbol.insert(*symbol, expr_var);
+        }
+
+        AbilityMemberSpecialization {
+            ident,
+            specializes: _,
+        } => {
+            vars_by_symbol.insert(*ident, expr_var);
         }
 
         AppliedTag { arguments, .. } => {
@@ -1748,36 +1762,12 @@ fn to_pending_type_def<'a>(
     }
 }
 
-fn pending_typed_body<'a>(
-    env: &mut Env<'a>,
-    loc_pattern: &'a Loc<ast::Pattern<'a>>,
-    loc_ann: &'a Loc<ast::TypeAnnotation<'a>>,
-    loc_expr: &'a Loc<ast::Expr<'a>>,
-    var_store: &mut VarStore,
-    scope: &mut Scope,
-    pattern_type: PatternType,
-) -> (Output, PendingValueDef<'a>) {
-    // This takes care of checking for shadowing and adding idents to scope.
-    let (output, loc_can_pattern) = canonicalize_pattern(
-        env,
-        var_store,
-        scope,
-        pattern_type,
-        &loc_pattern.value,
-        loc_pattern.region,
-    );
-
-    (
-        output,
-        PendingValueDef::TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr),
-    )
-}
-
 fn to_pending_value_def<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     def: &'a ast::ValueDef<'a>,
     scope: &mut Scope,
+    abilities_store: &AbilitiesStore,
     pattern_type: PatternType,
 ) -> Option<(Output, PendingValueDef<'a>)> {
     use ast::ValueDef::*;
@@ -1785,10 +1775,11 @@ fn to_pending_value_def<'a>(
     match def {
         Annotation(loc_pattern, loc_ann) => {
             // This takes care of checking for shadowing and adding idents to scope.
-            let (output, loc_can_pattern) = canonicalize_pattern(
+            let (output, loc_can_pattern) = canonicalize_def_header_pattern(
                 env,
                 var_store,
                 scope,
+                abilities_store,
                 pattern_type,
                 &loc_pattern.value,
                 loc_pattern.region,
@@ -1801,10 +1792,11 @@ fn to_pending_value_def<'a>(
         }
         Body(loc_pattern, loc_expr) => {
             // This takes care of checking for shadowing and adding idents to scope.
-            let (output, loc_can_pattern) = canonicalize_pattern(
+            let (output, loc_can_pattern) = canonicalize_def_header_pattern(
                 env,
                 var_store,
                 scope,
+                abilities_store,
                 pattern_type,
                 &loc_pattern.value,
                 loc_pattern.region,
@@ -1829,14 +1821,21 @@ fn to_pending_value_def<'a>(
                 //
                 // { x, y } : { x : Int, y ? Bool }*
                 // { x, y ? False } = rec
-                Some(pending_typed_body(
+                //
+                // This takes care of checking for shadowing and adding idents to scope.
+                let (output, loc_can_pattern) = canonicalize_def_header_pattern(
                     env,
-                    body_pattern,
-                    ann_type,
-                    body_expr,
                     var_store,
                     scope,
+                    abilities_store,
                     pattern_type,
+                    &body_pattern.value,
+                    body_pattern.region,
+                );
+
+                Some((
+                    output,
+                    PendingValueDef::TypedBody(body_pattern, loc_can_pattern, ann_type, body_expr),
                 ))
             } else {
                 // the pattern of the annotation does not match the pattern of the body direc

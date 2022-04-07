@@ -34,6 +34,9 @@ pub struct AbilitiesStore {
     /// member `member`.
     #[allow(unused)]
     declared_implementations: MutSet<(Symbol, Symbol)>,
+
+    /// Cache of all ability member names in scope.
+    ability_member_symbols: MutSet<Symbol>,
 }
 
 impl AbilitiesStore {
@@ -45,7 +48,7 @@ impl AbilitiesStore {
         let mut members_vec = Vec::with_capacity(members.len());
         for (member, signature, bound_has_clauses) in members.into_iter() {
             members_vec.push(member);
-            self.ability_members.insert(
+            let old_member = self.ability_members.insert(
                 member,
                 AbilityMemberData {
                     parent_ability: ability,
@@ -53,12 +56,26 @@ impl AbilitiesStore {
                     bound_has_clauses,
                 },
             );
+            debug_assert!(old_member.is_none(), "Replacing existing member definition");
+
+            let old_member = self.ability_member_symbols.insert(member);
+            debug_assert!(!old_member, "Replacing existing member entry");
         }
-        self.members_of_ability.insert(ability, members_vec);
+        let old_ability = self.members_of_ability.insert(ability, members_vec);
+        debug_assert!(
+            old_ability.is_none(),
+            "Replacing existing ability definition"
+        );
     }
 
     pub fn register_implementation(&mut self, implementing_type: Symbol, ability_member: Symbol) {
-        self.declared_implementations
+        let old_impl = self
+            .declared_implementations
             .insert((implementing_type, ability_member));
+        debug_assert!(!old_impl, "Replacing existing implementation");
+    }
+
+    pub fn is_ability_member_name(&self, name: Symbol) -> bool {
+        self.ability_member_symbols.contains(&name)
     }
 }

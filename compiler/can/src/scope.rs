@@ -6,6 +6,8 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, AliasKind, Type};
 
+use crate::abilities::AbilitiesStore;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scope {
     /// All the identifiers in scope, mapped to were they were defined and
@@ -229,6 +231,50 @@ impl Scope {
                 Err((original_region, shadow))
             }
             None => Ok(self.commit_introduction(ident, exposed_ident_ids, all_ident_ids, region)),
+        }
+    }
+
+    /// Like [Self::introduce], but handles the case of when an ident matches an ability member
+    /// name. In such cases a new symbol is created for the ident (since it's expected to be a
+    /// specialization of the ability member), but the ident is not added to the ident->symbol map.
+    ///
+    /// If the ident does not match an ability name, the behavior of this function is exactly that
+    /// of `introduce`.
+    pub fn introduce_or_shadow_ability_member(
+        &mut self,
+        ident: Ident,
+        exposed_ident_ids: &IdentIds,
+        all_ident_ids: &mut IdentIds,
+        region: Region,
+        abilities_store: &AbilitiesStore,
+    ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
+        match self.idents.get(&ident) {
+            Some(&(original_symbol, original_region)) => {
+                let shadow_ident_id = all_ident_ids.add(ident.clone());
+                let shadow_symbol = Symbol::new(self.home, shadow_ident_id);
+
+                self.symbols.insert(shadow_symbol, region);
+
+                if abilities_store.is_ability_member_name(original_symbol) {
+                    // Add a symbol for the shadow, but don't re-associate the member name.
+                    Ok((shadow_symbol, Some(original_symbol)))
+                } else {
+                    // This is an illegal shadow.
+                    let shadow = Loc {
+                        value: ident.clone(),
+                        region,
+                    };
+
+                    self.idents.insert(ident, (shadow_symbol, region));
+
+                    Err((original_region, shadow, shadow_symbol))
+                }
+            }
+            None => {
+                let new_symbol =
+                    self.commit_introduction(ident, exposed_ident_ids, all_ident_ids, region);
+                Ok((new_symbol, None))
+            }
         }
     }
 

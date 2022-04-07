@@ -589,7 +589,8 @@ fn fix_values_captured_in_closure_pattern(
         | Shadowed(..)
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
-        | OpaqueNotInScope(..) => (),
+        | OpaqueNotInScope(..)
+        | AbilityMemberSpecialization { .. } => (),
     }
 }
 

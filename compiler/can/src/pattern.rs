@@ -1,3 +1,4 @@
+use crate::abilities::AbilitiesStore;
 use crate::annotation::freshen_opaque_def;
 use crate::env::Env;
 use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
@@ -62,6 +63,17 @@ pub enum Pattern {
     SingleQuote(char),
     Underscore,
 
+    /// An identifier that marks a specialization of an ability member.
+    /// For example, given an ability member definition `hash : a -> U64 | a has Hash`,
+    /// there may be the specialization `hash : Bool -> U64`. In this case we generate a
+    /// new symbol for the specailized "hash" identifier.
+    AbilityMemberSpecialization {
+        /// The symbol for this specialization.
+        ident: Symbol,
+        /// The ability name being specialized.
+        specializes: Symbol,
+    },
+
     // Runtime Exceptions
     Shadowed(Region, Loc<Ident>, Symbol),
     OpaqueNotInScope(Loc<Ident>),
@@ -101,6 +113,11 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
             symbols.push(*symbol);
         }
 
+        AbilityMemberSpecialization { ident, specializes } => {
+            symbols.push(*ident);
+            symbols.push(*specializes);
+        }
+
         AppliedTag { arguments, .. } => {
             for (_, nested) in arguments {
                 symbols_from_pattern_help(&nested.value, symbols);
@@ -133,6 +150,55 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
         | OpaqueNotInScope(..) => {}
+    }
+}
+
+pub fn canonicalize_def_header_pattern<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    abilities_store: &AbilitiesStore,
+    pattern_type: PatternType,
+    pattern: &ast::Pattern<'a>,
+    region: Region,
+) -> (Output, Loc<Pattern>) {
+    use roc_parse::ast::Pattern::*;
+
+    let mut output = Output::default();
+    match pattern {
+        // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
+        Identifier(name) => match scope.introduce_or_shadow_ability_member(
+            (*name).into(),
+            &env.exposed_ident_ids,
+            &mut env.ident_ids,
+            region,
+            abilities_store,
+        ) {
+            Ok((symbol, shadowing_ability_member)) => {
+                output.references.bound_symbols.insert(symbol);
+                let can_pattern = match shadowing_ability_member {
+                    // A fresh identifier.
+                    None => Pattern::Identifier(symbol),
+                    // Likely a specialization of an ability.
+                    Some(ability_member_name) => Pattern::AbilityMemberSpecialization {
+                        ident: symbol,
+                        specializes: ability_member_name,
+                    },
+                };
+                (output, Loc::at(region, can_pattern))
+            }
+            Err((original_region, shadow, new_symbol)) => {
+                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                    original_region,
+                    shadow: shadow.clone(),
+                }));
+                output.references.bound_symbols.insert(new_symbol);
+
+                let can_pattern = Pattern::Shadowed(original_region, shadow, new_symbol);
+                (output, Loc::at(region, can_pattern))
+            }
+        },
+        _ => canonicalize_pattern(env, var_store, scope, pattern_type, pattern, region),
     }
 }
 
@@ -594,7 +660,12 @@ fn add_bindings_from_patterns(
     use Pattern::*;
 
     match pattern {
-        Identifier(symbol) | Shadowed(_, _, symbol) => {
+        Identifier(symbol)
+        | Shadowed(_, _, symbol)
+        | AbilityMemberSpecialization {
+            ident: symbol,
+            specializes: _,
+        } => {
             answer.push((*symbol, *region));
         }
         AppliedTag {
