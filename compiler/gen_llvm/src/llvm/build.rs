@@ -5868,15 +5868,39 @@ fn run_low_level<'a, 'ctx, 'env>(
         NumToFloatCast => {
             debug_assert_eq!(args.len(), 1);
 
-            let arg = load_symbol(scope, &args[0]).into_int_value();
+            let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            todo!("TODO if it's a float, cast; if it's an int, do either signed_int_to_float or unsigned_int_to_float; if it's Dec, panic for now");
-            // let to = basic_type_from_layout(env, layout).into_int_type();
-            // let to_signed = intwidth_from_layout(*layout).is_signed();
+            match arg_layout {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    // Converting from int to float
+                    let int_val = arg.into_int_value();
+                    let dest = basic_type_from_layout(env, layout).into_float_type();
 
-            // env.builder
-            //     .build_int_cast_sign_flag(arg, to, to_signed, "inc_cast")
-            //     .into()
+                    if width.is_signed() {
+                        env.builder
+                            .build_signed_int_to_float(int_val, dest, "signed_int_to_float")
+                            .into()
+                    } else {
+                        env.builder
+                            .build_unsigned_int_to_float(int_val, dest, "unsigned_int_to_float")
+                            .into()
+                    }
+                }
+                Layout::Builtin(Builtin::Float(_)) => {
+                    // Converting from float to float - e.g. F64 to F32, or vice versa
+                    let dest = basic_type_from_layout(env, layout).into_float_type();
+
+                    env.builder
+                        .build_float_cast(arg.into_float_value(), dest, "cast_float_to_float")
+                        .into()
+                }
+                Layout::Builtin(Builtin::Decimal) => {
+                    todo!("Support converting Dec values to floats.");
+                }
+                other => {
+                    unreachable!("Tried to do a float cast to non-float layout {:?}", other);
+                }
+            }
         }
         NumToFloatChecked => {
             // NOTE: For some reason there's no entry here for NumToIntChecked - why is that?
