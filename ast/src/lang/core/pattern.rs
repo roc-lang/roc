@@ -187,7 +187,7 @@ pub fn to_pattern2<'a>(
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok((float, _bound)) => Pattern2::FloatLiteral(FloatVal::F64(float)),
+                Ok((_, float, _bound)) => Pattern2::FloatLiteral(FloatVal::F64(float)),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },

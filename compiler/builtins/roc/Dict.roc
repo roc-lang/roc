@@ -1,3 +1,22 @@
+interface Dict
+    exposes 
+        [ 
+            empty,
+            single,
+            get,
+            walk,
+            insert,
+            len,
+            remove,
+            contains,
+            keys,
+            values,
+            union,
+            intersection,
+            difference,
+        ]
+    imports [ ]
+
 empty : Dict k v
 single : k, v -> Dict k v
 get : Dict k v, k -> Result v [ KeyNotFound ]*

@@ -1094,3 +1094,12 @@ fn box_box_type_alias() {
         r#"Box.box "bye stacks" : HeapStr"#,
     )
 }
+
+#[test]
+#[cfg(not(feature = "wasm"))]
+fn issue_2582_specialize_result_value() {
+    expect_success(
+        r#"\x, list -> if x > 0 then List.first list else Ok """#,
+        r"<function> : Num *, List Str -> Result Str [ ListWasEmpty ]*",
+    )
+}

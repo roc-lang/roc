@@ -1153,15 +1153,15 @@ impl<
                 let val = *x as f32;
                 ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, reg, val);
             }
-            (Literal::Str(x), Layout::Builtin(Builtin::Str)) if x.len() < 16 => {
+            (Literal::Str(x), Layout::Builtin(Builtin::Str)) if x.len() < 24 => {
                 // Load small string.
                 self.storage_manager.with_tmp_general_reg(
                     &mut self.buf,
                     |storage_manager, buf, reg| {
-                        let base_offset = storage_manager.claim_stack_area(sym, 16);
-                        let mut bytes = [0; 16];
+                        let base_offset = storage_manager.claim_stack_area(sym, 24);
+                        let mut bytes = [0; 24];
                         bytes[..x.len()].copy_from_slice(x.as_bytes());
-                        bytes[15] = (x.len() as u8) | 0b1000_0000;
+                        bytes[23] = (x.len() as u8) | 0b1000_0000;
 
                         let mut num_bytes = [0; 8];
                         num_bytes.copy_from_slice(&bytes[..8]);
@@ -1169,10 +1169,15 @@ impl<
                         ASM::mov_reg64_imm64(buf, reg, num);
                         ASM::mov_base32_reg64(buf, base_offset, reg);
 
-                        num_bytes.copy_from_slice(&bytes[8..]);
+                        num_bytes.copy_from_slice(&bytes[8..16]);
                         let num = i64::from_ne_bytes(num_bytes);
                         ASM::mov_reg64_imm64(buf, reg, num);
                         ASM::mov_base32_reg64(buf, base_offset + 8, reg);
+
+                        num_bytes.copy_from_slice(&bytes[16..]);
+                        let num = i64::from_ne_bytes(num_bytes);
+                        ASM::mov_reg64_imm64(buf, reg, num);
+                        ASM::mov_base32_reg64(buf, base_offset + 16, reg);
                     },
                 );
             }

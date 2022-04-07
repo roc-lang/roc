@@ -6139,6 +6139,32 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
+    fn missing_imports() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                interface Foobar
+                    exposes [ main, Foo ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD IMPORTS ───────────────────────────────────────────────────────────────
+
+                I am partway through parsing a header, but I got stuck here:
+
+                2│      exposes [ main, Foo ]
+                                             ^
+
+                I am expecting the `imports` keyword next, like 
+
+                    imports [ Animal, default, tame ]
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn exposes_identifier() {
         report_header_problem_as(
             indoc!(

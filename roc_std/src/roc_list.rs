@@ -13,6 +13,7 @@ where
 {
     elements: Option<NonNull<T>>,
     length: usize,
+    capacity: usize,
 }
 
 impl<T> RocList<T>
@@ -23,6 +24,7 @@ where
         RocList {
             elements: None,
             length: 0,
+            capacity: 0,
         }
     }
 
@@ -34,6 +36,10 @@ where
 
     pub fn len(&self) -> usize {
         self.length
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     pub fn is_empty(&self) -> bool {
@@ -128,6 +134,8 @@ where
             // a incrementing the reference count panics.
             self.length += 1;
         }
+
+        self.capacity = self.length
     }
 
     fn elements_and_storage(&self) -> Option<(NonNull<T>, &Cell<Storage>)> {
@@ -251,6 +259,7 @@ where
         Self {
             elements: self.elements,
             length: self.length,
+            capacity: self.capacity,
         }
     }
 }

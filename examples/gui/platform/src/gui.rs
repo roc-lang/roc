@@ -187,7 +187,6 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
             } => {
                 keyboard_modifiers = modifiers;
             }
-            Event::MainEventsCleared => window.request_redraw(),
             Event::RedrawRequested { .. } => {
                 // Get a command cmd_encoder for the current frame
                 let mut cmd_encoder =

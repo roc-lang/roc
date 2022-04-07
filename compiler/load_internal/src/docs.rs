@@ -7,9 +7,9 @@ use roc_can::scope::Scope;
 use roc_error_macros::todo_abilities;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
-use roc_parse::ast::CommentOrNewline;
 use roc_parse::ast::{self, TypeHeader};
 use roc_parse::ast::{AssignedField, Def};
+use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
 use roc_region::all::Loc;
 
 // Documentation generation requirements
@@ -166,97 +166,104 @@ fn generate_entry_doc<'a>(
             (new_acc, Some(comments_or_new_lines))
         }
 
-        Def::Annotation(loc_pattern, loc_ann) => match loc_pattern.value {
-            Pattern::Identifier(identifier) => {
-                // Check if the definition is exposed
-                if ident_ids.get_id(&identifier.into()).is_some() {
-                    let name = identifier.to_string();
-                    let doc_def = DocDef {
-                        name,
-                        type_annotation: type_to_docs(false, loc_ann.value),
-                        type_vars: Vec::new(),
-                        docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
-                    };
-                    acc.push(DocEntry::DocDef(doc_def));
+        Def::Value(def) => match def {
+            ValueDef::Annotation(loc_pattern, loc_ann) => match loc_pattern.value {
+                Pattern::Identifier(identifier) => {
+                    // Check if the definition is exposed
+                    if ident_ids.get_id(&identifier.into()).is_some() {
+                        let name = identifier.to_string();
+                        let doc_def = DocDef {
+                            name,
+                            type_annotation: type_to_docs(false, loc_ann.value),
+                            type_vars: Vec::new(),
+                            docs: before_comments_or_new_lines
+                                .and_then(comments_or_new_lines_to_docs),
+                        };
+                        acc.push(DocEntry::DocDef(doc_def));
+                    }
+                    (acc, None)
                 }
+
+                _ => (acc, None),
+            },
+
+            ValueDef::AnnotatedBody {
+                ann_pattern,
+                ann_type,
+                ..
+            } => match ann_pattern.value {
+                Pattern::Identifier(identifier) => {
+                    // Check if the definition is exposed
+                    if ident_ids.get_id(&identifier.into()).is_some() {
+                        let doc_def = DocDef {
+                            name: identifier.to_string(),
+                            type_annotation: type_to_docs(false, ann_type.value),
+                            type_vars: Vec::new(),
+                            docs: before_comments_or_new_lines
+                                .and_then(comments_or_new_lines_to_docs),
+                        };
+                        acc.push(DocEntry::DocDef(doc_def));
+                    }
+                    (acc, None)
+                }
+
+                _ => (acc, None),
+            },
+
+            ValueDef::Body(_, _) => (acc, None),
+
+            ValueDef::Expect(c) => todo!("documentation for tests {:?}", c),
+        },
+
+        Def::Type(def) => match def {
+            TypeDef::Alias {
+                header: TypeHeader { name, vars },
+                ann,
+            } => {
+                let mut type_vars = Vec::new();
+
+                for var in vars.iter() {
+                    if let Pattern::Identifier(ident_name) = var.value {
+                        type_vars.push(ident_name.to_string());
+                    }
+                }
+
+                let doc_def = DocDef {
+                    name: name.value.to_string(),
+                    type_annotation: type_to_docs(false, ann.value),
+                    type_vars,
+                    docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+                };
+                acc.push(DocEntry::DocDef(doc_def));
+
                 (acc, None)
             }
 
-            _ => (acc, None),
-        },
-        Def::AnnotatedBody {
-            ann_pattern,
-            ann_type,
-            ..
-        } => match ann_pattern.value {
-            Pattern::Identifier(identifier) => {
-                // Check if the definition is exposed
-                if ident_ids.get_id(&identifier.into()).is_some() {
-                    let doc_def = DocDef {
-                        name: identifier.to_string(),
-                        type_annotation: type_to_docs(false, ann_type.value),
-                        type_vars: Vec::new(),
-                        docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
-                    };
-                    acc.push(DocEntry::DocDef(doc_def));
+            TypeDef::Opaque {
+                header: TypeHeader { name, vars },
+                ..
+            } => {
+                let mut type_vars = Vec::new();
+
+                for var in vars.iter() {
+                    if let Pattern::Identifier(ident_name) = var.value {
+                        type_vars.push(ident_name.to_string());
+                    }
                 }
+
+                let doc_def = DocDef {
+                    name: name.value.to_string(),
+                    type_annotation: TypeAnnotation::NoTypeAnn,
+                    type_vars,
+                    docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+                };
+                acc.push(DocEntry::DocDef(doc_def));
+
                 (acc, None)
             }
 
-            _ => (acc, None),
+            TypeDef::Ability { .. } => todo_abilities!(),
         },
-
-        Def::Alias {
-            header: TypeHeader { name, vars },
-            ann,
-        } => {
-            let mut type_vars = Vec::new();
-
-            for var in vars.iter() {
-                if let Pattern::Identifier(ident_name) = var.value {
-                    type_vars.push(ident_name.to_string());
-                }
-            }
-
-            let doc_def = DocDef {
-                name: name.value.to_string(),
-                type_annotation: type_to_docs(false, ann.value),
-                type_vars,
-                docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
-            };
-            acc.push(DocEntry::DocDef(doc_def));
-
-            (acc, None)
-        }
-
-        Def::Opaque {
-            header: TypeHeader { name, vars },
-            ..
-        } => {
-            let mut type_vars = Vec::new();
-
-            for var in vars.iter() {
-                if let Pattern::Identifier(ident_name) = var.value {
-                    type_vars.push(ident_name.to_string());
-                }
-            }
-
-            let doc_def = DocDef {
-                name: name.value.to_string(),
-                type_annotation: TypeAnnotation::NoTypeAnn,
-                type_vars,
-                docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
-            };
-            acc.push(DocEntry::DocDef(doc_def));
-
-            (acc, None)
-        }
-
-        Def::Ability { .. } => todo_abilities!(),
-
-        Def::Body(_, _) => (acc, None),
-
-        Def::Expect(c) => todo!("documentation for tests {:?}", c),
 
         Def::NotYetImplemented(s) => todo!("{}", s),
     }

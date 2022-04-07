@@ -1074,7 +1074,7 @@ fn closure_in_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn specialize_closure() {
     use roc_std::RocList;
 
@@ -2660,7 +2660,7 @@ fn pattern_match_unit_tag() {
 // see for why this is disabled on wasm32 https://github.com/rtfeldman/roc/issues/1687
 #[cfg(not(feature = "wasm-cli-run"))]
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mirror_llvm_alignment_padding() {
     // see https://github.com/rtfeldman/roc/issues/1569
     assert_evals_to!(
@@ -2683,7 +2683,7 @@ fn mirror_llvm_alignment_padding() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_set_bool() {
     assert_evals_to!(
         indoc!(
@@ -2708,7 +2708,7 @@ fn lambda_set_bool() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_set_byte() {
     assert_evals_to!(
         indoc!(
@@ -2762,7 +2762,7 @@ fn lambda_set_struct_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_set_enum_byte_byte() {
     assert_evals_to!(
         indoc!(

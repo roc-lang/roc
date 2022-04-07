@@ -1,15 +1,17 @@
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
-use roc_module::low_level::{LowLevel, LowLevel::*};
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
+use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_mono::low_level::HigherOrder;
 
-use crate::backend::WasmBackend;
-use crate::layout::CallConv;
-use crate::layout::{StackMemoryFormat, WasmLayout};
+use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
+use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
 use crate::storage::{StackMemoryLocation, StoredValue};
 use crate::wasm_module::{Align, ValueType};
+use crate::TARGET_INFO;
 
 /// Number types used for Wasm code gen
 /// Unlike other enums, this contains no details about layout or storage.
@@ -175,6 +177,7 @@ impl<'a> LowLevelCall<'a> {
     ///  Main entrypoint from WasmBackend
     pub fn generate(&self, backend: &mut WasmBackend<'a>) {
         use CodeGenNumType::*;
+        use LowLevel::*;
 
         let panic_ret_type = || {
             internal_error!(
@@ -188,11 +191,17 @@ impl<'a> LowLevelCall<'a> {
             // Str
             StrConcat => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT),
             StrJoinWith => self.load_args_and_call_zig(backend, bitcode::STR_JOIN_WITH),
-            StrIsEmpty => {
-                self.load_args(backend);
-                backend.code_builder.i64_const(i64::MIN);
-                backend.code_builder.i64_eq();
-            }
+            StrIsEmpty => match backend.storage.get(&self.arguments[0]) {
+                StoredValue::StackMemory { location, .. } => {
+                    let (local_id, offset) =
+                        location.local_and_offset(backend.storage.stack_frame_pointer);
+                    backend.code_builder.get_local(local_id);
+                    backend.code_builder.i32_load8_u(Align::Bytes1, offset + 11);
+                    backend.code_builder.i32_const(0x80);
+                    backend.code_builder.i32_eq();
+                }
+                _ => internal_error!("invalid storage for Str"),
+            },
             StrStartsWith => self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH),
             StrStartsWithCodePt => {
                 self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_CODE_PT)
@@ -224,7 +233,7 @@ impl<'a> LowLevelCall<'a> {
                         &bitcode::STR_TO_FLOAT[float_width]
                     }
                     Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
-                    rest => internal_error!("Unexpected builtin {:?} for StrToNum", rest),
+                    rest => internal_error!("Unexpected layout {:?} for StrToNum", rest),
                 };
 
                 self.load_args_and_call_zig(backend, intrinsic);
@@ -260,14 +269,21 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
+            ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
+            | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
+            | ListAny | ListAll | ListFindUnsafe | DictWalk => {
+                internal_error!("HigherOrder lowlevels should not be handled here")
+            }
+
             ListGetUnsafe | ListReplaceUnsafe | ListSingle | ListRepeat | ListReverse
             | ListConcat | ListContains | ListAppend | ListPrepend | ListJoin | ListRange
-            | ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf
-            | ListWalk | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs
-            | ListSortWith | ListSublist | ListDropAt | ListSwap | ListAny | ListAll
-            | ListFindUnsafe | DictSize | DictEmpty | DictInsert | DictRemove | DictContains
-            | DictGetUnsafe | DictKeys | DictValues | DictUnion | DictIntersection
-            | DictDifference | DictWalk | SetFromList => {
+            | ListSublist | ListDropAt | ListSwap => {
+                todo!("{:?}", self.lowlevel);
+            }
+
+            DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
+            | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference
+            | SetFromList => {
                 todo!("{:?}", self.lowlevel);
             }
 
@@ -661,8 +677,14 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
             }
+            NumToFloatCast => {
+                todo!("implement toF32 and toF64");
+            }
             NumToIntChecked => {
                 todo!()
+            }
+            NumToFloatChecked => {
+                todo!("implement toF32Checked and toF64Checked");
             }
             And => {
                 self.load_args(backend);
@@ -705,7 +727,7 @@ impl<'a> LowLevelCall<'a> {
             "Cannot do `==` comparison on different types"
         );
 
-        let invert_result = matches!(self.lowlevel, NotEq);
+        let invert_result = matches!(self.lowlevel, LowLevel::NotEq);
 
         match arg_layout {
             Layout::Builtin(
@@ -870,7 +892,8 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
             match value_type {
-                ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(1), // always true for integers
+                // Integers are always finite. Just return True.
+                ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(1),
                 ValueType::F32 => {
                     backend.code_builder.i32_reinterpret_f32();
                     backend.code_builder.i32_const(0x7f80_0000);
@@ -893,7 +916,10 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
             let (local_id, offset) = location.local_and_offset(backend.storage.stack_frame_pointer);
 
             match format {
-                StackMemoryFormat::Int128 => backend.code_builder.i32_const(1),
+                // Integers and fixed-point numbers are always finite. Just return True.
+                StackMemoryFormat::Int128 | StackMemoryFormat::Decimal => {
+                    backend.code_builder.i32_const(1)
+                }
 
                 // f128 is not supported anywhere else but it's easy to support it here, so why not...
                 StackMemoryFormat::Float128 => {
@@ -905,19 +931,151 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
                     backend.code_builder.i64_ne();
                 }
 
-                StackMemoryFormat::Decimal => {
-                    backend.code_builder.get_local(local_id);
-                    backend.code_builder.i64_load(Align::Bytes4, offset + 8);
-                    backend.code_builder.i64_const(0x7100_0000_0000_0000);
-                    backend.code_builder.i64_and();
-                    backend.code_builder.i64_const(0x7100_0000_0000_0000);
-                    backend.code_builder.i64_ne();
-                }
-
                 StackMemoryFormat::DataStructure => {
                     internal_error!("Tried to perform NumIsFinite on a data structure")
                 }
             }
         }
+    }
+}
+
+pub fn call_higher_order_lowlevel<'a>(
+    backend: &mut WasmBackend<'a>,
+    return_sym: Symbol,
+    return_layout: &Layout<'a>,
+    higher_order: &'a HigherOrderLowLevel<'a>,
+) {
+    use HigherOrder::*;
+
+    let HigherOrderLowLevel {
+        op,
+        passed_function,
+        ..
+    } = higher_order;
+
+    let PassedFunction {
+        name: fn_name,
+        argument_layouts,
+        return_layout: result_layout,
+        owns_captured_environment,
+        captured_environment,
+        ..
+    } = passed_function;
+
+    let closure_data_layout = match backend.storage.symbol_layouts[captured_environment] {
+        Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(),
+        Layout::Struct {
+            field_layouts: &[], ..
+        } => Layout::UNIT,
+        x => internal_error!("Closure data has an invalid layout\n{:?}", x),
+    };
+    let closure_data_exists: bool = closure_data_layout != Layout::UNIT;
+
+    // We create a wrapper around the passed function, which just unboxes the arguments.
+    // This allows Zig builtins to have a generic pointer-based interface.
+    let source = {
+        let passed_proc_layout = ProcLayout {
+            arguments: argument_layouts,
+            result: *result_layout,
+        };
+        let passed_proc_index = backend
+            .proc_lookup
+            .iter()
+            .position(|ProcLookupData { name, layout, .. }| {
+                name == fn_name && layout == &passed_proc_layout
+            })
+            .unwrap();
+        ProcSource::HigherOrderWrapper(passed_proc_index)
+    };
+    let wrapper_sym = backend.create_symbol(&format!("#wrap#{:?}", fn_name));
+    let wrapper_layout = {
+        let mut wrapper_arg_layouts: Vec<Layout<'a>> =
+            Vec::with_capacity_in(argument_layouts.len() + 1, backend.env.arena);
+
+        let n_non_closure_args = if closure_data_exists {
+            argument_layouts.len() - 1
+        } else {
+            argument_layouts.len()
+        };
+
+        wrapper_arg_layouts.push(closure_data_layout);
+        wrapper_arg_layouts.extend(
+            argument_layouts
+                .iter()
+                .take(n_non_closure_args)
+                .map(Layout::Boxed),
+        );
+        wrapper_arg_layouts.push(Layout::Boxed(result_layout));
+
+        ProcLayout {
+            arguments: wrapper_arg_layouts.into_bump_slice(),
+            result: Layout::UNIT,
+        }
+    };
+
+    let wrapper_fn_idx = backend.register_helper_proc(wrapper_sym, wrapper_layout, source);
+    let inc_fn_idx = backend.gen_refcount_inc_for_zig(closure_data_layout);
+
+    let wrapper_fn_ptr = backend.get_fn_table_index(wrapper_fn_idx);
+    let inc_fn_ptr = backend.get_fn_table_index(inc_fn_idx);
+
+    match op {
+        // List.map : List elem_x, (elem_x -> elem_ret) -> List elem_ret
+        ListMap { xs } => {
+            let list_layout_in = backend.storage.symbol_layouts[xs];
+
+            let (elem_x, elem_ret) = match (list_layout_in, return_layout) {
+                (
+                    Layout::Builtin(Builtin::List(elem_x)),
+                    Layout::Builtin(Builtin::List(elem_ret)),
+                ) => (elem_x, elem_ret),
+                _ => unreachable!("invalid layout for List.map arguments"),
+            };
+            let elem_x_size = elem_x.stack_size(TARGET_INFO);
+            let (elem_ret_size, elem_ret_align) = elem_ret.stack_size_and_alignment(TARGET_INFO);
+
+            let cb = &mut backend.code_builder;
+
+            // Load return pointer & argument values
+            // Wasm signature: (i32, i64, i64, i32, i32, i32, i32, i32, i32, i32) -> nil
+            backend.storage.load_symbols(cb, &[return_sym]);
+            backend.storage.load_symbol_zig(cb, *xs); // list with capacity = 2 x i64 args
+            cb.i32_const(wrapper_fn_ptr);
+            if closure_data_exists {
+                backend.storage.load_symbols(cb, &[*captured_environment]);
+            } else {
+                // Normally, a zero-size arg would be eliminated in code gen, but Zig expects one!
+                cb.i32_const(0); // null pointer
+            }
+            cb.i32_const(inc_fn_ptr);
+            cb.i32_const(*owns_captured_environment as i32);
+            cb.i32_const(elem_ret_align as i32); // used for allocating the new list
+            cb.i32_const(elem_x_size as i32);
+            cb.i32_const(elem_ret_size as i32);
+
+            let num_wasm_args = 10; // 1 return pointer + 8 Zig args + list 2nd i64
+            let has_return_val = false;
+            backend.call_zig_builtin_after_loading_args(
+                bitcode::LIST_MAP,
+                num_wasm_args,
+                has_return_val,
+            );
+        }
+
+        ListMap2 { .. }
+        | ListMap3 { .. }
+        | ListMap4 { .. }
+        | ListMapWithIndex { .. }
+        | ListKeepIf { .. }
+        | ListWalk { .. }
+        | ListWalkUntil { .. }
+        | ListWalkBackwards { .. }
+        | ListKeepOks { .. }
+        | ListKeepErrs { .. }
+        | ListSortWith { .. }
+        | ListAny { .. }
+        | ListAll { .. }
+        | ListFindUnsafe { .. }
+        | DictWalk { .. } => todo!("{:?}", op),
     }
 }

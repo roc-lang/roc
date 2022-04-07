@@ -282,10 +282,10 @@ pub fn canonicalize_pattern<'a>(
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok((float, bound)) => Pattern::FloatLiteral(
+                Ok((str_without_suffix, float, bound)) => Pattern::FloatLiteral(
                     var_store.fresh(),
                     var_store.fresh(),
-                    (str).into(),
+                    str_without_suffix.into(),
                     float,
                     bound,
                 ),

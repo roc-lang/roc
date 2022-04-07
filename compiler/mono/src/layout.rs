@@ -554,6 +554,31 @@ impl<'a> UnionLayout<'a> {
 
         (size, alignment_bytes)
     }
+
+    /// Very important to use this when doing a memcpy!
+    fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
+        match self {
+            UnionLayout::NonRecursive(tags) => {
+                let id_layout = self.tag_id_layout();
+
+                let mut size = 0;
+
+                for field_layouts in tags.iter() {
+                    let fields = Layout::struct_no_name_order(field_layouts);
+                    let fields_and_id = [fields, id_layout];
+
+                    let data = Layout::struct_no_name_order(&fields_and_id);
+                    size = size.max(data.stack_size_without_alignment(target_info));
+                }
+
+                size
+            }
+            UnionLayout::Recursive(_)
+            | UnionLayout::NonNullableUnwrapped(_)
+            | UnionLayout::NullableWrapped { .. }
+            | UnionLayout::NullableUnwrapped { .. } => target_info.ptr_width() as u32,
+        }
+    }
 }
 
 /// Custom type so we can get the numeric representation of a symbol in tests (so `#UserApp.3`
@@ -1012,12 +1037,26 @@ impl<'a> Layout<'a> {
         false
     }
 
-    pub fn is_passed_by_reference(&self) -> bool {
+    pub fn is_passed_by_reference(&self, target_info: TargetInfo) -> bool {
         match self {
-            Layout::Union(UnionLayout::NonRecursive(_)) => true,
-            Layout::LambdaSet(lambda_set) => {
-                lambda_set.runtime_representation().is_passed_by_reference()
+            Layout::Builtin(builtin) => {
+                use Builtin::*;
+
+                match target_info.ptr_width() {
+                    PtrWidth::Bytes4 => {
+                        // more things fit into a register
+                        false
+                    }
+                    PtrWidth::Bytes8 => {
+                        // currently, only Str is passed by-reference internally
+                        matches!(builtin, Str)
+                    }
+                }
             }
+            Layout::Union(UnionLayout::NonRecursive(_)) => true,
+            Layout::LambdaSet(lambda_set) => lambda_set
+                .runtime_representation()
+                .is_passed_by_reference(target_info),
             _ => false,
         }
     }
@@ -1037,7 +1076,8 @@ impl<'a> Layout<'a> {
         (size, alignment)
     }
 
-    fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
+    /// Very important to use this when doing a memcpy!
+    pub fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
         use Layout::*;
 
         match self {
@@ -1051,18 +1091,7 @@ impl<'a> Layout<'a> {
 
                 sum
             }
-            Union(variant) => {
-                use UnionLayout::*;
-
-                match variant {
-                    NonRecursive(_) => variant.data_size_and_alignment(target_info).0,
-
-                    Recursive(_)
-                    | NullableWrapped { .. }
-                    | NullableUnwrapped { .. }
-                    | NonNullableUnwrapped(_) => target_info.ptr_width() as u32,
-                }
-            }
+            Union(variant) => variant.stack_size_without_alignment(target_info),
             LambdaSet(lambda_set) => lambda_set
                 .runtime_representation()
                 .stack_size_without_alignment(target_info),
@@ -1165,8 +1194,7 @@ impl<'a> Layout<'a> {
                 match variant {
                     NonRecursive(fields) => fields
                         .iter()
-                        .map(|ls| ls.iter())
-                        .flatten()
+                        .flat_map(|ls| ls.iter())
                         .any(|f| f.contains_refcounted()),
                     Recursive(_)
                     | NullableWrapped { .. }
@@ -1384,17 +1412,15 @@ impl<'a> Builtin<'a> {
     const DECIMAL_SIZE: u32 = std::mem::size_of::<i128>() as u32;
 
     /// Number of machine words in an empty one of these
-    pub const STR_WORDS: u32 = 2;
+    pub const STR_WORDS: u32 = 3;
     pub const DICT_WORDS: u32 = 3;
     pub const SET_WORDS: u32 = Builtin::DICT_WORDS; // Set is an alias for Dict with {} for value
-    pub const LIST_WORDS: u32 = 2;
+    pub const LIST_WORDS: u32 = 3;
 
-    /// Layout of collection wrapper for List and Str - a struct of (pointer, length).
-    ///
-    /// We choose this layout (with pointer first) because it's how
-    /// Rust slices are laid out, meaning we can cast to/from them for free.
+    /// Layout of collection wrapper for List and Str - a struct of (pointer, length, capacity).
     pub const WRAPPER_PTR: u32 = 0;
     pub const WRAPPER_LEN: u32 = 1;
+    pub const WRAPPER_CAPACITY: u32 = 2;
 
     pub fn stack_size(&self, target_info: TargetInfo) -> u32 {
         use Builtin::*;
@@ -2946,5 +2972,17 @@ mod test {
         let target_info = TargetInfo::default_x86_64();
         assert_eq!(layout.stack_size(target_info), 1);
         assert_eq!(layout.alignment_bytes(target_info), 1);
+    }
+
+    #[test]
+    fn memcpy_size_result_u32_unit() {
+        let ok_tag = &[Layout::Builtin(Builtin::Int(IntWidth::U32))];
+        let err_tag = &[Layout::UNIT];
+        let tags = [ok_tag as &[_], err_tag as &[_]];
+        let union_layout = UnionLayout::NonRecursive(&tags as &[_]);
+        let layout = Layout::Union(union_layout);
+
+        let target_info = TargetInfo::default_x86_64();
+        assert_eq!(layout.stack_size_without_alignment(target_info), 5);
     }
 }

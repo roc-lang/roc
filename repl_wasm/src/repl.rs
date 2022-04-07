@@ -68,7 +68,7 @@ impl<'a> ReplAppMemory for WasmMemory<'a> {
         // We can't use RocStr, we need our own small/big string logic.
         // The first field is *not* a pointer. We can calculate a pointer for it, but only for big strings.
         // If changing this code, remember it also runs in wasm32, not just the app.
-        let last_byte = self.copied_bytes[addr + 7] as i8;
+        let last_byte = self.copied_bytes[addr + 4 + 4 + 3] as i8;
         let is_small = last_byte < 0;
 
         let str_bytes = if is_small {

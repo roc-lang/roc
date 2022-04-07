@@ -1,6 +1,151 @@
+interface Num
+    exposes
+        [
+            Num,
+            Int,
+            Float,
+
+            Integer,
+            FloatingPoint,
+
+            I128,
+            I64,
+            I32,
+            I16,
+            I8,
+
+            U128,
+            U64,
+            U32,
+            U16,
+            U8,
+
+            Signed128,
+            Signed64,
+            Signed32,
+            Signed16,
+            Signed8,
+
+            Unsigned128,
+            Unsigned64,
+            Unsigned32,
+            Unsigned16,
+            Unsigned8,
+
+            Nat,
+            Dec,
+
+            F32,
+            F64,
+
+            Natural,
+            Decimal,
+
+            Binary32,
+            Binary64,
+
+            maxFloat,
+            minFloat,
+            abs,
+            neg,
+            add,
+            sub,
+            mul,
+            isLt,
+            isLte,
+            isGt,
+            isGte,
+            sin,
+            cos,
+            tan,
+            atan,
+            acos,
+            asin,
+            isZero,
+            isEven,
+            isOdd,
+            toFloat,
+            isPositive,
+            isNegative,
+            rem,
+            div,
+            modInt,
+            modFloat,
+            sqrt,
+            log,
+            round,
+            ceiling,
+            floor,
+            compare,
+            pow,
+            powInt,
+            addWrap,
+            addChecked,
+            addSaturated,
+            bitwiseAnd,
+            bitwiseXor,
+            bitwiseOr,
+            shiftLeftBy,
+            shiftRightBy,
+            shiftRightZfBy,
+            subWrap,
+            subChecked,
+            subSaturated,
+            mulWrap,
+            mulChecked,
+            intCast,
+            bytesToU16,
+            bytesToU32,
+            divCeil,
+            divFloor,
+            toStr,
+            isMultipleOf,
+            minI8,
+            maxI8,
+            minU8,
+            maxU8,
+            minI16,
+            maxI16,
+            minU16,
+            maxU16,
+            minI32,
+            maxI32,
+            minU32,
+            maxU32,
+            minI64,
+            maxI64,
+            minU64,
+            maxU64,
+            minI128,
+            maxI128,
+            minU128,
+            maxU128,
+            toI8,
+            toI8Checked,
+            toI16,
+            toI16Checked,
+            toI32,
+            toI32Checked,
+            toI64,
+            toI64Checked,
+            toI128,
+            toI128Checked,
+            toU8,
+            toU8Checked,
+            toU16,
+            toU16Checked,
+            toU32,
+            toU32Checked,
+            toU64,
+            toU64Checked,
+            toU128,
+            toU128Checked,
+        ]
+    imports [ ]
+
 Num range : [ @Num range ]
-Int range : Num (Integer range) 
-Float range : Num (FloatingPoint range) 
+Int range : Num (Integer range)
+Float range : Num (FloatingPoint range)
 
 Signed128 : [ @Signed128 ]
 Signed64 : [ @Signed64 ]
@@ -22,7 +167,7 @@ I128 : Num (Integer Signed128)
 I64 : Num (Integer Signed64)
 I32 : Num (Integer Signed32)
 I16 : Num (Integer Signed16)
-I8 : Int Signed8 
+I8 : Int Signed8
 
 U128 : Num (Integer Unsigned128)
 U64 : Num (Integer Unsigned64)
@@ -42,7 +187,7 @@ F64 : Num (FloatingPoint Binary64)
 F32 : Num (FloatingPoint Binary32)
 Dec : Num (FloatingPoint Decimal)
 
-# ------- Functions 
+# ------- Functions
 
 toStr : Num * -> Str
 intCast : Int a -> Int b
@@ -191,6 +336,9 @@ toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
 
+toF32 : Num * -> F32
+toF64 : Num * -> F64
+
 toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
 toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
 toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
@@ -201,3 +349,5 @@ toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
 toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
 toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
 toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
+toF64Checked : Num * -> Result F64 [ OutOfBounds ]*

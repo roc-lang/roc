@@ -19,17 +19,43 @@ mod test_load {
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
     use roc_constrain::module::ExposedByModule;
-    use roc_load_internal::file::{load_and_typecheck, LoadedModule};
+    use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem, Phase};
     use roc_module::ident::ModuleName;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_problem::can::Problem;
     use roc_region::all::LineInfo;
     use roc_reporting::report::can_problem;
     use roc_reporting::report::RocDocAllocator;
+    use roc_target::TargetInfo;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
     use std::collections::HashMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
+    fn load_and_typecheck<'a>(
+        arena: &'a Bump,
+        filename: PathBuf,
+        src_dir: &Path,
+        exposed_types: ExposedByModule,
+        target_info: TargetInfo,
+    ) -> Result<LoadedModule, LoadingProblem<'a>> {
+        use LoadResult::*;
+
+        let load_start = LoadStart::from_path(arena, filename)?;
+
+        match roc_load_internal::file::load(
+            arena,
+            load_start,
+            src_dir,
+            exposed_types,
+            Phase::SolveTypes,
+            target_info,
+            Default::default(), // these tests will re-compile the builtins
+        )? {
+            Monomorphized(_) => unreachable!(""),
+            TypeChecked(module) => Ok(module),
+        }
+    }
 
     const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
 

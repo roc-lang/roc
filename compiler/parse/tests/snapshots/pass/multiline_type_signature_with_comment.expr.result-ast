@@ -1,19 +1,21 @@
 Defs(
     [
-        @0-19 Annotation(
-            @0-1 Identifier(
-                "f",
-            ),
-            @17-19 SpaceBefore(
-                Record {
-                    fields: [],
-                    ext: None,
-                },
-                [
-                    LineComment(
-                        " comment",
-                    ),
-                ],
+        @0-19 Value(
+            Annotation(
+                @0-1 Identifier(
+                    "f",
+                ),
+                @17-19 SpaceBefore(
+                    Record {
+                        fields: [],
+                        ext: None,
+                    },
+                    [
+                        LineComment(
+                            " comment",
+                        ),
+                    ],
+                ),
             ),
         ),
     ],

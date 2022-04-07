@@ -301,7 +301,8 @@ impl<'a> Storage<'a> {
         }
     }
 
-    fn load_symbol_zig(&mut self, code_builder: &mut CodeBuilder, arg: Symbol) {
+    // TODO: expose something higher level instead, shared among higher-order calls
+    pub fn load_symbol_zig(&mut self, code_builder: &mut CodeBuilder, arg: Symbol) {
         if let StoredValue::StackMemory {
             location,
             size,
@@ -402,7 +403,7 @@ impl<'a> Storage<'a> {
 
         let return_method = return_layout.return_method();
         let return_type = match return_method {
-            ReturnMethod::Primitive(ty) => Some(ty),
+            ReturnMethod::Primitive(ty, _) => Some(ty),
             ReturnMethod::NoReturnValue => None,
             ReturnMethod::WriteToPointerArg => {
                 wasm_arg_types.push(PTR_TYPE);
@@ -496,7 +497,7 @@ impl<'a> Storage<'a> {
                             size
                         );
                     }
-                };
+                }
                 size
             }
         }
