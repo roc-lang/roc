@@ -16,7 +16,7 @@ use glyph_brush::OwnedSection;
 use pipelines::RectResources;
 use std::error::Error;
 use wgpu::{CommandEncoder, LoadOp, RenderPass, TextureView};
-use wgpu_glyph::{GlyphBrush, GlyphCruncher};
+use wgpu_glyph::GlyphBrush;
 use winit::{
     dpi::PhysicalSize,
     event,
@@ -298,9 +298,9 @@ fn begin_render_pass<'a>(
 }
 
 #[derive(Copy, Clone, Debug, Default)]
-struct Bounds {
-    width: f32,
-    height: f32,
+pub struct Bounds {
+    pub height: f32,
+    pub width: f32,
 }
 
 #[derive(Clone, Debug)]

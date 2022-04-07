@@ -2,7 +2,7 @@ use crate::graphics::colors::Rgba;
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::ManuallyDrop;
-use roc_std::{ReferenceCount, RocStr};
+use roc_std::{ReferenceCount, RocList, RocStr};
 use std::ffi::CStr;
 use std::fmt::Debug;
 use std::mem::MaybeUninit;
@@ -13,7 +13,7 @@ extern "C" {
     fn roc_program() -> ();
 
     #[link_name = "roc__programForHost_1_Render_caller"]
-    fn call_Render(state: *const State, closure_data: *const u8, output: *mut RocElem);
+    fn call_Render(state: *const State, closure_data: *const u8, output: *mut RocList<RocElem>);
 
     #[link_name = "roc__programForHost_size"]
     fn roc_program_size() -> i64;
@@ -81,9 +81,9 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ElemId(*const RocElemEntry);
 
-#[repr(packed)] // TODO this should be repr(C) but it's repr(packed) to work around https://github.com/rtfeldman/roc/issues/2803
+#[repr(C)]
 pub union RocElemEntry {
-    pub rect: ManuallyDrop<ButtonStyles>,
+    pub rect: ManuallyDrop<RocRect>,
     pub text: ManuallyDrop<RocStr>,
 }
 
@@ -153,7 +153,14 @@ impl RocElem {
 #[repr(C)]
 #[derive(Debug)]
 pub struct RocRect {
-    pub styles: ButtonStyles,
+    pub border_width: f32,
+    pub color: Rgba,
+
+    // These must be in this order for alphabetization!
+    pub height: f32,
+    pub left: f32,
+    pub top: f32,
+    pub width: f32,
 }
 
 unsafe impl ReferenceCount for RocElem {
