@@ -1,17 +1,19 @@
 [
     @0-9 SpaceAfter(
         SpaceBefore(
-            Opaque {
-                header: TypeHeader {
-                    name: @0-3 "Age",
-                    vars: [],
+            Type(
+                Opaque {
+                    header: TypeHeader {
+                        name: @0-3 "Age",
+                        vars: [],
+                    },
+                    typ: @7-9 Apply(
+                        "",
+                        "U8",
+                        [],
+                    ),
                 },
-                typ: @7-9 Apply(
-                    "",
-                    "U8",
-                    [],
-                ),
-            },
+            ),
             [],
         ),
         [

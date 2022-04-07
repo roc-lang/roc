@@ -1,41 +1,43 @@
 Defs(
     [
-        @0-37 Ability {
-            header: TypeHeader {
-                name: @0-4 "Hash",
-                vars: [],
-            },
-            loc_has: @5-8 Has,
-            members: [
-                AbilityMember {
-                    name: @9-13 "hash",
-                    typ: @21-37 Where(
-                        @21-24 Function(
-                            [
-                                @16-17 BoundVariable(
-                                    "a",
-                                ),
-                            ],
-                            @21-24 Apply(
-                                "",
-                                "U64",
-                                [],
-                            ),
-                        ),
-                        [
-                            @27-37 HasClause {
-                                var: @27-28 "a",
-                                ability: @33-37 Apply(
+        @0-37 Type(
+            Ability {
+                header: TypeHeader {
+                    name: @0-4 "Hash",
+                    vars: [],
+                },
+                loc_has: @5-8 Has,
+                members: [
+                    AbilityMember {
+                        name: @9-13 "hash",
+                        typ: @21-37 Where(
+                            @21-24 Function(
+                                [
+                                    @16-17 BoundVariable(
+                                        "a",
+                                    ),
+                                ],
+                                @21-24 Apply(
                                     "",
-                                    "Hash",
+                                    "U64",
                                     [],
                                 ),
-                            },
-                        ],
-                    ),
-                },
-            ],
-        },
+                            ),
+                            [
+                                @27-37 HasClause {
+                                    var: @27-28 "a",
+                                    ability: @33-37 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                },
+                            ],
+                        ),
+                    },
+                ],
+            },
+        ),
     ],
     @39-40 SpaceBefore(
         Num(

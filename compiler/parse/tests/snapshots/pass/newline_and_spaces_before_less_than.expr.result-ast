@@ -1,25 +1,27 @@
 Defs(
     [
-        @0-13 Body(
-            @0-1 Identifier(
-                "x",
-            ),
-            @4-13 BinOps(
-                [
-                    (
-                        @4-5 SpaceAfter(
-                            Num(
-                                "1",
+        @0-13 Value(
+            Body(
+                @0-1 Identifier(
+                    "x",
+                ),
+                @4-13 BinOps(
+                    [
+                        (
+                            @4-5 SpaceAfter(
+                                Num(
+                                    "1",
+                                ),
+                                [
+                                    Newline,
+                                ],
                             ),
-                            [
-                                Newline,
-                            ],
+                            @10-11 LessThan,
                         ),
-                        @10-11 LessThan,
+                    ],
+                    @12-13 Num(
+                        "2",
                     ),
-                ],
-                @12-13 Num(
-                    "2",
                 ),
             ),
         ),

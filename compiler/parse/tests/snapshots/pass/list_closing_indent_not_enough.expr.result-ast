@@ -1,65 +1,67 @@
 Defs(
     [
-        @0-58 Body(
-            @0-7 Malformed(
-                "my_list",
-            ),
-            @10-58 List(
-                Collection {
-                    items: [
-                        @16-17 SpaceBefore(
-                            Num(
-                                "0",
+        @0-58 Value(
+            Body(
+                @0-7 Malformed(
+                    "my_list",
+                ),
+                @10-58 List(
+                    Collection {
+                        items: [
+                            @16-17 SpaceBefore(
+                                Num(
+                                    "0",
+                                ),
+                                [
+                                    Newline,
+                                ],
                             ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                        @23-48 SpaceBefore(
-                            List(
-                                Collection {
-                                    items: [
-                                        @33-34 SpaceBefore(
-                                            Var {
-                                                module_name: "",
-                                                ident: "a",
-                                            },
-                                            [
-                                                Newline,
-                                            ],
-                                        ),
-                                        @44-45 SpaceBefore(
-                                            Var {
-                                                module_name: "",
-                                                ident: "b",
-                                            },
-                                            [
-                                                Newline,
-                                            ],
-                                        ),
-                                    ],
-                                    final_comments: [
-                                        Newline,
-                                    ],
-                                },
+                            @23-48 SpaceBefore(
+                                List(
+                                    Collection {
+                                        items: [
+                                            @33-34 SpaceBefore(
+                                                Var {
+                                                    module_name: "",
+                                                    ident: "a",
+                                                },
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                            @44-45 SpaceBefore(
+                                                Var {
+                                                    module_name: "",
+                                                    ident: "b",
+                                                },
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                        ],
+                                        final_comments: [
+                                            Newline,
+                                        ],
+                                    },
+                                ),
+                                [
+                                    Newline,
+                                ],
                             ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                        @54-55 SpaceBefore(
-                            Num(
-                                "1",
+                            @54-55 SpaceBefore(
+                                Num(
+                                    "1",
+                                ),
+                                [
+                                    Newline,
+                                ],
                             ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                    ],
-                    final_comments: [
-                        Newline,
-                    ],
-                },
+                        ],
+                        final_comments: [
+                            Newline,
+                        ],
+                    },
+                ),
             ),
         ),
     ],

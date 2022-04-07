@@ -1,79 +1,83 @@
 Defs(
     [
-        @0-33 Ability {
-            header: TypeHeader {
-                name: @0-3 "Ab1",
-                vars: [],
-            },
-            loc_has: @4-7 Has,
-            members: [
-                AbilityMember {
-                    name: @8-11 "ab1",
-                    typ: @19-33 Where(
-                        @19-21 Function(
-                            [
-                                @14-15 BoundVariable(
-                                    "a",
-                                ),
-                            ],
-                            @19-21 Record {
-                                fields: [],
-                                ext: None,
-                            },
-                        ),
-                        [
-                            @24-33 HasClause {
-                                var: @24-25 "a",
-                                ability: @30-33 Apply(
-                                    "",
-                                    "Ab1",
-                                    [],
-                                ),
-                            },
-                        ],
-                    ),
+        @0-33 Type(
+            Ability {
+                header: TypeHeader {
+                    name: @0-3 "Ab1",
+                    vars: [],
                 },
-            ],
-        },
+                loc_has: @4-7 Has,
+                members: [
+                    AbilityMember {
+                        name: @8-11 "ab1",
+                        typ: @19-33 Where(
+                            @19-21 Function(
+                                [
+                                    @14-15 BoundVariable(
+                                        "a",
+                                    ),
+                                ],
+                                @19-21 Record {
+                                    fields: [],
+                                    ext: None,
+                                },
+                            ),
+                            [
+                                @24-33 HasClause {
+                                    var: @24-25 "a",
+                                    ability: @30-33 Apply(
+                                        "",
+                                        "Ab1",
+                                        [],
+                                    ),
+                                },
+                            ],
+                        ),
+                    },
+                ],
+            },
+        ),
     ],
     @35-71 SpaceBefore(
         Defs(
             [
-                @35-68 Ability {
-                    header: TypeHeader {
-                        name: @35-38 "Ab2",
-                        vars: [],
-                    },
-                    loc_has: @39-42 Has,
-                    members: [
-                        AbilityMember {
-                            name: @43-46 "ab2",
-                            typ: @54-68 Where(
-                                @54-56 Function(
-                                    [
-                                        @49-50 BoundVariable(
-                                            "a",
-                                        ),
-                                    ],
-                                    @54-56 Record {
-                                        fields: [],
-                                        ext: None,
-                                    },
-                                ),
-                                [
-                                    @59-68 HasClause {
-                                        var: @59-60 "a",
-                                        ability: @65-68 Apply(
-                                            "",
-                                            "Ab2",
-                                            [],
-                                        ),
-                                    },
-                                ],
-                            ),
+                @35-68 Type(
+                    Ability {
+                        header: TypeHeader {
+                            name: @35-38 "Ab2",
+                            vars: [],
                         },
-                    ],
-                },
+                        loc_has: @39-42 Has,
+                        members: [
+                            AbilityMember {
+                                name: @43-46 "ab2",
+                                typ: @54-68 Where(
+                                    @54-56 Function(
+                                        [
+                                            @49-50 BoundVariable(
+                                                "a",
+                                            ),
+                                        ],
+                                        @54-56 Record {
+                                            fields: [],
+                                            ext: None,
+                                        },
+                                    ),
+                                    [
+                                        @59-68 HasClause {
+                                            var: @59-60 "a",
+                                            ability: @65-68 Apply(
+                                                "",
+                                                "Ab2",
+                                                [],
+                                            ),
+                                        },
+                                    ],
+                                ),
+                            },
+                        ],
+                    },
+                ),
             ],
             @70-71 SpaceBefore(
                 Num(
