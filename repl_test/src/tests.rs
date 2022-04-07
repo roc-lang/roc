@@ -1109,11 +1109,35 @@ fn issue_2582_specialize_result_value() {
 fn int_to_float() {
     expect_success("Num.toF32 42", "42 : F32");
     expect_success("Num.toF64 123", "123 : F64");
+    expect_success("Num.toF32 42i8", "42 : F32");
+    expect_success("Num.toF64 123i8", "123 : F64");
+    expect_success("Num.toF32 42i16", "42 : F32");
+    expect_success("Num.toF64 123i16", "123 : F64");
+    expect_success("Num.toF32 42i32", "42 : F32");
+    expect_success("Num.toF64 123i32", "123 : F64");
+    expect_success("Num.toF32 42i64", "42 : F32");
+    expect_success("Num.toF64 123i64", "123 : F64");
+    expect_success("Num.toF32 42i128", "42 : F32");
+    expect_success("Num.toF64 123i128", "123 : F64");
+    expect_success("Num.toF32 42u8", "42 : F32");
+    expect_success("Num.toF64 123u8", "123 : F64");
+    expect_success("Num.toF32 42u16", "42 : F32");
+    expect_success("Num.toF64 123u16", "123 : F64");
+    expect_success("Num.toF32 42u32", "42 : F32");
+    expect_success("Num.toF64 123u32", "123 : F64");
+    expect_success("Num.toF32 42u64", "42 : F32");
+    expect_success("Num.toF64 123u64", "123 : F64");
+    expect_success("Num.toF32 42u128", "42 : F32");
+    expect_success("Num.toF64 123u128", "123 : F64");
 }
 
 #[test]
 #[cfg(not(feature = "wasm"))]
 fn float_to_float() {
-    expect_success("Num.toF32 123.456", "123.456 : F32");
-    expect_success("Num.toF64 123.456", "123.456 : F64");
+    expect_success("Num.toF32 1.5", "1.5 : F32");
+    expect_success("Num.toF64 1.5", "1.5 : F64");
+    expect_success("Num.toF32 1.5f32", "1.5 : F32");
+    expect_success("Num.toF64 1.5f32", "1.5 : F64");
+    expect_success("Num.toF32 1.5f64", "1.5 : F32");
+    expect_success("Num.toF64 1.5f64", "1.5 : F64");
 }
