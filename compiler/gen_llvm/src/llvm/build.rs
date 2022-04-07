@@ -5903,7 +5903,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         NumToFloatChecked => {
-            // NOTE: For some reason there's no entry here for NumToIntChecked - why is that?
+            // NOTE: There's a NumToIntChecked implementation above,
+            // which could be useful to look at when implementing this.
             todo!("implement checked float conversion");
         }
         Eq => {
