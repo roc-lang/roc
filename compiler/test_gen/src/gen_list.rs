@@ -954,7 +954,7 @@ fn list_keep_if_str_is_hello() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_on_empty_list_with_int_layout() {
     assert_evals_to!(
         indoc!(
@@ -972,7 +972,7 @@ fn list_map_on_empty_list_with_int_layout() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_on_non_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -990,7 +990,7 @@ fn list_map_on_non_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_changes_input() {
     assert_evals_to!(
         indoc!(
@@ -1008,7 +1008,7 @@ fn list_map_changes_input() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_on_big_list() {
     assert_evals_to!(
         indoc!(
@@ -1028,7 +1028,7 @@ fn list_map_on_big_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_with_type_change() {
     assert_evals_to!(
         indoc!(
@@ -1047,7 +1047,7 @@ fn list_map_with_type_change() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_using_defined_function() {
     assert_evals_to!(
         indoc!(
@@ -1069,7 +1069,7 @@ fn list_map_using_defined_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_all_inline() {
     assert_evals_to!(
         indoc!(
