@@ -5634,4 +5634,17 @@ mod solve_expr {
             "Result I64 [ InvalidNumStr, ListWasEmpty ]*",
         )
     }
+
+    #[test]
+    fn lots_of_type_variables() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                fun = \a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,aa,bb -> {a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,aa,bb}
+                fun
+                "#
+            ),
+            "a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z, aa, bb -> { a : a, aa : aa, b : b, bb : bb, c : c, d : d, e : e, f : f, g : g, h : h, i : i, j : j, k : k, l : l, m : m, n : n, o : o, p : p, q : q, r : r, s : s, t : t, u : u, v : v, w : w, x : x, y : y, z : z }",
+        )
+    }
 }
