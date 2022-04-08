@@ -9030,6 +9030,13 @@ I need all branches in an `if` to have the same type!
                 3│  Alias : Ability
                     ^^^^^
 
+                Abilities are not types, but you can add an ability constraint to a
+                type variable `a` by writing
+
+                    | a has Ability
+
+                 at the end of the type.
+
                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
 
                 `ab` is not used anywhere in your code.

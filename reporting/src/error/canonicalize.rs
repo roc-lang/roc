@@ -615,6 +615,16 @@ pub fn can_problem<'b>(
                     alloc.reflow(":"),
                 ]),
                 alloc.region(lines.convert_region(region)),
+                alloc.concat(vec![
+                    alloc.reflow("Abilities are not types, but you can add an ability constraint to a type variable "),
+                    alloc.type_variable("a".into()),
+                    alloc.reflow(" by writing"),
+                ]),
+                alloc.type_block(alloc.concat(vec![
+                        alloc.reflow("| a has "),
+                        alloc.symbol_unqualified(ability),
+                ])),
+                alloc.reflow(" at the end of the type."),
             ]);
             title = ALIAS_USES_ABILITY.to_string();
             severity = Severity::RuntimeError;
