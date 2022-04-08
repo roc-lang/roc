@@ -646,6 +646,7 @@ fn fix_values_captured_in_closure_expr(
         | Var(_)
         | EmptyRecord
         | RuntimeError(_)
+        | ZeroArgumentTag { .. }
         | Accessor { .. } => {}
 
         List { loc_elems, .. } => {
@@ -712,7 +713,7 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
 
-        Tag { arguments, .. } | ZeroArgumentTag { arguments, .. } => {
+        Tag { arguments, .. } => {
             for (_, loc_arg) in arguments.iter_mut() {
                 fix_values_captured_in_closure_expr(&mut loc_arg.value, no_capture_symbols);
             }
