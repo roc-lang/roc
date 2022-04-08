@@ -880,92 +880,31 @@ pub fn constrain_expr(
             ext_var,
             name,
             arguments,
-        } => {
-            let mut vars = Vec::with_capacity(arguments.len());
-            let mut types = Vec::with_capacity(arguments.len());
-            let mut arg_cons = Vec::with_capacity(arguments.len());
-
-            for (var, loc_expr) in arguments {
-                let arg_con = constrain_expr(
-                    constraints,
-                    env,
-                    loc_expr.region,
-                    &loc_expr.value,
-                    Expected::NoExpectation(Type::Variable(*var)),
-                );
-
-                arg_cons.push(arg_con);
-                vars.push(*var);
-                types.push(Type::Variable(*var));
-            }
-
-            let union_con = constraints.equal_types_with_storage(
-                Type::TagUnion(
-                    vec![(name.clone(), types)],
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
-                ),
-                expected.clone(),
-                Category::TagApply {
-                    tag_name: name.clone(),
-                    args_count: arguments.len(),
-                },
-                region,
-                *variant_var,
-            );
-
-            vars.push(*variant_var);
-            vars.push(*ext_var);
-            arg_cons.push(union_con);
-
-            constraints.exists_many(vars, arg_cons)
-        }
+        } => constrain_tag(
+            constraints,
+            env,
+            expected,
+            region,
+            *variant_var,
+            *ext_var,
+            name,
+            arguments,
+        ),
         ZeroArgumentTag {
             variant_var,
             ext_var,
             name,
-            arguments,
-            closure_name,
-        } => {
-            let mut vars = Vec::with_capacity(arguments.len());
-            let mut types = Vec::with_capacity(arguments.len());
-            let mut arg_cons = Vec::with_capacity(arguments.len());
-
-            for (var, loc_expr) in arguments {
-                let arg_con = constrain_expr(
-                    constraints,
-                    env,
-                    loc_expr.region,
-                    &loc_expr.value,
-                    Expected::NoExpectation(Type::Variable(*var)),
-                );
-
-                arg_cons.push(arg_con);
-                vars.push(*var);
-                types.push(Type::Variable(*var));
-            }
-
-            let union_con = constraints.equal_types_with_storage(
-                Type::FunctionOrTagUnion(
-                    name.clone(),
-                    *closure_name,
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
-                ),
-                expected.clone(),
-                Category::TagApply {
-                    tag_name: name.clone(),
-                    args_count: arguments.len(),
-                },
-                region,
-                *variant_var,
-            );
-
-            vars.push(*variant_var);
-            vars.push(*ext_var);
-            arg_cons.push(union_con);
-
-            constraints.exists_many(vars, arg_cons)
-        }
-
+            closure_name: _,
+        } => constrain_tag(
+            constraints,
+            env,
+            expected,
+            region,
+            *variant_var,
+            *ext_var,
+            name,
+            &[],
+        ),
         OpaqueRef {
             opaque_var,
             name,
@@ -2046,4 +1985,56 @@ fn constrain_field_update(
     let con = constrain_expr(constraints, env, loc_expr.region, &loc_expr.value, expected);
 
     (var, field_type, con)
+}
+
+fn constrain_tag(
+    constraints: &mut Constraints,
+    env: &Env,
+    expected: Expected<Type>,
+    region: Region,
+    variant_var: Variable,
+    ext_var: Variable,
+    name: &TagName,
+    arguments: &[(Variable, Loc<Expr>)],
+) -> Constraint {
+    // +2 because we push all the arguments, plus variant_var and ext_var
+    let num_vars = arguments.len() + 2;
+
+    let mut vars = Vec::with_capacity(num_vars);
+    let mut types = Vec::with_capacity(arguments.len());
+    let mut arg_cons = Vec::with_capacity(arguments.len());
+
+    for (var, loc_expr) in arguments {
+        let arg_con = constrain_expr(
+            constraints,
+            env,
+            loc_expr.region,
+            &loc_expr.value,
+            Expected::NoExpectation(Type::Variable(*var)),
+        );
+
+        arg_cons.push(arg_con);
+        vars.push(*var);
+        types.push(Type::Variable(*var));
+    }
+
+    let union_con = constraints.equal_types_with_storage(
+        Type::TagUnion(
+            vec![(name.clone(), types)],
+            TypeExtension::from_type(Type::Variable(ext_var)),
+        ),
+        expected.clone(),
+        Category::TagApply {
+            tag_name: name.clone(),
+            args_count: arguments.len(),
+        },
+        region,
+        variant_var,
+    );
+
+    vars.push(variant_var);
+    vars.push(ext_var);
+    arg_cons.push(union_con);
+
+    constraints.exists_many(vars, arg_cons)
 }
