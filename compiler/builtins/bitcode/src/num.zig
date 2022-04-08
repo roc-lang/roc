@@ -92,8 +92,8 @@ pub fn exportAtan(comptime T: type, comptime name: []const u8) void {
 
 pub fn exportRound(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
-        fn func(input: T) callconv(.C) i64 {
-            return @floatToInt(i64, (@round(input)));
+        fn func(input: T) callconv(.C) T {
+            return @round(input);
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });

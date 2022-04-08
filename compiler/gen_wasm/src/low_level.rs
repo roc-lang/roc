@@ -503,18 +503,6 @@ impl<'a> LowLevelCall<'a> {
             NumCos => todo!("{:?}", self.lowlevel),
             NumSqrtUnchecked => todo!("{:?}", self.lowlevel),
             NumLogUnchecked => todo!("{:?}", self.lowlevel),
-            NumRound => {
-                self.load_args(backend);
-                match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    F32 => {
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND[FloatWidth::F32])
-                    }
-                    F64 => {
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND[FloatWidth::F64])
-                    }
-                    _ => todo!("{:?} for {:?}", self.lowlevel, self.ret_layout),
-                }
-            }
             NumToFloat => {
                 self.load_args(backend);
                 let ret_type = CodeGenNumType::from(self.ret_layout);
@@ -534,35 +522,42 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumPow => todo!("{:?}", self.lowlevel),
-            NumCeiling => {
+            NumCeiling | NumFloor | NumRound => {
                 self.load_args(backend);
-                match CodeGenNumType::from(self.ret_layout) {
-                    I32 => {
+                let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
+                let ret_type = CodeGenNumType::from(self.ret_layout);
+                match (arg_type, self.lowlevel) {
+                    (F32, NumCeiling) => {
                         backend.code_builder.f32_ceil();
-                        backend.code_builder.i32_trunc_s_f32()
                     }
-                    I64 => {
+                    (F64, NumCeiling) => {
                         backend.code_builder.f64_ceil();
-                        backend.code_builder.i64_trunc_s_f64()
                     }
+                    (F32, NumFloor) => {
+                        backend.code_builder.f32_floor();
+                    }
+                    (F64, NumFloor) => {
+                        backend.code_builder.f64_floor();
+                    }
+                    (F32, NumRound) => {
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND[FloatWidth::F32])
+                    }
+                    (F64, NumRound) => {
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND[FloatWidth::F64])
+                    }
+                    _ => internal_error!("Invalid argument type for ceiling: {:?}", arg_type),
+                }
+                match (ret_type, arg_type) {
+                    // TODO: signed truncation
+                    (I32, F32) => backend.code_builder.i32_trunc_s_f32(),
+                    (I32, F64) => backend.code_builder.i32_trunc_s_f64(),
+                    (I64, F32) => backend.code_builder.i64_trunc_s_f32(),
+                    (I64, F64) => backend.code_builder.i64_trunc_s_f64(),
+                    (I128, _) => todo!("{:?} for I128", self.lowlevel),
                     _ => panic_ret_type(),
                 }
             }
             NumPowInt => todo!("{:?}", self.lowlevel),
-            NumFloor => {
-                self.load_args(backend);
-                match CodeGenNumType::from(self.ret_layout) {
-                    I32 => {
-                        backend.code_builder.f32_floor();
-                        backend.code_builder.i32_trunc_s_f32()
-                    }
-                    I64 => {
-                        backend.code_builder.f64_floor();
-                        backend.code_builder.i64_trunc_s_f64()
-                    }
-                    _ => panic_ret_type(),
-                }
-            }
             NumIsFinite => num_is_finite(backend, self.arguments[0]),
 
             NumAtan => match self.ret_layout {
