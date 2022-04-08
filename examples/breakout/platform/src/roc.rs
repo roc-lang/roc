@@ -21,9 +21,6 @@ extern "C" {
     #[allow(dead_code)]
     #[link_name = "roc__programForHost_1_Render_size"]
     fn size_Render() -> i64;
-
-    #[link_name = "roc__programForHost_1_Render_result_size"]
-    fn size_Render_result() -> i64;
 }
 
 #[derive(Debug)]
@@ -143,10 +140,6 @@ impl RocElem {
         // };
 
         // Self::elem_from_tag(entry, RocElemTag::Text)
-    }
-
-    fn elem_from_tag(entry: RocElemEntry, tag: RocElemTag) -> Self {
-        Self { entry, tag }
     }
 }
 
