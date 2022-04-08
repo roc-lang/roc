@@ -772,7 +772,15 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
                 AliasKind::Opaque => "Opaque",
             };
 
-            write!(f, "{}({:?}, {:?}, {:?})", wrap, name, slice, actual)
+            write!(
+                f,
+                "{}({:?}, {:?}, <{:?}>{:?})",
+                wrap,
+                name,
+                slice,
+                actual,
+                SubsFmtContent(subs.get_content_without_compacting(*actual), subs)
+            )
         }
         Content::RangedNumber(typ, range) => {
             let slice = subs.get_subs_slice(*range);
@@ -833,7 +841,16 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
 
             let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
             for (name, slice) in it {
-                write!(f, "{:?} {:?}, ", name, slice)?;
+                write!(f, "{:?} ", name)?;
+                for var in slice {
+                    write!(
+                        f,
+                        "<{:?}>{:?} ",
+                        var,
+                        SubsFmtContent(subs.get_content_without_compacting(*var), subs)
+                    )?;
+                }
+                write!(f, ", ")?;
             }
 
             write!(f, "]<{:?}>", new_ext)
