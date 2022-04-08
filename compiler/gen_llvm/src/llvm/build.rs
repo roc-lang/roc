@@ -6920,6 +6920,37 @@ fn dec_binop_with_overflow<'a, 'ctx, 'env>(
         .into_struct_value()
 }
 
+pub fn dec_binop_with_unchecked<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let lhs = lhs.into_int_value();
+    let rhs = rhs.into_int_value();
+
+    let int_64 = env.context.i128_type().const_int(64, false);
+    let int_64_type = env.context.i64_type();
+
+    let lhs1 = env
+        .builder
+        .build_right_shift(lhs, int_64, false, "lhs_left_bits");
+    let rhs1 = env
+        .builder
+        .build_right_shift(rhs, int_64, false, "rhs_left_bits");
+
+    call_bitcode_fn(
+        env,
+        &[
+            env.builder.build_int_cast(lhs, int_64_type, "").into(),
+            env.builder.build_int_cast(lhs1, int_64_type, "").into(),
+            env.builder.build_int_cast(rhs, int_64_type, "").into(),
+            env.builder.build_int_cast(rhs1, int_64_type, "").into(),
+        ],
+        fn_name,
+    )
+}
+
 fn build_dec_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -6959,7 +6990,7 @@ fn build_dec_binop<'a, 'ctx, 'env>(
             rhs,
             "decimal multiplication overflowed",
         ),
-        NumDivUnchecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_DIV),
+        NumDivUnchecked => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
