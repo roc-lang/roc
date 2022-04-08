@@ -7100,6 +7100,9 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 || // Or if the two types are the same, they trivially fit.
                 arg_width == target_int_width;
 
+            let return_type =
+                convert::basic_type_from_layout(env, return_layout).into_struct_type();
+
             if arg_always_fits_in_target {
                 // This is guaranteed to succeed so we can just make it an int cast and let LLVM
                 // optimize it away.
@@ -7114,8 +7117,6 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     )
                     .into();
 
-                let return_type =
-                    convert::basic_type_from_layout(env, return_layout).into_struct_type();
                 let r = return_type.const_zero();
                 let r = bd
                     .build_insert_value(r, target_int_val, 0, "converted_int")
@@ -7138,7 +7139,14 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     &bitcode::NUM_INT_TO_INT_CHECKING_MAX_AND_MIN[target_int_width][arg_width]
                 };
 
-                call_bitcode_fn_fixing_for_convention(env, &[arg.into()], return_layout, bitcode_fn)
+                let result = call_bitcode_fn_fixing_for_convention(
+                    env,
+                    &[arg.into()],
+                    return_layout,
+                    bitcode_fn,
+                );
+
+                complex_bitcast_check_size(env, result, return_type.into(), "cast_bitpacked")
             }
         }
         _ => {
