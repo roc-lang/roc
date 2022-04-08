@@ -2466,7 +2466,10 @@ fn foo<'a>(
             (info, parse_state)
         }
         Ok(_) => panic!("invalid header format for builtin module"),
-        Err(e) => todo!(),
+        Err(e) => panic!(
+            "Hit a parse error in the header of {:?}:\n{:?}",
+            filename, e
+        ),
     }
 }
 
@@ -4145,10 +4148,15 @@ fn add_def_to_module<'a>(
                     arguments: loc_args,
                     loc_body,
                     captured_symbols,
+                    name,
                     ..
                 }) => {
                     // this is a top-level definition, it should not capture anything
-                    debug_assert!(captured_symbols.is_empty());
+                    debug_assert!(
+                        captured_symbols.is_empty(),
+                        "{:?}",
+                        (symbol, name, symbol.module_id(), &captured_symbols)
+                    );
 
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it
