@@ -430,8 +430,8 @@ mod test_reporting {
                 3│  Booly : [ Yes, No, Maybe ]
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Since these variables have the same name, it's easy to use the wrong
-                one on accident. Give one of them a new name.
+                Since these aliases have the same name, it's easy to use the wrong one
+                on accident. Give one of them a new name.
 
                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
 
@@ -9077,7 +9077,7 @@ I need all branches in an `if` to have the same type!
                 3│  Ability has ab1 : a -> U64 | a has Ability
                     ^^^^^^^
 
-                Since these variables have the same name, it's easy to use the wrong
+                Since these abilities have the same name, it's easy to use the wrong
                 one on accident. Give one of them a new name.
 
                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────

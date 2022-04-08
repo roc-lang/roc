@@ -13,7 +13,7 @@ use roc_exhaustive::{Ctor, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_problem::can::RuntimeError;
+use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
@@ -2037,6 +2037,7 @@ fn pattern_to_when<'a>(
             let error = roc_problem::can::RuntimeError::Shadowing {
                 original_region: *region,
                 shadow: loc_ident.clone(),
+                kind: ShadowKind::Variable,
             };
             (*new_symbol, Loc::at_zero(RuntimeError(error)))
         }
@@ -7838,6 +7839,7 @@ fn from_can_pattern_help<'a>(
         Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
+            kind: ShadowKind::Variable,
         }),
         UnsupportedPattern(region) => Err(RuntimeError::UnsupportedPattern(*region)),
         MalformedPattern(_problem, region) => {

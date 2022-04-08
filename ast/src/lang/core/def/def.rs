@@ -251,7 +251,7 @@ fn to_pending_def<'a>(
                 }
 
                 Err((original_region, loc_shadowed_symbol)) => {
-                    env.problem(Problem::ShadowingInAnnotation {
+                    env.problem(Problem::Shadowing {
                         original_region,
                         shadow: loc_shadowed_symbol,
                     });

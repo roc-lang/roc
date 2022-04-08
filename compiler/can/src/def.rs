@@ -19,6 +19,7 @@ use roc_parse::ast::AbilityMember;
 use roc_parse::ast::ExtractSpaces;
 use roc_parse::ast::TypeHeader;
 use roc_parse::pattern::PatternType;
+use roc_problem::can::ShadowKind;
 use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -459,9 +460,10 @@ pub fn canonicalize_defs<'a>(
             ) {
                 Ok(sym) => sym,
                 Err((original_region, shadow, _new_symbol)) => {
-                    env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
+                    env.problem(roc_problem::can::Problem::Shadowing {
                         original_region,
                         shadow,
+                        kind: ShadowKind::Variable,
                     });
                     // Pretend the member isn't a part of the ability
                     continue;
@@ -1149,6 +1151,7 @@ fn canonicalize_pending_value_def<'a>(
                 Pattern::Shadowed(region, loc_ident, _new_symbol) => RuntimeError::Shadowing {
                     original_region: *region,
                     shadow: loc_ident.clone(),
+                    kind: ShadowKind::Variable,
                 },
                 _ => RuntimeError::NoImplementation,
             };
@@ -1649,10 +1652,10 @@ fn to_pending_type_def<'a>(
             header: TypeHeader { name, vars },
             typ: ann,
         } => {
-            let kind = if matches!(def, Alias { .. }) {
-                AliasKind::Structural
+            let (kind, shadow_kind) = if matches!(def, Alias { .. }) {
+                (AliasKind::Structural, ShadowKind::Alias)
             } else {
-                AliasKind::Opaque
+                (AliasKind::Opaque, ShadowKind::Opaque)
             };
 
             let region = Region::span_across(&name.region, &ann.region);
@@ -1709,9 +1712,10 @@ fn to_pending_type_def<'a>(
                 }
 
                 Err((original_region, loc_shadowed_symbol, _new_symbol)) => {
-                    env.problem(Problem::ShadowingInAnnotation {
+                    env.problem(Problem::Shadowing {
                         original_region,
                         shadow: loc_shadowed_symbol,
+                        kind: shadow_kind,
                     });
 
                     Some((Output::default(), PendingTypeDef::InvalidAlias { kind }))
@@ -1732,9 +1736,10 @@ fn to_pending_type_def<'a>(
             ) {
                 Ok(symbol) => Loc::at(name.region, symbol),
                 Err((original_region, shadowed_symbol)) => {
-                    env.problem(Problem::ShadowingInAnnotation {
+                    env.problem(Problem::Shadowing {
                         original_region,
                         shadow: shadowed_symbol,
+                        kind: ShadowKind::Ability,
                     });
                     return Some((Output::default(), PendingTypeDef::InvalidAbility));
                 }

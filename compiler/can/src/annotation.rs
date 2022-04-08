@@ -4,6 +4,7 @@ use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
+use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
@@ -530,9 +531,10 @@ fn can_annotation_help(
                 Err((original_region, shadow, _new_symbol)) => {
                     let problem = Problem::Shadowed(original_region, shadow.clone());
 
-                    env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
+                    env.problem(roc_problem::can::Problem::Shadowing {
                         original_region,
                         shadow,
+                        kind: ShadowKind::Variable,
                     });
 
                     return Type::Erroneous(problem);
@@ -833,9 +835,10 @@ fn canonicalize_has_clause(
     if let Some(shadowing) = introduced_variables.named_var_by_name(&var_name) {
         let var_name_ident = var_name.to_string().into();
         let shadow = Loc::at(region, var_name_ident);
-        env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
+        env.problem(roc_problem::can::Problem::Shadowing {
             original_region: shadowing.first_seen,
             shadow: shadow.clone(),
+            kind: ShadowKind::Variable,
         });
         return Err(Type::Erroneous(Problem::Shadowed(
             shadowing.first_seen,

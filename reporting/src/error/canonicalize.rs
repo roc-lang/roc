@@ -2,7 +2,7 @@ use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
-    BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
+    BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError, ShadowKind,
 };
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
 use roc_types::types::AliasKind;
@@ -219,11 +219,12 @@ pub fn can_problem<'b>(
             title = SYNTAX_PROBLEM.to_string();
             severity = Severity::RuntimeError;
         }
-        Problem::ShadowingInAnnotation {
+        Problem::Shadowing {
             original_region,
             shadow,
+            kind,
         } => {
-            doc = report_shadowing(alloc, lines, original_region, shadow);
+            doc = report_shadowing(alloc, lines, original_region, shadow, kind);
 
             title = DUPLICATE_NAME.to_string();
             severity = Severity::RuntimeError;
@@ -1084,8 +1085,14 @@ fn report_shadowing<'b>(
     lines: &LineInfo,
     original_region: Region,
     shadow: Loc<Ident>,
+    kind: ShadowKind,
 ) -> RocDocBuilder<'b> {
-    let line = r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
+    let what = match kind {
+        ShadowKind::Variable => "variables",
+        ShadowKind::Alias => "aliases",
+        ShadowKind::Opaque => "opaques",
+        ShadowKind::Ability => "abilities",
+    };
 
     alloc.stack(vec![
         alloc
@@ -1095,7 +1102,11 @@ fn report_shadowing<'b>(
         alloc.region(lines.convert_region(original_region)),
         alloc.reflow("But then it's defined a second time here:"),
         alloc.region(lines.convert_region(shadow.region)),
-        alloc.reflow(line),
+        alloc.concat(vec![
+            alloc.reflow("Since these "),
+            alloc.reflow(what),
+            alloc.reflow(" have the same name, it's easy to use the wrong one on accident. Give one of them a new name."),
+        ]),
     ])
 }
 
@@ -1122,8 +1133,9 @@ fn pretty_runtime_error<'b>(
         RuntimeError::Shadowing {
             original_region,
             shadow,
+            kind,
         } => {
-            doc = report_shadowing(alloc, lines, original_region, shadow);
+            doc = report_shadowing(alloc, lines, original_region, shadow, kind);
             title = DUPLICATE_NAME;
         }
 

@@ -11,7 +11,7 @@ use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
-use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
+use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{LambdaSet, Type};
@@ -191,6 +191,7 @@ pub fn canonicalize_def_header_pattern<'a>(
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                     original_region,
                     shadow: shadow.clone(),
+                    kind: ShadowKind::Variable,
                 }));
                 output.references.bound_symbols.insert(new_symbol);
 
@@ -230,6 +231,7 @@ pub fn canonicalize_pattern<'a>(
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                     original_region,
                     shadow: shadow.clone(),
+                    kind: ShadowKind::Variable,
                 }));
                 output.references.bound_symbols.insert(new_symbol);
 
@@ -478,6 +480,7 @@ pub fn canonicalize_pattern<'a>(
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
+                                    kind: ShadowKind::Variable,
                                 }));
 
                                 // No matter what the other patterns
@@ -550,6 +553,7 @@ pub fn canonicalize_pattern<'a>(
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
+                                    kind: ShadowKind::Variable,
                                 }));
 
                                 // No matter what the other patterns
