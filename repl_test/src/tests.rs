@@ -1158,3 +1158,22 @@ fn issue_2810_recursive_layout_inside_nonrecursive() {
         "Job (Command (FromJob (Job (Command SystemTool)))) : Job",
     )
 }
+
+#[test]
+fn render_nullable_unwrapped_passing_through_alias() {
+    expect_success(
+        indoc!(
+            r#"
+            Deep : [ L DeepList ]
+            
+            DeepList : [ Nil, Cons Deep ]
+            
+            v : DeepList 
+            v = (Cons (L (Cons (L (Cons (L Nil))))))
+            
+            v
+            "#
+        ),
+        "Cons (L (Cons (L (Cons (L Nil))))) : DeepList",
+    )
+}

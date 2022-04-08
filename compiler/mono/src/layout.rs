@@ -196,7 +196,7 @@ impl<'a> RawFunctionLayout<'a> {
                 Self::from_var(env, var)
             }
             _ => {
-                let layout = layout_from_flat_type(env, flat_type)?;
+                let layout = layout_from_flat_type(env, var, flat_type)?;
                 Ok(Self::ZeroArgumentThunk(layout))
             }
         }
@@ -310,6 +310,50 @@ impl<'a> UnionLayout<'a> {
                 alloc
                     .text("[")
                     .append(alloc.intersperse(tags_doc, ", "))
+                    .append(alloc.text("]"))
+            }
+            Recursive(tags) => {
+                let tags_doc = tags.iter().map(|fields| {
+                    alloc.text("C ").append(alloc.intersperse(
+                        fields.iter().map(|x| x.to_doc(alloc, Parens::InTypeParam)),
+                        " ",
+                    ))
+                });
+                alloc
+                    .text("[<r>")
+                    .append(alloc.intersperse(tags_doc, ", "))
+                    .append(alloc.text("]"))
+            }
+            NonNullableUnwrapped(fields) => {
+                let fields_doc = alloc.text("C ").append(alloc.intersperse(
+                    fields.iter().map(|x| x.to_doc(alloc, Parens::InTypeParam)),
+                    " ",
+                ));
+                alloc
+                    .text("[<rnnu>")
+                    .append(fields_doc)
+                    .append(alloc.text("]"))
+            }
+            NullableUnwrapped {
+                nullable_id,
+                other_fields,
+            } => {
+                let fields_doc = alloc.text("C ").append(
+                    alloc.intersperse(
+                        other_fields
+                            .iter()
+                            .map(|x| x.to_doc(alloc, Parens::InTypeParam)),
+                        " ",
+                    ),
+                );
+                let tags_doc = if nullable_id {
+                    alloc.concat(vec![alloc.text("<null>, "), fields_doc])
+                } else {
+                    alloc.concat(vec![fields_doc, alloc.text(", <null>")])
+                };
+                alloc
+                    .text("[<rnu>")
+                    .append(tags_doc)
                     .append(alloc.text("]"))
             }
             _ => alloc.text("TODO"),
@@ -960,7 +1004,7 @@ impl<'a> Layout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
-            Structure(flat_type) => layout_from_flat_type(env, flat_type),
+            Structure(flat_type) => layout_from_flat_type(env, var, flat_type),
 
             Alias(symbol, _args, actual_var, _) => {
                 if let Some(int_width) = IntWidth::try_from_symbol(symbol) {
@@ -1573,6 +1617,7 @@ impl<'a> Builtin<'a> {
 
 fn layout_from_flat_type<'a>(
     env: &mut Env<'a, '_>,
+    _var: Variable,
     flat_type: FlatType,
 ) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::FlatType::*;
@@ -1791,7 +1836,6 @@ fn layout_from_flat_type<'a>(
                         continue;
                     }
 
-                    let content = subs.get_content_without_compacting(var);
                     tag_layout.push(Layout::from_var(env, var)?);
                 }
 
