@@ -27,16 +27,12 @@ pub struct AbilitiesStore {
     members_of_ability: MutMap<Symbol, Vec<Symbol>>,
 
     /// Information about all members composing abilities.
-    #[allow(unused)]
     ability_members: MutMap<Symbol, AbilityMemberData>,
 
     /// Tuples of (type, member) specifying that `type` declares an implementation of an ability
     /// member `member`.
     #[allow(unused)]
     declared_implementations: MutSet<(Symbol, Symbol)>,
-
-    /// Cache of all ability member names in scope.
-    ability_member_symbols: MutSet<Symbol>,
 }
 
 impl AbilitiesStore {
@@ -57,9 +53,6 @@ impl AbilitiesStore {
                 },
             );
             debug_assert!(old_member.is_none(), "Replacing existing member definition");
-
-            let old_member = self.ability_member_symbols.insert(member);
-            debug_assert!(!old_member, "Replacing existing member entry");
         }
         let old_ability = self.members_of_ability.insert(ability, members_vec);
         debug_assert!(
@@ -76,6 +69,6 @@ impl AbilitiesStore {
     }
 
     pub fn is_ability_member_name(&self, name: Symbol) -> bool {
-        self.ability_member_symbols.contains(&name)
+        self.ability_members.contains_key(&name)
     }
 }
