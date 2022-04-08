@@ -6782,8 +6782,7 @@ fn let_empty_struct<'a>(assigned: Symbol, hole: &'a Stmt<'a>) -> Stmt<'a> {
     Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole)
 }
 
-/// If the symbol is a function, make sure it is properly specialized
-// TODO: rename this now that we handle polymorphic non-function expressions too
+/// If the symbol is a function or polymorphic value, make sure it is properly specialized
 fn specialize_symbol<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
