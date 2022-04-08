@@ -66,6 +66,8 @@ use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, Unio
 use roc_target::TargetInfo;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
+use super::convert::zig_with_overflow_roc_dec;
+
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
 #[cfg(debug_assertions)]
@@ -6879,6 +6881,45 @@ fn build_float_binop<'a, 'ctx, 'env>(
     }
 }
 
+fn dec_binop_with_overflow<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+) -> StructValue<'ctx> {
+    let lhs = lhs.into_int_value();
+    let rhs = rhs.into_int_value();
+
+    let return_type = zig_with_overflow_roc_dec(env);
+    let return_alloca = env.builder.build_alloca(return_type, "return_alloca");
+
+    let int_64 = env.context.i128_type().const_int(64, false);
+    let int_64_type = env.context.i64_type();
+
+    let lhs1 = env
+        .builder
+        .build_right_shift(lhs, int_64, false, "lhs_left_bits");
+    let rhs1 = env
+        .builder
+        .build_right_shift(rhs, int_64, false, "rhs_left_bits");
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            return_alloca.into(),
+            env.builder.build_int_cast(lhs, int_64_type, "").into(),
+            env.builder.build_int_cast(lhs1, int_64_type, "").into(),
+            env.builder.build_int_cast(rhs, int_64_type, "").into(),
+            env.builder.build_int_cast(rhs1, int_64_type, "").into(),
+        ],
+        fn_name,
+    );
+
+    env.builder
+        .build_load(return_alloca, "load_dec")
+        .into_struct_value()
+}
+
 fn build_dec_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -6933,15 +6974,7 @@ fn build_dec_binop_throw_on_overflow<'a, 'ctx, 'env>(
     rhs: BasicValueEnum<'ctx>,
     message: &str,
 ) -> BasicValueEnum<'ctx> {
-    let overflow_type = crate::llvm::convert::zig_with_overflow_roc_dec(env);
-
-    let result_ptr = env.builder.build_alloca(overflow_type, "result_ptr");
-    call_void_bitcode_fn(env, &[result_ptr.into(), lhs, rhs], operation);
-
-    let result = env
-        .builder
-        .build_load(result_ptr, "load_overflow")
-        .into_struct_value();
+    let result = dec_binop_with_overflow(env, operation, lhs, rhs);
 
     let value = throw_on_overflow(env, parent, result, message).into_struct_value();
 
