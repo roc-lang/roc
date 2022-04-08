@@ -5414,25 +5414,20 @@ pub fn from_can<'a>(
             lookups_in_cond,
         } => {
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
-
-            let bool_layout = Layout::Builtin(Builtin::Bool);
             let cond_symbol = env.unique_symbol();
-
-            let op = LowLevel::ExpectTrue;
             let call_type = CallType::LowLevel {
-                op,
+                op: LowLevel::ExpectTrue,
                 update_mode: env.next_update_mode_id(),
             };
             let arguments = env.arena.alloc([cond_symbol]);
-            let call = self::Call {
-                call_type,
-                arguments,
-            };
 
-            let rest = Stmt::Let(
+            let stmt = Stmt::Let(
                 env.unique_symbol(),
-                Expr::Call(call),
-                bool_layout,
+                Expr::Call(self::Call {
+                    call_type,
+                    arguments,
+                }),
+                Layout::Builtin(Builtin::Bool),
                 env.arena.alloc(rest),
             );
 
@@ -5443,7 +5438,7 @@ pub fn from_can<'a>(
                 procs,
                 layout_cache,
                 cond_symbol,
-                env.arena.alloc(rest),
+                env.arena.alloc(stmt),
             )
         }
 
