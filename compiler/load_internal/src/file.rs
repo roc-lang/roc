@@ -3508,26 +3508,7 @@ fn run_solve_solve(
         solve_aliases.insert(*name, alias.clone());
     }
 
-    let (solved_subs, exposed_vars_by_symbol, problems) = if module_id.is_builtin() {
-        use memmap::MmapOptions;
-        use std::fs::File;
-
-        let root = get_project_root().unwrap();
-        let path = format!("{}/cached_subs/{:?}.dat", root.to_str().unwrap(), module_id);
-        eprintln!("{:?}: {}", module_id, &path);
-        let file = File::open(&path).unwrap();
-        let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
-        let (subs, vars_by_symbol) = Subs::deserialize(&mmap);
-        let solved_subs = Solved(subs);
-
-        let exposed_vars_by_symbol: Vec<_> = vars_by_symbol
-            .iter()
-            .filter(|(k, _)| exposed_symbols.contains(k))
-            .copied()
-            .collect();
-
-        (solved_subs, exposed_vars_by_symbol, vec![])
-    } else {
+    let (solved_subs, exposed_vars_by_symbol, problems) = {
         let (solved_subs, solved_env, problems) = roc_solve::module::run_solve(
             &constraints,
             actual_constraint,
@@ -3535,15 +3516,6 @@ fn run_solve_solve(
             subs,
             solve_aliases,
         );
-
-        if module_id.is_builtin() {
-            let mut f = std::fs::File::create(&format!("cached_subs/{:?}.dat", module_id)).unwrap();
-            let vars_by_symbol: Vec<(Symbol, Variable)> = solved_env.vars_by_symbol().collect();
-            solved_subs
-                .inner()
-                .serialize(&vars_by_symbol, &mut f)
-                .unwrap();
-        }
 
         let solved_subs = if true {
             solved_subs
@@ -3555,8 +3527,6 @@ fn run_solve_solve(
                 .serialize(&vars_by_symbol, &mut serialized)
                 .unwrap();
             let (subs, vbs) = Subs::deserialize(&serialized);
-
-            dbg!(vbs);
 
             Solved(subs)
         };
