@@ -6,7 +6,6 @@ extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
 
-#[macro_use]
 extern crate indoc;
 
 #[cfg(test)]
@@ -231,6 +230,7 @@ mod cli_run {
         ($($test_name:ident:$name:expr => $example:expr,)+) => {
             $(
                 #[test]
+                #[allow(non_snake_case)]
                 fn $test_name() {
                     let dir_name = $name;
                     let example = $example;
