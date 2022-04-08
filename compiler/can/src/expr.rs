@@ -189,7 +189,11 @@ pub enum Expr {
     },
 
     // Test
-    Expect(Box<Loc<Expr>>, Box<Loc<Expr>>),
+    Expect {
+        loc_condition: Box<Loc<Expr>>,
+        loc_continuation: Box<Loc<Expr>>,
+        lookups_in_cond: Vec<Symbol>,
+    },
 
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
@@ -852,6 +856,12 @@ pub fn canonicalize_expr<'a>(
             let (loc_condition, output1) =
                 canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
 
+            let mut lookups_in_cond = Vec::new();
+
+            // Get all the lookups that were referenced in the condition,
+            // so we can print their values later.
+            add_lookup_symbols(&loc_condition.value, &mut lookups_in_cond);
+
             let (loc_continuation, output2) = canonicalize_expr(
                 env,
                 var_store,
@@ -864,7 +874,11 @@ pub fn canonicalize_expr<'a>(
             output.union(output2);
 
             (
-                Expect(Box::new(loc_condition), Box::new(loc_continuation)),
+                Expect {
+                    loc_condition: Box::new(loc_condition),
+                    loc_continuation: Box::new(loc_continuation),
+                    lookups_in_cond,
+                },
                 output,
             )
         }
@@ -1407,18 +1421,26 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             }
         }
 
-        Expect(loc_condition, loc_expr) => {
+        Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond,
+        } => {
             let loc_condition = Loc {
                 region: loc_condition.region,
                 value: inline_calls(var_store, scope, loc_condition.value),
             };
 
-            let loc_expr = Loc {
-                region: loc_expr.region,
-                value: inline_calls(var_store, scope, loc_expr.value),
+            let loc_continuation = Loc {
+                region: loc_continuation.region,
+                value: inline_calls(var_store, scope, loc_continuation.value),
             };
 
-            Expect(Box::new(loc_condition), Box::new(loc_expr))
+            Expect {
+                loc_condition: Box::new(loc_condition),
+                loc_continuation: Box::new(loc_continuation),
+                lookups_in_cond,
+            }
         }
 
         LetRec(defs, loc_expr, var) => {
@@ -1818,5 +1840,94 @@ pub fn unescape_char(escaped: &EscapedChar) -> char {
         CarriageReturn => '\r',
         Tab => '\t',
         Newline => '\n',
+    }
+}
+
+fn add_lookup_symbols(expr: &Expr, symbols: &mut Vec<Symbol>) {
+    match expr {
+        Expr::Var(symbol) | Expr::Update { symbol, .. } => {
+            symbols.push(*symbol);
+        }
+        Expr::List { loc_elems, .. } => {
+            for loc_elem in loc_elems {
+                add_lookup_symbols(&loc_elem.value, symbols);
+            }
+        }
+        Expr::When {
+            loc_cond, branches, ..
+        } => {
+            add_lookup_symbols(&loc_cond.value, symbols);
+
+            for branch in branches {
+                add_lookup_symbols(&branch.value.value, symbols);
+
+                if let Some(guard) = &branch.guard {
+                    add_lookup_symbols(&guard.value, symbols);
+                }
+            }
+        }
+        Expr::If {
+            branches,
+            final_else,
+            ..
+        } => {
+            for (loc_cond, loc_body) in branches {
+                add_lookup_symbols(&loc_cond.value, symbols);
+                add_lookup_symbols(&loc_body.value, symbols);
+            }
+
+            add_lookup_symbols(&final_else.value, symbols);
+        }
+        Expr::LetRec(_, _, _) => todo!(),
+        Expr::LetNonRec(_, _, _) => todo!(),
+        Expr::Call(boxed_expr, args, _called_via) => {
+            // add the expr being called
+            add_lookup_symbols(&boxed_expr.1.value, symbols);
+
+            for (_var, loc_arg) in args {
+                add_lookup_symbols(&loc_arg.value, symbols);
+            }
+        }
+        Expr::Tag { arguments, .. } => {
+            for (_var, loc_expr) in arguments {
+                add_lookup_symbols(&loc_expr.value, symbols);
+            }
+        }
+        Expr::RunLowLevel { args, .. } | Expr::ForeignCall { args, .. } => {
+            for (_var, arg) in args {
+                add_lookup_symbols(arg, symbols);
+            }
+        }
+        Expr::OpaqueRef { argument, .. } => {
+            add_lookup_symbols(&argument.1.value, symbols);
+        }
+        Expr::Access { loc_expr, .. }
+        | Expr::Closure(ClosureData {
+            loc_body: loc_expr, ..
+        }) => {
+            add_lookup_symbols(&loc_expr.value, symbols);
+        }
+        Expr::Record { fields, .. } => {
+            for field in fields.values() {
+                add_lookup_symbols(&field.loc_expr.value, symbols);
+            }
+        }
+        Expr::Expect {
+            loc_continuation, ..
+        } => {
+            add_lookup_symbols(&(*loc_continuation).value, symbols);
+
+            // Intentionally ignore the lookups in the nested `expect` condition itself,
+            // because they couldn't possibly influence the outcome of this `expect`!
+        }
+        Expr::Num(_, _, _, _)
+        | Expr::Float(_, _, _, _, _)
+        | Expr::Int(_, _, _, _, _)
+        | Expr::Str(_)
+        | Expr::ZeroArgumentTag { .. }
+        | Expr::Accessor(_)
+        | Expr::SingleQuote(_)
+        | Expr::EmptyRecord
+        | Expr::RuntimeError(_) => {}
     }
 }

@@ -413,7 +413,11 @@ pub fn constrain_expr(
             constraints.exists_many(vars, cons)
         }
 
-        Expect(loc_cond, continuation) => {
+        Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond: _,
+        } => {
             let expect_bool = |region| {
                 let bool_type = Type::Variable(Variable::BOOL);
                 Expected::ForReason(Reason::ExpectCondition, bool_type, region)
@@ -422,16 +426,16 @@ pub fn constrain_expr(
             let cond_con = constrain_expr(
                 constraints,
                 env,
-                loc_cond.region,
-                &loc_cond.value,
-                expect_bool(loc_cond.region),
+                loc_condition.region,
+                &loc_condition.value,
+                expect_bool(loc_condition.region),
             );
 
             let continuation_con = constrain_expr(
                 constraints,
                 env,
-                continuation.region,
-                &continuation.value,
+                loc_continuation.region,
+                &loc_continuation.value,
                 expected,
             );
 

@@ -3586,7 +3586,7 @@ pub fn with_hole<'a>(
 
         EmptyRecord => let_empty_struct(assigned, hole),
 
-        Expect(_, _) => unreachable!("I think this is unreachable"),
+        Expect { .. } => unreachable!("I think this is unreachable"),
 
         If {
             cond_var,
@@ -5408,8 +5408,12 @@ pub fn from_can<'a>(
             stmt
         }
 
-        Expect(condition, rest) => {
-            let rest = from_can(env, variable, rest.value, procs, layout_cache);
+        Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond,
+        } => {
+            let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
 
             let bool_layout = Layout::Builtin(Builtin::Bool);
             let cond_symbol = env.unique_symbol();
@@ -5434,7 +5438,7 @@ pub fn from_can<'a>(
 
             with_hole(
                 env,
-                condition.value,
+                loc_condition.value,
                 variable,
                 procs,
                 layout_cache,
