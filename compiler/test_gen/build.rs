@@ -41,7 +41,8 @@ fn build_wasm_platform_and_builtins(out_dir: &str) {
         "-target",
         "wasm32-wasi",
         "-lc",
-        "-dynamic", // -dynamic ensures libc code goes into the binary
+        "-dynamic", // ensure libc code goes into the binary
+        "-rdynamic", // export all symbols
         bitcode::BUILTINS_WASM32_OBJ_PATH,
         &format!("src/helpers/{}.c", PLATFORM_FILENAME),
         &format!("-femit-bin={}/{}.o", out_dir, PLATFORM_FILENAME),
