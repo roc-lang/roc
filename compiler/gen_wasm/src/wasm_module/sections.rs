@@ -1155,6 +1155,10 @@ impl<'a> NameSection<'a> {
     }
 
     pub fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+        if *cursor >= module_bytes.len() {
+            internal_error!("NameSection not found in preloaded object file");
+        }
+
         // Custom section ID
         let section_id_byte = module_bytes[*cursor];
         if section_id_byte != Self::ID as u8 {
