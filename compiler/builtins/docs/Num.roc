@@ -628,6 +628,15 @@ toU16 : Int * -> U16
 toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
+
+## Convert a [Num] to a [F32]. If the given number can't be precisely represented in a [F32],
+## there will be a loss of precision.
+toF32 : Num * -> F32
+
+## Convert a [Num] to a [F64]. If the given number can't be precisely represented in a [F64],
+## there will be a loss of precision.
+toF64 : Num * -> F64
+
 ## Convert any [Int] to a specifically-sized [Int], after checking validity.
 ## These are checked bitwise operations,
 ## so if the source number is outside the target range, then these will
@@ -642,6 +651,9 @@ toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
 toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
 toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
 toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+
+toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
+toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 
 ## Convert a number to a [Str].
 ##
@@ -764,14 +776,6 @@ toU16 : Int * -> U16
 toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
-
-## Convert a #Num to a #F32. If the given number can't be precisely represented in a #F32,
-## there will be a loss of precision.
-toF32 : Num * -> F32
-
-## Convert a #Num to a #F64. If the given number can't be precisely represented in a #F64,
-## there will be a loss of precision.
-toF64 : Num * -> F64
 
 ## Convert a #Num to a #Dec. If the given number can't be precisely represented in a #Dec,
 ## there will be a loss of precision.

@@ -677,8 +677,14 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
             }
+            NumToFloatCast => {
+                todo!("implement toF32 and toF64");
+            }
             NumToIntChecked => {
                 todo!()
+            }
+            NumToFloatChecked => {
+                todo!("implement toF32Checked and toF64Checked");
             }
             And => {
                 self.load_args(backend);

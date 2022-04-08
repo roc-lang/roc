@@ -615,7 +615,35 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::NUM_TO_NAT_CHECKED,
         vec![int_type(flex(TVAR1))],
-        Box::new(result_type(nat_type(), out_of_bounds)),
+        Box::new(result_type(nat_type(), out_of_bounds.clone())),
+    );
+
+    // toF32 : Num * -> F32
+    add_top_level_function_type!(
+        Symbol::NUM_TO_F32,
+        vec![num_type(flex(TVAR1))],
+        Box::new(f32_type()),
+    );
+
+    // toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_F32_CHECKED,
+        vec![num_type(flex(TVAR1))],
+        Box::new(result_type(f32_type(), out_of_bounds.clone())),
+    );
+
+    // toF64 : Num * -> F64
+    add_top_level_function_type!(
+        Symbol::NUM_TO_F64,
+        vec![num_type(flex(TVAR1))],
+        Box::new(f64_type()),
+    );
+
+    // toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_F64_CHECKED,
+        vec![num_type(flex(TVAR1))],
+        Box::new(result_type(f64_type(), out_of_bounds)),
     );
 
     // toStr : Num a -> Str

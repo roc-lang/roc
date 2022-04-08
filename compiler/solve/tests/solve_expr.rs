@@ -5272,6 +5272,21 @@ mod solve_expr {
     }
 
     #[test]
+    fn to_float() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                {
+                    toF32: Num.toF32,
+                    toF64: Num.toF64,
+                }
+                "#
+            ),
+            r#"{ toF32 : Num * -> F32, toF64 : Num * -> F64 }"#,
+        )
+    }
+
+    #[test]
     fn opaque_wrap_infer() {
         infer_eq_without_problem(
             indoc!(
@@ -5359,7 +5374,7 @@ mod solve_expr {
                 condition : Bool
 
                 v : Id [ Y Str, Z Str ]
-                v = 
+                v =
                     if condition
                     then $Id (Id 21 (Y "sasha"))
                     else $Id (Id 21 (Z "felix"))
