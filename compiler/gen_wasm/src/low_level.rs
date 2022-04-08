@@ -548,7 +548,7 @@ impl<'a> LowLevelCall<'a> {
                     _ => internal_error!("Invalid argument type for ceiling: {:?}", arg_type),
                 }
                 match (ret_type, arg_type) {
-                    // TODO: signed truncation
+                    // TODO: unsigned truncation
                     (I32, F32) => backend.code_builder.i32_trunc_s_f32(),
                     (I32, F64) => backend.code_builder.i32_trunc_s_f64(),
                     (I64, F32) => backend.code_builder.i64_trunc_s_f32(),
