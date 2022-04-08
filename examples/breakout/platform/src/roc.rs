@@ -200,7 +200,7 @@ pub struct ButtonStyles {
     pub text_color: Rgba,
 }
 
-pub fn app_render(state: State) -> RocElem {
+pub fn app_render(state: State) -> RocList<RocElem> {
     let size = unsafe { roc_program_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
 
@@ -219,19 +219,10 @@ pub fn app_render(state: State) -> RocElem {
     }
 }
 
-unsafe fn call_the_closure(state: State, closure_data_ptr: *const u8) -> RocElem {
+unsafe fn call_the_closure(state: State, closure_data_ptr: *const u8) -> RocList<RocElem> {
     let mut output = MaybeUninit::uninit();
 
-    call_Render(
-        &state,                        // ({ float, float }* %arg
-        closure_data_ptr as *const u8, // {}* %arg1
-        output.as_mut_ptr(),           // { { [6 x i64], [4 x i8] }, i8 }* %arg2)
-    );
+    call_Render(&state, closure_data_ptr as *const u8, output.as_mut_ptr());
 
-    let answer = output.assume_init();
-
-    dbg!(answer);
-
-    todo!("explode");
-    // answer
+    output.assume_init()
 }

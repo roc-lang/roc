@@ -12,9 +12,12 @@ use crate::{
     roc::{self, RocElem, RocElemTag},
 };
 use cgmath::{Vector2, Vector4};
-use glyph_brush::OwnedSection;
+use glyph_brush::{GlyphCruncher, OwnedSection};
 use pipelines::RectResources;
-use std::error::Error;
+use std::{
+    error::Error,
+    time::{Duration, Instant},
+};
 use wgpu::{CommandEncoder, LoadOp, RenderPass, TextureView};
 use wgpu_glyph::GlyphBrush;
 use winit::{
@@ -31,6 +34,8 @@ use winit::{
 //
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
+const TIME_BETWEEN_RENDERS: Duration = Duration::new(0, 1000 / 60);
+
 pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Error>> {
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
@@ -41,7 +46,7 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
         .build(&event_loop)
         .unwrap();
 
-    let mut root = roc::app_render(state);
+    let mut elems = roc::app_render(state);
 
     let instance = wgpu::Instance::new(wgpu::Backends::all());
 
@@ -101,6 +106,7 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
     let mut keyboard_modifiers = ModifiersState::empty();
 
     // Render loop
+    let mut next_render_time = Instant::now();
     window.request_redraw();
 
     event_loop.run_return(|event, _, control_flow| {
@@ -175,7 +181,7 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
                     }
                 };
 
-                root = roc::app_render(roc::State {
+                elems = roc::app_render(roc::State {
                     height: size.height as f32,
                     width: size.width as f32,
                 });
@@ -189,6 +195,18 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
             }
             Event::MainEventsCleared => window.request_redraw(),
             Event::RedrawRequested { .. } => {
+                // If we shouldn't draw yet, keep waiting until we should.
+                let current_time = Instant::now();
+
+                if next_render_time.saturating_duration_since(current_time) > TIME_BETWEEN_RENDERS {
+                    // Keep waiting until it's time to draw again.
+                    window.request_redraw();
+
+                    return;
+                }
+
+                next_render_time = current_time + TIME_BETWEEN_RENDERS;
+
                 // Get a command cmd_encoder for the current frame
                 let mut cmd_encoder =
                     gpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -203,32 +221,31 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                dbg!(&root.tag());
-                dbg!(&root);
+                for elem in elems.iter() {
+                    let (_bounds, drawable) = to_drawable(
+                        elem,
+                        Bounds {
+                            width: size.width as f32,
+                            height: size.height as f32,
+                        },
+                        &mut glyph_brush,
+                    );
 
-                let (_bounds, drawable) = to_drawable(
-                    &root,
-                    Bounds {
-                        width: size.width as f32,
-                        height: size.height as f32,
-                    },
-                    &mut glyph_brush,
-                );
-
-                process_drawable(
-                    drawable,
-                    &mut staging_belt,
-                    &mut glyph_brush,
-                    &mut cmd_encoder,
-                    &view,
-                    &gpu_device,
-                    &rect_resources,
-                    wgpu::LoadOp::Load,
-                    Bounds {
-                        width: size.width as f32,
-                        height: size.height as f32,
-                    },
-                );
+                    process_drawable(
+                        drawable,
+                        &mut staging_belt,
+                        &mut glyph_brush,
+                        &mut cmd_encoder,
+                        &view,
+                        &gpu_device,
+                        &rect_resources,
+                        wgpu::LoadOp::Load,
+                        Bounds {
+                            width: size.width as f32,
+                            height: size.height as f32,
+                        },
+                    );
+                }
 
                 staging_belt.finish();
                 cmd_queue.submit(Some(cmd_encoder.finish()));
@@ -422,67 +439,64 @@ fn to_drawable(
 
     match elem.tag() {
         Rect => {
-            todo!("restore RECT")
-            // let rect = unsafe { &elem.entry().rect };
-            // let styles = rect.styles;
+            let rect = unsafe { &elem.entry().rect };
 
-            // let bounds = Bounds {
-            //     width: 500.0,
-            //     height: 300.0,
-            // };
+            let bounds = Bounds {
+                width: rect.width,
+                height: rect.height,
+            };
 
-            // let drawable = Drawable {
-            //     bounds,
-            //     content: DrawableContent::FillRect {
-            //         color: styles.bg_color,
-            //         border_width: styles.border_width,
-            //         border_color: styles.border_color,
-            //     },
-            // };
+            let drawable = Drawable {
+                bounds,
+                content: DrawableContent::FillRect {
+                    color: rect.color,
+                    border_width: 1.0,
+                    border_color: rect.color,
+                },
+            };
 
-            // (bounds, drawable)
+            (bounds, drawable)
         }
         Text => {
-            todo!("restore TEXT")
-            // let text = unsafe { &elem.entry().text };
-            // let is_centered = true; // TODO don't hardcode this
-            // let layout = wgpu_glyph::Layout::default().h_align(if is_centered {
-            //     wgpu_glyph::HorizontalAlign::Center
-            // } else {
-            //     wgpu_glyph::HorizontalAlign::Left
-            // });
+            let text = unsafe { &elem.entry().text };
+            let is_centered = true; // TODO don't hardcode this
+            let layout = wgpu_glyph::Layout::default().h_align(if is_centered {
+                wgpu_glyph::HorizontalAlign::Center
+            } else {
+                wgpu_glyph::HorizontalAlign::Left
+            });
 
-            // let section = owned_section_from_str(text.as_str(), bounds, layout);
+            let section = owned_section_from_str(text.as_str(), bounds, layout);
 
-            // // Calculate the bounds and offset by measuring glyphs
-            // let text_bounds;
-            // let offset;
+            // Calculate the bounds and offset by measuring glyphs
+            let text_bounds;
+            let offset;
 
-            // match glyph_brush.glyph_bounds(section.to_borrowed()) {
-            //     Some(glyph_bounds) => {
-            //         text_bounds = Bounds {
-            //             width: glyph_bounds.max.x - glyph_bounds.min.x,
-            //             height: glyph_bounds.max.y - glyph_bounds.min.y,
-            //         };
+            match glyph_brush.glyph_bounds(section.to_borrowed()) {
+                Some(glyph_bounds) => {
+                    text_bounds = Bounds {
+                        width: glyph_bounds.max.x - glyph_bounds.min.x,
+                        height: glyph_bounds.max.y - glyph_bounds.min.y,
+                    };
 
-            //         offset = (-glyph_bounds.min.x, -glyph_bounds.min.y).into();
-            //     }
-            //     None => {
-            //         text_bounds = Bounds {
-            //             width: 0.0,
-            //             height: 0.0,
-            //         };
+                    offset = (-glyph_bounds.min.x, -glyph_bounds.min.y).into();
+                }
+                None => {
+                    text_bounds = Bounds {
+                        width: 0.0,
+                        height: 0.0,
+                    };
 
-            //         offset = (0.0, 0.0).into();
-            //     }
-            // }
+                    offset = (0.0, 0.0).into();
+                }
+            }
 
-            // let drawable = Drawable {
-            //     bounds: text_bounds,
-            //     content: DrawableContent::Text(section, offset),
-            // };
+            let drawable = Drawable {
+                bounds: text_bounds,
+                content: DrawableContent::Text(section, offset),
+            };
 
-            // (text_bounds, drawable)
+            (text_bounds, drawable)
         }
     }
 }
