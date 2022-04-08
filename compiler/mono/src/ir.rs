@@ -3061,7 +3061,7 @@ fn specialize_naked_symbol<'a>(
     let opt_fn_var = Some(variable);
 
     // if this is a function symbol, ensure that it's properly specialized!
-    reuse_function_symbol(
+    specialize_symbol(
         env,
         procs,
         layout_cache,
@@ -3566,7 +3566,7 @@ pub fn with_hole<'a>(
                         // this symbol is already defined; nothing to do
                     }
                     Field::Function(symbol, variable) => {
-                        stmt = reuse_function_symbol(
+                        stmt = specialize_symbol(
                             env,
                             procs,
                             layout_cache,
@@ -4122,7 +4122,7 @@ pub fn with_hole<'a>(
                                 Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
 
                             if record_needs_specialization {
-                                stmt = reuse_function_symbol(
+                                stmt = specialize_symbol(
                                     env,
                                     procs,
                                     layout_cache,
@@ -4812,8 +4812,7 @@ fn construct_closure_data<'a>(
     // symbols to be inlined when specializing the closure body elsewhere.
     for &&(symbol, var) in symbols {
         if procs.partial_exprs.contains(symbol) {
-            result =
-                reuse_function_symbol(env, procs, layout_cache, Some(var), symbol, result, symbol);
+            result = specialize_symbol(env, procs, layout_cache, Some(var), symbol, result, symbol);
         }
     }
 
@@ -6326,6 +6325,20 @@ fn store_pattern_help<'a>(
 
     match can_pat {
         Identifier(symbol) => {
+            if let Some((_, var)) = procs.partial_exprs.get(outer_symbol) {
+                // It might be the case that symbol we're storing hasn't been reified to a value
+                // yet, if it's polymorphic. Do that now.
+                stmt = specialize_symbol(
+                    env,
+                    procs,
+                    layout_cache,
+                    Some(var),
+                    *symbol,
+                    stmt,
+                    outer_symbol,
+                );
+            }
+
             substitute_in_exprs(env.arena, &mut stmt, *symbol, outer_symbol);
         }
         Underscore => {
@@ -6777,9 +6790,8 @@ fn let_empty_struct<'a>(assigned: Symbol, hole: &'a Stmt<'a>) -> Stmt<'a> {
     Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole)
 }
 
-/// If the symbol is a function, make sure it is properly specialized
-// TODO: rename this now that we handle polymorphic non-function expressions too
-fn reuse_function_symbol<'a>(
+/// If the symbol is a function or polymorphic value, make sure it is properly specialized
+fn specialize_symbol<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
@@ -6988,7 +7000,7 @@ fn assign_to_symbol<'a>(
     match can_reuse_symbol(env, procs, &loc_arg.value) {
         Imported(original) | LocalFunction(original) | UnspecializedExpr(original) => {
             // for functions we must make sure they are specialized correctly
-            reuse_function_symbol(
+            specialize_symbol(
                 env,
                 procs,
                 layout_cache,
