@@ -26,11 +26,11 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN apt -y install lsb-release software-properties-common gnupg
     RUN wget https://apt.llvm.org/llvm.sh
     RUN chmod +x llvm.sh
-    RUN ./llvm.sh 12
-    RUN ln -s /usr/bin/clang-12 /usr/bin/clang
-    RUN ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
+    RUN ./llvm.sh 13
+    RUN ln -s /usr/bin/clang-13 /usr/bin/clang
+    RUN ln -s /usr/bin/llvm-as-13 /usr/bin/llvm-as
     # use lld as linker
-    RUN ln -s /usr/bin/lld-12 /usr/bin/ld.lld
+    RUN ln -s /usr/bin/lld-13 /usr/bin/ld.lld
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     # valgrind
     RUN apt -y install valgrind
