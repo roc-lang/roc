@@ -2460,7 +2460,9 @@ fn foo<'a>(
                 packages: &[],
                 exposes: unspace(arena, header.exposes.items),
                 imports: unspace(arena, header.imports.items),
-                extra: HeaderFor::Interface,
+                extra: HeaderFor::Builtin {
+                    generates_with: &[],
+                },
             };
 
             (info, parse_state)

@@ -396,7 +396,7 @@ pub fn canonicalize_module_defs<'a>(
                         if has_no_implementation(&def.loc_expr.value) {
                             match generated_info {
                                 GeneratedInfo::Builtin {
-                                    generated_functions,
+                                    generated_functions: _,
                                 } => {
                                     let symbol = def.pattern_vars.iter().next().unwrap().0;
                                     match crate::builtins::builtin_defs_map(*symbol, var_store) {

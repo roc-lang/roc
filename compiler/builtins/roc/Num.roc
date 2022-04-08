@@ -140,6 +140,8 @@ interface Num
             toU64Checked,
             toU128,
             toU128Checked,
+            toNat,
+            toNatChecked,
             toF32,
             toF32Checked,
             toF64,
@@ -354,6 +356,7 @@ toU16 : Int * -> U16
 toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
+toNat : Int * -> Nat
 
 toF32 : Num * -> F32
 toF64 : Num * -> F64
@@ -368,5 +371,6 @@ toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
 toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
 toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
 toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+toNatChecked : Int * -> Result Nat [ OutOfBounds ]*
 toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
 toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
