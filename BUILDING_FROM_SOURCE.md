@@ -39,6 +39,8 @@ Use `cargo run help` to see all subcommands.
 To use the `repl` subcommand, execute `cargo run repl`.
 Use `cargo build` to build the whole project.
 
+> In the nix-shell, make sure that inside your `PATH` variable `usr/bin` comes after all the nix-related components. Otherwise you might get some nasty rust compilation errors!
+
 #### Extra tips
 
 If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependencies into your current shell, so you never have to run nix-shell directly!
