@@ -1,4 +1,4 @@
-interface Num
+interface List
     exposes
         [
             isEmpty,

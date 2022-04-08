@@ -1,4 +1,4 @@
-interface Dict
+interface Set
     exposes 
         [ 
             empty,
@@ -14,7 +14,7 @@ interface Dict
             intersection,
             difference,
         ]
-    imports [ ]
+    imports [ List, Bool.{ Bool } ]
 
 empty : Set k
 single : k -> Set k
