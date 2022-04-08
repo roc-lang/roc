@@ -1987,6 +1987,7 @@ fn constrain_field_update(
     (var, field_type, con)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn constrain_tag(
     constraints: &mut Constraints,
     env: &Env,
@@ -2023,7 +2024,7 @@ fn constrain_tag(
             vec![(name.clone(), types)],
             TypeExtension::from_type(Type::Variable(ext_var)),
         ),
-        expected.clone(),
+        expected,
         Category::TagApply {
             tag_name: name.clone(),
             args_count: arguments.len(),
