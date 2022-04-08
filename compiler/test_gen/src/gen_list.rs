@@ -1104,7 +1104,7 @@ fn list_map_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map4_group() {
     assert_evals_to!(
         indoc!(
@@ -1112,13 +1112,13 @@ fn list_map4_group() {
             List.map4 [1,2,3] [3,2,1] [2,1,3] [3,1,2] (\a, b, c, d -> Group a b c d)
             "#
         ),
-        RocList::from_slice(&[(1, 3, 2, 3), (2, 2, 1, 1), (3, 1, 3, 2)]),
-        RocList<(i64, i64, i64, i64)>
+        RocList::from_slice(&[[1, 3, 2, 3], [2, 2, 1, 1], [3, 1, 3, 2]]),
+        RocList<[i64; 4]>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map4_different_length() {
     assert_evals_to!(
         indoc!(
