@@ -193,15 +193,12 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
             } => {
                 keyboard_modifiers = modifiers;
             }
-            Event::MainEventsCleared => window.request_redraw(),
             Event::RedrawRequested { .. } => {
                 // If we shouldn't draw yet, keep waiting until we should.
                 let current_time = Instant::now();
 
                 if next_render_time.saturating_duration_since(current_time) > TIME_BETWEEN_RENDERS {
                     // Keep waiting until it's time to draw again.
-                    window.request_redraw();
-
                     return;
                 }
 
