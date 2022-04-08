@@ -2,7 +2,7 @@ use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
-    BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
+    BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError, ShadowKind,
 };
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
 use roc_types::types::AliasKind;
@@ -38,6 +38,12 @@ const OPAQUE_DECLARED_OUTSIDE_SCOPE: &str = "OPAQUE TYPE DECLARED OUTSIDE SCOPE"
 const OPAQUE_NOT_APPLIED: &str = "OPAQUE TYPE NOT APPLIED";
 const OPAQUE_OVER_APPLIED: &str = "OPAQUE TYPE APPLIED TO TOO MANY ARGS";
 const INVALID_EXTENSION_TYPE: &str = "INVALID_EXTENSION_TYPE";
+const ABILITY_HAS_TYPE_VARIABLES: &str = "ABILITY HAS TYPE VARIABLES";
+const HAS_CLAUSE_IS_NOT_AN_ABILITY: &str = "HAS CLAUSE IS NOT AN ABILITY";
+const ALIAS_USES_ABILITY: &str = "ALIAS USES ABILITY";
+const ILLEGAL_HAS_CLAUSE: &str = "ILLEGAL HAS CLAUSE";
+const ABILITY_MEMBER_MISSING_HAS_CLAUSE: &str = "ABILITY MEMBER MISSING HAS CLAUSE";
+const ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE: &str = "ABILITY MEMBER HAS EXTRANEOUS HAS CLAUSE";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -213,11 +219,12 @@ pub fn can_problem<'b>(
             title = SYNTAX_PROBLEM.to_string();
             severity = Severity::RuntimeError;
         }
-        Problem::ShadowingInAnnotation {
+        Problem::Shadowing {
             original_region,
             shadow,
+            kind,
         } => {
-            doc = report_shadowing(alloc, lines, original_region, shadow);
+            doc = report_shadowing(alloc, lines, original_region, shadow, kind);
 
             title = DUPLICATE_NAME.to_string();
             severity = Severity::RuntimeError;
@@ -560,6 +567,144 @@ pub fn can_problem<'b>(
             ]);
 
             title = INVALID_EXTENSION_TYPE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AbilityHasTypeVariables {
+            name,
+            variables_region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The definition of the "),
+                    alloc.symbol_unqualified(name),
+                    alloc.reflow(" ability includes type variables:"),
+                ]),
+                alloc.region(lines.convert_region(variables_region)),
+                alloc.reflow(
+                    "Abilities cannot depend on type variables, but their member values can!",
+                ),
+            ]);
+            title = ABILITY_HAS_TYPE_VARIABLES.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::HasClauseIsNotAbility {
+            region: clause_region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.reflow(r#"The type referenced in this "has" clause is not an ability:"#),
+                alloc.region(lines.convert_region(clause_region)),
+            ]);
+            title = HAS_CLAUSE_IS_NOT_AN_ABILITY.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AliasUsesAbility {
+            loc_name: Loc {
+                region,
+                value: name,
+            },
+            ability,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The definition of the "),
+                    alloc.symbol_unqualified(name),
+                    alloc.reflow(" aliases references the ability "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat(vec![
+                    alloc.reflow("Abilities are not types, but you can add an ability constraint to a type variable "),
+                    alloc.type_variable("a".into()),
+                    alloc.reflow(" by writing"),
+                ]),
+                alloc.type_block(alloc.concat(vec![
+                        alloc.reflow("| a has "),
+                        alloc.symbol_unqualified(ability),
+                ])),
+                alloc.reflow(" at the end of the type."),
+            ]);
+            title = ALIAS_USES_ABILITY.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::IllegalHasClause { region } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("A "),
+                    alloc.keyword("has"),
+                    alloc.reflow(" clause is not allowed here:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat(vec![
+                    alloc.keyword("has"),
+                    alloc.reflow(" clauses can only be specified on the top-level type annotation of an ability member."),
+                ]),
+            ]);
+            title = ILLEGAL_HAS_CLAUSE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AbilityMemberMissingHasClause {
+            member,
+            ability,
+            region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The definition of the ability member "),
+                    alloc.symbol_unqualified(member),
+                    alloc.reflow(" does not include a "),
+                    alloc.keyword("has"),
+                    alloc.reflow(" clause binding a type variable to the ability "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat(vec![
+                    alloc.reflow("Ability members must include a "),
+                    alloc.keyword("has"),
+                    alloc.reflow(" clause binding a type variable to an ability, like"),
+                ]),
+                alloc.type_block(alloc.concat(vec![
+                    alloc.type_variable("a".into()),
+                    alloc.space(),
+                    alloc.keyword("has"),
+                    alloc.space(),
+                    alloc.symbol_unqualified(ability),
+                ])),
+                alloc.concat(vec![alloc.reflow(
+                    "Otherwise, the function does not need to be part of the ability!",
+                )]),
+            ]);
+            title = ABILITY_MEMBER_MISSING_HAS_CLAUSE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AbilityMemberBindsExternalAbility {
+            member,
+            ability,
+            region,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The definition of the ability member "),
+                    alloc.symbol_unqualified(member),
+                    alloc.reflow(" includes a has clause binding an ability it is not a part of:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Currently, ability members can only bind variables to the ability they are a part of."),
+                alloc.concat(vec![
+                    alloc.hint(""),
+                    alloc.reflow("Did you mean to bind the "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(" ability instead?"),
+                ]),
+            ]);
+            title = ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE.to_string();
             severity = Severity::RuntimeError;
         }
     };
@@ -940,8 +1085,14 @@ fn report_shadowing<'b>(
     lines: &LineInfo,
     original_region: Region,
     shadow: Loc<Ident>,
+    kind: ShadowKind,
 ) -> RocDocBuilder<'b> {
-    let line = r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
+    let what = match kind {
+        ShadowKind::Variable => "variables",
+        ShadowKind::Alias => "aliases",
+        ShadowKind::Opaque => "opaques",
+        ShadowKind::Ability => "abilities",
+    };
 
     alloc.stack(vec![
         alloc
@@ -951,7 +1102,11 @@ fn report_shadowing<'b>(
         alloc.region(lines.convert_region(original_region)),
         alloc.reflow("But then it's defined a second time here:"),
         alloc.region(lines.convert_region(shadow.region)),
-        alloc.reflow(line),
+        alloc.concat(vec![
+            alloc.reflow("Since these "),
+            alloc.reflow(what),
+            alloc.reflow(" have the same name, it's easy to use the wrong one on accident. Give one of them a new name."),
+        ]),
     ])
 }
 
@@ -978,8 +1133,9 @@ fn pretty_runtime_error<'b>(
         RuntimeError::Shadowing {
             original_region,
             shadow,
+            kind,
         } => {
-            doc = report_shadowing(alloc, lines, original_region, shadow);
+            doc = report_shadowing(alloc, lines, original_region, shadow, kind);
             title = DUPLICATE_NAME;
         }
 
