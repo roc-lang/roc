@@ -5,7 +5,7 @@ const CrossTarget = std.zig.CrossTarget;
 const Arch = std.Target.Cpu.Arch;
 
 pub fn build(b: *Builder) void {
-    // b.setPreferredReleaseMode(builtin.Mode.Debug
+    // b.setPreferredReleaseMode(.Debug);
     b.setPreferredReleaseMode(.ReleaseFast);
     const mode = b.standardReleaseOptions();
 
