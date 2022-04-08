@@ -145,7 +145,10 @@ interface Num
             toF64,
             toF64Checked,
         ]
-    imports [ ]
+    imports
+        [
+            Bool.{ Bool }
+        ]
 
 Num range : [ @Num range ]
 Int range : Num (Integer range)

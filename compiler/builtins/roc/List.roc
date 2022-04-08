@@ -51,7 +51,10 @@ interface List
             sortAsc,
             sortDesc,
         ]
-    imports [ Bool.{ Bool }, Result.{ Result } ]
+    imports
+        [
+            Bool.{ Bool }
+        ]
 
 isEmpty : List a -> Bool
 isEmpty = \list ->
@@ -75,11 +78,11 @@ walkBackwards  : List elem, state, (state, elem -> state) -> state
 walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
 
 sum : List (Num a) -> Num a
-sum = \list -> 
+sum = \list ->
     List.walk list 0 Num.add
 
 product : List (Num a) -> Num a
-product = \list -> 
+product = \list ->
     List.walk list 1 Num.mul
 
 any : List a, (a -> Bool) -> Bool

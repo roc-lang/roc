@@ -1,6 +1,6 @@
 interface Set
-    exposes 
-        [ 
+    exposes
+        [
             empty,
             single,
             walk,
