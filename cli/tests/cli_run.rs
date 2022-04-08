@@ -111,7 +111,7 @@ mod cli_run {
         build_example(file, &all_flags[..]);
 
         let out = if use_valgrind && ALLOW_VALGRIND {
-            let (valgrind_out, raw_xml) = if let Some(input_file) = input_file {
+            let (valgrind_out, raw_xml) = if let Some(ref input_file) = input_file {
                 run_with_valgrind(
                     stdin,
                     &[
@@ -149,7 +149,10 @@ mod cli_run {
                             println!("    {}", text);
                         }
                     }
-                    panic!("Valgrind reported memory errors");
+                    panic!(
+                        "Valgrind reported memory errors in {:?} with flags {:?}",
+                        file, flags
+                    );
                 }
             } else {
                 let exit_code = match valgrind_out.status.code() {
