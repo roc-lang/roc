@@ -66,7 +66,7 @@ pub enum Pattern {
     /// An identifier that marks a specialization of an ability member.
     /// For example, given an ability member definition `hash : a -> U64 | a has Hash`,
     /// there may be the specialization `hash : Bool -> U64`. In this case we generate a
-    /// new symbol for the specailized "hash" identifier.
+    /// new symbol for the specialized "hash" identifier.
     AbilityMemberSpecialization {
         /// The symbol for this specialization.
         ident: Symbol,
