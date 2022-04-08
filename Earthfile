@@ -16,18 +16,12 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # editor
     RUN apt -y install libxkbcommon-dev
     # zig
-<<<<<<< HEAD
     RUN wget -c https://ziglang.org/download/0.9.1/zig-linux-x86_64-0.9.1.tar.xz --no-check-certificate
     RUN tar -xf zig-linux-x86_64-0.9.1.tar.xz
     RUN ln -s /earthbuild/zig-linux-x86_64-0.9.1/zig /usr/bin/zig
-=======
-    RUN wget -c https://ziglang.org/download/0.8.0/zig-linux-x86_64-0.8.0.tar.xz --no-check-certificate
-    RUN tar -xf zig-linux-x86_64-0.8.0.tar.xz
-    RUN ln -s /earthbuild/zig-linux-x86_64-0.8.0/zig /usr/bin/zig
     # zig builtins wasm tests
     RUN apt -y install build-essential
     RUN cargo install wasmer-cli --features "singlepass"
->>>>>>> origin/trunk
     # llvm
     RUN apt -y install lsb-release software-properties-common gnupg
     RUN wget https://apt.llvm.org/llvm.sh
