@@ -696,14 +696,12 @@ fn fix_tag_union_recursion_variable(
         Structure(FlatType::RecursiveTagUnion(..))
     ));
 
-    let f = subs.get_content_without_compacting(tag_union_promoted_to_recursive);
-
     let has_recursing_recursive_variable = subs
         .occurs_including_recursion_vars(tag_union_promoted_to_recursive)
         .is_err();
 
     if !has_recursing_recursive_variable {
-        merge(subs, ctx, recursion_var.clone())
+        merge(subs, ctx, *recursion_var)
     } else {
         vec![]
     }
