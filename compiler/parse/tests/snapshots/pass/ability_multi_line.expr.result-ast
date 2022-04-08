@@ -1,54 +1,56 @@
 Defs(
     [
-        @0-45 Ability {
-            header: TypeHeader {
-                name: @0-4 "Hash",
-                vars: [],
+        @0-45 Type(
+            Ability {
+                header: TypeHeader {
+                    name: @0-4 "Hash",
+                    vars: [],
+                },
+                loc_has: @5-8 Has,
+                members: [
+                    AbilityMember {
+                        name: @11-15 SpaceBefore(
+                            "hash",
+                            [
+                                Newline,
+                            ],
+                        ),
+                        typ: @23-26 Function(
+                            [
+                                @18-19 BoundVariable(
+                                    "a",
+                                ),
+                            ],
+                            @23-26 Apply(
+                                "",
+                                "U64",
+                                [],
+                            ),
+                        ),
+                    },
+                    AbilityMember {
+                        name: @29-34 SpaceBefore(
+                            "hash2",
+                            [
+                                Newline,
+                            ],
+                        ),
+                        typ: @42-45 Function(
+                            [
+                                @37-38 BoundVariable(
+                                    "a",
+                                ),
+                            ],
+                            @42-45 Apply(
+                                "",
+                                "U64",
+                                [],
+                            ),
+                        ),
+                    },
+                ],
             },
-            loc_has: @5-8 Has,
-            demands: [
-                AbilityDemand {
-                    name: @11-15 SpaceBefore(
-                        "hash",
-                        [
-                            Newline,
-                        ],
-                    ),
-                    typ: @23-26 Function(
-                        [
-                            @18-19 BoundVariable(
-                                "a",
-                            ),
-                        ],
-                        @23-26 Apply(
-                            "",
-                            "U64",
-                            [],
-                        ),
-                    ),
-                },
-                AbilityDemand {
-                    name: @29-34 SpaceBefore(
-                        "hash2",
-                        [
-                            Newline,
-                        ],
-                    ),
-                    typ: @42-45 Function(
-                        [
-                            @37-38 BoundVariable(
-                                "a",
-                            ),
-                        ],
-                        @42-45 Apply(
-                            "",
-                            "U64",
-                            [],
-                        ),
-                    ),
-                },
-            ],
-        },
+        ),
     ],
     @47-48 SpaceBefore(
         Num(

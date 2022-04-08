@@ -30,9 +30,10 @@ void* roc_memset(void* str, int c, size_t n) { return memset(str, c, n); }
 struct RocStr {
   char* bytes;
   size_t len;
+  size_t capacity;
 };
 
-bool is_small_str(struct RocStr str) { return ((ssize_t)str.len) < 0; }
+bool is_small_str(struct RocStr str) { return ((ssize_t)str.capacity) < 0; }
 
 // Determine the length of the string, taking into
 // account the small string optimization
@@ -53,10 +54,12 @@ size_t roc_str_len(struct RocStr str) {
   }
 }
 
-extern struct RocStr roc__mainForHost_1_exposed();
+extern void roc__mainForHost_1_exposed_generic(*RocStr);
 
 int main() {
-  struct RocStr str = roc__mainForHost_1_exposed();
+
+  struct RocStr str;
+  roc__mainForHost_1_exposed_generic(&str);
 
   // Determine str_len and the str_bytes pointer,
   // taking into account the small string optimization.

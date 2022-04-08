@@ -13,7 +13,7 @@ use crate::helpers::dev::assert_evals_to as assert_llvm_evals_to;
 #[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocList, RocStr};
+use roc_std::{RocList, RocResult, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
@@ -103,18 +103,9 @@ fn str_split_str_concat_repeated() {
 #[cfg(any(feature = "gen-llvm"))]
 fn str_split_small_str_bigger_delimiter() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                    when
-                        List.first
-                            (Str.split "JJJ" "0123456789abcdefghi")
-                    is
-                        Ok str -> str
-                        _ -> ""
-                "#
-        ),
-        RocStr::from("JJJ"),
-        RocStr
+        indoc!(r#"Str.split "JJJ" "0123456789abcdefghi""#),
+        RocList::from_slice(&[RocStr::from("JJJ")]),
+        RocList<RocStr>
     );
 }
 
@@ -271,26 +262,34 @@ fn str_concat_big_to_big() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_literal() {
     assert_llvm_evals_to!(
-        "\"JJJJJJJJJJJJJJJ\"",
+        "\"JJJJJJJJJJJJJJJJJJJJJJJ\"",
         [
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0b1000_1111
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            0b1000_0000 | 23
         ],
-        [u8; 16]
+        [u8; 24]
     );
 }
 
@@ -318,9 +317,17 @@ fn small_str_zeroed_literal() {
             0x00,
             0x00,
             0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
             0b1000_0001
         ],
-        [u8; 16]
+        [u8; 24]
     );
 }
 
@@ -330,24 +337,32 @@ fn small_str_concat_empty_first_arg() {
     assert_llvm_evals_to!(
         r#"Str.concat "" "JJJJJJJJJJJJJJJ""#,
         [
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0b1000_1111
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0b1000_0000 | 15
         ],
-        [u8; 16]
+        [u8; 24]
     );
 }
 
@@ -357,24 +372,32 @@ fn small_str_concat_empty_second_arg() {
     assert_llvm_evals_to!(
         r#"Str.concat "JJJJJJJJJJJJJJJ" """#,
         [
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0b1000_1111
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0b1000_0000 | 15
         ],
-        [u8; 16]
+        [u8; 24]
     );
 }
 
@@ -394,24 +417,32 @@ fn small_str_concat_small_to_small_staying_small() {
     assert_llvm_evals_to!(
         r#"Str.concat "J" "JJJJJJJJJJJJJJ""#,
         [
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0x4a,
-            0b1000_1111
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            b'J',
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0b1000_0000 | 15
         ],
-        [u8; 16]
+        [u8; 24]
     );
 }
 
@@ -1001,7 +1032,7 @@ fn str_from_utf8_range_count_too_high_for_start() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_repeat_small() {
+fn str_repeat_small_stays_small() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "Roc" 3"#),
         RocStr::from("RocRocRoc"),
@@ -1011,10 +1042,20 @@ fn str_repeat_small() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn str_repeat_small_becomes_big() {
+    assert_evals_to!(
+        indoc!(r#"Str.repeat "less than 23 characters" 2"#),
+        RocStr::from("less than 23 charactersless than 23 characters"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_repeat_big() {
     assert_evals_to!(
-        indoc!(r#"Str.repeat "more than 16 characters" 2"#),
-        RocStr::from("more than 16 charactersmore than 16 characters"),
+        indoc!(r#"Str.repeat "more than 23 characters now" 2"#),
+        RocStr::from("more than 23 characters nowmore than 23 characters now"),
         RocStr
     );
 }
@@ -1022,7 +1063,9 @@ fn str_repeat_big() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn str_repeat_empty_string() {
-    assert_evals_to!(indoc!(r#"Str.repeat "" 3"#), RocStr::from(""), RocStr);
+    let a = indoc!(r#"Str.repeat "" 3"#);
+    let b = RocStr::from("");
+    assert_evals_to!(a, b, RocStr);
 }
 
 #[test]
@@ -1390,16 +1433,9 @@ fn str_to_i64() {
 #[cfg(any(feature = "gen-llvm"))]
 fn str_to_u64() {
     assert_evals_to!(
-        indoc!(
-            r#"
-            when Str.toU64 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
-        ),
-        1,
-        u64
+        r#"Str.toU64 "1""#,
+        RocResult::ok(1u64),
+        RocResult<u64, u8>
     );
 }
 
@@ -1424,16 +1460,9 @@ fn str_to_i32() {
 #[cfg(any(feature = "gen-llvm"))]
 fn str_to_u32() {
     assert_evals_to!(
-        indoc!(
-            r#"
-            when Str.toU32 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
-        ),
-        1,
-        u32
+        r#"Str.toU32 "1""#,
+        RocResult::ok(1u32),
+        RocResult<u32, u8>
     );
 }
 

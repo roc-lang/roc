@@ -1,16 +1,18 @@
 Defs(
     [
-        @0-9 Body(
-            @0-1 Identifier(
-                "x",
-            ),
-            @8-9 SpaceBefore(
-                Num(
-                    "5",
+        @0-9 Value(
+            Body(
+                @0-1 Identifier(
+                    "x",
                 ),
-                [
-                    Newline,
-                ],
+                @8-9 SpaceBefore(
+                    Num(
+                        "5",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
             ),
         ),
     ],

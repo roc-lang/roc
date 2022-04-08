@@ -901,11 +901,11 @@ test "toStr: -0.00045" {
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-test "toStr: -111.123456789" {
-    var dec: RocDec = .{ .num = -111123456789000000000 };
+test "toStr: -111.123456" {
+    var dec: RocDec = .{ .num = -111123456000000000000 };
     var res_roc_str = dec.toStr();
 
-    const res_slice: []const u8 = "-111.123456789"[0..];
+    const res_slice: []const u8 = "-111.123456"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 

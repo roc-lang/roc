@@ -4,7 +4,7 @@ use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
-use roc_builtins::standard_library::module_source;
+use roc_builtins::roc::module_source;
 use roc_builtins::std::borrow_stdlib;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
@@ -48,7 +48,8 @@ use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 use std::{env, fs};
 
-use crate::work::{Dependencies, Phase};
+use crate::work::Dependencies;
+pub use crate::work::Phase;
 
 #[cfg(target_family = "wasm")]
 use crate::wasm_system_time::{Duration, SystemTime};
@@ -182,8 +183,7 @@ fn start_phase<'a>(
         Recurse(new) => {
             return new
                 .into_iter()
-                .map(|(module_id, phase)| start_phase(module_id, phase, arena, state))
-                .flatten()
+                .flat_map(|(module_id, phase)| start_phase(module_id, phase, arena, state))
                 .collect()
         }
     }
@@ -322,6 +322,7 @@ fn start_phase<'a>(
                     &mut state.exposed_types,
                     dep_idents,
                     declarations,
+                    state.cached_subs.clone(),
                 )
             }
             Phase::FindSpecializations => {
@@ -668,7 +669,12 @@ struct State<'a> {
     // since the unioning process could potentially take longer than the savings.
     // (Granted, this has not been attempted or measured!)
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
+
+    // cached subs (used for builtin modules, could include packages in the future too)
+    cached_subs: CachedSubs,
 }
+
+type CachedSubs = Arc<Mutex<MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>>>;
 
 impl<'a> State<'a> {
     fn new(
@@ -678,6 +684,7 @@ impl<'a> State<'a> {
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+        cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     ) -> Self {
         let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
@@ -701,6 +708,7 @@ impl<'a> State<'a> {
             exposed_symbols_by_module: MutMap::default(),
             timings: MutMap::default(),
             layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
+            cached_subs: Arc::new(Mutex::new(cached_subs)),
         }
     }
 }
@@ -804,6 +812,7 @@ enum BuildTask<'a> {
         var_store: VarStore,
         declarations: Vec<Declaration>,
         dep_idents: MutMap<ModuleId, IdentIds>,
+        cached_subs: CachedSubs,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -874,16 +883,21 @@ fn enqueue_task<'a>(
     Ok(())
 }
 
-pub fn load_and_typecheck<'a>(
+pub fn load_and_typecheck_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
+    source: &'a str,
     src_dir: &Path,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename)?;
+    let load_start = LoadStart::from_str(arena, filename, source)?;
+
+    // this function is used specifically in the case
+    // where we want to regenerate the cached data
+    let cached_subs = MutMap::default();
 
     match load(
         arena,
@@ -892,68 +906,18 @@ pub fn load_and_typecheck<'a>(
         exposed_types,
         Phase::SolveTypes,
         target_info,
+        cached_subs,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
     }
 }
 
-/// Main entry point to the compiler from the CLI and tests
-pub fn load_and_monomorphize<'a>(
-    arena: &'a Bump,
-    filename: PathBuf,
-    src_dir: &Path,
-    exposed_types: ExposedByModule,
-    target_info: TargetInfo,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
-    use LoadResult::*;
-
-    let load_start = LoadStart::from_path(arena, filename)?;
-
-    match load(
-        arena,
-        load_start,
-        src_dir,
-        exposed_types,
-        Phase::MakeSpecializations,
-        target_info,
-    )? {
-        Monomorphized(module) => Ok(module),
-        TypeChecked(_) => unreachable!(""),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn load_and_monomorphize_from_str<'a>(
-    arena: &'a Bump,
-    filename: PathBuf,
-    src: &'a str,
-    src_dir: &Path,
-    exposed_types: ExposedByModule,
-    target_info: TargetInfo,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
-    use LoadResult::*;
-
-    let load_start = LoadStart::from_str(arena, filename, src)?;
-
-    match load(
-        arena,
-        load_start,
-        src_dir,
-        exposed_types,
-        Phase::MakeSpecializations,
-        target_info,
-    )? {
-        Monomorphized(module) => Ok(module),
-        TypeChecked(_) => unreachable!(""),
-    }
-}
-
-struct LoadStart<'a> {
-    pub arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
-    pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-    pub root_id: ModuleId,
-    pub root_msg: Msg<'a>,
+pub struct LoadStart<'a> {
+    arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    root_id: ModuleId,
+    root_msg: Msg<'a>,
 }
 
 impl<'a> LoadStart<'a> {
@@ -1040,7 +1004,7 @@ impl<'a> LoadStart<'a> {
     }
 }
 
-enum LoadResult<'a> {
+pub enum LoadResult<'a> {
     TypeChecked(LoadedModule),
     Monomorphized(MonomorphizedModule<'a>),
 }
@@ -1089,13 +1053,14 @@ enum LoadResult<'a> {
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
 #[allow(clippy::too_many_arguments)]
-fn load<'a>(
+pub fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
+    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     // When compiling to wasm, we cannot spawn extra threads
     // so we have a single-threaded implementation
@@ -1107,6 +1072,7 @@ fn load<'a>(
             exposed_types,
             goal_phase,
             target_info,
+            cached_subs,
         )
     } else {
         load_multi_threaded(
@@ -1116,6 +1082,7 @@ fn load<'a>(
             exposed_types,
             goal_phase,
             target_info,
+            cached_subs,
         )
     }
 }
@@ -1129,6 +1096,7 @@ fn load_single_threaded<'a>(
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
+    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1150,6 +1118,7 @@ fn load_single_threaded<'a>(
         exposed_types,
         arc_modules,
         ident_ids_by_module,
+        cached_subs,
     );
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
@@ -1310,6 +1279,7 @@ fn load_multi_threaded<'a>(
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
+    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1325,6 +1295,7 @@ fn load_multi_threaded<'a>(
         exposed_types,
         arc_modules,
         ident_ids_by_module,
+        cached_subs,
     );
 
     let (msg_tx, msg_rx) = bounded(1024);
@@ -2589,17 +2560,21 @@ fn load_module<'a>(
             const IMPORTS: &[Loc<ImportsEntry>] = &[
                 Loc::at_zero(ImportsEntry::Module(
                     roc_parse::header::ModuleName::new("Result"),
-                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new(
-                        "Result",
-                    )))]),
+                    Collection::with_items(
+                        arena.alloc([Loc::at_zero(Spaced::Item(ExposedName::new("Result")))]),
+                    ),
                 )),
                 Loc::at_zero(ImportsEntry::Module(
                     roc_parse::header::ModuleName::new("Bool"),
-                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Bool")))]),
+                    Collection::with_items(
+                        arena.alloc([Loc::at_zero(Spaced::Item(ExposedName::new("Bool")))]),
+                    ),
                 )),
                 Loc::at_zero(ImportsEntry::Module(
                     roc_parse::header::ModuleName::new("Num"),
-                    Collection::with_items(&[Loc::at_zero(Spaced::Item(ExposedName::new("Nat")))]),
+                    Collection::with_items(
+                        arena.alloc([Loc::at_zero(Spaced::Item(ExposedName::new("Nat")))]),
+                    ),
                 )),
             ];
 
@@ -3927,6 +3902,7 @@ impl<'a> BuildTask<'a> {
         exposed_types: &mut ExposedByModule,
         dep_idents: MutMap<ModuleId, IdentIds>,
         declarations: Vec<Declaration>,
+        cached_subs: CachedSubs,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
         let exposed_for_module =
@@ -3951,49 +3927,18 @@ impl<'a> BuildTask<'a> {
             declarations,
             dep_idents,
             module_timing,
+            cached_subs,
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_solve<'a>(
-    module: Module,
-    ident_ids: IdentIds,
-    mut module_timing: ModuleTiming,
-    imported_builtins: Vec<Symbol>,
+fn add_imports(
+    subs: &mut Subs,
     mut exposed_for_module: ExposedForModule,
-    mut constraints: Constraints,
-    constraint: ConstraintSoa,
-    mut var_store: VarStore,
-    decls: Vec<Declaration>,
-    dep_idents: MutMap<ModuleId, IdentIds>,
-) -> Msg<'a> {
-    // We have more constraining work to do now, so we'll add it to our timings.
-    let constrain_start = SystemTime::now();
-
-    let mut rigid_vars = Vec::new();
-    let mut def_types = Vec::new();
-    // let () = constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
-
-    let constrain_end = SystemTime::now();
-
-    let module_id = module.module_id;
-
-    let Module {
-        exposed_symbols,
-        aliases,
-        rigid_variables,
-        ..
-    } = module;
-
-    let mut subs = Subs::new_from_varstore(var_store);
-
+    def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
+    rigid_vars: &mut Vec<Variable>,
+) -> Vec<Variable> {
     let mut import_variables = Vec::new();
-
-    // TODO this is suspicious
-    if !module_id.is_builtin() {
-        exposed_for_module.imported_values.extend(imported_builtins)
-    }
 
     for symbol in exposed_for_module.imported_values {
         let module_id = symbol.module_id();
@@ -4024,7 +3969,7 @@ fn run_solve<'a>(
                         Some((_, x)) => *x,
                     };
 
-                    let copied_import = storage_subs.export_variable_to(&mut subs, variable);
+                    let copied_import = storage_subs.export_variable_to(subs, variable);
 
                     // not a typo; rigids are turned into flex during type inference, but when imported we must
                     // consider them rigid variables
@@ -4044,6 +3989,37 @@ fn run_solve<'a>(
             }
         }
     }
+
+    import_variables
+}
+
+fn run_solve_solve(
+    imported_builtins: Vec<Symbol>,
+    exposed_for_module: ExposedForModule,
+    mut constraints: Constraints,
+    constraint: ConstraintSoa,
+    mut var_store: VarStore,
+    module: Module,
+) -> (Solved<Subs>, Vec<(Symbol, Variable)>, Vec<solve::TypeError>) {
+    let Module {
+        exposed_symbols,
+        aliases,
+        rigid_variables,
+        module_id,
+        ..
+    } = module;
+
+    let (mut rigid_vars, mut def_types) =
+        constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
+
+    let mut subs = Subs::new_from_varstore(var_store);
+
+    let import_variables = add_imports(
+        &mut subs,
+        exposed_for_module,
+        &mut def_types,
+        &mut rigid_vars,
+    );
 
     let actual_constraint =
         constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
@@ -4067,8 +4043,9 @@ fn run_solve<'a>(
         let solved_subs = Solved(subs);
 
         let exposed_vars_by_symbol: Vec<_> = vars_by_symbol
-            .into_iter()
+            .iter()
             .filter(|(k, _)| exposed_symbols.contains(k))
+            .copied()
             .collect();
 
         (solved_subs, exposed_vars_by_symbol, vec![])
@@ -4114,6 +4091,60 @@ fn run_solve<'a>(
         (solved_subs, exposed_vars_by_symbol, problems)
     };
 
+    (solved_subs, exposed_vars_by_symbol, problems)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_solve<'a>(
+    module: Module,
+    ident_ids: IdentIds,
+    mut module_timing: ModuleTiming,
+    imported_builtins: Vec<Symbol>,
+    exposed_for_module: ExposedForModule,
+    constraints: Constraints,
+    constraint: ConstraintSoa,
+    var_store: VarStore,
+    decls: Vec<Declaration>,
+    dep_idents: MutMap<ModuleId, IdentIds>,
+    cached_subs: CachedSubs,
+) -> Msg<'a> {
+    let solve_start = SystemTime::now();
+
+    let module_id = module.module_id;
+
+    // TODO remove when we write builtins in roc
+    let aliases = module.aliases.clone();
+
+    let (solved_subs, exposed_vars_by_symbol, problems) = {
+        if module_id.is_builtin() {
+            match cached_subs.lock().remove(&module_id) {
+                None => {
+                    // this should never happen
+                    run_solve_solve(
+                        imported_builtins,
+                        exposed_for_module,
+                        constraints,
+                        constraint,
+                        var_store,
+                        module,
+                    )
+                }
+                Some((subs, exposed_vars_by_symbol)) => {
+                    (Solved(subs), exposed_vars_by_symbol.to_vec(), vec![])
+                }
+            }
+        } else {
+            run_solve_solve(
+                imported_builtins,
+                exposed_for_module,
+                constraints,
+                constraint,
+                var_store,
+                module,
+            )
+        }
+    };
+
     let mut solved_subs = solved_subs;
     let (storage_subs, stored_vars_by_symbol) =
         roc_solve::module::exposed_types_storage_subs(&mut solved_subs, &exposed_vars_by_symbol);
@@ -4128,10 +4159,7 @@ fn run_solve<'a>(
 
     // Record the final timings
     let solve_end = SystemTime::now();
-    let constrain_elapsed = constrain_end.duration_since(constrain_start).unwrap();
-
-    module_timing.constrain += constrain_elapsed;
-    module_timing.solve = solve_end.duration_since(constrain_end).unwrap();
+    module_timing.solve = solve_end.duration_since(solve_start).unwrap();
 
     // Send the subs to the main thread for processing,
     Msg::SolvedTypes {
@@ -4838,6 +4866,7 @@ fn run_task<'a>(
             ident_ids,
             declarations,
             dep_idents,
+            cached_subs,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -4849,6 +4878,7 @@ fn run_task<'a>(
             var_store,
             declarations,
             dep_idents,
+            cached_subs,
         )),
         BuildPendingSpecializations {
             module_id,

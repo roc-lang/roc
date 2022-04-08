@@ -63,29 +63,29 @@ struct ErrorTypeState {
 
 #[derive(Clone, Copy, Debug)]
 struct SubsHeader {
-    utable: usize,
-    variables: usize,
-    tag_names: usize,
-    field_names: usize,
-    record_fields: usize,
-    variable_slices: usize,
-    vars_by_symbol: usize,
+    utable: u64,
+    variables: u64,
+    tag_names: u64,
+    field_names: u64,
+    record_fields: u64,
+    variable_slices: u64,
+    exposed_vars_by_symbol: u64,
 }
 
 impl SubsHeader {
-    fn from_subs(subs: &Subs, vars_by_symbol: usize) -> Self {
+    fn from_subs(subs: &Subs, exposed_vars_by_symbol: usize) -> Self {
         // TODO what do we do with problems? they should
         // be reported and then removed from Subs I think
         debug_assert!(subs.problems.is_empty());
 
         Self {
-            utable: subs.utable.len(),
-            variables: subs.variables.len(),
-            tag_names: subs.tag_names.len(),
-            field_names: subs.field_names.len(),
-            record_fields: subs.record_fields.len(),
-            variable_slices: subs.variable_slices.len(),
-            vars_by_symbol,
+            utable: subs.utable.len() as u64,
+            variables: subs.variables.len() as u64,
+            tag_names: subs.tag_names.len() as u64,
+            field_names: subs.field_names.len() as u64,
+            record_fields: subs.record_fields.len() as u64,
+            variable_slices: subs.variable_slices.len() as u64,
+            exposed_vars_by_symbol: exposed_vars_by_symbol as u64,
         }
     }
 
@@ -118,12 +118,12 @@ enum SerializedTagName {
 impl Subs {
     pub fn serialize(
         &self,
-        vars_by_symbol: &[(Symbol, Variable)],
+        exposed_vars_by_symbol: &[(Symbol, Variable)],
         writer: &mut impl std::io::Write,
     ) -> std::io::Result<usize> {
         let mut written = 0;
 
-        let header = SubsHeader::from_subs(self, vars_by_symbol.len()).to_array();
+        let header = SubsHeader::from_subs(self, exposed_vars_by_symbol.len()).to_array();
         written += header.len();
         writer.write_all(&header)?;
 
@@ -134,7 +134,7 @@ impl Subs {
         written = Self::serialize_field_names(&self.field_names, writer, written)?;
         written = Self::serialize_slice(&self.record_fields, writer, written)?;
         written = Self::serialize_slice(&self.variable_slices, writer, written)?;
-        written = Self::serialize_slice(vars_by_symbol, writer, written)?;
+        written = Self::serialize_slice(exposed_vars_by_symbol, writer, written)?;
 
         Ok(written)
     }
@@ -190,7 +190,7 @@ impl Subs {
         Self::serialize_slice(&buf, writer, written)
     }
 
-    /// Lowercase can be heap-allocated
+    /// Global tag names can be heap-allocated
     fn serialize_tag_names(
         tag_names: &[TagName],
         writer: &mut impl std::io::Write,
@@ -238,7 +238,7 @@ impl Subs {
         Ok(written + padding_bytes + bytes_slice.len())
     }
 
-    pub fn deserialize(bytes: &[u8]) -> (Self, Vec<(Symbol, Variable)>) {
+    pub fn deserialize(bytes: &[u8]) -> (Self, &[(Symbol, Variable)]) {
         use std::convert::TryInto;
 
         let mut offset = 0;
@@ -246,30 +246,34 @@ impl Subs {
         offset += header_slice.len();
         let header = SubsHeader::from_array(header_slice.try_into().unwrap());
 
-        let (utable, offset) = Self::deserialize_unification_table(bytes, header.utable, offset);
+        let (utable, offset) =
+            Self::deserialize_unification_table(bytes, header.utable as usize, offset);
 
-        let (variables, offset) = Self::deserialize_slice(bytes, header.variables, offset);
-        let (tag_names, offset) = Self::deserialize_tag_names(bytes, header.tag_names, offset);
+        let (variables, offset) = Self::deserialize_slice(bytes, header.variables as usize, offset);
+        let (tag_names, offset) =
+            Self::deserialize_tag_names(bytes, header.tag_names as usize, offset);
         let (field_names, offset) =
-            Self::deserialize_field_names(bytes, header.field_names, offset);
-        let (record_fields, offset) = Self::deserialize_slice(bytes, header.record_fields, offset);
+            Self::deserialize_field_names(bytes, header.field_names as usize, offset);
+        let (record_fields, offset) =
+            Self::deserialize_slice(bytes, header.record_fields as usize, offset);
         let (variable_slices, offset) =
-            Self::deserialize_slice(bytes, header.variable_slices, offset);
-        let (vars_by_symbol, _) = Self::deserialize_slice(bytes, header.vars_by_symbol, offset);
-        let x = vars_by_symbol.to_vec();
+            Self::deserialize_slice(bytes, header.variable_slices as usize, offset);
+        let (exposed_vars_by_symbol, _) =
+            Self::deserialize_slice(bytes, header.exposed_vars_by_symbol as usize, offset);
 
-        let subs = Self {
-            utable,
-            variables: variables.to_vec(),
-            tag_names: tag_names.to_vec(),
-            field_names,
-            record_fields: record_fields.to_vec(),
-            variable_slices: variable_slices.to_vec(),
-            tag_name_cache: Default::default(),
-            problems: Default::default(),
-        };
-
-        (subs, x)
+        (
+            Self {
+                utable,
+                variables: variables.to_vec(),
+                tag_names: tag_names.to_vec(),
+                field_names,
+                record_fields: record_fields.to_vec(),
+                variable_slices: variable_slices.to_vec(),
+                tag_name_cache: Default::default(),
+                problems: Default::default(),
+            },
+            exposed_vars_by_symbol,
+        )
     }
 
     fn deserialize_unification_table(
@@ -1970,6 +1974,13 @@ impl Subs {
 
     pub fn commit_snapshot(&mut self, snapshot: Snapshot<InPlace<Variable>>) {
         self.utable.commit(snapshot)
+    }
+
+    pub fn vars_since_snapshot(
+        &mut self,
+        snapshot: &Snapshot<InPlace<Variable>>,
+    ) -> core::ops::Range<Variable> {
+        self.utable.vars_since_snapshot(snapshot)
     }
 
     /// Checks whether the content of `var`, or any nested content, satisfies the `predicate`.

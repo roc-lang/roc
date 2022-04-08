@@ -186,7 +186,12 @@ wasm_result_primitive!(f64, f64_store, Align::Bytes8);
 wasm_result_stack_memory!(u128);
 wasm_result_stack_memory!(i128);
 wasm_result_stack_memory!(RocDec);
-wasm_result_stack_memory!(RocStr);
+
+impl Wasm32Result for RocStr {
+    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+        build_wrapper_body_stack_memory(code_builder, main_function_index, 12)
+    }
+}
 
 impl<T: Wasm32Result + ReferenceCount> Wasm32Result for RocList<T> {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {

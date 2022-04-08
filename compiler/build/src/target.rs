@@ -50,6 +50,42 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
     }
 }
 
+pub fn target_zig_str(target: &Triple) -> &'static str {
+    // Zig has its own architecture mappings, defined here:
+    // https://github.com/ziglang/zig/blob/master/tools/process_headers.zig
+    //
+    // and an open proposal to unify them with the more typical "target triples":
+    // https://github.com/ziglang/zig/issues/4911
+    match target {
+        Triple {
+            architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "x86_64-linux-gnu",
+        Triple {
+            architecture: Architecture::X86_32(target_lexicon::X86_32Architecture::I386),
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "i386-linux-gnu",
+        Triple {
+            architecture: Architecture::Aarch64(_),
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "aarch64-linux-gnu",
+        Triple {
+            architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Darwin,
+            ..
+        } => "x86_64-apple-darwin",
+        Triple {
+            architecture: Architecture::Aarch64(_),
+            operating_system: OperatingSystem::Darwin,
+            ..
+        } => "aarch64-apple-darwin",
+        _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
+    }
+}
+
 #[cfg(feature = "llvm")]
 pub fn init_arch(target: &Triple) {
     match target.architecture {

@@ -220,7 +220,9 @@ impl<'a> EdModule<'a> {
 pub mod test_ed_model {
     use crate::editor::ed_error::EdResult;
     use crate::editor::mvc::ed_model;
-    use crate::editor::resources::strings::{nr_hello_world_lines, HELLO_WORLD, PLATFORM_STR};
+    use crate::editor::resources::strings::{
+        nr_hello_world_lines, HELLO_WORLD, PLATFORM_NAME, PLATFORM_STR,
+    };
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::caret_w_select::CaretPos;
@@ -307,7 +309,7 @@ pub mod test_ed_model {
 
         let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
 
-        let platform_dir = temp_dir.path().join("platform");
+        let platform_dir = temp_dir.path().join(PLATFORM_NAME);
         fs::create_dir(platform_dir.clone()).expect("Failed to create platform directory");
         let package_config_path = platform_dir.join("Package-Config.roc");
         let mut package_config_file =

@@ -24,11 +24,11 @@ mod cli_run {
     #[cfg(not(debug_assertions))]
     use roc_collections::all::MutMap;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     const TEST_SURGICAL_LINKER: bool = true;
 
-    // Surgical linker currently only supports linux.
-    #[cfg(not(target_os = "linux"))]
+    // Surgical linker currently only supports linux x86_64.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     const TEST_SURGICAL_LINKER: bool = false;
 
     #[cfg(not(target_os = "macos"))]
@@ -239,6 +239,11 @@ mod cli_run {
                             eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
                             return;
                         }
+                        "form" => {
+                            // test is skipped until we upgrate to zig 0.9 / llvm 13
+                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
+                            return;
+                        }
                         "helloSwift" => {
                             if cfg!(not(target_os = "macos")) {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
@@ -247,7 +252,7 @@ mod cli_run {
                         }
                         "hello-gui" => {
                             // Since this one requires opening a window, we do `roc build` on it but don't run it.
-                            if cfg!(target_os = "linux") {
+                            if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
                                 // The surgical linker can successfully link this on Linux, but the legacy linker errors!
                                 build_example(&file_name, &["--optimize", "--roc-linker"]);
                             } else {
@@ -426,7 +431,7 @@ mod cli_run {
             stdin: &["Giovanni\n", "Giorgio\n"],
             input_file: None,
             expected_ending: "Hi, Giovanni Giorgio! 👋\n",
-            use_valgrind: true,
+            use_valgrind: false,
         },
         tui:"interactive" => Example {
             filename: "tui.roc",
@@ -459,7 +464,7 @@ mod cli_run {
                 stdin: &[],
                 input_file: Some("examples/hello.false"),
                 expected_ending:"Hello, World!\n",
-                use_valgrind: true,
+                use_valgrind: false,
             }
         },
     }

@@ -1,11 +1,13 @@
 Defs(
     [
-        @0-6 Body(
-            @0-4 Identifier(
-                "iffy",
-            ),
-            @5-6 Num(
-                "5",
+        @0-6 Value(
+            Body(
+                @0-4 Identifier(
+                    "iffy",
+                ),
+                @5-6 Num(
+                    "5",
+                ),
             ),
         ),
     ],

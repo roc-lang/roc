@@ -1,12 +1,14 @@
 [
     @0-7 SpaceAfter(
         SpaceBefore(
-            Body(
-                @0-3 Identifier(
-                    "foo",
-                ),
-                @6-7 Num(
-                    "1",
+            Value(
+                Body(
+                    @0-3 Identifier(
+                        "foo",
+                    ),
+                    @6-7 Num(
+                        "1",
+                    ),
                 ),
             ),
             [],

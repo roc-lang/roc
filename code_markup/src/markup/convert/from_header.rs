@@ -243,7 +243,7 @@ fn add_header_mn_list(
     str_vec
         .iter()
         .enumerate()
-        .map(|(indx, provide_str)| {
+        .flat_map(|(indx, provide_str)| {
             let provide_str = header_val_mn(
                 provide_str.to_owned(),
                 ast_node_id,
@@ -266,7 +266,6 @@ fn add_header_mn_list(
                 vec![provide_str]
             }
         })
-        .flatten()
         .collect()
 }
 

@@ -1,3 +1,7 @@
+interface Result
+    exposes [ Result, isOk, isErr, map, mapErr, after, withDefault ]
+    imports [ ]
+
 Result ok err : [ Ok ok, Err err ]
 
 isOk : Result ok err -> Bool
