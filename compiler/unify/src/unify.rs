@@ -5,7 +5,8 @@ use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
-    RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    RecordFields, Subs, SubsFmtContent, SubsIndex, SubsSlice, UnionTags, Variable,
+    VariableSubsSlice,
 };
 use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField};
 
@@ -316,10 +317,10 @@ fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option
             ctx.first,
             ctx.second,
             ctx.first,
-            roc_types::subs::SubsFmtContent(&content_1, subs),
+            SubsFmtContent(&content_1, subs),
             mode,
             ctx.second,
-            roc_types::subs::SubsFmtContent(&content_2, subs),
+            SubsFmtContent(&content_2, subs),
         );
 
         unsafe { UNIFICATION_DEPTH = new_depth };
@@ -576,7 +577,13 @@ fn unify_structure(
         RecursionVar { structure, .. } => match flat_type {
             FlatType::TagUnion(_, _) => {
                 // unify the structure with this unrecursive tag union
-                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
+                let mut problems = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
+
+                problems.extend(fix_tag_union_recursion_variable(
+                    subs, ctx, ctx.first, other,
+                ));
+
+                problems
             }
             FlatType::RecursiveTagUnion(rec, _, _) => {
                 debug_assert!(is_recursion_var(subs, *rec));
@@ -585,7 +592,13 @@ fn unify_structure(
             }
             FlatType::FunctionOrTagUnion(_, _, _) => {
                 // unify the structure with this unrecursive tag union
-                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
+                let mut problems = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
+
+                problems.extend(fix_tag_union_recursion_variable(
+                    subs, ctx, ctx.first, other,
+                ));
+
+                problems
             }
             // Only tag unions can be recursive; everything else is an error.
             _ => mismatch!(
@@ -640,6 +653,59 @@ fn unify_structure(
                 &other
             )
         }
+    }
+}
+
+/// Ensures that a non-recursive tag union, when unified with a recursion var to become a recursive
+/// tag union, properly contains a recursion variable that recurses on itself.
+//
+// When might this not be the case? For example, in the code
+//
+//   Indirect : [ Indirect ConsList ]
+//
+//   ConsList : [ Nil, Cons Indirect ]
+//
+//   l : ConsList
+//   l = Cons (Indirect (Cons (Indirect Nil)))
+//   #   ^^^^^^^^^^^^^^^~~~~~~~~~~~~~~~~~~~~~^ region-a
+//   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
+//   l
+//
+// Suppose `ConsList` has the expanded type `[ Nil, Cons [ Indirect <rec> ] ] as <rec>`.
+// After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
+// the tentative total-type of the application annotated "region-a" would be
+// `<v> = [ Nil, Cons [ Indirect <v> ] ] as <rec>`. That is, the type of the recursive tag union
+// would be inlined at the site "v", rather than passing through the correct recursion variable
+// "rec" first.
+//
+// This is not incorrect from a type perspective, but causes problems later on for e.g. layout
+// determination, which expects recursion variables to be placed correctly. Attempting to detect
+// this during layout generation does not work so well because it may be that there *are* recursive
+// tag unions that should be inlined, and not pass through recursion variables. So instead, try to
+// resolve these cases here.
+//
+// See tests labeled "issue_2810" for more examples.
+fn fix_tag_union_recursion_variable(
+    subs: &mut Subs,
+    ctx: &Context,
+    tag_union_promoted_to_recursive: Variable,
+    recursion_var: &Content,
+) -> Outcome {
+    debug_assert!(matches!(
+        subs.get_content_without_compacting(tag_union_promoted_to_recursive),
+        Structure(FlatType::RecursiveTagUnion(..))
+    ));
+
+    let f = subs.get_content_without_compacting(tag_union_promoted_to_recursive);
+
+    let has_recursing_recursive_variable = subs
+        .occurs_including_recursion_vars(tag_union_promoted_to_recursive)
+        .is_err();
+
+    if !has_recursing_recursive_variable {
+        merge(subs, ctx, recursion_var.clone())
+    } else {
+        vec![]
     }
 }
 

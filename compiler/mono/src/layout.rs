@@ -196,7 +196,7 @@ impl<'a> RawFunctionLayout<'a> {
                 Self::from_var(env, var)
             }
             _ => {
-                let layout = layout_from_flat_type(env, var, flat_type)?;
+                let layout = layout_from_flat_type(env, flat_type)?;
                 Ok(Self::ZeroArgumentThunk(layout))
             }
         }
@@ -960,7 +960,7 @@ impl<'a> Layout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
-            Structure(flat_type) => layout_from_flat_type(env, var, flat_type),
+            Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(symbol, _args, actual_var, _) => {
                 if let Some(int_width) = IntWidth::try_from_symbol(symbol) {
@@ -1573,7 +1573,6 @@ impl<'a> Builtin<'a> {
 
 fn layout_from_flat_type<'a>(
     env: &mut Env<'a, '_>,
-    var: Variable,
     flat_type: FlatType,
 ) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::FlatType::*;
@@ -1776,7 +1775,6 @@ fn layout_from_flat_type<'a>(
                 }
             }
 
-            env.insert_seen(var);
             env.insert_seen(rec_var);
             for (index, &(_name, variables)) in tags_vec.iter().enumerate() {
                 if matches!(nullable, Some(i) if i == index as TagIdIntType) {
@@ -1793,6 +1791,7 @@ fn layout_from_flat_type<'a>(
                         continue;
                     }
 
+                    let content = subs.get_content_without_compacting(var);
                     tag_layout.push(Layout::from_var(env, var)?);
                 }
 
@@ -1806,7 +1805,6 @@ fn layout_from_flat_type<'a>(
                 tag_layouts.push(tag_layout.into_bump_slice());
             }
             env.remove_seen(rec_var);
-            env.insert_seen(var);
 
             let union_layout = if let Some(tag_id) = nullable {
                 match tag_layouts.into_bump_slice() {
