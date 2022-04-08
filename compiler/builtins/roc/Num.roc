@@ -44,8 +44,6 @@ interface Num
             Binary32,
             Binary64,
 
-            maxFloat,
-            minFloat,
             abs,
             neg,
             add,
@@ -69,8 +67,6 @@ interface Num
             isNegative,
             rem,
             div,
-            modInt,
-            modFloat,
             sqrt,
             log,
             round,
@@ -120,6 +116,10 @@ interface Num
             maxI128,
             minU128,
             maxU128,
+            minF32,
+            maxF32,
+            minF64,
+            maxF64,
             toI8,
             toI8Checked,
             toI16,
@@ -140,6 +140,10 @@ interface Num
             toU64Checked,
             toU128,
             toU128Checked,
+            toF32,
+            toF32Checked,
+            toF64,
+            toF64Checked,
         ]
     imports [ ]
 
@@ -324,6 +328,18 @@ minU128 = 0
 
 maxU128 : U128
 maxU128 = 0340282366920938463463374607431768211455
+
+minF32 : F32
+minF32 = -3.40282347e38
+
+maxF32 : F32
+maxF32 = 3.40282347e38
+
+minF64 : F64
+minF64 = -1.7976931348623157e308
+
+maxF64 : F64
+maxF64 = 1.7976931348623157e308
 
 toI8 : Int * -> I8
 toI16 : Int * -> I16
