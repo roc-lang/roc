@@ -138,6 +138,7 @@ impl WasmLayout {
     }
 }
 
+#[allow(dead_code)]
 #[derive(PartialEq, Eq)]
 pub enum ZigVersion {
     Zig8,
