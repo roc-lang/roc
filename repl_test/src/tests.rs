@@ -1138,3 +1138,23 @@ fn issue_2818() {
         r"<function> : {} -> List Str",
     )
 }
+
+#[test]
+fn issue_2810_recursive_layout_inside_nonrecursive() {
+    expect_success(
+        indoc!(
+            r#"
+            Command : [ Command Tool ]
+
+            Job : [ Job Command ]
+
+            Tool : [ SystemTool, FromJob Job ]
+
+            a : Job
+            a = Job (Command (FromJob (Job (Command SystemTool))))
+            a
+            "#
+        ),
+        "Job (Command (FromJob (Job (Command SystemTool)))) : Job",
+    )
+}
