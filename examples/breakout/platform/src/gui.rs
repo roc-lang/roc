@@ -319,6 +319,7 @@ pub struct Bounds {
 
 #[derive(Clone, Debug)]
 struct Drawable {
+    pos: Vector2<f32>,
     bounds: Bounds,
     content: DrawableContent,
 }
@@ -346,15 +347,10 @@ fn process_drawable(
     load_op: LoadOp<wgpu::Color>,
     texture_size: Bounds,
 ) {
-    // TODO iterate through drawables,
-    // calculating a pos using offset,
-    // calling draw and updating bounding boxes
-    let pos: Vector2<f32> = (0.0, 0.0).into();
-
     draw(
         drawable.bounds,
         drawable.content,
-        pos,
+        drawable.pos,
         staging_belt,
         glyph_brush,
         cmd_encoder,
@@ -444,6 +440,7 @@ fn to_drawable(
             };
 
             let drawable = Drawable {
+                pos: (rect.left, rect.top).into(),
                 bounds,
                 content: DrawableContent::FillRect {
                     color: rect.color,
@@ -489,6 +486,7 @@ fn to_drawable(
             }
 
             let drawable = Drawable {
+                pos: (0.0, 0.0).into(), // TODO store the pos in Text and read it here
                 bounds: text_bounds,
                 content: DrawableContent::Text(section, offset),
             };

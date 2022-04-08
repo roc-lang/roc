@@ -9,7 +9,7 @@ pub extern "C" fn rust_main() -> i32 {
         height: 1000.0,
     };
 
-    gui::run_event_loop("test title", state).expect("Error running event loop");
+    gui::run_event_loop("RocOut!", state).expect("Error running event loop");
 
     // Exit code
     0
