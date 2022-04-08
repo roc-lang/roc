@@ -5,7 +5,7 @@ use crate::wasm_module::ValueType;
 use crate::{PTR_SIZE, PTR_TYPE, TARGET_INFO};
 
 /// Manually keep up to date with the Zig version we are using for builtins
-pub const BUILTINS_ZIG_VERSION: ZigVersion = ZigVersion::Zig8;
+pub const BUILTINS_ZIG_VERSION: ZigVersion = ZigVersion::Zig9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReturnMethod {
