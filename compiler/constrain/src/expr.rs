@@ -942,7 +942,7 @@ pub fn constrain_expr(
                 *variant_var,
             );
 
-            constraints.exists_many(vec![*variant_var, *ext_var], vec![union_con])
+            constraints.exists_many([*variant_var, *ext_var], [union_con])
         }
         OpaqueRef {
             opaque_var,
