@@ -1874,7 +1874,7 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ret_var,
     )
 }
-/// Str.romUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [ BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } } ]*
+/// Str.fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [ BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } } ]*
 fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bytes_var = var_store.fresh();
     let bool_var = var_store.fresh();
