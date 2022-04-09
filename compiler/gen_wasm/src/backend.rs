@@ -22,12 +22,11 @@ use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{DataSymbol, LinkingSegment, WasmObjectSymbol};
 use crate::wasm_module::sections::{DataMode, DataSegment};
 use crate::wasm_module::{
-    code_builder, CodeBuilder, Export, ExportType, LocalId, Signature, SymInfo, ValueType,
-    WasmModule,
+    code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
 };
 use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, MEMORY_NAME,
-    PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME, TARGET_INFO,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, PTR_SIZE,
+    PTR_TYPE, TARGET_INFO,
 };
 
 pub struct WasmBackend<'a> {
@@ -62,21 +61,31 @@ impl<'a> WasmBackend<'a> {
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
-        module.export.append(Export {
-            name: MEMORY_NAME.as_bytes(),
-            ty: ExportType::Mem,
-            index: 0,
-        });
-        module.export.append(Export {
-            name: STACK_POINTER_NAME.as_bytes(),
-            ty: ExportType::Global,
-            index: STACK_POINTER_GLOBAL_ID,
-        });
+        // The preloaded builtins object file exports all functions, but the final app binary doesn't.
+        // Remove the function exports and use them to populate the Name section (debug info)
+        let platform_and_builtins_exports =
+            std::mem::replace(&mut module.export.exports, bumpalo::vec![in env.arena]);
+        let mut app_exports = Vec::with_capacity_in(32, env.arena);
+        for ex in platform_and_builtins_exports.into_iter() {
+            match ex.ty {
+                ExportType::Func => module.names.append_function(ex.index, ex.name),
+                _ => app_exports.push(ex),
+            }
+        }
 
         // The preloaded binary has a global to tell us where its data section ends
         // Note: We need this to account for zero data (.bss), which doesn't have an explicit DataSegment!
-        let data_end_idx = module.export.globals_lookup["__data_end".as_bytes()];
+        let data_end_name = "__data_end".as_bytes();
+        let data_end_idx = app_exports
+            .iter()
+            .find(|ex| ex.name == data_end_name)
+            .map(|ex| ex.index)
+            .unwrap_or_else(|| {
+                internal_error!("Preloaded Wasm binary must export global constant `__data_end`")
+            });
         let next_constant_addr = module.global.parse_u32_at_index(data_end_idx);
+
+        module.export.exports = app_exports;
 
         WasmBackend {
             env,
