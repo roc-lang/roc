@@ -1891,8 +1891,15 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
             Expr::Call(boxed_expr, args, _called_via) => {
                 stack.reserve(1 + args.len());
 
-                // add the expr being called
-                stack.push(&boxed_expr.1.value);
+                match &boxed_expr.1.value {
+                    Expr::Var(_) => {
+                        // do nothing
+                    }
+                    function_expr => {
+                        // add the expr being called
+                        stack.push(function_expr);
+                    }
+                }
 
                 for (_var, loc_arg) in args {
                     stack.push(&loc_arg.value);
