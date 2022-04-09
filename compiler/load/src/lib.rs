@@ -105,7 +105,7 @@ pub fn load_and_typecheck<'a>(
     }
 }
 
-const BOOL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Bool.dat")) as &[_];
+// const BOOL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Bool.dat")) as &[_];
 // const RESULT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Result.dat")) as &[_];
 // const LIST: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/List.dat")) as &[_];
 // const STR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Str.dat")) as &[_];
@@ -123,7 +123,7 @@ fn deserialize_help(bytes: &[u8]) -> (Subs, Vec<(Symbol, Variable)>) {
 fn read_cached_subs() -> MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)> {
     let mut output = MutMap::default();
 
-    output.insert(ModuleId::BOOL, deserialize_help(BOOL));
+    // output.insert(ModuleId::BOOL, deserialize_help(BOOL));
     // output.insert(ModuleId::RESULT, deserialize_help(RESULT));
     // output.insert(ModuleId::LIST, deserialize_help(LIST));
     // output.insert(ModuleId::STR, deserialize_help(STR));
