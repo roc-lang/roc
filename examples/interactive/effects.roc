@@ -5,4 +5,13 @@ app "effects"
 
 main : Effect.Effect {}
 main =
-    (Effect.putLine (Str.concat "It is known" "foo"))
+    Effect.after
+        (Effect.getLine)
+        \line ->
+            Effect.after
+                (Effect.putLine "You entered: \(line)")
+                \{  } ->
+                    Effect.after
+                        (Effect.putLine "It is known")
+                        \{  } ->
+                            Effect.always {}
