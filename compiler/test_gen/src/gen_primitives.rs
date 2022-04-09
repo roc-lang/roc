@@ -3266,7 +3266,12 @@ fn box_and_unbox_string() {
     assert_evals_to!(
         indoc!(
             r#"
-            Box.unbox (Box.box (Str.concat "Leverage " "agile frameworks to provide a robust synopsis for high level overviews"))
+            app "test" imports [ Box ] provides [ main ] to "./platform"
+
+            main =
+                Str.concat "Leverage " "agile frameworks to provide a robust synopsis for high level overviews"
+                    |> Box.box
+                    |> Box.unbox
             "#
         ),
         RocStr::from(
