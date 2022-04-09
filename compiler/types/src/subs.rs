@@ -2955,7 +2955,7 @@ fn occurs(
                     }
                     RecursiveTagUnion(rec_var, tags, ext_var) => {
                         if include_recursion_var {
-                            new_seen.push(*rec_var);
+                            new_seen.push(subs.get_root_key_without_compacting(*rec_var));
                         }
                         for slice_index in tags.variables() {
                             let slice = subs[slice_index];
