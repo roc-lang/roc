@@ -633,6 +633,7 @@ struct PlatformData {
 #[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
+    pub root_subs: Option<Subs>,
     pub platform_data: Option<PlatformData>,
     pub goal_phase: Phase,
     pub exposed_types: ExposedByModule,
@@ -688,6 +689,7 @@ impl<'a> State<'a> {
 
         Self {
             root_id,
+            root_subs: None,
             target_info,
             platform_data: None,
             goal_phase,
@@ -2153,6 +2155,14 @@ fn update<'a>(
                     existing.push(requested);
                 }
 
+                // use the subs of the root module;
+                // this is used in the repl to find the type of `main`
+                let subs = if module_id == state.root_id {
+                    subs
+                } else {
+                    state.root_subs.clone().unwrap()
+                };
+
                 msg_tx
                     .send(Msg::FinishedAllSpecialization {
                         subs,
@@ -2165,6 +2175,12 @@ fn update<'a>(
                 // the originally requested module, we're all done!
                 return Ok(state);
             } else {
+                // record the subs of the root module;
+                // this is used in the repl to find the type of `main`
+                if module_id == state.root_id {
+                    state.root_subs = Some(subs);
+                }
+
                 state.constrained_ident_ids.insert(module_id, ident_ids);
 
                 for (module_id, requested) in external_specializations_requested {
