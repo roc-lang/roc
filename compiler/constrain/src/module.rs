@@ -147,17 +147,6 @@ pub fn constrain_builtin_imports(
                 }
             }
             None => {
-                let is_valid_alias = stdlib.applies.contains(&symbol)
-                        // This wasn't a builtin value or Apply; maybe it was a builtin alias.
-                        || roc_types::builtin_aliases::aliases().contains_key(&symbol);
-
-                //                if !is_valid_alias {
-                //                    panic!(
-                //                        "Could not find {:?} in builtin types {:?} or builtin aliases",
-                //                        symbol, stdlib.types,
-                //                    );
-                //                }
-
                 continue;
             }
         };
