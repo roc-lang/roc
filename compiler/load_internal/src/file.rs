@@ -3778,11 +3778,9 @@ fn canonicalize_and_constrain<'a>(
 
             let mut constraints = Constraints::new();
 
-            let constraint = if module_id.is_builtin() {
-                roc_can::constraint::Constraint::True
-            } else {
-                constrain_module(&mut constraints, &module_output.declarations, module_id)
-            };
+            // TODO: don't generate constraints for a builtin module if it's cached
+            let constraint =
+                constrain_module(&mut constraints, &module_output.declarations, module_id);
 
             let after = roc_types::types::get_type_clone_count();
 
