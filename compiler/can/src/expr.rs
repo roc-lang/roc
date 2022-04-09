@@ -198,6 +198,7 @@ pub enum Expr {
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClosureData {
     pub function_type: Variable,
