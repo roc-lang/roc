@@ -192,7 +192,7 @@ pub enum Expr {
     Expect {
         loc_condition: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
-        lookups_in_cond: Vec<Symbol>,
+        lookups_in_cond: Vec<(Symbol, Variable)>,
     },
 
     // Compiles, but will crash if reached
@@ -856,11 +856,9 @@ pub fn canonicalize_expr<'a>(
             let (loc_condition, output1) =
                 canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
 
-            let mut lookups_in_cond = Vec::new();
-
             // Get all the lookups that were referenced in the condition,
             // so we can print their values later.
-            add_lookup_symbols(&loc_condition.value, &mut lookups_in_cond);
+            let lookups_in_cond = get_lookup_symbols(&loc_condition.value, var_store);
 
             let (loc_continuation, output2) = canonicalize_expr(
                 env,
@@ -1843,91 +1841,99 @@ pub fn unescape_char(escaped: &EscapedChar) -> char {
     }
 }
 
-fn add_lookup_symbols(expr: &Expr, symbols: &mut Vec<Symbol>) {
-    match expr {
-        Expr::Var(symbol) | Expr::Update { symbol, .. } => {
-            symbols.push(*symbol);
-        }
-        Expr::List { loc_elems, .. } => {
-            for loc_elem in loc_elems {
-                add_lookup_symbols(&loc_elem.value, symbols);
-            }
-        }
-        Expr::When {
-            loc_cond, branches, ..
-        } => {
-            add_lookup_symbols(&loc_cond.value, symbols);
+fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Variable)> {
+    let mut stack: Vec<&Expr> = vec![expr];
+    let mut symbols = Vec::new();
 
-            for branch in branches {
-                add_lookup_symbols(&branch.value.value, symbols);
-
-                if let Some(guard) = &branch.guard {
-                    add_lookup_symbols(&guard.value, symbols);
+    while let Some(expr) = stack.pop() {
+        match expr {
+            Expr::Var(symbol) | Expr::Update { symbol, .. } => {
+                // Don't introduce duplicates, or make unused variables
+                if !symbols.iter().any(|(sym, _)| sym == symbol) {
+                    symbols.push((*symbol, var_store.fresh()));
                 }
             }
-        }
-        Expr::If {
-            branches,
-            final_else,
-            ..
-        } => {
-            for (loc_cond, loc_body) in branches {
-                add_lookup_symbols(&loc_cond.value, symbols);
-                add_lookup_symbols(&loc_body.value, symbols);
+            Expr::List { loc_elems, .. } => {
+                stack.extend(loc_elems.iter().map(|loc_elem| &loc_elem.value));
             }
+            Expr::When {
+                loc_cond, branches, ..
+            } => {
+                stack.push(&loc_cond.value);
 
-            add_lookup_symbols(&final_else.value, symbols);
-        }
-        Expr::LetRec(_, _, _) => todo!(),
-        Expr::LetNonRec(_, _, _) => todo!(),
-        Expr::Call(boxed_expr, args, _called_via) => {
-            // add the expr being called
-            add_lookup_symbols(&boxed_expr.1.value, symbols);
+                stack.reserve(branches.len());
 
-            for (_var, loc_arg) in args {
-                add_lookup_symbols(&loc_arg.value, symbols);
-            }
-        }
-        Expr::Tag { arguments, .. } => {
-            for (_var, loc_expr) in arguments {
-                add_lookup_symbols(&loc_expr.value, symbols);
-            }
-        }
-        Expr::RunLowLevel { args, .. } | Expr::ForeignCall { args, .. } => {
-            for (_var, arg) in args {
-                add_lookup_symbols(arg, symbols);
-            }
-        }
-        Expr::OpaqueRef { argument, .. } => {
-            add_lookup_symbols(&argument.1.value, symbols);
-        }
-        Expr::Access { loc_expr, .. }
-        | Expr::Closure(ClosureData {
-            loc_body: loc_expr, ..
-        }) => {
-            add_lookup_symbols(&loc_expr.value, symbols);
-        }
-        Expr::Record { fields, .. } => {
-            for field in fields.values() {
-                add_lookup_symbols(&field.loc_expr.value, symbols);
-            }
-        }
-        Expr::Expect {
-            loc_continuation, ..
-        } => {
-            add_lookup_symbols(&(*loc_continuation).value, symbols);
+                for branch in branches {
+                    stack.push(&branch.value.value);
 
-            // Intentionally ignore the lookups in the nested `expect` condition itself,
-            // because they couldn't possibly influence the outcome of this `expect`!
+                    if let Some(guard) = &branch.guard {
+                        stack.push(&guard.value);
+                    }
+                }
+            }
+            Expr::If {
+                branches,
+                final_else,
+                ..
+            } => {
+                stack.reserve(1 + branches.len() * 2);
+
+                for (loc_cond, loc_body) in branches {
+                    stack.push(&loc_cond.value);
+                    stack.push(&loc_body.value);
+                }
+
+                stack.push(&final_else.value);
+            }
+            Expr::LetRec(_, _, _) => todo!(),
+            Expr::LetNonRec(_, _, _) => todo!(),
+            Expr::Call(boxed_expr, args, _called_via) => {
+                stack.reserve(1 + args.len());
+
+                // add the expr being called
+                stack.push(&boxed_expr.1.value);
+
+                for (_var, loc_arg) in args {
+                    stack.push(&loc_arg.value);
+                }
+            }
+            Expr::Tag { arguments, .. } => {
+                stack.extend(arguments.iter().map(|(_var, loc_expr)| &loc_expr.value));
+            }
+            Expr::RunLowLevel { args, .. } | Expr::ForeignCall { args, .. } => {
+                stack.extend(args.iter().map(|(_var, arg)| arg));
+            }
+            Expr::OpaqueRef { argument, .. } => {
+                stack.push(&argument.1.value);
+            }
+            Expr::Access { loc_expr, .. }
+            | Expr::Closure(ClosureData {
+                loc_body: loc_expr, ..
+            }) => {
+                stack.push(&loc_expr.value);
+            }
+            Expr::Record { fields, .. } => {
+                stack.extend(fields.iter().map(|(_, field)| &field.loc_expr.value));
+            }
+            Expr::Expect {
+                loc_continuation, ..
+            } => {
+                stack.push(&(*loc_continuation).value);
+
+                // Intentionally ignore the lookups in the nested `expect` condition itself,
+                // because they couldn't possibly influence the outcome of this `expect`!
+            }
+            Expr::Num(_, _, _, _)
+            | Expr::Float(_, _, _, _, _)
+            | Expr::Int(_, _, _, _, _)
+            | Expr::Str(_)
+            | Expr::ZeroArgumentTag { .. }
+            | Expr::Accessor(_)
+            | Expr::SingleQuote(_)
+            | Expr::EmptyRecord
+            | Expr::RuntimeError(_) => {}
         }
-        Expr::Num(_, _, _, _)
-        | Expr::Float(_, _, _, _, _)
-        | Expr::Int(_, _, _, _, _)
-        | Expr::Str(_)
-        | Expr::ZeroArgumentTag { .. }
-        | Expr::Accessor(_)
-        | Expr::SingleQuote(_)
-        | Expr::EmptyRecord
-        | Expr::RuntimeError(_) => {}
     }
+
+    symbols
 }

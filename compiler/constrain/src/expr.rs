@@ -416,7 +416,7 @@ pub fn constrain_expr(
         Expect {
             loc_condition,
             loc_continuation,
-            lookups_in_cond: _,
+            lookups_in_cond,
         } => {
             let expect_bool = |region| {
                 let bool_type = Type::Variable(Variable::BOOL);
@@ -439,7 +439,25 @@ pub fn constrain_expr(
                 expected,
             );
 
-            constraints.exists_many([], [cond_con, continuation_con])
+            // + 2 for cond_con and continuation_con
+            let mut all_constraints = Vec::with_capacity(lookups_in_cond.len() + 2);
+
+            all_constraints.push(cond_con);
+            all_constraints.push(continuation_con);
+
+            let mut vars = Vec::with_capacity(lookups_in_cond.len());
+
+            for (symbol, var) in lookups_in_cond.iter() {
+                vars.push(*var);
+
+                all_constraints.push(constraints.lookup(
+                    *symbol,
+                    NoExpectation(Type::Variable(*var)),
+                    Region::zero(),
+                ));
+            }
+
+            constraints.exists_many(vars, all_constraints)
         }
 
         If {
