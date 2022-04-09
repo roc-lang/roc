@@ -3251,7 +3251,7 @@ mod solve_expr {
                 Dict.insert
                 "#
             ),
-            "Dict k v, k, v -> Dict k v",
+            "Dict a b, a, b -> Dict a b",
         );
     }
 
@@ -3807,7 +3807,7 @@ mod solve_expr {
                 List.walkBackwards
                 "#
             ),
-            "List elem, state, (state, elem -> state) -> state",
+            "List a, b, (b, a -> b) -> b",
         );
     }
 
@@ -3883,7 +3883,7 @@ mod solve_expr {
                 List.takeLast
                 "#
             ),
-            "List elem, Nat -> List elem",
+            "List a, Nat -> List a",
         );
     }
 
