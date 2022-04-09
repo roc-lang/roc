@@ -1,19 +1,15 @@
-use bumpalo::Bump;
 use roc_module::ident::TagName;
 use roc_module::symbol::IdentIds;
 use roc_types::subs::{Content, Subs};
 
-use crate::ir::{
-    Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
-    SelfRecursive, Stmt, UpdateModeId,
-};
+use crate::ir::Expr;
 use crate::layout::{Builtin, Layout, UnionLayout};
 
 use super::CodeGenHelp;
 
 /// THESE MUST REMAIN SORTED ALPHABETICALLY!!!
 #[repr(u8)]
-enum RocValueTag {
+pub enum RocValueTag {
     Dec,
     F32,
     F64,
@@ -54,7 +50,7 @@ enum RocValueTag {
 ///
 /// THESE MUST REMAIN SORTED ALPHABETICALLY!!!
 #[repr(u8)]
-enum RocTypeTag {
+pub enum RocTypeTag {
     Function,
     Named,
     Opaque,
@@ -88,7 +84,7 @@ enum RocTypeTag {
 ///     Tag Str (List Value) Type
 ///     Opaque Value Type
 /// ]
-const ROC_VALUE_LAYOUT: UnionLayout<'static> = UnionLayout::Recursive(&[
+pub const ROC_VALUE_LAYOUT: UnionLayout<'static> = UnionLayout::Recursive(&[
     //     Str Str
     &[Layout::Builtin(Builtin::Str)],
     //     I8 I8
@@ -113,12 +109,7 @@ const ROC_VALUE_LAYOUT: UnionLayout<'static> = UnionLayout::Recursive(&[
     //     Opaque Value Type
 ]);
 
-fn generate_help<'a>(
-    root: CodeGenHelp<'a>,
-    ident_ids: &mut IdentIds,
-    content: Content,
-    subs: &Subs,
-) -> Stmt<'a> {
+pub fn generate_roc_value<'a>(ident_ids: &mut IdentIds, content: Content, subs: &Subs) -> Expr<'a> {
     match content {
         Content::FlexVar(_) => todo!(),
         Content::RigidVar(_) => todo!(),
@@ -138,20 +129,12 @@ fn generate_help<'a>(
                 RecursiveTagUnion(_, _, _) => todo!(),
                 EmptyRecord => {
                     // Record []
-                    let sym = root.create_symbol(ident_ids, "record");
-                    let expr = Expr::Tag {
+                    Expr::Tag {
                         tag_layout: ROC_VALUE_LAYOUT,
                         tag_name: TagName::Global("Record".into()),
                         tag_id: RocValueTag::Record as u8 as _,
                         arguments: &[],
-                    };
-
-                    Stmt::Let(
-                        sym,
-                        expr,
-                        Layout::Union(ROC_VALUE_LAYOUT),
-                        root.arena.alloc(Stmt::Ret(sym)),
-                    )
+                    }
                 }
                 EmptyTagUnion => todo!("code gen a panic Stmt about how you got an empty tag union value, which should be impossible"),
                 Erroneous(_) => todo!("code gen a panic Stmt"),

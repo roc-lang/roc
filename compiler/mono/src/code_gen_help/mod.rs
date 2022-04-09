@@ -13,7 +13,7 @@ use crate::layout::{Builtin, Layout, UnionLayout};
 
 mod equality;
 mod refcount;
-mod rocval;
+pub mod rocval;
 
 const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
 const LAYOUT_UNIT: Layout = Layout::UNIT;

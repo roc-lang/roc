@@ -1,5 +1,6 @@
 #![allow(clippy::manual_map)]
 
+use crate::code_gen_help::rocval::{generate_roc_value, ROC_VALUE_LAYOUT};
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
     RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
@@ -5415,23 +5416,20 @@ pub fn from_can<'a>(
         } => {
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
             let cond_symbol = env.unique_symbol();
-            let call_type = CallType::LowLevel {
-                op: LowLevel::ExpectTrue,
-                update_mode: env.next_update_mode_id(),
-            };
-            let arguments = env.arena.alloc([cond_symbol]);
-
-            let stmt = Stmt::Let(
+            let mut stmt = Stmt::Let(
                 env.unique_symbol(),
                 Expr::Call(self::Call {
-                    call_type,
-                    arguments,
+                    call_type: CallType::LowLevel {
+                        op: LowLevel::ExpectTrue,
+                        update_mode: env.next_update_mode_id(),
+                    },
+                    arguments: env.arena.alloc([cond_symbol]),
                 }),
                 Layout::Builtin(Builtin::Bool),
                 env.arena.alloc(rest),
             );
 
-            with_hole(
+            stmt = with_hole(
                 env,
                 loc_condition.value,
                 variable,
@@ -5439,7 +5437,40 @@ pub fn from_can<'a>(
                 layout_cache,
                 cond_symbol,
                 env.arena.alloc(stmt),
-            )
+            );
+
+            let subs = env.subs;
+            let ident_ids = env.ident_ids;
+
+            for (symbol, var) in lookups_in_cond.iter().rev() {
+                let content = subs.get_content_without_compacting(*var);
+                let expr = generate_roc_value(ident_ids, *content, subs);
+                let roc_value_symbol = env.unique_symbol();
+
+                // TODO: generate a function based on the Content, and then call it on the `symbol`
+
+                stmt = Stmt::Let(
+                    env.unique_symbol(),
+                    Expr::Call(self::Call {
+                        call_type: CallType::LowLevel {
+                            op: LowLevel::RocReport,
+                            update_mode: env.next_update_mode_id(),
+                        },
+                        arguments: env.arena.alloc([roc_value_symbol]),
+                    }),
+                    Layout::UNIT,
+                    env.arena.alloc(stmt),
+                );
+
+                stmt = Stmt::Let(
+                    roc_value_symbol,
+                    expr,
+                    Layout::Union(ROC_VALUE_LAYOUT),
+                    env.arena.alloc(stmt),
+                );
+            }
+
+            stmt
         }
 
         LetRec(defs, cont, _) => {
