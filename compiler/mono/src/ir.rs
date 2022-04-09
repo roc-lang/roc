@@ -7303,6 +7303,7 @@ fn call_by_name_help<'a>(
         add_needed_external(procs, env, original_fn_var, proc_name);
 
         debug_assert_ne!(proc_name.module_id(), ModuleId::ATTR);
+
         if procs.is_imported_module_thunk(proc_name) {
             force_thunk(
                 env,

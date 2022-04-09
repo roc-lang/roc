@@ -25,7 +25,7 @@ use roc_mono::ir::{
     UpdateModeIds,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
-use roc_parse::ast::{self, Collection, ExtractSpaces, Spaced, StrLiteral};
+use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
@@ -1062,7 +1062,7 @@ pub fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     // When compiling to wasm, we cannot spawn extra threads
     // so we have a single-threaded implementation
-    if true || cfg!(target_family = "wasm") {
+    if cfg!(target_family = "wasm") {
         load_single_threaded(
             arena,
             load_start,
@@ -3488,7 +3488,6 @@ fn run_solve_solve(
         exposed_symbols,
         aliases,
         rigid_variables,
-        module_id,
         ..
     } = module;
 
@@ -3531,7 +3530,7 @@ fn run_solve_solve(
                 .inner()
                 .serialize(&vars_by_symbol, &mut serialized)
                 .unwrap();
-            let (subs, vbs) = Subs::deserialize(&serialized);
+            let (subs, _vbs) = Subs::deserialize(&serialized);
 
             Solved(subs)
         };

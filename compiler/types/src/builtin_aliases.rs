@@ -11,7 +11,6 @@ const NUM_BUILTIN_IMPORTS: usize = 8;
 
 /// These can be shared between definitions, they will get instantiated when converted to Type
 const TVAR1: VarId = VarId::from_u32(1);
-const TVAR2: VarId = VarId::from_u32(2);
 
 pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
     let mut aliases = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
