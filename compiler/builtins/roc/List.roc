@@ -61,8 +61,12 @@ isEmpty = \list ->
     List.len list == 0
 
 get : List a, Nat -> Result a [ OutOfBounds ]*
-set : List a, Nat, a -> List a
 replace : List a, Nat, a -> { list : List a, value : a }
+
+set : List a, Nat, a -> List a
+set = \list, index, value ->
+    (List.replace list index value).list
+
 append : List a, a -> List a
 prepend : List a, a -> List a
 len : List a -> Nat
@@ -90,6 +94,8 @@ all : List a, (a -> Bool) -> Bool
 
 keepIf : List a, (a -> Bool) -> List a
 dropIf : List a, (a -> Bool) -> List a
+dropIf = \list, predicate ->
+    List.keepIf list (\e -> Bool.not (predicate e))
 
 keepOks : List before, (before -> Result after *) -> List after
 keepErrs: List before, (before -> Result * after) -> List after
@@ -97,7 +103,7 @@ map : List a, (a -> b) -> List b
 map2 : List a, List b, (a, b -> c) -> List c
 map3 : List a, List b, List c, (a, b, c -> d) -> List d
 map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
-mapWithIndex : List a, (a -> b) -> List b
+mapWithIndex : List a, (a, Nat -> b) -> List b
 range : Int a, Int a -> List (Int a)
 sortWith : List a, (a, a -> [ LT, EQ, GT ] ) -> List a
 sortAsc : List (Num a) -> List (Num a)
@@ -120,9 +126,47 @@ drop : List elem, Nat -> List elem
 dropAt : List elem, Nat -> List elem
 
 min :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+min = \list ->
+    when List.first list is
+        Ok initial ->
+            Ok (minHelp list initial)
+
+        Err ListWasEmpty ->
+            Err ListWasEmpty
+
+
+minHelp :  List (Num a), Num a -> Num a
+minHelp = \list, initial ->
+    List.walk list initial \bestSoFar, current ->
+        if current < bestSoFar then
+            current
+
+        else
+            bestSoFar
+
 max :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+max = \list ->
+    when List.first list is
+        Ok initial ->
+            Ok (maxHelp list initial)
+
+        Err ListWasEmpty ->
+            Err ListWasEmpty
+
+
+maxHelp :  List (Num a), Num a -> Num a
+maxHelp = \list, initial ->
+    List.walk list initial \bestSoFar, current ->
+        if current > bestSoFar then
+            current
+
+        else
+            bestSoFar
 
 joinMap : List a, (a -> List b) -> List b
+joinMap = \list, mapper ->
+    List.walk list [] (\state, elem -> List.concat state (mapper elem))
+
 find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
 sublist : List elem, { start : Nat, len : Nat } -> List elem
 intersperse : List elem, elem -> List elem

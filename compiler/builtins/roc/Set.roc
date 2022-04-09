@@ -14,7 +14,7 @@ interface Set
             intersection,
             difference,
         ]
-    imports [ List, Bool.{ Bool } ]
+    imports [ List, Bool.{ Bool }, Dict.{ values } ]
 
 empty : Set k
 single : k -> Set k
@@ -35,4 +35,4 @@ toDict : Set k -> Dict k {}
 
 walk : Set k, state, (state, k -> state) -> state
 walk = \set, state, step ->
-    Dict.walk (toDict set) state (\s, k, _ -> step s k)
+    Dict.walk (Set.toDict set) state (\s, k, _ -> step s k)
