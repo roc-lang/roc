@@ -64,7 +64,6 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
             arguments: [],
             result,
         } => {
-            dbg!(content, &result);
             // this is a thunk
             jit_to_ast_help(&env, app, main_fn_name, &result, content)
         }
@@ -1203,8 +1202,6 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
     use Content::*;
 
     let arena = env.arena;
-
-    dbg!(&num_expr, content);
 
     match content {
         Structure(flat_type) => {
