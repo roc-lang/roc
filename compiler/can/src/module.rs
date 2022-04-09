@@ -256,7 +256,7 @@ pub fn canonicalize_module_defs<'a>(
             Symbol::STR_STR,
             Symbol::DICT_DICT,
             Symbol::SET_SET,
-            // Symbol::BOX_BOX,
+            Symbol::BOX_BOX_TYPE,
         ]
         .contains(&symbol)
         {
