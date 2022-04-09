@@ -34,6 +34,7 @@ pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_OPT_SIZE: &str = "opt-size";
 pub const FLAG_LIB: &str = "lib";
+pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINK: &str = "roc-linker";
@@ -86,6 +87,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::new(FLAG_LIB)
                     .long(FLAG_LIB)
                     .about("Build a C library instead of an executable.")
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_NO_LINK)
+                    .long(FLAG_NO_LINK)
+                    .about("Does not link. Instead just outputs the `.o` file")
                     .required(false),
             )
             .arg(
@@ -291,10 +298,14 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
 
-    let link_type = if matches.is_present(FLAG_LIB) {
-        LinkType::Dylib
-    } else {
-        LinkType::Executable
+    let link_type = match (
+        matches.is_present(FLAG_LIB),
+        matches.is_present(FLAG_NO_LINK),
+    ) {
+        (true, false) => LinkType::Dylib,
+        (true, true) => user_error!("build can only be one of `--lib` or `--no-link`"),
+        (false, true) => LinkType::None,
+        (false, false) => LinkType::Executable,
     };
     let surgically_link = matches.is_present(FLAG_LINK);
     let precompiled = matches.is_present(FLAG_PRECOMPILED);

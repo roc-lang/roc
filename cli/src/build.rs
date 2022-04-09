@@ -246,6 +246,11 @@ pub fn build_file<'a>(
                 todo!("gracefully handle failing to surgically link");
             })?;
         BuildOutcome::NoProblems
+    } else if matches!(link_type, LinkType::None) {
+        // Just copy the object file to the output folder.
+        binary_path.set_extension(app_extension);
+        std::fs::copy(app_o_file, &binary_path).unwrap();
+        BuildOutcome::NoProblems
     } else {
         let mut inputs = vec![
             host_input_path.as_path().to_str().unwrap(),
