@@ -75,19 +75,17 @@ fn validate_generate_with<'a>(
 }
 
 #[derive(Debug)]
-enum GeneratedInfo<'a> {
+enum GeneratedInfo {
     Hosted {
         effect_symbol: Symbol,
         generated_functions: HostedGeneratedFunctions,
     },
-    Builtin {
-        generated_functions: &'a [Symbol],
-    },
+    Builtin,
     NotSpecial,
 }
 
-impl<'a> GeneratedInfo<'a> {
-    fn from_header_for(
+impl GeneratedInfo {
+    fn from_header_for<'a>(
         env: &mut Env,
         scope: &mut Scope,
         var_store: &mut VarStore,
@@ -140,9 +138,10 @@ impl<'a> GeneratedInfo<'a> {
                     generated_functions,
                 }
             }
-            HeaderFor::Builtin { generates_with } => GeneratedInfo::Builtin {
-                generated_functions: generates_with,
-            },
+            HeaderFor::Builtin { generates_with } => {
+                debug_assert!(generates_with.is_empty());
+                GeneratedInfo::Builtin
+            }
             _ => GeneratedInfo::NotSpecial,
         }
     }
@@ -395,9 +394,7 @@ pub fn canonicalize_module_defs<'a>(
                         // we just assume they are hosted functions (meant to be provided by the platform)
                         if has_no_implementation(&def.loc_expr.value) {
                             match generated_info {
-                                GeneratedInfo::Builtin {
-                                    generated_functions: _,
-                                } => {
+                                GeneratedInfo::Builtin => {
                                     let symbol = def.pattern_vars.iter().next().unwrap().0;
                                     match crate::builtins::builtin_defs_map(*symbol, var_store) {
                                         None => {
