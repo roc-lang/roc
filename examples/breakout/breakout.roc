@@ -41,9 +41,9 @@ render = \state ->
 
     paddle =
         color = { r: 0.8, g: 0.8, b: 0.8, a: 1.0 }
-        width = state.width * 0.1
-        height = state.height * 0.1
-        left = state.width - (state.width * 0.1)
+        width = state.width * 0.25
+        height = blockHeight
+        left = (state.width * 0.5) - (width * 0.5)
         top = state.height - (height * 2)
 
         Rect { left, top, width, height, color }
