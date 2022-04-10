@@ -579,9 +579,11 @@ fn unify_structure(
                 // unify the structure with this unrecursive tag union
                 let mut problems = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
 
-                problems.extend(fix_tag_union_recursion_variable(
-                    subs, ctx, ctx.first, other,
-                ));
+                if problems.is_empty() {
+                    problems.extend(fix_tag_union_recursion_variable(
+                        subs, ctx, ctx.first, other,
+                    ));
+                }
 
                 problems
             }
@@ -594,9 +596,11 @@ fn unify_structure(
                 // unify the structure with this unrecursive tag union
                 let mut problems = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
 
-                problems.extend(fix_tag_union_recursion_variable(
-                    subs, ctx, ctx.first, other,
-                ));
+                if problems.is_empty() {
+                    problems.extend(fix_tag_union_recursion_variable(
+                        subs, ctx, ctx.first, other,
+                    ));
+                }
 
                 problems
             }
