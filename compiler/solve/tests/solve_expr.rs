@@ -3297,6 +3297,30 @@ mod solve_expr {
     }
 
     #[test]
+    fn div() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.div
+                "#
+            ),
+            "Float a, Float a -> Float a"
+        )
+    }
+
+    #[test]
+    fn div_checked() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divChecked
+                "#
+            ),
+            "Float a, Float a -> Result (Float a) [ DivByZero ]*"
+        )
+    }
+
+    #[test]
     fn div_ceil() {
         infer_eq_without_problem(
             indoc!(
@@ -3317,6 +3341,30 @@ mod solve_expr {
                 "#
             ),
             "Int a, Int a -> Result (Int a) [ DivByZero ]*",
+        );
+    }
+
+    #[test]
+    fn div_floor() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divFloor
+                "#
+            ),
+            "Int a, Int a -> Int a"
+        );
+    }
+
+    #[test]
+    fn div_floor_checked() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divFloorChecked
+                "#
+            ),
+            "Int a, Int a -> Result (Int a) [ DivByZer ]*"
         );
     }
 
