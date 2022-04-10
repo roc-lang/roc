@@ -3440,7 +3440,6 @@ pub fn with_hole<'a>(
         ZeroArgumentTag {
             variant_var,
             name: tag_name,
-            arguments: args,
             ext_var,
             closure_name,
         } => {
@@ -3474,7 +3473,7 @@ pub fn with_hole<'a>(
                     tag_name,
                     procs,
                     layout_cache,
-                    args,
+                    std::vec::Vec::new(),
                     arena,
                 )
             }
