@@ -32,6 +32,28 @@ fn load<'a>(
     )
 }
 
+/// Load using only a single thread; used when compiling to webassembly
+pub fn load_single_threaded<'a>(
+    arena: &'a Bump,
+    load_start: LoadStart<'a>,
+    src_dir: &Path,
+    exposed_types: ExposedByModule,
+    goal_phase: Phase,
+    target_info: TargetInfo,
+) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
+    let cached_subs = read_cached_subs();
+
+    roc_load_internal::file::load_single_threaded(
+        arena,
+        load_start,
+        src_dir,
+        exposed_types,
+        goal_phase,
+        target_info,
+        cached_subs,
+    )
+}
+
 pub fn load_and_monomorphize_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -117,7 +139,10 @@ pub fn load_and_typecheck_str<'a>(
 
     let load_start = LoadStart::from_str(arena, filename, source)?;
 
-    match load(
+    // NOTE: this function is meant for tests, and so we use single-threaded
+    // solving so we don't use too many threads per-test. That gives higher
+    // throughput for the test run overall
+    match load_single_threaded(
         arena,
         load_start,
         src_dir,
@@ -148,16 +173,14 @@ fn deserialize_help(bytes: &[u8]) -> (Subs, Vec<(Symbol, Variable)>) {
 fn read_cached_subs() -> MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)> {
     let mut output = MutMap::default();
 
-    if false {
-        output.insert(ModuleId::BOOL, deserialize_help(BOOL));
-        output.insert(ModuleId::RESULT, deserialize_help(RESULT));
-        output.insert(ModuleId::LIST, deserialize_help(LIST));
-        output.insert(ModuleId::STR, deserialize_help(STR));
-        output.insert(ModuleId::DICT, deserialize_help(DICT));
-        output.insert(ModuleId::SET, deserialize_help(SET));
-        output.insert(ModuleId::BOX, deserialize_help(BOX));
-        output.insert(ModuleId::NUM, deserialize_help(NUM));
-    }
+    output.insert(ModuleId::BOOL, deserialize_help(BOOL));
+    output.insert(ModuleId::RESULT, deserialize_help(RESULT));
+    output.insert(ModuleId::LIST, deserialize_help(LIST));
+    output.insert(ModuleId::STR, deserialize_help(STR));
+    output.insert(ModuleId::DICT, deserialize_help(DICT));
+    output.insert(ModuleId::SET, deserialize_help(SET));
+    output.insert(ModuleId::BOX, deserialize_help(BOX));
+    output.insert(ModuleId::NUM, deserialize_help(NUM));
 
     output
 }

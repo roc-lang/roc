@@ -1089,7 +1089,7 @@ pub fn load<'a>(
 
 /// Load using only a single thread; used when compiling to webassembly
 #[allow(clippy::too_many_arguments)]
-fn load_single_threaded<'a>(
+pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     src_dir: &Path,
