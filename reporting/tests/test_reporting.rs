@@ -580,9 +580,9 @@ mod test_reporting {
                 Did you mean one of these?
 
                     baz
-                    Nat
                     Str
                     Err
+                    main
                 "#
             ),
         )
@@ -609,8 +609,8 @@ mod test_reporting {
 
                     True
                     Str
-                    Num
                     Err
+                    List
                 "#
             ),
         )
@@ -772,10 +772,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
-                    Decimal
-                    Dec
-                    Result
-                    Num
+                    Set
+                    List
+                    True
+                    Box
                 "#
             ),
         );
@@ -1556,9 +1556,9 @@ mod test_reporting {
                 Did you mean one of these?
 
                     Box
-                    Bool
-                    U8
-                    F64
+                    Set
+                    Str
+                    Ok
                 "#
             ),
         )
@@ -2013,9 +2013,9 @@ mod test_reporting {
                 Did you mean one of these?
 
                     Ok
-                    U8
-                    Box
                     f
+                    Box
+                    Set
                "#
             ),
         )
@@ -5950,10 +5950,10 @@ I need all branches in an `if` to have the same type!
 
                 Did you mean one of these?
 
-                    Nat
                     Str
                     Err
-                    U8
+                    Box
+                    Set
                 "#
             ),
         )
@@ -8564,7 +8564,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : Num.Nat }U32
+                f : { x : Num.Nat }[]
                 f
                 "#
             ),
@@ -8574,8 +8574,8 @@ I need all branches in an `if` to have the same type!
 
                 This record extension type is invalid:
 
-                1│  f : { x : Num.Nat }U32
-                                       ^^^
+                1│  f : { x : Num.Nat }[]
+                                       ^^
 
                 Note: A record extension variable can only contain a type variable or
                 another record.
@@ -8634,25 +8634,25 @@ I need all branches in an `if` to have the same type!
                                          ^^^^^^^^^^^
 
                 Did you mean one of these?
-
+                
                     Type
-                    Unsigned8
-                    Unsigned32
-                    Unsigned16
-
+                    True
+                    Box
+                    Ok
+                
                 ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
-
+                
                 I cannot find a `UnknownType` value
-
+                
                 3│  insertHelper : UnknownType, Type -> Type
                                                         ^^^^
-
+                
                 Did you mean one of these?
-
+                
                     Type
-                    Unsigned8
-                    Unsigned32
-                    Unsigned16
+                    True
+                    insertHelper
+                    Box
                 "#
             ),
         )
