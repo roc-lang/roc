@@ -149,6 +149,13 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
                     &rect_resources.ortho.buffer,
                     &cmd_queue,
                 );
+
+                elems = roc::app_render(roc::State {
+                    height: size.height as f32,
+                    width: size.width as f32,
+                });
+
+                window.request_redraw();
             }
             // Keyboard input
             Event::WindowEvent {

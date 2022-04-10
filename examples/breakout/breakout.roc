@@ -32,8 +32,20 @@ render = \state ->
     blockWidth = state.width / numCols |> Result.withDefault 0
     blockHeight = 80
 
-    List.map blocks \{ row, col, color } ->
-        left = Num.toF32 col * blockWidth
-        top = Num.toF32 (row * blockHeight)
+    rects =
+        List.map blocks \{ row, col, color } ->
+            left = Num.toF32 col * blockWidth
+            top = Num.toF32 (row * blockHeight)
 
-        Rect { left, top, width: blockWidth, height: blockHeight, color }
+            Rect { left, top, width: blockWidth, height: blockHeight, color }
+
+    paddle =
+        color = { r: 0.8, g: 0.8, b: 0.8, a: 1.0 }
+        width = state.width * 0.1
+        height = state.height * 0.1
+        left = state.width - (state.width * 0.1)
+        top = state.height - (height * 2)
+
+        Rect { left, top, width, height, color }
+
+    List.append rects paddle
