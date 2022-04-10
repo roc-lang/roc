@@ -1,5 +1,5 @@
 platform "gui"
-    requires {} { program : Program State }
+    requires { Model } { program : _ }
     exposes []
     packages {}
     imports []
@@ -12,5 +12,9 @@ Elem : [ Rect { color : Rgba, left : F32, top : F32, width : F32, height : F32 }
 Event : [ Resize { width : F32, height : F32 }, KeyDown U32, KeyUp U32 ]
 
 # TODO allow changing the window title - maybe via a Task, since that shouldn't happen all the time
-programForHost : { render : (Event -> List Elem) as Render }
+programForHost : {
+    init : ({} -> Model) as Init,
+    update : (Model, Event -> Model) as Update,
+    render : (Model -> List Elem) as Render
+}
 programForHost = program

@@ -3,54 +3,57 @@ app "breakout"
     imports []# [ pf.Action.{ Action }, pf.Elem.{ button, text, row, col } ]
     provides [ program ] to pf
 
-program = { render }
+program = { init, update, render }
 
-render = \event ->
+init = \_ -> { width: 1900, height: 1000 }
+
+update = \state ->
     when event is
-        Resize size ->
-            numRows = 4
-            numCols = 8
-            numBlocks = numRows * numCols
+        Resize size -> size
+        KeyUp keyCode -> { width: 1900, height: 1000 }
+        KeyDown keyCode -> { width: 1900, height: 1000 }
 
-            blocks = List.map (List.range 0 numBlocks) \index ->
-                col =
-                    Num.rem index numCols
-                        |> Result.withDefault 0
-                        |> Num.toF32
+render = \state ->
+    numRows = 4
+    numCols = 8
+    numBlocks = numRows * numCols
 
-                row =
-                    index // numCols
-                        |> Result.withDefault 0
-                        |> Num.toF32
+    blocks = List.map (List.range 0 numBlocks) \index ->
+        col =
+            Num.rem index numCols
+                |> Result.withDefault 0
+                |> Num.toF32
 
-                red = (col / Num.toF32 numCols) |> Result.withDefault 0
-                green = ((row / Num.toF32 numRows) |> Result.withDefault 0)
-                blue = (Num.toF32 index / Num.toF32 numBlocks) |> Result.withDefault 0
+        row =
+            index // numCols
+                |> Result.withDefault 0
+                |> Num.toF32
 
-                color = { r: red * 0.8, g: 0.2 + green * 0.6, b: 0.2 + blue * 0.8, a: 1 }
+        red = (col / Num.toF32 numCols) |> Result.withDefault 0
+        green = ((row / Num.toF32 numRows) |> Result.withDefault 0)
+        blue = (Num.toF32 index / Num.toF32 numBlocks) |> Result.withDefault 0
 
-                { row, col, color }
+        color = { r: red * 0.8, g: 0.2 + green * 0.6, b: 0.2 + blue * 0.8, a: 1 }
 
-            blockWidth = size.width / numCols |> Result.withDefault 0
-            blockHeight = 80
+        { row, col, color }
 
-            rects =
-                List.map blocks \{ row, col, color } ->
-                    left = Num.toF32 col * blockWidth
-                    top = Num.toF32 (row * blockHeight)
+    blockWidth = state.width / numCols |> Result.withDefault 0
+    blockHeight = 80
 
-                    Rect { left, top, width: blockWidth, height: blockHeight, color }
+    rects =
+        List.map blocks \{ row, col, color } ->
+            left = Num.toF32 col * blockWidth
+            top = Num.toF32 (row * blockHeight)
 
-            paddle =
-                color = { r: 0.8, g: 0.8, b: 0.8, a: 1.0 }
-                width = size.width * 0.25
-                height = blockHeight
-                left = (size.width * 0.5) - (width * 0.5)
-                top = size.height - (height * 2)
+            Rect { left, top, width: blockWidth, height: blockHeight, color }
 
-                Rect { left, top, width, height, color }
+    paddle =
+        color = { r: 0.8, g: 0.8, b: 0.8, a: 1.0 }
+        width = state.width * 0.25
+        height = blockHeight
+        left = (state.width * 0.5) - (width * 0.5)
+        top = state.height - (height * 2)
 
-            List.append rects paddle
+        Rect { left, top, width, height, color }
 
-        _ ->
-            [ Text "TODO handle other events than Resize!" ]
+    List.append rects paddle
