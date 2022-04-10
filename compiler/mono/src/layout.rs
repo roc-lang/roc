@@ -468,7 +468,7 @@ impl<'a> UnionLayout<'a> {
 
     pub fn allocation_alignment_bytes(&self, target_info: TargetInfo) -> u32 {
         let allocation = match self {
-            UnionLayout::NonRecursive(_) => unreachable!("not heap-allocated"),
+            UnionLayout::NonRecursive(tags) => Self::tags_alignment_bytes(tags, target_info),
             UnionLayout::Recursive(tags) => Self::tags_alignment_bytes(tags, target_info),
             UnionLayout::NonNullableUnwrapped(field_layouts) => {
                 Layout::struct_no_name_order(field_layouts).alignment_bytes(target_info)
@@ -1150,9 +1150,11 @@ impl<'a> Layout<'a> {
     }
 
     pub fn allocation_alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+        let ptr_width = target_info.ptr_width() as u32;
+
         match self {
             Layout::Builtin(builtin) => builtin.allocation_alignment_bytes(target_info),
-            Layout::Struct { .. } => unreachable!("not heap-allocated"),
+            Layout::Struct { .. } => self.alignment_bytes(target_info).max(ptr_width),
             Layout::Union(union_layout) => union_layout.allocation_alignment_bytes(target_info),
             Layout::LambdaSet(lambda_set) => lambda_set
                 .runtime_representation()
@@ -1545,9 +1547,6 @@ impl<'a> Builtin<'a> {
         let ptr_width = target_info.ptr_width() as u32;
 
         let allocation = match self {
-            Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
-                unreachable!("not heap-allocated")
-            }
             Builtin::Str => ptr_width,
             Builtin::Dict(k, v) => k
                 .alignment_bytes(target_info)
@@ -1555,6 +1554,11 @@ impl<'a> Builtin<'a> {
                 .max(ptr_width),
             Builtin::Set(k) => k.alignment_bytes(target_info).max(ptr_width),
             Builtin::List(e) => e.alignment_bytes(target_info).max(ptr_width),
+            // The following are usually not heap-allocated, but they might be when inside a Box.
+            Builtin::Int(int_width) => int_width.alignment_bytes(target_info).max(ptr_width),
+            Builtin::Float(float_width) => float_width.alignment_bytes(target_info).max(ptr_width),
+            Builtin::Bool => (core::mem::align_of::<bool>() as u32).max(ptr_width),
+            Builtin::Decimal => IntWidth::I128.alignment_bytes(target_info).max(ptr_width),
         };
 
         allocation.max(ptr_width)
