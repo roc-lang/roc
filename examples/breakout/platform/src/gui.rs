@@ -9,7 +9,7 @@ use crate::{
             text::build_glyph_brush,
         },
     },
-    roc::{self, RocElem, RocElemTag},
+    roc::{self, Bounds, RocElem, RocElemTag, RocEvent},
 };
 use cgmath::{Vector2, Vector4};
 use glyph_brush::{GlyphCruncher, OwnedSection};
@@ -23,7 +23,7 @@ use wgpu_glyph::GlyphBrush;
 use winit::{
     dpi::PhysicalSize,
     event,
-    event::{Event, ModifiersState},
+    event::{ElementState, Event, ModifiersState},
     event_loop::ControlFlow,
     platform::run_return::EventLoopExtRunReturn,
 };
@@ -36,17 +36,17 @@ use winit::{
 
 const TIME_BETWEEN_RENDERS: Duration = Duration::new(0, 1000 / 60);
 
-pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Error>> {
+pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn Error>> {
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
-        .with_inner_size(PhysicalSize::new(state.width, state.height))
+        .with_inner_size(PhysicalSize::new(window_bounds.width, window_bounds.height))
         .with_title(title)
         .build(&event_loop)
         .unwrap();
 
-    let mut elems = roc::app_render(state);
+    let mut elems = roc::app_render(RocEvent::resize(window_bounds));
 
     let instance = wgpu::Instance::new(wgpu::Backends::all());
 
@@ -150,10 +150,10 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
                     &cmd_queue,
                 );
 
-                elems = roc::app_render(roc::State {
+                elems = roc::app_render(RocEvent::resize(Bounds {
                     height: size.height as f32,
                     width: size.width as f32,
-                });
+                }));
 
                 window.request_redraw();
             }
@@ -171,27 +171,14 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
                     },
                 ..
             } => {
-                use event::ElementState::*;
-                use event::VirtualKeyCode::*;
-
-                match keycode {
-                    Left => match input_state {
-                        Pressed => println!("Left pressed!"),
-                        Released => println!("Left released!"),
-                    },
-                    Right => match input_state {
-                        Pressed => println!("Right pressed!"),
-                        Released => println!("Right released!"),
-                    },
-                    _ => {
-                        println!("Other!");
-                    }
+                let roc_event = match input_state {
+                    ElementState::Pressed => RocEvent::key_down(keycode),
+                    ElementState::Released => RocEvent::key_up(keycode),
                 };
 
-                elems = roc::app_render(roc::State {
-                    height: size.height as f32,
-                    width: size.width as f32,
-                });
+                elems = roc::app_render(roc_event);
+
+                window.request_redraw();
             }
             //Modifiers Changed
             Event::WindowEvent {
@@ -316,12 +303,6 @@ fn begin_render_pass<'a>(
         depth_stencil_attachment: None,
         label: None,
     })
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-pub struct Bounds {
-    pub height: f32,
-    pub width: f32,
 }
 
 #[derive(Clone, Debug)]

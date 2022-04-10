@@ -7,13 +7,14 @@ use std::ffi::CStr;
 use std::fmt::Debug;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
+use winit::event::VirtualKeyCode;
 
 extern "C" {
     #[link_name = "roc__programForHost_1_exposed_generic"]
     fn roc_program() -> ();
 
     #[link_name = "roc__programForHost_1_Render_caller"]
-    fn call_Render(state: *const State, closure_data: *const u8, output: *mut RocList<RocElem>);
+    fn call_Render(event: *const RocEvent, closure_data: *const u8, output: *mut RocList<RocElem>);
 
     #[link_name = "roc__programForHost_size"]
     fn roc_program_size() -> i64;
@@ -23,11 +24,71 @@ extern "C" {
     fn size_Render() -> i64;
 }
 
-#[derive(Debug)]
 #[repr(C)]
-pub struct State {
-    pub height: f32,
-    pub width: f32,
+pub union RocEventEntry {
+    pub key_down: winit::event::VirtualKeyCode,
+    pub key_up: winit::event::VirtualKeyCode,
+    pub resize: Bounds,
+}
+
+#[repr(u8)]
+#[allow(unused)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RocEventTag {
+    KeyDown = 0,
+    KeyUp = 1,
+    Resize = 2,
+}
+
+#[repr(C)]
+#[cfg(target_pointer_width = "64")] // on a 64-bit system, the tag fits in this pointer's spare 3 bits
+pub struct RocEvent {
+    entry: RocEventEntry,
+    tag: RocEventTag,
+}
+
+impl Debug for RocEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use RocEventTag::*;
+
+        match self.tag() {
+            KeyDown => unsafe { self.entry().key_down }.fmt(f),
+            KeyUp => unsafe { self.entry().key_up }.fmt(f),
+            Resize => unsafe { self.entry().resize }.fmt(f),
+        }
+    }
+}
+
+impl RocEvent {
+    #[cfg(target_pointer_width = "64")]
+    pub fn tag(&self) -> RocEventTag {
+        self.tag
+    }
+
+    pub fn entry(&self) -> &RocEventEntry {
+        &self.entry
+    }
+
+    pub fn resize(size: Bounds) -> Self {
+        Self {
+            tag: RocEventTag::Resize,
+            entry: RocEventEntry { resize: size },
+        }
+    }
+
+    pub fn key_down(keycode: VirtualKeyCode) -> Self {
+        Self {
+            tag: RocEventTag::KeyDown,
+            entry: RocEventEntry { key_down: keycode },
+        }
+    }
+
+    pub fn key_up(keycode: VirtualKeyCode) -> Self {
+        Self {
+            tag: RocEventTag::KeyUp,
+            entry: RocEventEntry { key_up: keycode },
+        }
+    }
 }
 
 #[no_mangle]
@@ -193,7 +254,7 @@ pub struct ButtonStyles {
     pub text_color: Rgba,
 }
 
-pub fn app_render(state: State) -> RocList<RocElem> {
+pub fn app_render(state: RocEvent) -> RocList<RocElem> {
     let size = unsafe { roc_program_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
 
@@ -212,10 +273,17 @@ pub fn app_render(state: State) -> RocList<RocElem> {
     }
 }
 
-unsafe fn call_the_closure(state: State, closure_data_ptr: *const u8) -> RocList<RocElem> {
+unsafe fn call_the_closure(event: RocEvent, closure_data_ptr: *const u8) -> RocList<RocElem> {
     let mut output = MaybeUninit::uninit();
 
-    call_Render(&state, closure_data_ptr as *const u8, output.as_mut_ptr());
+    call_Render(&event, closure_data_ptr as *const u8, output.as_mut_ptr());
 
     output.assume_init()
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+#[repr(C)]
+pub struct Bounds {
+    pub height: f32,
+    pub width: f32,
 }
