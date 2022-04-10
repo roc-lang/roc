@@ -3304,6 +3304,18 @@ mod solve_expr {
                 Num.divCeil
                 "#
             ),
+            "Int a, Int a -> Int a"
+        );
+    }
+
+    #[test]
+    fn div_ceil_checked() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divCeilChecked
+                "#
+            ),
             "Int a, Int a -> Result (Int a) [ DivByZero ]*",
         );
     }
