@@ -48,13 +48,10 @@ mod solve_expr {
             let dir = tempdir()?;
             let filename = PathBuf::from("Test.roc");
             let file_path = dir.path().join(filename);
-            let full_file_path = file_path.clone();
-            let mut file = File::create(file_path)?;
-            writeln!(file, "{}", module_src)?;
-            drop(file);
-            let result = roc_load::load_and_typecheck(
+            let result = roc_load::load_and_typecheck_str(
                 arena,
-                full_file_path,
+                file_path,
+                module_src,
                 dir.path(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),

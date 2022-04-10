@@ -105,6 +105,31 @@ pub fn load_and_typecheck<'a>(
     }
 }
 
+pub fn load_and_typecheck_str<'a>(
+    arena: &'a Bump,
+    filename: PathBuf,
+    source: &'a str,
+    src_dir: &Path,
+    exposed_types: ExposedByModule,
+    target_info: TargetInfo,
+) -> Result<LoadedModule, LoadingProblem<'a>> {
+    use LoadResult::*;
+
+    let load_start = LoadStart::from_str(arena, filename, source)?;
+
+    match load(
+        arena,
+        load_start,
+        src_dir,
+        exposed_types,
+        Phase::SolveTypes,
+        target_info,
+    )? {
+        Monomorphized(_) => unreachable!(""),
+        TypeChecked(module) => Ok(module),
+    }
+}
+
 const BOOL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Bool.dat")) as &[_];
 const RESULT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Result.dat")) as &[_];
 const LIST: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/List.dat")) as &[_];
