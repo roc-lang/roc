@@ -50,7 +50,13 @@ fn headers_from_annotation_help(
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> bool {
     match pattern {
-        Identifier(symbol) | Shadowed(_, _, symbol) => {
+        Identifier(symbol)
+        | Shadowed(_, _, symbol)
+        // TODO(abilities): handle linking the member def to the specialization ident
+        | AbilityMemberSpecialization {
+            ident: symbol,
+            specializes: _,
+        } => {
             let typ = Loc::at(annotation.region, annotation.value.clone());
             headers.insert(*symbol, typ);
             true
@@ -182,7 +188,12 @@ pub fn constrain_pattern(
             // Erroneous patterns don't add any constraints.
         }
 
-        Identifier(symbol) | Shadowed(_, _, symbol) => {
+        Identifier(symbol) | Shadowed(_, _, symbol)
+        // TODO(abilities): handle linking the member def to the specialization ident
+        | AbilityMemberSpecialization {
+            ident: symbol,
+            specializes: _,
+        } => {
             if could_be_a_tag_union(expected.get_type_ref()) {
                 state
                     .constraints

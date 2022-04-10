@@ -4,7 +4,7 @@
 
 The Roc programming language is named after [a mythical bird](https://en.wikipedia.org/wiki/Roc_(mythology)).
 
-That’s why the logo is a bird. It’s specifically an [*origami* bird](https://youtu.be/9gni1t1k1uY) as a homage
+That’s why the logo is a bird. It’s specifically an [*origami* bird](https://youtu.be/9gni1t1k1uY) as an homage
 to [Elm](https://elm-lang.org/)’s tangram logo.
 
 Roc is a direct descendant of Elm. The languages are similar, but not the same.

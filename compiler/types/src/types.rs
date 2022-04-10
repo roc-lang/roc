@@ -1856,6 +1856,7 @@ pub enum Problem {
     },
     InvalidModule,
     SolvedTypeError,
+    HasClauseIsNotAbility(Region),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

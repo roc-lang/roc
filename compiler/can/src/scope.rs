@@ -6,6 +6,8 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, AliasKind, Type};
 
+use crate::abilities::AbilitiesStore;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scope {
     /// All the identifiers in scope, mapped to were they were defined and
@@ -18,6 +20,9 @@ pub struct Scope {
 
     /// The type aliases currently in scope
     pub aliases: SendMap<Symbol, Alias>,
+
+    /// The abilities currently in scope, and their implementors.
+    pub abilities: SendMap<Symbol, Region>,
 
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
@@ -62,6 +67,8 @@ impl Scope {
             idents: Symbol::default_in_scope(),
             symbols: SendMap::default(),
             aliases,
+            // TODO(abilities): default abilities in scope
+            abilities: SendMap::default(),
         }
     }
 
@@ -180,6 +187,11 @@ impl Scope {
     ///
     /// Returns Err if this would shadow an existing ident, including the
     /// Symbol and Region of the ident we already had in scope under that name.
+    ///
+    /// If this ident shadows an existing one, a new ident is allocated for the shadow. This is
+    /// done so that all identifiers have unique symbols, which is important in particular when
+    /// we generate code for value identifiers.
+    /// If this behavior is undesirable, use [`Self::introduce_without_shadow_symbol`].
     pub fn introduce(
         &mut self,
         ident: Ident,
@@ -202,23 +214,96 @@ impl Scope {
 
                 Err((original_region, shadow, symbol))
             }
-            None => {
-                // If this IdentId was already added previously
-                // when the value was exposed in the module header,
-                // use that existing IdentId. Otherwise, create a fresh one.
-                let ident_id = match exposed_ident_ids.get_id(&ident) {
-                    Some(ident_id) => ident_id,
-                    None => all_ident_ids.add(ident.clone()),
+            None => Ok(self.commit_introduction(ident, exposed_ident_ids, all_ident_ids, region)),
+        }
+    }
+
+    /// Like [Self::introduce], but does not introduce a new symbol for the shadowing symbol.
+    pub fn introduce_without_shadow_symbol(
+        &mut self,
+        ident: Ident,
+        exposed_ident_ids: &IdentIds,
+        all_ident_ids: &mut IdentIds,
+        region: Region,
+    ) -> Result<Symbol, (Region, Loc<Ident>)> {
+        match self.idents.get(&ident) {
+            Some(&(_, original_region)) => {
+                let shadow = Loc {
+                    value: ident.clone(),
+                    region,
                 };
+                Err((original_region, shadow))
+            }
+            None => Ok(self.commit_introduction(ident, exposed_ident_ids, all_ident_ids, region)),
+        }
+    }
 
-                let symbol = Symbol::new(self.home, ident_id);
+    /// Like [Self::introduce], but handles the case of when an ident matches an ability member
+    /// name. In such cases a new symbol is created for the ident (since it's expected to be a
+    /// specialization of the ability member), but the ident is not added to the ident->symbol map.
+    ///
+    /// If the ident does not match an ability name, the behavior of this function is exactly that
+    /// of `introduce`.
+    #[allow(clippy::type_complexity)]
+    pub fn introduce_or_shadow_ability_member(
+        &mut self,
+        ident: Ident,
+        exposed_ident_ids: &IdentIds,
+        all_ident_ids: &mut IdentIds,
+        region: Region,
+        abilities_store: &AbilitiesStore,
+    ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
+        match self.idents.get(&ident) {
+            Some(&(original_symbol, original_region)) => {
+                let shadow_ident_id = all_ident_ids.add(ident.clone());
+                let shadow_symbol = Symbol::new(self.home, shadow_ident_id);
 
-                self.symbols.insert(symbol, region);
-                self.idents.insert(ident, (symbol, region));
+                self.symbols.insert(shadow_symbol, region);
 
-                Ok(symbol)
+                if abilities_store.is_ability_member_name(original_symbol) {
+                    // Add a symbol for the shadow, but don't re-associate the member name.
+                    Ok((shadow_symbol, Some(original_symbol)))
+                } else {
+                    // This is an illegal shadow.
+                    let shadow = Loc {
+                        value: ident.clone(),
+                        region,
+                    };
+
+                    self.idents.insert(ident, (shadow_symbol, region));
+
+                    Err((original_region, shadow, shadow_symbol))
+                }
+            }
+            None => {
+                let new_symbol =
+                    self.commit_introduction(ident, exposed_ident_ids, all_ident_ids, region);
+                Ok((new_symbol, None))
             }
         }
+    }
+
+    fn commit_introduction(
+        &mut self,
+        ident: Ident,
+        exposed_ident_ids: &IdentIds,
+        all_ident_ids: &mut IdentIds,
+        region: Region,
+    ) -> Symbol {
+        // If this IdentId was already added previously
+        // when the value was exposed in the module header,
+        // use that existing IdentId. Otherwise, create a fresh one.
+        let ident_id = match exposed_ident_ids.get_id(&ident) {
+            Some(ident_id) => ident_id,
+            None => all_ident_ids.add(ident.clone()),
+        };
+
+        let symbol = Symbol::new(self.home, ident_id);
+
+        self.symbols.insert(symbol, region);
+        self.idents.insert(ident, (symbol, region));
+
+        symbol
     }
 
     /// Ignore an identifier.

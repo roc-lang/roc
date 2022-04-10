@@ -3281,3 +3281,47 @@ fn box_and_unbox_string() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn box_and_unbox_num() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box (123u8))
+            "#
+        ),
+        123,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn box_and_unbox_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box { a: 15u8, b: 27u8 })
+            "#
+        ),
+        (15, 27),
+        (u8, u8)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn box_and_unbox_tag_union() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            v : [ A U8, B U8 ] # usually stack allocated
+            v = B 27u8
+            Box.unbox (Box.box v)
+            "#
+        ),
+        (27, 1),
+        (u8, u8)
+    )
+}

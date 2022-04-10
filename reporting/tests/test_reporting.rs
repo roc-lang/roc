@@ -430,8 +430,8 @@ mod test_reporting {
                 3│  Booly : [ Yes, No, Maybe ]
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Since these variables have the same name, it's easy to use the wrong
-                one on accident. Give one of them a new name.
+                Since these aliases have the same name, it's easy to use the wrong one
+                on accident. Give one of them a new name.
 
                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
 
@@ -8898,6 +8898,342 @@ I need all branches in an `if` to have the same type!
 
                 Tip: Type variables must be bound before the `:`. Perhaps you intended
                 to add a type parameter to this type?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn bad_type_parameter_in_ability() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Hash a b c has
+                  hash : a -> U64 | a has Hash
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ABILITY HAS TYPE VARIABLES ──────────────────────────────────────────────────
+
+                The definition of the `Hash` ability includes type variables:
+
+                1│  Hash a b c has
+                         ^^^^^
+
+                Abilities cannot depend on type variables, but their member values
+                can!
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Hash` is not used anywhere in your code.
+
+                1│  Hash a b c has
+                    ^^^^
+
+                If you didn't intend on using `Hash` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn alias_in_has_clause() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── HAS CLAUSE IS NOT AN ABILITY ────────────────────────────────────────────────
+
+                The type referenced in this "has" clause is not an ability:
+
+                1│  Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
+                                                                        ^^^^^^^^^
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `hash` is not used anywhere in your code.
+
+                1│  Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
+                             ^^^^
+
+                If you didn't intend on using `hash` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn shadowed_type_variable_in_has_clause() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
+
+                The `a` name is first defined here:
+
+                1│  Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
+                                            ^^^^^^^^^
+
+                But then it's defined a second time here:
+
+                1│  Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
+                                                       ^^^^^^^^^
+
+                Since these variables have the same name, it's easy to use the wrong
+                one on accident. Give one of them a new name.
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `ab1` is not used anywhere in your code.
+
+                1│  Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
+                            ^^^
+
+                If you didn't intend on using `ab1` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn alias_using_ability() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Ability has ab : a -> {} | a has Ability
+
+                Alias : Ability
+
+                a : Alias
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ALIAS USES ABILITY ──────────────────────────────────────────────────────────
+
+                The definition of the `Alias` aliases references the ability `Ability`:
+
+                3│  Alias : Ability
+                    ^^^^^
+
+                Abilities are not types, but you can add an ability constraint to a
+                type variable `a` by writing
+
+                    | a has Ability
+
+                 at the end of the type.
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `ab` is not used anywhere in your code.
+
+                1│  Ability has ab : a -> {} | a has Ability
+                                ^^
+
+                If you didn't intend on using `ab` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_shadows_ability() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Ability has ab : a -> Num.U64 | a has Ability
+
+                Ability has ab1 : a -> Num.U64 | a has Ability
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
+
+                The `Ability` name is first defined here:
+
+                1│  Ability has ab : a -> Num.U64 | a has Ability
+                    ^^^^^^^
+
+                But then it's defined a second time here:
+
+                3│  Ability has ab1 : a -> Num.U64 | a has Ability
+                    ^^^^^^^
+
+                Since these abilities have the same name, it's easy to use the wrong
+                one on accident. Give one of them a new name.
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `ab` is not used anywhere in your code.
+
+                1│  Ability has ab : a -> Num.U64 | a has Ability
+                                ^^
+
+                If you didn't intend on using `ab` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_member_does_not_bind_ability() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Ability has ab : {} -> {}
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ABILITY MEMBER MISSING HAS CLAUSE ───────────────────────────────────────────
+
+                The definition of the ability member `ab` does not include a `has` clause
+                binding a type variable to the ability `Ability`:
+
+                1│  Ability has ab : {} -> {}
+                                ^^
+
+                Ability members must include a `has` clause binding a type variable to
+                an ability, like
+
+                    a has Ability
+
+                Otherwise, the function does not need to be part of the ability!
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `Ability` is not used anywhere in your code.
+
+                1│  Ability has ab : {} -> {}
+                    ^^^^^^^
+
+                If you didn't intend on using `Ability` then remove it so future readers
+                of your code don't wonder why it is there.
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `ab` is not used anywhere in your code.
+
+                1│  Ability has ab : {} -> {}
+                                ^^
+
+                If you didn't intend on using `ab` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_member_binds_extra_ability() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Eq has eq : a, a -> Bool.Bool | a has Eq
+                Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
+
+                1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ABILITY MEMBER HAS EXTRANEOUS HAS CLAUSE ────────────────────────────────────
+
+                The definition of the ability member `hash` includes a has clause
+                binding an ability it is not a part of:
+
+                2│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
+                                                      ^^^^^^^^
+
+                Currently, ability members can only bind variables to the ability they
+                are a part of.
+
+                Hint: Did you mean to bind the `Hash` ability instead?
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `eq` is not used anywhere in your code.
+
+                1│  Eq has eq : a, a -> Bool.Bool | a has Eq
+                           ^^
+
+                If you didn't intend on using `eq` then remove it so future readers of
+                your code don't wonder why it is there.
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `hash` is not used anywhere in your code.
+
+                2│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
+                             ^^^^
+
+                If you didn't intend on using `hash` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn has_clause_outside_of_ability() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Hash has hash : a -> Num.U64 | a has Hash
+
+                f : a -> Num.U64 | a has Hash
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ILLEGAL HAS CLAUSE ──────────────────────────────────────────────────────────
+
+                A `has` clause is not allowed here:
+
+                3│  f : a -> Num.U64 | a has Hash
+                                       ^^^^^^^^^^
+
+                `has` clauses can only be specified on the top-level type annotation of
+                an ability member.
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `hash` is not used anywhere in your code.
+
+                1│  Hash has hash : a -> Num.U64 | a has Hash
+                             ^^^^
+
+                If you didn't intend on using `hash` then remove it so future readers of
+                your code don't wonder why it is there.
                 "#
             ),
         )

@@ -881,7 +881,9 @@ pub fn constrain_expr(
             name,
             arguments,
         } => {
-            let mut vars = Vec::with_capacity(arguments.len());
+            // +2 because we push all the arguments, plus variant_var and ext_var
+            let num_vars = arguments.len() + 2;
+            let mut vars = Vec::with_capacity(num_vars);
             let mut types = Vec::with_capacity(arguments.len());
             let mut arg_cons = Vec::with_capacity(arguments.len());
 
@@ -923,27 +925,8 @@ pub fn constrain_expr(
             variant_var,
             ext_var,
             name,
-            arguments,
             closure_name,
         } => {
-            let mut vars = Vec::with_capacity(arguments.len());
-            let mut types = Vec::with_capacity(arguments.len());
-            let mut arg_cons = Vec::with_capacity(arguments.len());
-
-            for (var, loc_expr) in arguments {
-                let arg_con = constrain_expr(
-                    constraints,
-                    env,
-                    loc_expr.region,
-                    &loc_expr.value,
-                    Expected::NoExpectation(Type::Variable(*var)),
-                );
-
-                arg_cons.push(arg_con);
-                vars.push(*var);
-                types.push(Type::Variable(*var));
-            }
-
             let union_con = constraints.equal_types_with_storage(
                 Type::FunctionOrTagUnion(
                     name.clone(),
@@ -953,19 +936,14 @@ pub fn constrain_expr(
                 expected.clone(),
                 Category::TagApply {
                     tag_name: name.clone(),
-                    args_count: arguments.len(),
+                    args_count: 0,
                 },
                 region,
                 *variant_var,
             );
 
-            vars.push(*variant_var);
-            vars.push(*ext_var);
-            arg_cons.push(union_con);
-
-            constraints.exists_many(vars, arg_cons)
+            constraints.exists_many([*variant_var, *ext_var], [union_con])
         }
-
         OpaqueRef {
             opaque_var,
             name,

@@ -1587,3 +1587,19 @@ fn str_to_dec() {
         RocDec
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2811() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = Command { tool: "bash" }
+            Command c = x
+            c.tool
+            "#
+        ),
+        RocStr::from("bash"),
+        RocStr
+    );
+}
