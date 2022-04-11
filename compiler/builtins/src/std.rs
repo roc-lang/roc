@@ -675,7 +675,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
         Box::new(float_type(flex(TVAR1)))
     );
-    
+
     // divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
     add_top_level_function_type!(
         Symbol::NUM_DIV_FLOAT_CHECKED,

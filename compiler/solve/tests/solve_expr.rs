@@ -3304,7 +3304,7 @@ mod solve_expr {
                 Num.div
                 "#
             ),
-            "Float a, Float a -> Float a"
+            "Float a, Float a -> Float a",
         )
     }
 
@@ -3316,7 +3316,7 @@ mod solve_expr {
                 Num.divChecked
                 "#
             ),
-            "Float a, Float a -> Result (Float a) [ DivByZero ]*"
+            "Float a, Float a -> Result (Float a) [ DivByZero ]*",
         )
     }
 
@@ -3328,7 +3328,7 @@ mod solve_expr {
                 Num.divCeil
                 "#
             ),
-            "Int a, Int a -> Int a"
+            "Int a, Int a -> Int a",
         );
     }
 
@@ -3352,7 +3352,7 @@ mod solve_expr {
                 Num.divFloor
                 "#
             ),
-            "Int a, Int a -> Int a"
+            "Int a, Int a -> Int a",
         );
     }
 
@@ -3364,7 +3364,7 @@ mod solve_expr {
                 Num.divFloorChecked
                 "#
             ),
-            "Int a, Int a -> Result (Int a) [ DivByZero ]*"
+            "Int a, Int a -> Result (Int a) [ DivByZero ]*",
         );
     }
 
