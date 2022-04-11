@@ -1,13 +1,15 @@
 app "breakout"
     packages { pf: "platform" }
     imports []# [ pf.Action.{ Action }, pf.Elem.{ button, text, row, col } ]
-    provides [ program ] to pf
+    provides [ program ] { Model } to pf
+
+Model : { height : F32, width : F32 }
 
 program = { init, update, render }
 
 init = \_ -> { width: 1900, height: 1000 }
 
-update = \state ->
+update = \state, event ->
     when event is
         Resize size -> size
         KeyUp keyCode -> { width: 1900, height: 1000 }
