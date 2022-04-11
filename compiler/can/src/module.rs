@@ -190,8 +190,6 @@ pub fn canonicalize_module_defs<'a>(
     // Here we essentially add those "defs" to "the beginning of the module"
     // by canonicalizing them right before we canonicalize the actual ast::Def nodes.
     for (ident, (symbol, region)) in exposed_imports {
-        dbg!((&ident, symbol));
-
         let first_char = ident.as_inline_str().as_str().chars().next().unwrap();
 
         if first_char.is_lowercase() {
