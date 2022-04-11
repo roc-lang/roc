@@ -723,7 +723,6 @@ fn gen_wrap_add_nums() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_div_f64() {
-    // FIXME this works with normal types, but fails when checking uniqueness types
     assert_evals_to!(
         indoc!(
             r#"
@@ -738,7 +737,6 @@ fn gen_div_f64() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_div_checked_f64() {
-    // FIXME this works with normal types, but fails when checking uniqueness types
     assert_evals_to!(
         indoc!(
             r#"
@@ -755,7 +753,6 @@ fn gen_div_checked_f64() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_div_checked_by_zero_f64() {
-    // FIXME this works with normal types, but fails when checking uniqueness types
     assert_evals_to!(
         indoc!(
             r#"
