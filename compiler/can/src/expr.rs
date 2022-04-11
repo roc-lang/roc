@@ -161,7 +161,6 @@ pub enum Expr {
         variant_var: Variable,
         ext_var: Variable,
         name: TagName,
-        arguments: Vec<(Variable, Loc<Expr>)>,
     },
 
     /// A wrapping of an opaque type, like `$Age 21`
@@ -813,7 +812,6 @@ pub fn canonicalize_expr<'a>(
             (
                 ZeroArgumentTag {
                     name: TagName::Global((*tag).into()),
-                    arguments: vec![],
                     variant_var,
                     closure_name: symbol,
                     ext_var,
@@ -831,7 +829,6 @@ pub fn canonicalize_expr<'a>(
             (
                 ZeroArgumentTag {
                     name: TagName::Private(symbol),
-                    arguments: vec![],
                     variant_var,
                     ext_var,
                     closure_name: lambda_set_symbol,
@@ -1560,15 +1557,13 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             variant_var,
             ext_var,
             name,
-            arguments,
         } => {
             todo!(
-                "Inlining for ZeroArgumentTag with closure_name {:?}, variant_var {:?}, ext_var {:?}, name {:?}, arguments {:?}",
+                "Inlining for ZeroArgumentTag with closure_name {:?}, variant_var {:?}, ext_var {:?}, name {:?}",
                 closure_name,
                 variant_var,
                 ext_var,
                 name,
-                arguments
             );
         }
 

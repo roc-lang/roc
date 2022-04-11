@@ -20,6 +20,14 @@ pub enum BadPattern {
     Unsupported(PatternType),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShadowKind {
+    Variable,
+    Alias,
+    Opaque,
+    Ability,
+}
+
 /// Problems that can occur in the course of canonicalization.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Problem {
@@ -33,9 +41,10 @@ pub enum Problem {
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(BadPattern, Region),
-    ShadowingInAnnotation {
+    Shadowing {
         original_region: Region,
         shadow: Loc<Ident>,
+        kind: ShadowKind,
     },
     CyclicAlias(Symbol, Region, Vec<Symbol>),
     BadRecursion(Vec<CycleEntry>),
@@ -94,6 +103,30 @@ pub enum Problem {
     InvalidExtensionType {
         region: Region,
         kind: ExtensionTypeKind,
+    },
+    AbilityHasTypeVariables {
+        name: Symbol,
+        variables_region: Region,
+    },
+    HasClauseIsNotAbility {
+        region: Region,
+    },
+    IllegalHasClause {
+        region: Region,
+    },
+    AbilityMemberMissingHasClause {
+        member: Symbol,
+        ability: Symbol,
+        region: Region,
+    },
+    AbilityMemberBindsExternalAbility {
+        member: Symbol,
+        ability: Symbol,
+        region: Region,
+    },
+    AliasUsesAbility {
+        loc_name: Loc<Symbol>,
+        ability: Symbol,
     },
 }
 
@@ -157,6 +190,7 @@ pub enum RuntimeError {
     Shadowing {
         original_region: Region,
         shadow: Loc<Ident>,
+        kind: ShadowKind,
     },
     InvalidOptionalValue {
         field_name: Lowercase,
