@@ -1,6 +1,6 @@
 interface Num
-    exposes 
-        [ 
+    exposes
+        [
             Num,
             Int,
             Float,
@@ -144,8 +144,8 @@ interface Num
     imports [ ]
 
 Num range : [ @Num range ]
-Int range : Num (Integer range) 
-Float range : Num (FloatingPoint range) 
+Int range : Num (Integer range)
+Float range : Num (FloatingPoint range)
 
 Signed128 : [ @Signed128 ]
 Signed64 : [ @Signed64 ]
@@ -167,7 +167,7 @@ I128 : Num (Integer Signed128)
 I64 : Num (Integer Signed64)
 I32 : Num (Integer Signed32)
 I16 : Num (Integer Signed16)
-I8 : Int Signed8 
+I8 : Int Signed8
 
 U128 : Num (Integer Unsigned128)
 U64 : Num (Integer Unsigned64)
@@ -187,7 +187,7 @@ F64 : Num (FloatingPoint Binary64)
 F32 : Num (FloatingPoint Binary32)
 Dec : Num (FloatingPoint Decimal)
 
-# ------- Functions 
+# ------- Functions
 
 toStr : Num * -> Str
 intCast : Int a -> Int b
@@ -336,6 +336,9 @@ toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
 
+toF32 : Num * -> F32
+toF64 : Num * -> F64
+
 toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
 toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
 toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
@@ -346,3 +349,5 @@ toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
 toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
 toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
 toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
+toF64Checked : Num * -> Result F64 [ OutOfBounds ]*

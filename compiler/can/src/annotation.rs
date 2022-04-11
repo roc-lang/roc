@@ -1,10 +1,10 @@
 use crate::env::Env;
 use crate::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
-use roc_error_macros::todo_abilities;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_parse::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
+use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
+use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
@@ -104,6 +104,10 @@ impl IntroducedVariables {
             .find(|nv| nv.variable == var)
             .map(|nv| &nv.name)
     }
+
+    pub fn named_var_by_name(&self, name: &Lowercase) -> Option<&NamedVariable> {
+        self.named.iter().find(|nv| &nv.name == name)
+    }
 }
 
 fn malformed(env: &mut Env, region: Region, name: &str) {
@@ -141,6 +145,78 @@ pub fn canonicalize_annotation(
         references,
         aliases,
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct HasClause {
+    pub var_name: Lowercase,
+    pub var: Variable,
+    pub ability: Symbol,
+}
+
+pub fn canonicalize_annotation_with_possible_clauses(
+    env: &mut Env,
+    scope: &mut Scope,
+    annotation: &TypeAnnotation,
+    region: Region,
+    var_store: &mut VarStore,
+    abilities_in_scope: &[Symbol],
+) -> (Annotation, Vec<Loc<HasClause>>) {
+    let mut introduced_variables = IntroducedVariables::default();
+    let mut references = MutSet::default();
+    let mut aliases = SendMap::default();
+
+    let (annotation, region, clauses) = match annotation {
+        TypeAnnotation::Where(annotation, clauses) => {
+            let mut can_clauses = Vec::with_capacity(clauses.len());
+            for clause in clauses.iter() {
+                match canonicalize_has_clause(
+                    env,
+                    scope,
+                    var_store,
+                    &mut introduced_variables,
+                    clause,
+                    abilities_in_scope,
+                    &mut references,
+                ) {
+                    Ok(result) => can_clauses.push(Loc::at(clause.region, result)),
+                    Err(err_type) => {
+                        return (
+                            Annotation {
+                                typ: err_type,
+                                introduced_variables,
+                                references,
+                                aliases,
+                            },
+                            can_clauses,
+                        )
+                    }
+                };
+            }
+            (&annotation.value, annotation.region, can_clauses)
+        }
+        annot => (annot, region, vec![]),
+    };
+
+    let typ = can_annotation_help(
+        env,
+        annotation,
+        region,
+        scope,
+        var_store,
+        &mut introduced_variables,
+        &mut aliases,
+        &mut references,
+    );
+
+    let annot = Annotation {
+        typ,
+        introduced_variables,
+        references,
+        aliases,
+    };
+
+    (annot, clauses)
 }
 
 fn make_apply_symbol(
@@ -271,7 +347,13 @@ pub fn find_type_def_symbols(
             SpaceBefore(inner, _) | SpaceAfter(inner, _) => {
                 stack.push(inner);
             }
-            Where(..) => todo_abilities!(),
+            Where(annotation, clauses) => {
+                stack.push(&annotation.value);
+
+                for has_clause in clauses.iter() {
+                    stack.push(&has_clause.value.ability.value);
+                }
+            }
             Inferred | Wildcard | Malformed(_) => {}
         }
     }
@@ -449,9 +531,10 @@ fn can_annotation_help(
                 Err((original_region, shadow, _new_symbol)) => {
                     let problem = Problem::Shadowed(original_region, shadow.clone());
 
-                    env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
+                    env.problem(roc_problem::can::Problem::Shadowing {
                         original_region,
                         shadow,
+                        kind: ShadowKind::Variable,
                     });
 
                     return Type::Erroneous(problem);
@@ -685,7 +768,17 @@ fn can_annotation_help(
 
             Type::Variable(var)
         }
-        Where(..) => todo_abilities!(),
+        Where(_annotation, clauses) => {
+            debug_assert!(!clauses.is_empty());
+
+            // Has clauses are allowed only on the top level of an ability member signature (for
+            // now), which we handle elsewhere.
+            env.problem(roc_problem::can::Problem::IllegalHasClause {
+                region: Region::across_all(clauses.iter().map(|clause| &clause.region)),
+            });
+
+            Type::Erroneous(Problem::CanonicalizationProblem)
+        }
         Malformed(string) => {
             malformed(env, region, string);
 
@@ -696,6 +789,72 @@ fn can_annotation_help(
             Type::Variable(var)
         }
     }
+}
+
+fn canonicalize_has_clause(
+    env: &mut Env,
+    scope: &mut Scope,
+    var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
+    clause: &Loc<roc_parse::ast::HasClause<'_>>,
+    abilities_in_scope: &[Symbol],
+    references: &mut MutSet<Symbol>,
+) -> Result<HasClause, Type> {
+    let Loc {
+        region,
+        value: roc_parse::ast::HasClause { var, ability },
+    } = clause;
+    let region = *region;
+
+    let var_name = var.extract_spaces().item;
+    debug_assert!(
+        var_name.starts_with(char::is_lowercase),
+        "Vars should have been parsed as lowercase"
+    );
+    let var_name = Lowercase::from(var_name);
+
+    let ability = match ability.value {
+        TypeAnnotation::Apply(module_name, ident, _type_arguments) => {
+            let symbol = make_apply_symbol(env, ability.region, scope, module_name, ident)?;
+            if !abilities_in_scope.contains(&symbol) {
+                let region = ability.region;
+                env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
+                return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));
+            }
+            symbol
+        }
+        _ => {
+            let region = ability.region;
+            env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
+            return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));
+        }
+    };
+
+    references.insert(ability);
+
+    if let Some(shadowing) = introduced_variables.named_var_by_name(&var_name) {
+        let var_name_ident = var_name.to_string().into();
+        let shadow = Loc::at(region, var_name_ident);
+        env.problem(roc_problem::can::Problem::Shadowing {
+            original_region: shadowing.first_seen,
+            shadow: shadow.clone(),
+            kind: ShadowKind::Variable,
+        });
+        return Err(Type::Erroneous(Problem::Shadowed(
+            shadowing.first_seen,
+            shadow,
+        )));
+    }
+
+    let var = var_store.fresh();
+
+    introduced_variables.insert_named(var_name.clone(), Loc::at(region, var));
+
+    Ok(HasClause {
+        var_name,
+        var,
+        ability,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

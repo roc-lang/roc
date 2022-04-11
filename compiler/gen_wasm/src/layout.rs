@@ -10,7 +10,7 @@ pub const BUILTINS_ZIG_VERSION: ZigVersion = ZigVersion::Zig9;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReturnMethod {
     /// This layout is returned from a Wasm function "normally" as a Primitive
-    Primitive(ValueType),
+    Primitive(ValueType, u32),
     /// This layout is returned by writing to a pointer passed as the first argument
     WriteToPointerArg,
     /// This layout is empty and requires no return value or argument (e.g. refcount helpers)
@@ -47,8 +47,7 @@ impl WasmLayout {
         use UnionLayout::*;
         use ValueType::*;
 
-        let size = layout.stack_size(TARGET_INFO);
-        let alignment_bytes = layout.alignment_bytes(TARGET_INFO);
+        let (size, alignment_bytes) = layout.stack_size_and_alignment(TARGET_INFO);
 
         match layout {
             Layout::Builtin(Int(int_width)) => {
@@ -87,9 +86,10 @@ impl WasmLayout {
                 format: StackMemoryFormat::Decimal,
             },
 
+            Layout::LambdaSet(lambda_set) => WasmLayout::new(&lambda_set.runtime_representation()),
+
             Layout::Builtin(Str | Dict(_, _) | Set(_) | List(_))
             | Layout::Struct { .. }
-            | Layout::LambdaSet(_)
             | Layout::Union(NonRecursive(_)) => Self::StackMemory {
                 size,
                 alignment_bytes,
@@ -126,7 +126,7 @@ impl WasmLayout {
 
     pub fn return_method(&self) -> ReturnMethod {
         match self {
-            Self::Primitive(ty, _) => ReturnMethod::Primitive(*ty),
+            Self::Primitive(ty, size) => ReturnMethod::Primitive(*ty, *size),
             Self::StackMemory { size, .. } => {
                 if *size == 0 {
                     ReturnMethod::NoReturnValue

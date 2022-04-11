@@ -1,0 +1,40 @@
+procedure List.10 (#Attr.2):
+    let Test.20 : U64 = 0i64;
+    let Test.21 : U64 = lowlevel ListLen #Attr.2;
+    let Test.16 : Int1 = lowlevel NotEq Test.20 Test.21;
+    if Test.16 then
+        let Test.19 : U64 = 0i64;
+        let Test.18 : I64 = lowlevel ListGetUnsafe #Attr.2 Test.19;
+        let Test.17 : [C Int1, C I64] = Ok Test.18;
+        ret Test.17;
+    else
+        let Test.15 : Int1 = true;
+        let Test.14 : [C Int1, C I64] = Err Test.15;
+        ret Test.14;
+
+procedure Str.28 (#Attr.2):
+    let #Attr.3 : {I64, U8} = lowlevel StrToNum #Attr.2;
+    let Test.9 : U8 = StructAtIndex 1 #Attr.3;
+    let Test.10 : U8 = 0i64;
+    let Test.6 : Int1 = lowlevel NumGt Test.9 Test.10;
+    if Test.6 then
+        let Test.8 : Int1 = false;
+        let Test.7 : [C Int1, C I64] = Err Test.8;
+        ret Test.7;
+    else
+        let Test.5 : I64 = StructAtIndex 0 #Attr.3;
+        let Test.4 : [C Int1, C I64] = Ok Test.5;
+        ret Test.4;
+
+procedure Test.0 ():
+    let Test.11 : Int1 = true;
+    if Test.11 then
+        let Test.13 : List I64 = Array [];
+        let Test.12 : [C Int1, C I64] = CallByName List.10 Test.13;
+        dec Test.13;
+        ret Test.12;
+    else
+        let Test.3 : Str = "";
+        let Test.2 : [C Int1, C I64] = CallByName Str.28 Test.3;
+        dec Test.3;
+        ret Test.2;

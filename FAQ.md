@@ -1,5 +1,10 @@
 # Frequently Asked Questions
 
+# Why make a new editor instead of making an LSP plugin for VSCode, Vim or Emacs?
+The Roc editor is one of the key areas where we want to innovate. Constraining ourselves to a plugin for existing editors would severely limit our possibilities for innovation.
+
+A key part of our editor will be the use of plugins that are shipped with libraries. Think of a regex visualizer, parser debugger, or color picker. For library authors, it would be most convenient to write these plugins in Roc. Trying to dynamically load library plugins (written in Roc) in for example VSCode seems very difficult.
+
 ## Is there syntax highlighting for Vim/Emacs/VS Code or a LSP?
 
 Not currently. Although they will presumably exist someday, while Roc is in the early days there's actually a conscious
