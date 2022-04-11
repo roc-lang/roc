@@ -68,7 +68,10 @@ fn num_floor_division() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_floor_checked_division_success() {
-    expect_success("Num.divFloorChecked 4 3", "Ok 1 : Result (Int *) [ DivByZero ]*");
+    expect_success(
+        "Num.divFloorChecked 4 3",
+        "Ok 1 : Result (Int *) [ DivByZero ]*",
+    );
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -89,7 +92,10 @@ fn num_ceil_division() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_ceil_checked_division_success() {
-    expect_success("Num.divCeilChecked 4 3", "Ok 2 : Result (Int *) [ DivByZero ]*")
+    expect_success(
+        "Num.divCeilChecked 4 3",
+        "Ok 2 : Result (Int *) [ DivByZero ]*",
+    )
 }
 
 #[test]
