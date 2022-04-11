@@ -200,14 +200,18 @@ impl<'a> WasmBackend<'a> {
     }
 
     fn start_proc(&mut self, proc: &Proc<'a>) {
+        use ReturnMethod::*;
         let ret_layout = WasmLayout::new(&proc.ret_layout);
 
-        let ret_type = match ret_layout.return_method() {
-            ReturnMethod::Primitive(ty) => Some(ty),
-            ReturnMethod::NoReturnValue => None,
-            ReturnMethod::WriteToPointerArg => {
+        let ret_type = match ret_layout.return_method(CallConv::C) {
+            Primitive(ty) => Some(ty),
+            NoReturnValue => None,
+            WriteToPointerArg => {
                 self.storage.arg_types.push(PTR_TYPE);
                 None
+            }
+            ZigPackedStruct => {
+                internal_error!("C calling convention does not return Zig packed structs")
             }
         };
 
@@ -849,21 +853,21 @@ impl<'a> WasmBackend<'a> {
             return self.expr_call_low_level(lowlevel, arguments, ret_sym, ret_layout, ret_storage);
         }
 
-        let (param_types, ret_type) = self.storage.load_symbols_for_call(
-            self.env.arena,
-            &mut self.code_builder,
-            arguments,
-            ret_sym,
-            &wasm_layout,
-            CallConv::C,
-        );
+        let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
+            self.storage.load_symbols_for_call(
+                self.env.arena,
+                &mut self.code_builder,
+                arguments,
+                ret_sym,
+                &wasm_layout,
+                CallConv::C,
+            );
+        debug_assert!(!ret_zig_packed_struct);
 
         let iter = self.proc_lookup.iter().enumerate();
         for (roc_proc_index, (ir_sym, pl, linker_sym_index)) in iter {
             if *ir_sym == func_sym && pl == proc_layout {
                 let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
-                let num_wasm_args = param_types.len();
-                let has_return_val = ret_type.is_some();
                 self.code_builder.call(
                     wasm_fn_index,
                     *linker_sym_index,
