@@ -115,15 +115,14 @@
   
   ##### Arbitrary-rank types
   
-  ​	Unlike arbitrary-rank (aka "Rank-N") types, both Rank-1 and Rank-2 type systems are compatible with principal
-  ​	type inference. Roc currently uses Rank-1 types, and the benefits of Rank-N over Rank-2 don't seem worth
-  ​	sacrificing principal type inference to attain, so let's focus on the trade-offs between Rank-1 and Rank-2.
+  Unlike arbitrary-rank (aka "Rank-N") types, both Rank-1 and Rank-2 type systems are compatible with principal
+  type inference. Roc currently uses Rank-1 types, and the benefits of Rank-N over Rank-2 don't seem worth
+  sacrificing principal type inference to attain, so let's focus on the trade-offs between Rank-1 and Rank-2.
   
-  - Supporting Rank-2 types in Roc has been discussed before, but it has several important downsides:
-   
-    - It would increase the complexity of the language.
-    - It would make some compiler error messages more confusing (e.g. they might mention `forall` because that was the most general type that could be inferred, even if that wasn't helpful or related to the actual problem).
-    - It would substantially increase the complexity of the type checker, which would necessarily slow it down.
+  Supporting Rank-2 types in Roc has been discussed before, but it has several important downsides:
+  - It would increase the complexity of the language.
+  - It would make some compiler error messages more confusing (e.g. they might mention `forall` because that was the most general type that could be inferred, even if that wasn't helpful or related to the actual problem).
+  - It would substantially increase the complexity of the type checker, which would necessarily slow it down.
  
   No implementation of Rank-2 types can remove any of these downsides. Thus far, we've been able to come up
   with sufficiently nice APIs that only require Rank-1 types, and we haven't seen a really compelling use case
@@ -394,7 +393,5 @@
   The reason zig entered the project because it has many different backends (wasm, various assembly formats, llvm IR) and can create code with minimal dependencies and the Roc stdlib implementation is unavoidably unsafe we originally started out writing it in Rust, and it needed `unsafe` all over the place so Rust's safety guarantees don't apply to it regardless so when we were having a bad experience using Rust for the stdlib, the thinking was "since we're not getting any benefit out of Rust for this, maybe we should write it in C?" and then "at that point, why settle for C when we could use Zig?"
 
 - #### Why ROC uses universal permission license v1 0
-
    [We're changing Roc's license, and we need your sign-off to do it! · Issue #1199](https://github.com/rtfeldman/roc/issues/1199)
-
-​		If you can't access it, you can simply think that UPL v1.0 aims to achieve the same goal as MIT + Apache 2.0
+   If you can't access it, you can simply think that UPL v1.0 aims to achieve the same goal as MIT + Apache 2.0
