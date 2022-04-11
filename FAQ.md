@@ -3,7 +3,7 @@
 ***<u>Where can I learn Roc?</u>***
 
 - You can check the [official website](https://roc-lang.org).
-- Access the directory under the root directory of the project: **README.md  FAQ.md  TUTORIAL.md.**
+- Access the directory under the root directory of the project: **README.md  FAQ.md  TUTORIAL.md.** and other .md files
 - You can study in [Roc Zulip chat](https://roc.zulipchat.com) too.
 
 ## Table Of Contents
@@ -120,15 +120,11 @@
   ​	sacrificing principal type inference to attain, so let's focus on the trade-offs between Rank-1 and Rank-2.
   
   - Supporting Rank-2 types in Roc has been discussed before, but it has several important downsides:
-  
-    
+   
     - It would increase the complexity of the language.
     - It would make some compiler error messages more confusing (e.g. they might mention `forall` because that was the most general type that could be inferred, even if that wasn't helpful or related to the actual problem).
     - It would substantially increase the complexity of the type checker, which would necessarily slow it down.
-    
-  
-  
-  
+ 
   No implementation of Rank-2 types can remove any of these downsides. Thus far, we've been able to come up
   with sufficiently nice APIs that only require Rank-1 types, and we haven't seen a really compelling use case
   where the gap between the Rank-2 and Rank-1 designs was big enough to justify switching to Rank-2.
