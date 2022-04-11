@@ -115,7 +115,7 @@ fn section_size(bytes: &[u8]) -> usize {
 }
 
 fn parse_section<'a>(id: SectionId, module_bytes: &'a [u8], cursor: &mut usize) -> (u32, &'a [u8]) {
-    if module_bytes[*cursor] != id as u8 {
+    if (*cursor >= module_bytes.len()) || (module_bytes[*cursor] != id as u8) {
         return (0, &[]);
     }
     *cursor += 1;

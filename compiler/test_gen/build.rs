@@ -39,13 +39,13 @@ fn build_wasm() {
         &platform_path,
         &compiler_rt_path,
         "-L",
-        &libc_dir,
+        libc_dir,
         "-lc",
         "-o",
         &format!("{}/{}.o", out_dir, PLATFORM_FILENAME),
         "--export-all",
         "--no-entry",
-        // "--emit-relocs", // TODO: resize stack by relocating __heap_base (issue #2480)
+        // "--emit-relocs", // TODO: resize stack by relocating __heap_base (issue #2480) here and in repl_test build
     ];
 
     let zig = zig_executable();
