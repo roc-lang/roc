@@ -3364,7 +3364,7 @@ mod solve_expr {
                 Num.divFloorChecked
                 "#
             ),
-            "Int a, Int a -> Result (Int a) [ DivByZer ]*"
+            "Int a, Int a -> Result (Int a) [ DivByZero ]*"
         );
     }
 
