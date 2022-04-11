@@ -742,7 +742,7 @@ fn gen_div_checked_f64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when 48 / 2 is
+                    when Num.divChecked 48 2 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -759,7 +759,7 @@ fn gen_div_checked_by_zero_f64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when 48 / 0 is
+                    when Num.divChecked 48 0 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -2248,7 +2248,7 @@ fn max_u8() {
     );
 }
 
-macro_rules! num_conversion_tests {
+macro_rules! to_int_tests {
     ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr $(, [ $($support_gen:literal),* ])? )*))*) => {$($(
         #[test]
         #[cfg(any(feature = "gen-llvm", $($(feature = $support_gen)*)?))]
@@ -2259,7 +2259,7 @@ macro_rules! num_conversion_tests {
     )*)*}
 }
 
-num_conversion_tests! {
+to_int_tests! {
     "Num.toI8", i8, (
         to_i8_same_width, "15u8", 15, ["gen-wasm"]
         to_i8_truncate, "115i32", 115, ["gen-wasm"]
@@ -2319,36 +2319,6 @@ num_conversion_tests! {
         to_nat_extend, "15i8", 15, ["gen-wasm"]
         to_nat_truncate, "115i128", 115
         to_nat_truncate_wraps, "10_000_000_000_000_000_000_000i128", 1864712049423024128
-    )
-    "Num.toF32", f32, (
-        to_f32_from_i8, "15i8", 15.0
-        to_f32_from_i16, "15i16", 15.0
-        to_f32_from_i32, "15i32", 15.0
-        to_f32_from_i64, "15i64", 15.0
-        to_f32_from_i128, "15i128", 15.0
-        to_f32_from_u8, "15u8", 15.0
-        to_f32_from_u16, "15u16", 15.0
-        to_f32_from_u32, "15u32", 15.0
-        to_f32_from_u64, "15u64", 15.0
-        to_f32_from_u128, "15u128", 15.0
-        to_f32_from_nat, "15nat", 15.0
-        to_f32_from_f32, "1.5f32", 1.5
-        to_f32_from_f64, "1.5f64", 1.5
-    )
-    "Num.toF64", f64, (
-        to_f64_from_i8, "15i8", 15.0
-        to_f64_from_i16, "15i16", 15.0
-        to_f64_from_i32, "15i32", 15.0
-        to_f64_from_i64, "15i64", 15.0
-        to_f64_from_i128, "15i128", 15.0
-        to_f64_from_u8, "15u8", 15.0
-        to_f64_from_u16, "15u16", 15.0
-        to_f64_from_u32, "15u32", 15.0
-        to_f64_from_u64, "15u64", 15.0
-        to_f64_from_u128, "15u128", 15.0
-        to_f64_from_nat, "15nat", 15.0
-        to_f64_from_f32, "1.5f32", 1.5
-        to_f64_from_f64, "1.5f64", 1.5
     )
 }
 
