@@ -764,7 +764,7 @@ fn gen_div_checked_by_zero_f64() {
                         Err _ -> -1
                 "#
         ),
-        -1,
+        -1.0,
         f64
     );
 }
