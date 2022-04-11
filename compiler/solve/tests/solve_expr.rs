@@ -5272,6 +5272,21 @@ mod solve_expr {
     }
 
     #[test]
+    fn to_float() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                {
+                    toF32: Num.toF32,
+                    toF64: Num.toF64,
+                }
+                "#
+            ),
+            r#"{ toF32 : Num * -> F32, toF64 : Num * -> F64 }"#,
+        )
+    }
+
+    #[test]
     fn opaque_wrap_infer() {
         infer_eq_without_problem(
             indoc!(
@@ -5359,7 +5374,7 @@ mod solve_expr {
                 condition : Bool
 
                 v : Id [ Y Str, Z Str ]
-                v = 
+                v =
                     if condition
                     then $Id (Id 21 (Y "sasha"))
                     else $Id (Id 21 (Z "felix"))
@@ -5620,6 +5635,31 @@ mod solve_expr {
                 "#
             ),
             r#"Outer"#,
+        )
+    }
+
+    #[test]
+    fn issue_2583_specialize_errors_behind_unified_branches() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                if True then List.first [] else Str.toI64 ""
+                "#
+            ),
+            "Result I64 [ InvalidNumStr, ListWasEmpty ]*",
+        )
+    }
+
+    #[test]
+    fn lots_of_type_variables() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                fun = \a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,aa,bb -> {a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,aa,bb}
+                fun
+                "#
+            ),
+            "a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z, aa, bb -> { a : a, aa : aa, b : b, bb : bb, c : c, d : d, e : e, f : f, g : g, h : h, i : i, j : j, k : k, l : l, m : m, n : n, o : o, p : p, q : q, r : r, s : s, t : t, u : u, v : v, w : w, x : x, y : y, z : z }",
         )
     }
 }

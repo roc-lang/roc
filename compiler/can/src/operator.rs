@@ -6,7 +6,7 @@ use roc_module::called_via::BinOp::Pizza;
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{AssignedField, Def, WhenBranch};
+use roc_parse::ast::{AssignedField, Def, TypeDef, ValueDef, WhenBranch};
 use roc_region::all::{Loc, Region};
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind
@@ -88,15 +88,21 @@ fn desugar_def_helps<'a>(
     })
 }
 
-pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
-    use roc_parse::ast::Def::*;
+fn desugar_type_def<'a>(def: &'a TypeDef<'a>) -> TypeDef<'a> {
+    use TypeDef::*;
 
     match def {
-        Body(loc_pattern, loc_expr) => Body(loc_pattern, desugar_expr(arena, loc_expr)),
-        SpaceBefore(def, _) | SpaceAfter(def, _) => desugar_def(arena, def),
         alias @ Alias { .. } => *alias,
         opaque @ Opaque { .. } => *opaque,
         ability @ Ability { .. } => *ability,
+    }
+}
+
+fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a> {
+    use ValueDef::*;
+
+    match def {
+        Body(loc_pattern, loc_expr) => Body(loc_pattern, desugar_expr(arena, loc_expr)),
         ann @ Annotation(_, _) => *ann,
         AnnotatedBody {
             ann_pattern,
@@ -115,6 +121,16 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
             let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
             Expect(desugared_condition)
         }
+    }
+}
+
+pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
+    use roc_parse::ast::Def::*;
+
+    match def {
+        Type(type_def) => Type(desugar_type_def(type_def)),
+        Value(value_def) => Value(desugar_value_def(arena, value_def)),
+        SpaceBefore(def, _) | SpaceAfter(def, _) => desugar_def(arena, def),
         NotYetImplemented(s) => todo!("{}", s),
     }
 }

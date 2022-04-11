@@ -14,7 +14,8 @@ pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature}
 use self::linking::{LinkingSection, RelocationSection};
 use self::sections::{
     CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
-    ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId, TypeSection,
+    ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId, TableSection,
+    TypeSection,
 };
 use self::serialize::{SerialBuffer, Serialize};
 
@@ -25,7 +26,7 @@ pub struct WasmModule<'a> {
     pub types: TypeSection<'a>,
     pub import: ImportSection<'a>,
     pub function: FunctionSection<'a>,
-    pub table: OpaqueSection<'a>,
+    pub table: TableSection,
     pub memory: MemorySection<'a>,
     pub global: GlobalSection<'a>,
     pub export: ExportSection<'a>,
@@ -138,7 +139,7 @@ impl<'a> WasmModule<'a> {
         let function = FunctionSection::preload(arena, bytes, &mut cursor);
         let defined_fn_signatures = function.parse(arena);
 
-        let table = OpaqueSection::preload(SectionId::Table, arena, bytes, &mut cursor);
+        let table = TableSection::preload(bytes, &mut cursor);
 
         let memory = MemorySection::preload(arena, bytes, &mut cursor);
 

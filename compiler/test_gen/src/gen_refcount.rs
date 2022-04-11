@@ -301,8 +301,8 @@ fn refcount_different_rosetrees_inc() {
         (Pointer, Pointer),
         &[
             Live(2), // s
-            Live(3), // i1
             Live(2), // s1
+            Live(3), // i1
             Live(1), // [i1, i1]
             Live(1), // i2
             Live(1), // [s1, s1]

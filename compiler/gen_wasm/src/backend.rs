@@ -2,7 +2,7 @@ use bumpalo::{self, collections::Vec};
 use std::fmt::Write;
 
 use code_builder::Align;
-use roc_builtins::bitcode::IntWidth;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::ident::Ident;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
@@ -17,10 +17,10 @@ use roc_error_macros::internal_error;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
-use crate::low_level::LowLevelCall;
+use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{DataSymbol, LinkingSegment, WasmObjectSymbol};
-use crate::wasm_module::sections::{DataMode, DataSegment};
+use crate::wasm_module::sections::{DataMode, DataSegment, Limits};
 use crate::wasm_module::{
     code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
 };
@@ -28,6 +28,22 @@ use crate::{
     copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, PTR_SIZE,
     PTR_TYPE, TARGET_INFO,
 };
+
+#[derive(Clone, Copy, Debug)]
+pub enum ProcSource {
+    Roc,
+    Helper,
+    /// Wrapper function for higher-order calls from Zig to Roc
+    HigherOrderWrapper(usize),
+}
+
+#[derive(Debug)]
+pub struct ProcLookupData<'a> {
+    pub name: Symbol,
+    pub layout: ProcLayout<'a>,
+    pub linker_index: u32,
+    pub source: ProcSource,
+}
 
 pub struct WasmBackend<'a> {
     pub env: &'a Env<'a>,
@@ -37,9 +53,9 @@ pub struct WasmBackend<'a> {
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     next_constant_addr: u32,
-    fn_index_offset: u32,
+    pub fn_index_offset: u32,
     called_preload_fns: Vec<'a, u32>,
-    proc_lookup: Vec<'a, (Symbol, ProcLayout<'a>, u32)>,
+    pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
     helper_proc_gen: CodeGenHelp<'a>,
 
     // Function-level data
@@ -56,7 +72,7 @@ impl<'a> WasmBackend<'a> {
         env: &'a Env<'a>,
         interns: &'a mut Interns,
         layout_ids: LayoutIds<'a>,
-        proc_lookup: Vec<'a, (Symbol, ProcLayout<'a>, u32)>,
+        proc_lookup: Vec<'a, ProcLookupData<'a>>,
         mut module: WasmModule<'a>,
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
@@ -109,31 +125,45 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    pub fn generate_helpers(&mut self) -> Vec<'a, Proc<'a>> {
+    pub fn get_helpers(&mut self) -> Vec<'a, Proc<'a>> {
         self.helper_proc_gen.take_procs()
     }
 
-    fn register_helper_proc(&mut self, new_proc_info: (Symbol, ProcLayout<'a>)) {
-        let (new_proc_sym, new_proc_layout) = new_proc_info;
-        let wasm_fn_index = self.proc_lookup.len() as u32;
+    pub fn register_helper_proc(
+        &mut self,
+        symbol: Symbol,
+        layout: ProcLayout<'a>,
+        source: ProcSource,
+    ) -> u32 {
+        let proc_index = self.proc_lookup.len();
+        let wasm_fn_index = self.fn_index_offset + proc_index as u32;
         let linker_sym_index = self.module.linking.symbol_table.len() as u32;
 
         let name = self
             .layout_ids
-            .get_toplevel(new_proc_sym, &new_proc_layout)
-            .to_symbol_string(new_proc_sym, self.interns);
+            .get_toplevel(symbol, &layout)
+            .to_symbol_string(symbol, self.interns);
 
-        self.proc_lookup
-            .push((new_proc_sym, new_proc_layout, linker_sym_index));
+        self.proc_lookup.push(ProcLookupData {
+            name: symbol,
+            layout,
+            linker_index: linker_sym_index,
+            source,
+        });
+
         let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
             flags: 0,
             index: wasm_fn_index,
             name,
         });
         self.module.linking.symbol_table.push(linker_symbol);
+
+        wasm_fn_index
     }
 
-    pub fn finalize(self) -> (WasmModule<'a>, Vec<'a, u32>) {
+    pub fn finalize(mut self) -> (WasmModule<'a>, Vec<'a, u32>) {
+        let fn_table_size = 1 + self.module.element.max_table_index();
+        self.module.table.function_table.limits = Limits::MinMax(fn_table_size, fn_table_size);
         (self.module, self.called_preload_fns)
     }
 
@@ -150,8 +180,12 @@ impl<'a> WasmBackend<'a> {
     #[cfg(not(debug_assertions))]
     pub fn register_symbol_debug_names(&self) {}
 
+    pub fn get_fn_table_index(&mut self, fn_index: u32) -> i32 {
+        self.module.element.get_fn_table_index(fn_index)
+    }
+
     /// Create an IR Symbol for an anonymous value (such as ListLiteral)
-    fn create_symbol(&mut self, debug_name: &str) -> Symbol {
+    pub fn create_symbol(&mut self, debug_name: &str) -> Symbol {
         let ident_ids = self
             .interns
             .all_ident_ids
@@ -204,7 +238,7 @@ impl<'a> WasmBackend<'a> {
         let ret_layout = WasmLayout::new(&proc.ret_layout);
 
         let ret_type = match ret_layout.return_method(CallConv::C) {
-            Primitive(ty) => Some(ty),
+            Primitive(ty, _) => Some(ty),
             NoReturnValue => None,
             WriteToPointerArg => {
                 self.storage.arg_types.push(PTR_TYPE);
@@ -251,18 +285,154 @@ impl<'a> WasmBackend<'a> {
         );
     }
 
-    fn append_proc_debug_name(&mut self, name: Symbol) {
+    fn append_proc_debug_name(&mut self, sym: Symbol) {
         let proc_index = self
             .proc_lookup
             .iter()
-            .position(|(n, _, _)| *n == name)
+            .position(|ProcLookupData { name, .. }| *name == sym)
             .unwrap();
         let wasm_fn_index = self.fn_index_offset + proc_index as u32;
 
         let mut debug_name = bumpalo::collections::String::with_capacity_in(64, self.env.arena);
-        write!(debug_name, "{:?}", name).unwrap();
+        write!(debug_name, "{:?}", sym).unwrap();
         let name_bytes = debug_name.into_bytes().into_bump_slice();
         self.module.names.append_function(wasm_fn_index, name_bytes);
+    }
+
+    /// Build a wrapper around a Roc procedure so that it can be called from our higher-order Zig builtins.
+    ///
+    /// The generic Zig code passes *pointers* to all of the argument values (e.g. on the heap in a List).
+    /// Numbers up to 64 bits are passed by value, so we need to load them from the provided pointer.
+    /// Everything else is passed by reference, so we can just pass the pointer through.
+    ///
+    /// NOTE: If the builtins expected the return pointer first and closure data last, we could eliminate the wrapper
+    /// when all args are pass-by-reference and non-zero size. But currently we need it to swap those around.
+    pub fn build_higher_order_wrapper(
+        &mut self,
+        wrapper_lookup_idx: usize,
+        inner_lookup_idx: usize,
+    ) {
+        use Align::*;
+        use ValueType::*;
+
+        let ProcLookupData {
+            name: wrapper_name,
+            layout: wrapper_proc_layout,
+            ..
+        } = self.proc_lookup[wrapper_lookup_idx];
+        let wrapper_arg_layouts = wrapper_proc_layout.arguments;
+
+        // Our convention is that the last arg of the wrapper is the heap return pointer
+        let heap_return_ptr_id = LocalId(wrapper_arg_layouts.len() as u32 - 1);
+        let inner_ret_layout = match wrapper_arg_layouts.last() {
+            Some(Layout::Boxed(inner)) => WasmLayout::new(inner),
+            x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
+        };
+
+        let mut n_inner_wasm_args = 0;
+        let ret_type_and_size = match inner_ret_layout.return_method(CallConv::C) {
+            ReturnMethod::NoReturnValue => None,
+            ReturnMethod::Primitive(ty, size) => {
+                // If the inner function returns a primitive, load the address to store it at
+                // After the call, it will be under the call result in the value stack
+                self.code_builder.get_local(heap_return_ptr_id);
+                Some((ty, size))
+            }
+            ReturnMethod::WriteToPointerArg => {
+                // If the inner function writes to a return pointer, load its address
+                self.code_builder.get_local(heap_return_ptr_id);
+                n_inner_wasm_args += 1;
+                None
+            }
+            x => internal_error!("A Roc function should never use ReturnMethod {:?}", x),
+        };
+
+        // Load all the arguments for the inner function
+        for (i, wrapper_arg) in wrapper_arg_layouts.iter().enumerate() {
+            let is_closure_data = i == 0; // Skip closure data (first for wrapper, last for inner)
+            let is_return_pointer = i == wrapper_arg_layouts.len() - 1; // Skip return pointer (may not be an arg for inner. And if it is, swaps from end to start)
+            if is_closure_data || is_return_pointer || wrapper_arg.stack_size(TARGET_INFO) == 0 {
+                continue;
+            }
+            n_inner_wasm_args += 1;
+
+            // Load wrapper argument. They're all pointers.
+            self.code_builder.get_local(LocalId(i as u32));
+
+            // Dereference any primitive-valued arguments
+            match wrapper_arg {
+                Layout::Boxed(inner_arg) => match inner_arg {
+                    Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
+                        self.code_builder.i32_load8_u(Bytes1, 0);
+                    }
+                    Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
+                        self.code_builder.i32_load16_u(Bytes2, 0);
+                    }
+                    Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
+                        self.code_builder.i32_load(Bytes4, 0);
+                    }
+                    Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
+                        self.code_builder.i64_load(Bytes8, 0);
+                    }
+                    Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                        self.code_builder.f32_load(Bytes4, 0);
+                    }
+                    Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                        self.code_builder.f64_load(Bytes8, 0);
+                    }
+                    Layout::Builtin(Builtin::Bool) => {
+                        self.code_builder.i32_load8_u(Bytes1, 0);
+                    }
+                    _ => {
+                        // Any other layout is a pointer, which we've already loaded. Nothing to do!
+                    }
+                },
+                x => internal_error!("Higher-order wrapper: expected a Box layout, got {:?}", x),
+            }
+        }
+
+        // If the inner function has closure data, it's the last arg of the inner fn
+        let closure_data_layout = wrapper_arg_layouts[0];
+        if closure_data_layout.stack_size(TARGET_INFO) > 0 {
+            self.code_builder.get_local(LocalId(0));
+        }
+
+        // Call the wrapped inner function
+        let lookup = &self.proc_lookup[inner_lookup_idx];
+        let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
+        let has_return_val = ret_type_and_size.is_some();
+        self.code_builder.call(
+            inner_wasm_fn_index,
+            lookup.linker_index,
+            n_inner_wasm_args,
+            has_return_val,
+        );
+
+        // If the inner function returns a primitive, store it to the address we loaded at the very beginning
+        if let Some((ty, size)) = ret_type_and_size {
+            match (ty, size) {
+                (I64, 8) => self.code_builder.i64_store(Bytes8, 0),
+                (I32, 4) => self.code_builder.i32_store(Bytes4, 0),
+                (I32, 2) => self.code_builder.i32_store16(Bytes2, 0),
+                (I32, 1) => self.code_builder.i32_store8(Bytes1, 0),
+                (F32, 4) => self.code_builder.f32_store(Bytes4, 0),
+                (F64, 8) => self.code_builder.f64_store(Bytes8, 0),
+                _ => {
+                    internal_error!("Cannot store {:?} with alignment of {:?}", ty, size);
+                }
+            }
+        }
+
+        // Write empty function header (local variables array with zero length)
+        self.code_builder.build_fn_header_and_footer(&[], 0, None);
+
+        self.module.add_function_signature(Signature {
+            param_types: bumpalo::vec![in self.env.arena; I32; wrapper_arg_layouts.len()],
+            ret_type: None,
+        });
+
+        self.append_proc_debug_name(wrapper_name);
+        self.reset();
     }
 
     /**********************************************************
@@ -551,8 +721,8 @@ impl<'a> WasmBackend<'a> {
         }
 
         // If any new specializations were created, register their symbol data
-        for spec in new_specializations.into_iter() {
-            self.register_helper_proc(spec);
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
         self.stmt(rc_stmt);
@@ -827,11 +997,16 @@ impl<'a> WasmBackend<'a> {
                     ret_storage,
                 )
             }
+
             CallType::LowLevel { op: lowlevel, .. } => {
                 self.expr_call_low_level(*lowlevel, arguments, ret_sym, ret_layout, ret_storage)
             }
 
-            x => todo!("call type {:?}", x),
+            CallType::HigherOrder(higher_order_lowlevel) => {
+                call_higher_order_lowlevel(self, ret_sym, ret_layout, *higher_order_lowlevel)
+            }
+
+            CallType::Foreign { .. } => todo!("CallType::Foreign"),
         }
     }
 
@@ -864,8 +1039,13 @@ impl<'a> WasmBackend<'a> {
             );
         debug_assert!(!ret_zig_packed_struct);
 
-        let iter = self.proc_lookup.iter().enumerate();
-        for (roc_proc_index, (ir_sym, pl, linker_sym_index)) in iter {
+        for (roc_proc_index, lookup) in self.proc_lookup.iter().enumerate() {
+            let ProcLookupData {
+                name: ir_sym,
+                layout: pl,
+                linker_index: linker_sym_index,
+                ..
+            } = lookup;
             if *ir_sym == func_sym && pl == proc_layout {
                 let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
                 self.code_builder.call(
@@ -945,8 +1125,8 @@ impl<'a> WasmBackend<'a> {
             .call_specialized_equals(ident_ids, arg_layout, arguments);
 
         // If any new specializations were created, register their symbol data
-        for spec in new_specializations.into_iter() {
-            self.register_helper_proc(spec);
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
         // Generate Wasm code for the IR call expression
@@ -1430,8 +1610,8 @@ impl<'a> WasmBackend<'a> {
             .call_reset_refcount(ident_ids, layout, argument);
 
         // If any new specializations were created, register their symbol data
-        for spec in new_specializations.into_iter() {
-            self.register_helper_proc(spec);
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
         // Generate Wasm code for the IR call expression
@@ -1441,5 +1621,31 @@ impl<'a> WasmBackend<'a> {
             &Layout::Builtin(Builtin::Bool),
             ret_storage,
         );
+    }
+
+    /// Generate a refcount increment procedure and return its Wasm function index
+    pub fn gen_refcount_inc_for_zig(&mut self, layout: Layout<'a>) -> u32 {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (proc_symbol, new_specializations) = self
+            .helper_proc_gen
+            .gen_refcount_inc_proc(ident_ids, layout);
+
+        // If any new specializations were created, register their symbol data
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
+        }
+
+        let proc_index = self
+            .proc_lookup
+            .iter()
+            .position(|lookup| lookup.name == proc_symbol && lookup.layout.arguments[0] == layout)
+            .unwrap();
+
+        self.fn_index_offset + proc_index as u32
     }
 }

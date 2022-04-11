@@ -72,7 +72,7 @@ pub fn def_to_def2<'a>(
                 def_to_def2(arena, env, scope, inner_def, region)
             }
         }
-        Body(&loc_pattern, &loc_expr) => {
+        Value(roc_parse::ast::ValueDef::Body(&loc_pattern, &loc_expr)) => {
             let expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
             let expr_id = env.pool.add(expr2);
 

@@ -1,21 +1,25 @@
+use crate::abilities::AbilitiesStore;
 use crate::annotation::canonicalize_annotation;
+use crate::annotation::canonicalize_annotation_with_possible_clauses;
 use crate::annotation::IntroducedVariables;
 use crate::env::Env;
 use crate::expr::ClosureData;
 use crate::expr::Expr::{self, *};
 use crate::expr::{canonicalize_expr, local_successors_with_duplicates, Output, Recursive};
-use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
+use crate::pattern::{bindings_from_patterns, canonicalize_def_header_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::Scope;
 use roc_collections::all::ImSet;
 use roc_collections::all::{default_hasher, ImEntry, ImMap, MutMap, MutSet, SendMap};
-use roc_error_macros::todo_abilities;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
+use roc_parse::ast::AbilityMember;
+use roc_parse::ast::ExtractSpaces;
 use roc_parse::ast::TypeHeader;
 use roc_parse::pattern::PatternType;
+use roc_problem::can::ShadowKind;
 use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -49,11 +53,12 @@ pub struct CanDefs {
     pub can_defs_by_symbol: MutMap<Symbol, Def>,
     pub aliases: SendMap<Symbol, Alias>,
 }
+
 /// A Def that has had patterns and type annnotations canonicalized,
 /// but no Expr canonicalization has happened yet. Also, it has had spaces
 /// and nesting resolved, and knows whether annotations are standalone or not.
 #[derive(Debug, Clone, PartialEq)]
-enum PendingDef<'a> {
+enum PendingValueDef<'a> {
     /// A standalone annotation with no body
     AnnotationOnly(
         &'a Loc<ast::Pattern<'a>>,
@@ -73,7 +78,10 @@ enum PendingDef<'a> {
         &'a Loc<ast::TypeAnnotation<'a>>,
         &'a Loc<ast::Expr<'a>>,
     ),
+}
 
+#[derive(Debug, Clone, PartialEq)]
+enum PendingTypeDef<'a> {
     /// A structural or opaque type alias, e.g. `Ints : List Int` or `Age := U32` respectively.
     Alias {
         name: Loc<Symbol>,
@@ -82,10 +90,19 @@ enum PendingDef<'a> {
         kind: AliasKind,
     },
 
+    Ability {
+        name: Loc<Symbol>,
+        members: &'a [ast::AbilityMember<'a>],
+    },
+
     /// An invalid alias, that is ignored in the rest of the pipeline
     /// e.g. a shadowed alias, or a definition like `MyAlias 1 : Int`
     /// with an incorrect pattern
     InvalidAlias { kind: AliasKind },
+
+    /// An invalid ability, that is ignored in the rest of the pipeline.
+    /// E.g. a shadowed ability, or with a bad definition.
+    InvalidAbility,
 }
 
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
@@ -206,56 +223,53 @@ pub fn canonicalize_defs<'a>(
     let num_defs = loc_defs.len();
     let mut refs_by_symbol = MutMap::default();
     let mut can_defs_by_symbol = HashMap::with_capacity_and_hasher(num_defs, default_hasher());
-    let mut pending = Vec::with_capacity(num_defs); // TODO bump allocate this!
 
-    // Canonicalize all the patterns, record shadowing problems, and store
-    // the ast::Expr values in pending_exprs for further canonicalization
-    // once we've finished assembling the entire scope.
+    let mut type_defs = Vec::with_capacity(num_defs);
+    let mut value_defs = Vec::with_capacity(num_defs);
+
     for loc_def in loc_defs {
-        match to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type) {
-            None => (),
-            Some((new_output, pending_def)) => {
-                // store the top-level defs, used to ensure that closures won't capture them
-                if let PatternType::TopLevelDef = pattern_type {
-                    match &pending_def {
-                        PendingDef::AnnotationOnly(_, loc_can_pattern, _)
-                        | PendingDef::Body(_, loc_can_pattern, _)
-                        | PendingDef::TypedBody(_, loc_can_pattern, _, _) => {
-                            env.top_level_symbols.extend(
-                                bindings_from_patterns(std::iter::once(loc_can_pattern))
-                                    .iter()
-                                    .map(|t| t.0),
-                            )
-                        }
-
-                        // Type definitions aren't value definitions, so we don't need to do
-                        // anything for them here.
-                        PendingDef::Alias { .. } | PendingDef::InvalidAlias { .. } => {}
-                    }
-                }
-                // Record the ast::Expr for later. We'll do another pass through these
-                // once we have the entire scope assembled. If we were to canonicalize
-                // the exprs right now, they wouldn't have symbols in scope from defs
-                // that get would have gotten added later in the defs list!
-                pending.push(pending_def);
-                output.union(new_output);
-            }
+        match loc_def.value.unroll_def() {
+            Ok(type_def) => type_defs.push(Loc::at(loc_def.region, type_def)),
+            Err(value_def) => value_defs.push(Loc::at(loc_def.region, value_def)),
         }
     }
+
+    // We need to canonicalize all the type defs first.
+    // Clippy is wrong - we do need the collect, otherwise "env" and "scope" are captured for
+    // longer than we'd like.
+    #[allow(clippy::needless_collect)]
+    let pending_type_defs = type_defs
+        .into_iter()
+        .filter_map(|loc_def| {
+            to_pending_type_def(env, loc_def.value, &mut scope).map(|(new_output, pending_def)| {
+                output.union(new_output);
+                pending_def
+            })
+        })
+        .collect::<Vec<_>>();
 
     if cfg!(debug_assertions) {
         env.home.register_debug_idents(&env.ident_ids);
     }
 
-    let mut aliases = SendMap::default();
-    let mut value_defs = Vec::new();
+    enum TypeDef<'a> {
+        AliasLike(
+            Loc<Symbol>,
+            Vec<Loc<Lowercase>>,
+            &'a Loc<ast::TypeAnnotation<'a>>,
+            AliasKind,
+        ),
+        Ability(Loc<Symbol>, &'a [AbilityMember<'a>]),
+    }
 
-    let mut alias_defs = MutMap::default();
+    let mut type_defs = MutMap::default();
+    let mut abilities_in_scope = Vec::new();
+
     let mut referenced_type_symbols = MutMap::default();
 
-    for pending_def in pending.into_iter() {
+    for pending_def in pending_type_defs.into_iter() {
         match pending_def {
-            PendingDef::Alias {
+            PendingTypeDef::Alias {
                 name,
                 vars,
                 ann,
@@ -269,93 +283,137 @@ pub fn canonicalize_defs<'a>(
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
 
-                alias_defs.insert(name.value, (name, vars, ann, kind));
+                type_defs.insert(name.value, TypeDef::AliasLike(name, vars, ann, kind));
             }
-            other => value_defs.push(other),
+            PendingTypeDef::Ability { name, members } => {
+                let mut referenced_symbols = Vec::with_capacity(2);
+
+                for member in members.iter() {
+                    // Add the referenced type symbols of each member function. We need to make
+                    // sure those are processed first before we resolve the whole ability
+                    // definition.
+                    referenced_symbols.extend(crate::annotation::find_type_def_symbols(
+                        env.home,
+                        &mut env.ident_ids,
+                        &member.typ.value,
+                    ));
+                }
+
+                referenced_type_symbols.insert(name.value, referenced_symbols);
+                type_defs.insert(name.value, TypeDef::Ability(name, members));
+                abilities_in_scope.push(name.value);
+            }
+            PendingTypeDef::InvalidAlias { .. } | PendingTypeDef::InvalidAbility { .. } => { /* ignore */
+            }
         }
     }
 
     let sorted = sort_type_defs_before_introduction(referenced_type_symbols);
+    let mut aliases = SendMap::default();
+    let mut abilities = MutMap::default();
 
     for type_name in sorted {
-        let (name, vars, ann, kind) = alias_defs.remove(&type_name).unwrap();
+        match type_defs.remove(&type_name).unwrap() {
+            TypeDef::AliasLike(name, vars, ann, kind) => {
+                let symbol = name.value;
+                let can_ann =
+                    canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
 
-        let symbol = name.value;
-        let can_ann = canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
+                // Does this alias reference any abilities? For now, we don't permit that.
+                let ability_references = can_ann
+                    .references
+                    .iter()
+                    .filter_map(|&ty_ref| abilities_in_scope.iter().find(|&&name| name == ty_ref))
+                    .collect::<Vec<_>>();
 
-        // Record all the annotation's references in output.references.lookups
-        for symbol in can_ann.references {
-            output.references.type_lookups.insert(symbol);
-            output.references.referenced_type_defs.insert(symbol);
-        }
-
-        let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
-        let mut is_phantom = false;
-
-        let mut named = can_ann.introduced_variables.named;
-        for loc_lowercase in vars.iter() {
-            match named.iter().position(|nv| nv.name == loc_lowercase.value) {
-                Some(index) => {
-                    // This is a valid lowercase rigid var for the type def.
-                    let named_variable = named.swap_remove(index);
-
-                    can_vars.push(Loc {
-                        value: (named_variable.name, named_variable.variable),
-                        region: loc_lowercase.region,
+                if let Some(one_ability_ref) = ability_references.first() {
+                    env.problem(Problem::AliasUsesAbility {
+                        loc_name: name,
+                        ability: **one_ability_ref,
                     });
                 }
-                None => {
-                    is_phantom = true;
 
-                    env.problems.push(Problem::PhantomTypeArgument {
+                // Record all the annotation's references in output.references.lookups
+                for symbol in can_ann.references {
+                    output.references.type_lookups.insert(symbol);
+                    output.references.referenced_type_defs.insert(symbol);
+                }
+
+                let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
+                let mut is_phantom = false;
+
+                let mut named = can_ann.introduced_variables.named;
+                for loc_lowercase in vars.iter() {
+                    match named.iter().position(|nv| nv.name == loc_lowercase.value) {
+                        Some(index) => {
+                            // This is a valid lowercase rigid var for the type def.
+                            let named_variable = named.swap_remove(index);
+
+                            can_vars.push(Loc {
+                                value: (named_variable.name, named_variable.variable),
+                                region: loc_lowercase.region,
+                            });
+                        }
+                        None => {
+                            is_phantom = true;
+
+                            env.problems.push(Problem::PhantomTypeArgument {
+                                typ: symbol,
+                                variable_region: loc_lowercase.region,
+                                variable_name: loc_lowercase.value.clone(),
+                            });
+                        }
+                    }
+                }
+
+                if is_phantom {
+                    // Bail out
+                    continue;
+                }
+
+                let IntroducedVariables {
+                    wildcards,
+                    inferred,
+                    ..
+                } = can_ann.introduced_variables;
+                let num_unbound = named.len() + wildcards.len() + inferred.len();
+                if num_unbound > 0 {
+                    let one_occurrence = named
+                        .iter()
+                        .map(|nv| Loc::at(nv.first_seen, nv.variable))
+                        .chain(wildcards)
+                        .chain(inferred)
+                        .next()
+                        .unwrap()
+                        .region;
+
+                    env.problems.push(Problem::UnboundTypeVariable {
                         typ: symbol,
-                        variable_region: loc_lowercase.region,
-                        variable_name: loc_lowercase.value.clone(),
+                        num_unbound,
+                        one_occurrence,
+                        kind,
                     });
+
+                    // Bail out
+                    continue;
                 }
+
+                let alias = create_alias(
+                    symbol,
+                    name.region,
+                    can_vars.clone(),
+                    can_ann.typ.clone(),
+                    kind,
+                );
+                aliases.insert(symbol, alias.clone());
+            }
+
+            TypeDef::Ability(name, members) => {
+                // For now we enforce that aliases cannot reference abilities, so let's wait to
+                // resolve ability definitions until aliases are resolved and in scope below.
+                abilities.insert(name.value, (name, members));
             }
         }
-
-        if is_phantom {
-            // Bail out
-            continue;
-        }
-
-        let IntroducedVariables {
-            wildcards,
-            inferred,
-            ..
-        } = can_ann.introduced_variables;
-        let num_unbound = named.len() + wildcards.len() + inferred.len();
-        if num_unbound > 0 {
-            let one_occurrence = named
-                .iter()
-                .map(|nv| Loc::at(nv.first_seen, nv.variable))
-                .chain(wildcards)
-                .chain(inferred)
-                .next()
-                .unwrap()
-                .region;
-
-            env.problems.push(Problem::UnboundTypeVariable {
-                typ: symbol,
-                num_unbound,
-                one_occurrence,
-                kind,
-            });
-
-            // Bail out
-            continue;
-        }
-
-        let alias = create_alias(
-            symbol,
-            name.region,
-            can_vars.clone(),
-            can_ann.typ.clone(),
-            kind,
-        );
-        aliases.insert(symbol, alias.clone());
     }
 
     // Now that we know the alias dependency graph, we can try to insert recursion variables
@@ -371,10 +429,139 @@ pub fn canonicalize_defs<'a>(
         );
     }
 
+    // Now we can go through and resolve all pending abilities, to add them to scope.
+    let mut abilities_store = AbilitiesStore::default();
+    for (loc_ability_name, members) in abilities.into_values() {
+        let mut can_members = Vec::with_capacity(members.len());
+
+        for member in members {
+            let (member_annot, clauses) = canonicalize_annotation_with_possible_clauses(
+                env,
+                &mut scope,
+                &member.typ.value,
+                member.typ.region,
+                var_store,
+                &abilities_in_scope,
+            );
+
+            // Record all the annotation's references in output.references.lookups
+            for symbol in member_annot.references {
+                output.references.type_lookups.insert(symbol);
+                output.references.referenced_type_defs.insert(symbol);
+            }
+
+            let member_name = member.name.extract_spaces().item;
+
+            let member_sym = match scope.introduce(
+                member_name.into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                member.name.region,
+            ) {
+                Ok(sym) => sym,
+                Err((original_region, shadow, _new_symbol)) => {
+                    env.problem(roc_problem::can::Problem::Shadowing {
+                        original_region,
+                        shadow,
+                        kind: ShadowKind::Variable,
+                    });
+                    // Pretend the member isn't a part of the ability
+                    continue;
+                }
+            };
+
+            // What variables in the annotation are bound to the parent ability, and what variables
+            // are bound to some other ability?
+            let (variables_bound_to_ability, variables_bound_to_other_abilities): (Vec<_>, Vec<_>) =
+                clauses
+                    .into_iter()
+                    .partition(|has_clause| has_clause.value.ability == loc_ability_name.value);
+
+            let mut bad_has_clauses = false;
+
+            if variables_bound_to_ability.is_empty() {
+                // There are no variables bound to the parent ability - then this member doesn't
+                // need to be a part of the ability.
+                env.problem(Problem::AbilityMemberMissingHasClause {
+                    member: member_sym,
+                    ability: loc_ability_name.value,
+                    region: member.name.region,
+                });
+                bad_has_clauses = true;
+            }
+
+            if !variables_bound_to_other_abilities.is_empty() {
+                // Disallow variables bound to other abilities, for now.
+                for bad_clause in variables_bound_to_other_abilities.iter() {
+                    env.problem(Problem::AbilityMemberBindsExternalAbility {
+                        member: member_sym,
+                        ability: loc_ability_name.value,
+                        region: bad_clause.region,
+                    });
+                }
+                bad_has_clauses = true;
+            }
+
+            if bad_has_clauses {
+                // Pretend the member isn't a part of the ability
+                continue;
+            }
+
+            let has_clauses = variables_bound_to_ability
+                .into_iter()
+                .map(|clause| clause.value)
+                .collect();
+            can_members.push((member_sym, member_annot.typ, has_clauses));
+        }
+
+        // Store what symbols a type must define implementations for to have this ability.
+        abilities_store.register_ability(loc_ability_name.value, can_members);
+    }
+
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
-    for pending_def in value_defs.into_iter() {
-        output = canonicalize_pending_def(
+
+    // Canonicalize all the patterns, record shadowing problems, and store
+    // the ast::Expr values in pending_exprs for further canonicalization
+    // once we've finished assembling the entire scope.
+    let mut pending_value_defs = Vec::with_capacity(value_defs.len());
+    for loc_def in value_defs.into_iter() {
+        match to_pending_value_def(
+            env,
+            var_store,
+            loc_def.value,
+            &mut scope,
+            &abilities_store,
+            pattern_type,
+        ) {
+            None => { /* skip */ }
+            Some((new_output, pending_def)) => {
+                // store the top-level defs, used to ensure that closures won't capture them
+                if let PatternType::TopLevelDef = pattern_type {
+                    match &pending_def {
+                        PendingValueDef::AnnotationOnly(_, loc_can_pattern, _)
+                        | PendingValueDef::Body(_, loc_can_pattern, _)
+                        | PendingValueDef::TypedBody(_, loc_can_pattern, _, _) => {
+                            env.top_level_symbols.extend(
+                                bindings_from_patterns(std::iter::once(loc_can_pattern))
+                                    .iter()
+                                    .map(|t| t.0),
+                            )
+                        }
+                    }
+                }
+                // Record the ast::Expr for later. We'll do another pass through these
+                // once we have the entire scope assembled. If we were to canonicalize
+                // the exprs right now, they wouldn't have symbols in scope from defs
+                // that get would have gotten added later in the defs list!
+                pending_value_defs.push(pending_def);
+                output.union(new_output);
+            }
+        }
+    }
+
+    for pending_def in pending_value_defs.into_iter() {
+        output = canonicalize_pending_value_def(
             env,
             pending_def,
             output,
@@ -833,6 +1020,13 @@ fn pattern_to_vars_by_symbol(
             vars_by_symbol.insert(*symbol, expr_var);
         }
 
+        AbilityMemberSpecialization {
+            ident,
+            specializes: _,
+        } => {
+            vars_by_symbol.insert(*ident, expr_var);
+        }
+
         AppliedTag { arguments, .. } => {
             for (var, nested) in arguments {
                 pattern_to_vars_by_symbol(vars_by_symbol, &nested.value, *var);
@@ -910,9 +1104,9 @@ fn add_annotation_aliases(
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::cognitive_complexity)]
-fn canonicalize_pending_def<'a>(
+fn canonicalize_pending_value_def<'a>(
     env: &mut Env<'a>,
-    pending_def: PendingDef<'a>,
+    pending_def: PendingValueDef<'a>,
     mut output: Output,
     scope: &mut Scope,
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
@@ -920,7 +1114,7 @@ fn canonicalize_pending_def<'a>(
     refs_by_symbol: &mut MutMap<Symbol, (Region, References)>,
     aliases: &mut ImMap<Symbol, Alias>,
 ) -> Output {
-    use PendingDef::*;
+    use PendingValueDef::*;
 
     // Make types for the body expr, even if we won't end up having a body.
     let expr_var = var_store.fresh();
@@ -957,6 +1151,7 @@ fn canonicalize_pending_def<'a>(
                 Pattern::Shadowed(region, loc_ident, _new_symbol) => RuntimeError::Shadowing {
                     original_region: *region,
                     shadow: loc_ident.clone(),
+                    kind: ShadowKind::Variable,
                 },
                 _ => RuntimeError::NoImplementation,
             };
@@ -1047,11 +1242,6 @@ fn canonicalize_pending_def<'a>(
             }
         }
 
-        Alias { .. } => unreachable!("Aliases are handled in a separate pass"),
-
-        InvalidAlias { .. } => {
-            // invalid aliases and opaques (shadowed, incorrect patterns) get ignored
-        }
         TypedBody(_loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
             let type_annotation =
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
@@ -1446,85 +1636,14 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
     Recursive::NotRecursive
 }
 
-fn to_pending_def<'a>(
+fn to_pending_type_def<'a>(
     env: &mut Env<'a>,
-    var_store: &mut VarStore,
-    def: &'a ast::Def<'a>,
+    def: &'a ast::TypeDef<'a>,
     scope: &mut Scope,
-    pattern_type: PatternType,
-) -> Option<(Output, PendingDef<'a>)> {
-    use roc_parse::ast::Def::*;
+) -> Option<(Output, PendingTypeDef<'a>)> {
+    use ast::TypeDef::*;
 
     match def {
-        Annotation(loc_pattern, loc_ann) => {
-            // This takes care of checking for shadowing and adding idents to scope.
-            let (output, loc_can_pattern) = canonicalize_pattern(
-                env,
-                var_store,
-                scope,
-                pattern_type,
-                &loc_pattern.value,
-                loc_pattern.region,
-            );
-
-            Some((
-                output,
-                PendingDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_ann),
-            ))
-        }
-        Body(loc_pattern, loc_expr) => {
-            // This takes care of checking for shadowing and adding idents to scope.
-            let (output, loc_can_pattern) = canonicalize_pattern(
-                env,
-                var_store,
-                scope,
-                pattern_type,
-                &loc_pattern.value,
-                loc_pattern.region,
-            );
-
-            Some((
-                output,
-                PendingDef::Body(loc_pattern, loc_can_pattern, loc_expr),
-            ))
-        }
-
-        AnnotatedBody {
-            ann_pattern,
-            ann_type,
-            comment: _,
-            body_pattern,
-            body_expr,
-        } => {
-            if ann_pattern.value.equivalent(&body_pattern.value) {
-                // NOTE: Pick the body pattern, picking the annotation one is
-                // incorrect in the presence of optional record fields!
-                //
-                // { x, y } : { x : Int, y ? Bool }*
-                // { x, y ? False } = rec
-                Some(pending_typed_body(
-                    env,
-                    body_pattern,
-                    ann_type,
-                    body_expr,
-                    var_store,
-                    scope,
-                    pattern_type,
-                ))
-            } else {
-                // the pattern of the annotation does not match the pattern of the body direc
-                env.problems.push(Problem::SignatureDefMismatch {
-                    annotation_pattern: ann_pattern.region,
-                    def_pattern: body_pattern.region,
-                });
-
-                // TODO: Should we instead build some PendingDef::InvalidAnnotatedBody ? This would
-                // remove the `Option` on this function (and be probably more reliable for further
-                // problem/error reporting)
-                None
-            }
-        }
-
         Alias {
             header: TypeHeader { name, vars },
             ann,
@@ -1533,10 +1652,10 @@ fn to_pending_def<'a>(
             header: TypeHeader { name, vars },
             typ: ann,
         } => {
-            let kind = if matches!(def, Alias { .. }) {
-                AliasKind::Structural
+            let (kind, shadow_kind) = if matches!(def, Alias { .. }) {
+                (AliasKind::Structural, ShadowKind::Alias)
             } else {
-                AliasKind::Opaque
+                (AliasKind::Opaque, ShadowKind::Opaque)
             };
 
             let region = Region::span_across(&name.region, &ann.region);
@@ -1571,7 +1690,7 @@ fn to_pending_def<'a>(
 
                                 return Some((
                                     Output::default(),
-                                    PendingDef::InvalidAlias { kind },
+                                    PendingTypeDef::InvalidAlias { kind },
                                 ));
                             }
                         }
@@ -1582,7 +1701,7 @@ fn to_pending_def<'a>(
                         value: symbol,
                     };
 
-                    let pending_def = PendingDef::Alias {
+                    let pending_def = PendingTypeDef::Alias {
                         name,
                         vars: can_rigids,
                         ann,
@@ -1593,51 +1712,152 @@ fn to_pending_def<'a>(
                 }
 
                 Err((original_region, loc_shadowed_symbol, _new_symbol)) => {
-                    env.problem(Problem::ShadowingInAnnotation {
+                    env.problem(Problem::Shadowing {
                         original_region,
                         shadow: loc_shadowed_symbol,
+                        kind: shadow_kind,
                     });
 
-                    Some((Output::default(), PendingDef::InvalidAlias { kind }))
+                    Some((Output::default(), PendingTypeDef::InvalidAlias { kind }))
                 }
             }
         }
 
-        Ability { .. } => todo_abilities!(),
+        Ability {
+            header: TypeHeader { name, vars },
+            members,
+            loc_has: _,
+        } => {
+            let name = match scope.introduce_without_shadow_symbol(
+                name.value.into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                name.region,
+            ) {
+                Ok(symbol) => Loc::at(name.region, symbol),
+                Err((original_region, shadowed_symbol)) => {
+                    env.problem(Problem::Shadowing {
+                        original_region,
+                        shadow: shadowed_symbol,
+                        kind: ShadowKind::Ability,
+                    });
+                    return Some((Output::default(), PendingTypeDef::InvalidAbility));
+                }
+            };
 
-        Expect(_condition) => todo!(),
+            if !vars.is_empty() {
+                // Disallow ability type arguments, at least for now.
+                let variables_region = Region::across_all(vars.iter().map(|v| &v.region));
 
-        SpaceBefore(sub_def, _) | SpaceAfter(sub_def, _) => {
-            to_pending_def(env, var_store, sub_def, scope, pattern_type)
+                env.problem(Problem::AbilityHasTypeVariables {
+                    name: name.value,
+                    variables_region,
+                });
+                return Some((Output::default(), PendingTypeDef::InvalidAbility));
+            }
+
+            let pending_ability = PendingTypeDef::Ability {
+                name,
+                // We'll handle adding the member symbols later on when we do all value defs.
+                members,
+            };
+
+            Some((Output::default(), pending_ability))
         }
-
-        NotYetImplemented(s) => todo!("{}", s),
     }
 }
 
-fn pending_typed_body<'a>(
+fn to_pending_value_def<'a>(
     env: &mut Env<'a>,
-    loc_pattern: &'a Loc<ast::Pattern<'a>>,
-    loc_ann: &'a Loc<ast::TypeAnnotation<'a>>,
-    loc_expr: &'a Loc<ast::Expr<'a>>,
     var_store: &mut VarStore,
+    def: &'a ast::ValueDef<'a>,
     scope: &mut Scope,
+    abilities_store: &AbilitiesStore,
     pattern_type: PatternType,
-) -> (Output, PendingDef<'a>) {
-    // This takes care of checking for shadowing and adding idents to scope.
-    let (output, loc_can_pattern) = canonicalize_pattern(
-        env,
-        var_store,
-        scope,
-        pattern_type,
-        &loc_pattern.value,
-        loc_pattern.region,
-    );
+) -> Option<(Output, PendingValueDef<'a>)> {
+    use ast::ValueDef::*;
 
-    (
-        output,
-        PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr),
-    )
+    match def {
+        Annotation(loc_pattern, loc_ann) => {
+            // This takes care of checking for shadowing and adding idents to scope.
+            let (output, loc_can_pattern) = canonicalize_def_header_pattern(
+                env,
+                var_store,
+                scope,
+                abilities_store,
+                pattern_type,
+                &loc_pattern.value,
+                loc_pattern.region,
+            );
+
+            Some((
+                output,
+                PendingValueDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_ann),
+            ))
+        }
+        Body(loc_pattern, loc_expr) => {
+            // This takes care of checking for shadowing and adding idents to scope.
+            let (output, loc_can_pattern) = canonicalize_def_header_pattern(
+                env,
+                var_store,
+                scope,
+                abilities_store,
+                pattern_type,
+                &loc_pattern.value,
+                loc_pattern.region,
+            );
+
+            Some((
+                output,
+                PendingValueDef::Body(loc_pattern, loc_can_pattern, loc_expr),
+            ))
+        }
+
+        AnnotatedBody {
+            ann_pattern,
+            ann_type,
+            comment: _,
+            body_pattern,
+            body_expr,
+        } => {
+            if ann_pattern.value.equivalent(&body_pattern.value) {
+                // NOTE: Pick the body pattern, picking the annotation one is
+                // incorrect in the presence of optional record fields!
+                //
+                // { x, y } : { x : Int, y ? Bool }*
+                // { x, y ? False } = rec
+                //
+                // This takes care of checking for shadowing and adding idents to scope.
+                let (output, loc_can_pattern) = canonicalize_def_header_pattern(
+                    env,
+                    var_store,
+                    scope,
+                    abilities_store,
+                    pattern_type,
+                    &body_pattern.value,
+                    body_pattern.region,
+                );
+
+                Some((
+                    output,
+                    PendingValueDef::TypedBody(body_pattern, loc_can_pattern, ann_type, body_expr),
+                ))
+            } else {
+                // the pattern of the annotation does not match the pattern of the body direc
+                env.problems.push(Problem::SignatureDefMismatch {
+                    annotation_pattern: ann_pattern.region,
+                    def_pattern: body_pattern.region,
+                });
+
+                // TODO: Should we instead build some PendingValueDef::InvalidAnnotatedBody ? This would
+                // remove the `Option` on this function (and be probably more reliable for further
+                // problem/error reporting)
+                None
+            }
+        }
+
+        Expect(_condition) => todo!(),
+    }
 }
 
 /// Make aliases recursive

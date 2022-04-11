@@ -18,7 +18,7 @@ use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 use roc_target::TargetInfo;
 
-use crate::backend::WasmBackend;
+use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::wasm_module::{
     Align, CodeBuilder, Export, ExportType, LocalId, SymInfo, ValueType, WasmModule,
 };
@@ -107,7 +107,12 @@ pub fn build_module_without_wrapper<'a>(
         let linker_sym_index = linker_symbols.len() as u32;
 
         // linker_sym_index is redundant for these procs from user code, but needed for generated helpers!
-        proc_lookup.push((sym, proc_layout, linker_sym_index));
+        proc_lookup.push(ProcLookupData {
+            name: sym,
+            layout: proc_layout,
+            linker_index: linker_sym_index,
+            source: ProcSource::Roc,
+        });
         linker_symbols.push(linker_sym);
 
         fn_index += 1;
@@ -134,7 +139,7 @@ pub fn build_module_without_wrapper<'a>(
         println!("## procs");
         for proc in procs.iter() {
             println!("{}", proc.to_pretty(200));
-            // println!("{:#?}", proc);
+            // println!("{:?}", proc);
         }
     }
 
@@ -144,7 +149,7 @@ pub fn build_module_without_wrapper<'a>(
     }
 
     // Generate specialized helpers for refcounting & equality
-    let helper_procs = backend.generate_helpers();
+    let helper_procs = backend.get_helpers();
 
     backend.register_symbol_debug_names();
 
@@ -156,9 +161,22 @@ pub fn build_module_without_wrapper<'a>(
         }
     }
 
-    // Generate Wasm for refcounting procs
-    for proc in helper_procs.iter() {
-        backend.build_proc(proc);
+    // Generate Wasm for helpers and Zig/Roc wrappers
+    let sources = Vec::from_iter_in(
+        backend
+            .proc_lookup
+            .iter()
+            .map(|ProcLookupData { source, .. }| *source),
+        env.arena,
+    );
+    let mut helper_iter = helper_procs.iter();
+    for (idx, source) in sources.iter().enumerate() {
+        use ProcSource::*;
+        match source {
+            Roc => { /* already generated */ }
+            Helper => backend.build_proc(helper_iter.next().unwrap()),
+            HigherOrderWrapper(inner_idx) => backend.build_higher_order_wrapper(idx, *inner_idx),
+        }
     }
 
     let (module, called_preload_fns) = backend.finalize();

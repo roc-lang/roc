@@ -182,6 +182,26 @@ impl<'a> CodeGenHelp<'a> {
         (expr, ctx.new_linker_data)
     }
 
+    /// Generate a refcount increment procedure, *without* a Call expression.
+    /// *This method should be rarely used* - only when the proc is to be called from Zig.
+    /// Otherwise you want to generate the Proc and the Call together, using another method.
+    /// This only supports the 'inc' operation, as it's the only real use case we have.
+    pub fn gen_refcount_inc_proc(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        layout: Layout<'a>,
+    ) -> (Symbol, Vec<'a, (Symbol, ProcLayout<'a>)>) {
+        let mut ctx = Context {
+            new_linker_data: Vec::new_in(self.arena),
+            recursive_union: None,
+            op: HelperOp::Inc,
+        };
+
+        let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout);
+
+        (proc_name, ctx.new_linker_data)
+    }
+
     /// Replace a generic `Lowlevel::Eq` call with a specialized helper proc.
     /// The helper procs themselves are to be generated later with `generate_procs`
     pub fn call_specialized_equals(
@@ -512,24 +532,18 @@ fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
         Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
             false
         }
-
         Layout::Builtin(Builtin::Str) => {
             // Str type can use either Zig functions or generated IR, since it's not generic.
             // Eq uses a Zig function, refcount uses generated IR.
             // Both are fine, they were just developed at different times.
             matches!(op, HelperOp::Inc | HelperOp::Dec | HelperOp::DecRef(_))
         }
-
         Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_)) => true,
-
-        Layout::Struct { field_layouts, .. } => !field_layouts.is_empty(),
-
+        Layout::Struct { .. } => true, // note: we do generate a helper for Unit, with just a Stmt::Ret
         Layout::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
-
         Layout::Union(_) => true,
-
-        Layout::LambdaSet(_) | Layout::RecursivePointer => false,
-
+        Layout::LambdaSet(_) => true,
+        Layout::RecursivePointer => false,
         Layout::Boxed(_) => true,
     }
 }
