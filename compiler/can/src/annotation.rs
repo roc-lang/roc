@@ -98,13 +98,6 @@ impl IntroducedVariables {
             .map(|nv| &nv.variable)
     }
 
-    pub fn name_by_var(&self, var: Variable) -> Option<&Lowercase> {
-        self.named
-            .iter()
-            .find(|nv| nv.variable == var)
-            .map(|nv| &nv.name)
-    }
-
     pub fn named_var_by_name(&self, name: &Lowercase) -> Option<&NamedVariable> {
         self.named.iter().find(|nv| &nv.name == name)
     }
