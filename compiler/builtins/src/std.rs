@@ -316,16 +316,30 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(SolvedType::Wildcard),
     );
 
-    // divInt : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // divInt : Int a, Int a -> Int a
     add_top_level_function_type!(
         Symbol::NUM_DIV_INT,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(int_type(flex(TVAR1)))
+    );
+
+    // divIntChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    add_top_level_function_type!(
+        Symbol::NUM_DIV_INT_CHECKED,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
 
-    //divCeil: Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // divCeil : Int a, Int a -> Int a
     add_top_level_function_type!(
         Symbol::NUM_DIV_CEIL,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(int_type(flex(TVAR1)))
+    );
+
+    //divCeilChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    add_top_level_function_type!(
+        Symbol::NUM_DIV_CEIL_CHECKED,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
@@ -630,6 +644,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // div : Float a, Float a -> Float a
     add_top_level_function_type!(
         Symbol::NUM_DIV_FLOAT,
+        vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
+        Box::new(float_type(flex(TVAR1)))
+    );
+    
+    // divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
+    add_top_level_function_type!(
+        Symbol::NUM_DIV_FLOAT_CHECKED,
         vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
         Box::new(result_type(float_type(flex(TVAR1)), div_by_zero.clone())),
     );
