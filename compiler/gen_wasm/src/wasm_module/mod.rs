@@ -5,7 +5,7 @@ pub mod opcodes;
 pub mod sections;
 pub mod serialize;
 
-use bumpalo::Bump;
+use bumpalo::{collections::Vec, Bump};
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 pub use linking::SymInfo;
 use roc_error_macros::internal_error;
@@ -145,7 +145,7 @@ impl<'a> WasmModule<'a> {
 
         let global = GlobalSection::preload(arena, bytes, &mut cursor);
 
-        let export = ExportSection::preload_globals(arena, bytes, &mut cursor);
+        let export = ExportSection::preload(arena, bytes, &mut cursor);
 
         let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
 
@@ -191,10 +191,18 @@ impl<'a> WasmModule<'a> {
         arena: &'a Bump,
         called_preload_fns: T,
     ) {
+        let exported_fn_iter = self
+            .export
+            .exports
+            .iter()
+            .filter(|ex| ex.ty == ExportType::Func)
+            .map(|ex| ex.index);
+        let function_indices = Vec::from_iter_in(exported_fn_iter, arena);
+
         self.code.remove_dead_preloads(
             arena,
             self.import.function_count,
-            &self.export.function_indices,
+            &function_indices,
             called_preload_fns,
         )
     }
