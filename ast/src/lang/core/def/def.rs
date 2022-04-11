@@ -18,7 +18,7 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, TypeDef, TypeHeader, ValueDef as AstValueDef};
 use roc_parse::pattern::PatternType;
-use roc_problem::can::{Problem, RuntimeError};
+use roc_problem::can::{Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use std::collections::HashMap;
@@ -251,9 +251,10 @@ fn to_pending_def<'a>(
                 }
 
                 Err((original_region, loc_shadowed_symbol)) => {
-                    env.problem(Problem::ShadowingInAnnotation {
+                    env.problem(Problem::Shadowing {
                         original_region,
                         shadow: loc_shadowed_symbol,
+                        kind: ShadowKind::Variable,
                     });
 
                     Some((Output::default(), PendingDef::InvalidAlias))

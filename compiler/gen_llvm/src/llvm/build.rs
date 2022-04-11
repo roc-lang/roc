@@ -5865,6 +5865,48 @@ fn run_low_level<'a, 'ctx, 'env>(
                 .build_int_cast_sign_flag(arg, to, to_signed, "inc_cast")
                 .into()
         }
+        NumToFloatCast => {
+            debug_assert_eq!(args.len(), 1);
+
+            let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            match arg_layout {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    // Converting from int to float
+                    let int_val = arg.into_int_value();
+                    let dest = basic_type_from_layout(env, layout).into_float_type();
+
+                    if width.is_signed() {
+                        env.builder
+                            .build_signed_int_to_float(int_val, dest, "signed_int_to_float")
+                            .into()
+                    } else {
+                        env.builder
+                            .build_unsigned_int_to_float(int_val, dest, "unsigned_int_to_float")
+                            .into()
+                    }
+                }
+                Layout::Builtin(Builtin::Float(_)) => {
+                    // Converting from float to float - e.g. F64 to F32, or vice versa
+                    let dest = basic_type_from_layout(env, layout).into_float_type();
+
+                    env.builder
+                        .build_float_cast(arg.into_float_value(), dest, "cast_float_to_float")
+                        .into()
+                }
+                Layout::Builtin(Builtin::Decimal) => {
+                    todo!("Support converting Dec values to floats.");
+                }
+                other => {
+                    unreachable!("Tried to do a float cast to non-float layout {:?}", other);
+                }
+            }
+        }
+        NumToFloatChecked => {
+            // NOTE: There's a NumToIntChecked implementation above,
+            // which could be useful to look at when implementing this.
+            todo!("implement checked float conversion");
+        }
         Eq => {
             debug_assert_eq!(args.len(), 2);
 

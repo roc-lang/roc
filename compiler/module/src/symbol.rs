@@ -1115,7 +1115,6 @@ define_builtins! {
         32 STR_TO_I16: "toI16"
         33 STR_TO_U8: "toU8"
         34 STR_TO_I8: "toI8"
-
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

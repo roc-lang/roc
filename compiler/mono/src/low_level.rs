@@ -170,6 +170,7 @@ enum FirstOrder {
     NumBytesToU32,
     NumShiftRightZfBy,
     NumIntCast,
+    NumFloatCast,
     Eq,
     NotEq,
     And,
