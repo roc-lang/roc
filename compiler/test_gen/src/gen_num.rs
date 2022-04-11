@@ -759,7 +759,7 @@ fn gen_div_checked_by_zero_f64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.divChecked 48 0 is
+                    when Num.divChecked 47 0 is
                         Ok val -> val
                         Err _ -> -1
                 "#
