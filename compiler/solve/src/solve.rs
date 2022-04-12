@@ -1269,16 +1269,48 @@ fn check_ability_specialization(
         // in the specialization type, but not the original signature type.
         let root_signature_var =
             deep_copy_var_in(subs, Rank::toplevel(), pools, root_signature_var, arena);
+        let snapshot = subs.snapshot();
         let unified = unify(subs, symbol_loc_var.value, root_signature_var, Mode::EQ);
 
         match unified {
             Success {
                 vars: _,
                 must_implement_ability,
+            } if must_implement_ability.is_empty() => {
+                // This can happen when every ability constriant on a type variable went
+                // through only another type variable. That means this def is not specialized
+                // for one type - for now, we won't admit this.
+
+                // Rollback the snapshot so we unlink the root signature with the specialization,
+                // so we can have two separate error types.
+                subs.rollback_to(snapshot);
+
+                let (expected_type, _problems) = subs.var_to_error_type(root_signature_var);
+                let (actual_type, _problems) = subs.var_to_error_type(symbol_loc_var.value);
+
+                let reason = Reason::GeneralizedAbilityMemberSpecialization {
+                    member_name: root_symbol,
+                    def_region: root_data.region,
+                };
+
+                let problem = TypeError::BadExpr(
+                    symbol_loc_var.region,
+                    Category::AbilityMemberSpecialization(root_symbol),
+                    actual_type,
+                    Expected::ForReason(reason, expected_type, symbol_loc_var.region),
+                );
+
+                problems.push(problem);
+
+                return;
+            }
+
+            Success {
+                vars,
+                must_implement_ability,
             } => {
-                if must_implement_ability.is_empty() {
-                    // This is an error.. but what kind?
-                }
+                subs.commit_snapshot(snapshot);
+                introduce(subs, rank, pools, &vars);
 
                 // First, figure out and register for what type does this symbol specialize
                 // the ability member.
@@ -1309,6 +1341,7 @@ fn check_ability_specialization(
                 deferred_must_implement_abilities.extend(must_implement_ability);
             }
             Failure(vars, actual_type, expected_type, unimplemented_abilities) => {
+                subs.commit_snapshot(snapshot);
                 introduce(subs, rank, pools, &vars);
 
                 let reason = Reason::InvalidAbilityMemberSpecialization {
@@ -1327,6 +1360,7 @@ fn check_ability_specialization(
                 problems.push(problem);
             }
             BadType(vars, problem) => {
+                subs.commit_snapshot(snapshot);
                 introduce(subs, rank, pools, &vars);
 
                 problems.push(TypeError::BadType(problem));

@@ -1749,6 +1749,10 @@ pub enum Reason {
         def_region: Region,
         unimplemented_abilities: DoesNotImplementAbility,
     },
+    GeneralizedAbilityMemberSpecialization {
+        member_name: Symbol,
+        def_region: Region,
+    },
 }
 
 #[derive(PartialEq, Debug, Clone)]

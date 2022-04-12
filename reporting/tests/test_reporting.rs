@@ -9536,4 +9536,45 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn ability_specialization_overly_generalized() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                hash = \_ -> 0u64
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This specialization of `hash` is overly general:
+
+                6│  hash = \_ -> 0u64
+                    ^^^^
+
+                This value is a declared specialization of type:
+
+                    a -> U64
+
+                But the type annotation on `hash` says it must match:
+
+                    a -> U64 | a has Hash
+
+                Note: The specialized type is too general, and does not provide a
+                concrete type where a type variable is bound to an ability.
+
+                Specializations can only be made for concrete types. If you have a
+                generic implementation for this value, perhaps you don't need an
+                ability?
+                "#
+            ),
+        )
+    }
 }

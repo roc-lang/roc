@@ -1053,6 +1053,46 @@ fn to_expr_report<'b>(
                 )
             }
 
+            Reason::GeneralizedAbilityMemberSpecialization {
+                member_name,
+                def_region: _,
+            } => {
+                let problem = alloc.concat(vec![
+                    alloc.reflow("This specialization of "),
+                    alloc.symbol_unqualified(member_name),
+                    alloc.reflow(" is overly general:"),
+                ]);
+                let this_is = alloc.reflow("This value is");
+                let instead_of = alloc.concat(vec![
+                    alloc.reflow("But the type annotation on "),
+                    alloc.symbol_unqualified(member_name),
+                    alloc.reflow(" says it must match:"),
+                ]);
+
+                let note = alloc.stack(vec![
+                    alloc.concat(vec![
+                        alloc.note(""),
+                        alloc.reflow("The specialized type is too general, and does not provide a concrete type where a type variable is bound to an ability."),
+                    ]),
+                    alloc.reflow("Specializations can only be made for concrete types. If you have a generic implementation for this value, perhaps you don't need an ability?"),
+                ]);
+
+                report_mismatch(
+                    alloc,
+                    lines,
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    problem,
+                    this_is,
+                    instead_of,
+                    Some(note),
+                )
+            }
+
             Reason::LowLevelOpArg { op, arg_index } => {
                 panic!(
                     "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
