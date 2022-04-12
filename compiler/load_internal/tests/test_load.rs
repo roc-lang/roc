@@ -427,7 +427,7 @@ mod test_load {
             hashmap! {
                 "floatTest" => "Float *",
                 "divisionFn" => "Float a, Float a -> Float a",
-                "divisionTest" => "Float a",
+                "divisionTest" => "Float *",
                 "intTest" => "I64",
                 "x" => "Float *",
                 "constantNum" => "Num *",
