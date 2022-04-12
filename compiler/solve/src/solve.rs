@@ -806,6 +806,7 @@ fn solve(
                 let mut new_env = env.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
                     check_ability_specialization(
+                        arena,
                         subs,
                         &new_env,
                         pools,
@@ -1240,6 +1241,7 @@ fn solve(
 /// does specialize the ability, and record the specialization.
 #[allow(clippy::too_many_arguments)]
 fn check_ability_specialization(
+    arena: &Bump,
     subs: &mut Subs,
     env: &Env,
     pools: &mut Pools,
@@ -1260,7 +1262,13 @@ fn check_ability_specialization(
 
         // Check if they unify - if they don't, then the claimed specialization isn't really one,
         // and that's a type error!
-        let snapshot = subs.snapshot();
+        // This also fixes any latent type variables that need to be specialized to exactly what
+        // the ability signature expects.
+
+        // We need to freshly instantiate the root signature so that all unifications are reflected
+        // in the specialization type, but not the original signature type.
+        let root_signature_var =
+            deep_copy_var_in(subs, Rank::toplevel(), pools, root_signature_var, arena);
         let unified = unify(subs, symbol_loc_var.value, root_signature_var, Mode::EQ);
 
         match unified {
@@ -1268,10 +1276,6 @@ fn check_ability_specialization(
                 vars: _,
                 must_implement_ability,
             } => {
-                // We don't actually care about storing the unified type since the checked type for the
-                // specialization is what we want for code generation.
-                subs.rollback_to(snapshot);
-
                 if must_implement_ability.is_empty() {
                     // This is an error.. but what kind?
                 }
@@ -1305,7 +1309,6 @@ fn check_ability_specialization(
                 deferred_must_implement_abilities.extend(must_implement_ability);
             }
             Failure(vars, actual_type, expected_type, unimplemented_abilities) => {
-                subs.commit_snapshot(snapshot);
                 introduce(subs, rank, pools, &vars);
 
                 let reason = Reason::InvalidAbilityMemberSpecialization {
@@ -1324,7 +1327,6 @@ fn check_ability_specialization(
                 problems.push(problem);
             }
             BadType(vars, problem) => {
-                subs.commit_snapshot(snapshot);
                 introduce(subs, rank, pools, &vars);
 
                 problems.push(TypeError::BadType(problem));
