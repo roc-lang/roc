@@ -9462,4 +9462,29 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn ability_specialization_is_incomplete() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ eq, le ] to "./platform"
+
+                Eq has
+                    eq : a, a -> Bool | a has Eq
+                    le : a, a -> Bool | a has Eq
+
+                Id := U64
+
+                eq = \$Id m, $Id n -> m == n
+
+                le = \$Id m, $Id n -> m < n
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
 }
