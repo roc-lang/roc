@@ -19,9 +19,8 @@ extern "C" {
     #[link_name = "roc__programForHost_size"]
     fn roc_program_size() -> i64;
 
-    #[allow(dead_code)]
     #[link_name = "roc__programForHost_1_Render_size"]
-    fn size_Render() -> i64;
+    fn roc_render_size() -> i64;
 }
 
 #[repr(C)]
@@ -254,31 +253,22 @@ pub struct ButtonStyles {
     pub text_color: Rgba,
 }
 
-pub fn app_render(state: RocEvent) -> RocList<RocElem> {
-    let size = unsafe { roc_program_size() } as usize;
-    let layout = Layout::array::<u8>(size).unwrap();
+pub fn app_render(event: RocEvent) -> RocList<RocElem> {
+    let mut output = MaybeUninit::uninit();
 
+    // Call the program's render function
     unsafe {
-        roc_program();
+        let layout = Layout::array::<u8>(roc_render_size() as usize).unwrap();
 
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        // Call the program's render function
-        let result = call_the_closure(state, buffer);
+        call_Render(&event, buffer, output.as_mut_ptr());
 
         std::alloc::dealloc(buffer, layout);
 
-        result
+        output.assume_init()
     }
-}
-
-unsafe fn call_the_closure(event: RocEvent, closure_data_ptr: *const u8) -> RocList<RocElem> {
-    let mut output = MaybeUninit::uninit();
-
-    call_Render(&event, closure_data_ptr as *const u8, output.as_mut_ptr());
-
-    output.assume_init()
 }
 
 #[derive(Copy, Clone, Debug, Default)]
