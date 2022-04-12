@@ -9462,4 +9462,43 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn ability_specialization_is_incomplete() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ eq, le ] to "./platform"
+
+                Eq has
+                    eq : a, a -> Bool | a has Eq
+                    le : a, a -> Bool | a has Eq
+
+                Id := U64
+
+                eq = \$Id m, $Id n -> m == n
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────────────────────────────
+
+                The type `Id` does not fully implement the ability `Eq`. The following
+                specializations are missing:
+
+                A specialization for `le`, which is defined here:
+
+                5│      le : a, a -> Bool | a has Eq
+                        ^^
+
+                Note: `Id` specializes the following members of `Eq`:
+
+                `eq`, specialized here:
+
+                9│  eq = \$Id m, $Id n -> m == n
+                    ^^
+                "#
+            ),
+        )
+    }
 }

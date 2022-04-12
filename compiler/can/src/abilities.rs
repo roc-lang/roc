@@ -1,4 +1,4 @@
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::{subs::Variable, types::Type};
@@ -10,6 +10,13 @@ pub struct AbilityMemberData {
     pub parent_ability: Symbol,
     pub signature_var: Variable,
     pub signature: Type,
+    pub region: Region,
+}
+
+/// A particular specialization of an ability member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemberSpecialization {
+    pub symbol: Symbol,
     pub region: Region,
 }
 
@@ -35,9 +42,9 @@ pub struct AbilitiesStore {
     /// We keep the mapping #hash1->#hash
     specialization_to_root: MutMap<Symbol, Symbol>,
 
-    /// Tuples of (type, member) specifying that `type` declares an implementation of an ability
-    /// member `member`.
-    declared_specializations: MutSet<(Symbol, Symbol)>,
+    /// Maps a tuple (member, type) specifying that `type` declares an implementation of an ability
+    /// member `member`, to the exact symbol that implements the ability.
+    declared_specializations: MutMap<(Symbol, Symbol), MemberSpecialization>,
 }
 
 impl AbilitiesStore {
@@ -69,15 +76,18 @@ impl AbilitiesStore {
     }
 
     /// Records a specialization of `ability_member` with specialized type `implementing_type`.
+    /// Entries via this function are considered a source of truth. It must be ensured that a
+    /// specialization is validated before being registered here.
     pub fn register_specialization_for_type(
         &mut self,
-        implementing_type: Symbol,
         ability_member: Symbol,
+        implementing_type: Symbol,
+        specialization: MemberSpecialization,
     ) {
-        let is_new_insert = self
+        let old_spec = self
             .declared_specializations
-            .insert((implementing_type, ability_member));
-        debug_assert!(is_new_insert, "Replacing existing implementation");
+            .insert((ability_member, implementing_type), specialization);
+        debug_assert!(old_spec.is_none(), "Replacing existing specialization");
     }
 
     /// Checks if `name` is a root ability member symbol name.
@@ -123,9 +133,27 @@ impl AbilitiesStore {
         Some((*root_symbol, root_data))
     }
 
+    /// Finds the ability member definition for a member name.
+    pub fn member_def(&self, member: Symbol) -> Option<&AbilityMemberData> {
+        self.ability_members.get(&member)
+    }
+
+    /// Returns an iterator over pairs (ability member, type) specifying that
+    /// "ability member" has a specialization with type "type".
+    pub fn get_known_specializations<'lifetime_for_copied>(
+        &'lifetime_for_copied self,
+    ) -> impl Iterator<Item = (Symbol, Symbol)> + 'lifetime_for_copied {
+        self.declared_specializations.keys().copied()
+    }
+
+    /// Retrieves the specialization of `member` for `typ`, if it exists.
+    pub fn get_specialization(&self, member: Symbol, typ: Symbol) -> Option<MemberSpecialization> {
+        self.declared_specializations.get(&(member, typ)).copied()
+    }
+
     /// Returns pairs of (type, ability member) specifying that "ability member" has a
     /// specialization with type "type".
-    pub fn get_known_specializations(&self) -> &MutSet<(Symbol, Symbol)> {
-        &self.declared_specializations
+    pub fn members_of_ability(&self, ability: Symbol) -> Option<&[Symbol]> {
+        self.members_of_ability.get(&ability).map(|v| v.as_ref())
     }
 }

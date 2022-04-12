@@ -1,5 +1,5 @@
 use bumpalo::Bump;
-use roc_can::abilities::AbilitiesStore;
+use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Constraints, LetConstraint};
 use roc_can::expected::{Expected, PExpected};
@@ -76,6 +76,13 @@ pub enum TypeError {
     CircularType(Region, Symbol, ErrorType),
     BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
+    IncompleteAbilityImplementation {
+        // TODO(abilities): have general types here, not just opaques
+        typ: Symbol,
+        ability: Symbol,
+        specialized_members: Vec<Loc<Symbol>>,
+        missing_members: Vec<Loc<Symbol>>,
+    },
 }
 
 use roc_types::types::Alias;
@@ -568,7 +575,34 @@ pub fn run_in_place(
         &mut deferred_must_implement_abilities,
     );
 
-    // TODO run through and check that all abilities are properly implemented
+    // Now that the module has been solved, we can run through and check all
+    // types claimed to implement abilities.
+    deferred_must_implement_abilities.dedup();
+    for MustImplementAbility { typ, ability } in deferred_must_implement_abilities.into_iter() {
+        let members_of_ability = abilities_store.members_of_ability(ability).unwrap();
+        let mut specialized_members = Vec::with_capacity(members_of_ability.len());
+        let mut missing_members = Vec::with_capacity(members_of_ability.len());
+        for &member in members_of_ability {
+            match abilities_store.get_specialization(member, typ) {
+                None => {
+                    let root_data = abilities_store.member_def(member).unwrap();
+                    missing_members.push(Loc::at(root_data.region, member));
+                }
+                Some(specialization) => {
+                    specialized_members.push(Loc::at(specialization.region, member));
+                }
+            }
+        }
+
+        if !missing_members.is_empty() {
+            problems.push(TypeError::IncompleteAbilityImplementation {
+                typ,
+                ability,
+                specialized_members,
+                missing_members,
+            });
+        }
+    }
 
     state.env
 }
@@ -1254,8 +1288,17 @@ fn check_ability_specialization(
                     "If there's more than one, the definition is ambiguous - this should be an error"
                 );
 
+                // This is a valid specialization! Record it.
                 let specialization_type = ability_implementations_for_specialization[0].typ;
-                abilities_store.register_specialization_for_type(specialization_type, root_symbol);
+                let specialization = MemberSpecialization {
+                    symbol,
+                    region: symbol_loc_var.region,
+                };
+                abilities_store.register_specialization_for_type(
+                    root_symbol,
+                    specialization_type,
+                    specialization,
+                );
 
                 // Store the checks for what abilities must be implemented to be checked after the
                 // whole module is complete.

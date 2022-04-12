@@ -118,6 +118,53 @@ pub fn type_problem<'b>(
                 other => panic!("unhandled bad type: {:?}", other),
             }
         }
+        IncompleteAbilityImplementation {
+            typ,
+            ability,
+            specialized_members,
+            missing_members,
+        } => {
+            let title = "INCOMPLETE ABILITY IMPLEMENTATION".to_string();
+
+            let mut stack = vec![alloc.concat(vec![
+                alloc.reflow("The type "),
+                alloc.symbol_unqualified(typ),
+                alloc.reflow(" does not fully implement the ability "),
+                alloc.symbol_unqualified(ability),
+                alloc.reflow(". The following specializations are missing:"),
+            ])];
+
+            for member in missing_members.into_iter() {
+                stack.push(alloc.concat(vec![
+                    alloc.reflow("A specialization for "),
+                    alloc.symbol_unqualified(member.value),
+                    alloc.reflow(", which is defined here:"),
+                ]));
+                stack.push(alloc.region(lines.convert_region(member.region)));
+            }
+
+            debug_assert!(!specialized_members.is_empty());
+
+            stack.push(alloc.concat(vec![
+                alloc.note(""),
+                alloc.symbol_unqualified(typ),
+                alloc.reflow(" specializes the following members of "),
+                alloc.symbol_unqualified(ability),
+                alloc.reflow(":"),
+            ]));
+
+            for spec in specialized_members {
+                stack.push(alloc.concat(vec![
+                    alloc.symbol_unqualified(spec.value),
+                    alloc.reflow(", specialized here:"),
+                ]));
+                stack.push(alloc.region(lines.convert_region(spec.region)));
+            }
+
+            let doc = alloc.stack(stack);
+
+            report(title, doc, filename)
+        }
     }
 }
 
