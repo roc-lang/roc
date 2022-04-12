@@ -1687,10 +1687,12 @@ fn to_comparison<'b>(
     expected: ErrorType,
 ) -> Comparison<'b> {
     let diff = to_diff(alloc, Parens::Unnecessary, actual, expected);
+    let actual = type_with_able_vars(alloc, diff.left, diff.left_able);
+    let expected = type_with_able_vars(alloc, diff.right, diff.right_able);
 
     Comparison {
-        actual: alloc.type_block(diff.left),
-        expected: alloc.type_block(diff.right),
+        actual: alloc.type_block(actual),
+        expected: alloc.type_block(expected),
         problems: match diff.status {
             Status::Similar => vec![],
             Status::Different(problems) => problems,
@@ -1743,7 +1745,9 @@ pub struct Diff<T> {
     left: T,
     right: T,
     status: Status,
-    // TODO: include able variables
+    // idea: lift "able" type variables so they are shown at the top of a type.
+    left_able: AbleVariables,
+    right_able: AbleVariables,
 }
 
 fn ext_to_doc<'b>(alloc: &'b RocDocAllocator<'b>, ext: TypeExt) -> Option<RocDocBuilder<'b>> {
@@ -1798,13 +1802,7 @@ fn to_doc_help<'b>(
         FlexAbleVar(lowercase, ability) | RigidAbleVar(lowercase, ability) => {
             // TODO we should be putting able variables on the toplevel of the type, not here
             ctx.able_variables.push((lowercase.clone(), ability));
-            alloc.concat(vec![
-                alloc.type_variable(lowercase),
-                alloc.space(),
-                alloc.keyword("has"),
-                alloc.space(),
-                alloc.symbol_foreign_qualified(ability),
-            ])
+            alloc.type_variable(lowercase)
         }
 
         Type(symbol, args) => report_text::apply(
@@ -1926,13 +1924,40 @@ fn same<'b>(
     parens: Parens,
     tipe: ErrorType,
 ) -> Diff<RocDocBuilder<'b>> {
-    let doc = to_doc(alloc, parens, tipe).0;
+    let (doc, able) = to_doc(alloc, parens, tipe);
 
     Diff {
         left: doc.clone(),
         right: doc,
         status: Status::Similar,
+        left_able: able.clone(),
+        right_able: able,
     }
+}
+
+fn type_with_able_vars<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    typ: RocDocBuilder<'b>,
+    able: AbleVariables,
+) -> RocDocBuilder<'b> {
+    if able.is_empty() {
+        // fast path: taken the vast majority of the time
+        return typ;
+    }
+
+    let mut doc = Vec::with_capacity(1 + 6 * able.len());
+    doc.push(typ);
+
+    for (i, (var, ability)) in able.into_iter().enumerate() {
+        doc.push(alloc.string(if i == 0 { " | " } else { ", " }.to_string()));
+        doc.push(alloc.type_variable(var));
+        doc.push(alloc.space());
+        doc.push(alloc.keyword("has"));
+        doc.push(alloc.space());
+        doc.push(alloc.symbol_foreign_qualified(ability));
+    }
+
+    alloc.concat(doc)
 }
 
 fn to_diff<'b>(
@@ -1963,15 +1988,21 @@ fn to_diff<'b>(
 
                 let left = report_text::function(alloc, parens, arg_diff.left, ret_diff.left);
                 let right = report_text::function(alloc, parens, arg_diff.right, ret_diff.right);
+                let mut left_able = arg_diff.left_able;
+                left_able.extend(ret_diff.left_able);
+                let mut right_able = arg_diff.right_able;
+                right_able.extend(ret_diff.right_able);
 
                 Diff {
                     left,
                     right,
                     status,
+                    left_able,
+                    right_able,
                 }
             } else {
-                let left = to_doc(alloc, Parens::InFn, type1).0;
-                let right = to_doc(alloc, Parens::InFn, type2).0;
+                let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
+                let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
 
                 Diff {
                     left,
@@ -1980,6 +2011,8 @@ fn to_diff<'b>(
                         args1.len(),
                         args2.len(),
                     )]),
+                    left_able,
+                    right_able,
                 }
             }
         }
@@ -2002,6 +2035,8 @@ fn to_diff<'b>(
                 left,
                 right,
                 status: args_diff.status,
+                left_able: args_diff.left_able,
+                right_able: args_diff.right_able,
             }
         }
 
@@ -2024,17 +2059,21 @@ fn to_diff<'b>(
                 left,
                 right,
                 status: args_diff.status,
+                left_able: args_diff.left_able,
+                right_able: args_diff.right_able,
             }
         }
 
         (Alias(_, _, _, AliasKind::Opaque), _) | (_, Alias(_, _, _, AliasKind::Opaque)) => {
-            let left = to_doc(alloc, Parens::InFn, type1).0;
-            let right = to_doc(alloc, Parens::InFn, type2).0;
+            let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
+            let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
 
             Diff {
                 left,
                 right,
                 status: Status::Different(vec![Problem::OpaqueComparedToNonOpaque]),
+                left_able,
+                right_able,
             }
         }
 
@@ -2061,20 +2100,22 @@ fn to_diff<'b>(
 
         (RecursiveTagUnion(_rec1, _tags1, _ext1), RecursiveTagUnion(_rec2, _tags2, _ext2)) => {
             // TODO do a better job here
-            let left = to_doc(alloc, Parens::Unnecessary, type1).0;
-            let right = to_doc(alloc, Parens::Unnecessary, type2).0;
+            let (left, left_able) = to_doc(alloc, Parens::Unnecessary, type1);
+            let (right, right_able) = to_doc(alloc, Parens::Unnecessary, type2);
 
             Diff {
                 left,
                 right,
                 status: Status::Similar,
+                left_able,
+                right_able,
             }
         }
 
         pair => {
             // We hit none of the specific cases where we give more detailed information
-            let left = to_doc(alloc, parens, type1).0;
-            let right = to_doc(alloc, parens, type2).0;
+            let (left, left_able) = to_doc(alloc, parens, type1);
+            let (right, right_able) = to_doc(alloc, parens, type2);
 
             let is_int = |t: &ErrorType| match t {
                 ErrorType::Type(Symbol::NUM_INT, _) => true,
@@ -2130,6 +2171,8 @@ fn to_diff<'b>(
                 left,
                 right,
                 status: Status::Different(problems),
+                left_able,
+                right_able,
             }
         }
     }
@@ -2149,6 +2192,8 @@ where
     // TODO use ExactSizeIterator to pre-allocate here
     let mut left = Vec::new();
     let mut right = Vec::new();
+    let mut left_able = Vec::new();
+    let mut right_able = Vec::new();
 
     for (arg1, arg2) in args1.into_iter().zip(args2.into_iter()) {
         let diff = to_diff(alloc, parens, arg1, arg2);
@@ -2156,12 +2201,16 @@ where
         left.push(diff.left);
         right.push(diff.right);
         status.merge(diff.status);
+        left_able.extend(diff.left_able);
+        right_able.extend(diff.right_able);
     }
 
     Diff {
         left,
         right,
         status,
+        left_able,
+        right_able,
     }
 }
 
@@ -2228,6 +2277,8 @@ fn diff_record<'b>(
                     _ => diff.status,
                 }
             },
+            left_able: diff.left_able,
+            right_able: diff.right_able,
         }
     };
 
@@ -2293,12 +2344,16 @@ fn diff_record<'b>(
             left: vec![],
             right: vec![],
             status: Status::Similar,
+            left_able: vec![],
+            right_able: vec![],
         };
 
     for diff in both {
         fields_diff.left.push(diff.left);
         fields_diff.right.push(diff.right);
         fields_diff.status.merge(diff.status);
+        fields_diff.left_able.extend(diff.left_able);
+        fields_diff.right_able.extend(diff.right_able);
     }
 
     if !all_fields_shared {
@@ -2336,6 +2391,8 @@ fn diff_record<'b>(
         left: doc1,
         right: doc2,
         status: fields_diff.status,
+        left_able: fields_diff.left_able,
+        right_able: fields_diff.right_able,
     }
 }
 
@@ -2353,16 +2410,26 @@ fn diff_tag_union<'b>(
             left: (field.clone(), alloc.tag_name(field.clone()), diff.left),
             right: (field.clone(), alloc.tag_name(field), diff.right),
             status: diff.status,
+            left_able: diff.left_able,
+            right_able: diff.right_able,
         }
     };
-    let to_unknown_docs = |(field, args): (&TagName, &Vec<ErrorType>)| {
+    let to_unknown_docs = |(field, args): (&TagName, &Vec<ErrorType>)| -> (
+        TagName,
+        RocDocBuilder<'b>,
+        Vec<RocDocBuilder<'b>>,
+        AbleVariables,
+    ) {
+        let (args, able): (_, Vec<AbleVariables>) =
+            // TODO add spaces between args
+            args.iter()
+                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg.clone()))
+                .unzip();
         (
             field.clone(),
             alloc.tag_name(field.clone()),
-            // TODO add spaces between args
-            args.iter()
-                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg.clone()).0)
-                .collect(),
+            args,
+            able.into_iter().flatten().collect(),
         )
     };
     let shared_keys = fields1
@@ -2380,7 +2447,7 @@ fn diff_tag_union<'b>(
 
     let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
         (true, true) => match left.peek() {
-            Some((f, _, _)) => Status::Different(vec![Problem::TagTypo(
+            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
                 fields2.keys().cloned().collect(),
             )]),
@@ -2397,14 +2464,14 @@ fn diff_tag_union<'b>(
             }
         },
         (false, true) => match left.peek() {
-            Some((f, _, _)) => Status::Different(vec![Problem::TagTypo(
+            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
                 fields2.keys().cloned().collect(),
             )]),
             None => Status::Similar,
         },
         (true, false) => match right.peek() {
-            Some((f, _, _)) => Status::Different(vec![Problem::TagTypo(
+            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
                 fields1.keys().cloned().collect(),
             )]),
@@ -2419,17 +2486,27 @@ fn diff_tag_union<'b>(
         left: vec![],
         right: vec![],
         status: Status::Similar,
+        left_able: vec![],
+        right_able: vec![],
     };
 
     for diff in both {
         fields_diff.left.push(diff.left);
         fields_diff.right.push(diff.right);
         fields_diff.status.merge(diff.status);
+        fields_diff.left_able.extend(diff.left_able);
+        fields_diff.right_able.extend(diff.right_able);
     }
 
     if !all_fields_shared {
-        fields_diff.left.extend(left);
-        fields_diff.right.extend(right);
+        for (tag, tag_doc, args, able) in left {
+            fields_diff.left.push((tag, tag_doc, args));
+            fields_diff.left_able.extend(able);
+        }
+        for (tag, tag_doc, args, able) in right {
+            fields_diff.right.push((tag, tag_doc, args));
+            fields_diff.right_able.extend(able);
+        }
         fields_diff.status.merge(Status::Different(vec![]));
     }
 
@@ -2456,6 +2533,8 @@ fn diff_tag_union<'b>(
         left: doc1,
         right: doc2,
         status: fields_diff.status,
+        left_able: fields_diff.left_able,
+        right_able: fields_diff.right_able,
     }
 }
 
@@ -2473,12 +2552,16 @@ fn ext_to_diff<'b>(
             left: ext_doc_1,
             right: ext_doc_2,
             status,
+            left_able: vec![],
+            right_able: vec![],
         },
         Status::Different(_) => Diff {
             // NOTE elm colors these differently at this point
             left: ext_doc_1,
             right: ext_doc_2,
             status,
+            left_able: vec![],
+            right_able: vec![],
         },
     }
 }

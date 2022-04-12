@@ -9452,7 +9452,7 @@ I need all branches in an `if` to have the same type!
 
                 But the type annotation on `hash` says it must match:
 
-                    a has Hash -> U64
+                    a -> U64 | a has Hash
 
                 Note: Some types in this specialization don't implement the abilities
                 they are expected to. I found the following missing implementations:
