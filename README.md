@@ -20,7 +20,7 @@ If you have a specific question, the [FAQ](FAQ.md) might have an answer, althoug
 **Roc is not ready for production yet.** You are likely to encounter bugs. Publishing packages or documentation is not yet supported.
 Many programs can however be compiled correctly. Check out [examples](examples) and [examples/benchmarks](examples/benchmarks). There are minimal platforms for Rust, Zig, C, Swift and an HTTP server. We are hard at work to make programming in Roc a delightful experience!
 
-## Getting started
+## Getting Started
 
 - [Linux x86](getting_started/linux_x86.md)
 - [Windows](getting_started/windows.md)
@@ -38,14 +38,6 @@ For NQueens, input 10 in the terminal and press enter.
 [examples/benchmarks](examples/benchmarks) contains larger examples.
 
 **Tip:** when programming in roc, we recommend to execute `./roc check myproject/Foo.roc` before `./roc myproject/Foo.roc` or `./roc build myproject/Foo.roc`. `./roc check` can produce clear error messages in cases where building/running may panic.
-
-## Sponsor
-
-We are very grateful for our sponsor [NoRedInk](https://www.noredink.com/).
-
-[NoRedInk – Funding the Roc Programming Language](https://blog.noredink.com/post/676230051771138048/funding-the-roc-programming-language)
-
-<img src="https://www.noredink.com/assets/logo-red-black-f6989d7567cf90b349409137595e99c52d036d755b4403d25528e0fd83a3b084.svg" height="60" alt="NoRedInk logo"/>
 
 ## Project Goals
 
@@ -119,7 +111,21 @@ been able to find beginner-friendly projects to get people up to speed gradually
 If you're interested in getting involved, check out
 [CONTRIBUTING.md](https://github.com/rtfeldman/roc/blob/trunk/CONTRIBUTING.md)!
 
+## Sponsor
+
+We are very grateful for our sponsor [NoRedInk](https://www.noredink.com/).
+
+[NoRedInk – Funding the Roc Programming Language](https://blog.noredink.com/post/676230051771138048/funding-the-roc-programming-language)
+
+<img src="https://www.noredink.com/assets/logo-red-black-f6989d7567cf90b349409137595e99c52d036d755b4403d25528e0fd83a3b084.svg" height="60" alt="NoRedInk logo"/>
+
 ## Name and Logo
 
 If you're curious about where the language's name and logo came from,
 [here's an explanation](https://github.com/rtfeldman/roc/blob/trunk/name-and-logo.md).
+
+## License
+
+[We're changing Roc's license, and we need your sign-off to do it! · Issue #1199](https://github.com/rtfeldman/roc/issues/1199)
+
+UPL v1.0 wants to achieve the same goal as MIT + Apache 2.0
