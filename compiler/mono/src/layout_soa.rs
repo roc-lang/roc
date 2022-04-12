@@ -137,8 +137,10 @@ impl FunctionLayout {
         use LayoutError::*;
 
         match content {
-            Content::FlexVar(_) => Err(UnresolvedVariable(var)),
-            Content::RigidVar(_) => Err(UnresolvedVariable(var)),
+            Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _) => Err(UnresolvedVariable(var)),
             Content::RecursionVar { .. } => Err(TypeError(())),
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(_, _, actual, _) => Self::from_var_help(layouts, subs, *actual),
@@ -243,8 +245,10 @@ impl LambdaSet {
         use LayoutError::*;
 
         match content {
-            Content::FlexVar(_) => Err(UnresolvedVariable(var)),
-            Content::RigidVar(_) => Err(UnresolvedVariable(var)),
+            Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _) => Err(UnresolvedVariable(var)),
             Content::RecursionVar { .. } => {
                 unreachable!("lambda sets cannot currently be recursive")
             }
@@ -627,8 +631,10 @@ impl Layout {
         use LayoutError::*;
 
         match content {
-            Content::FlexVar(_) => Err(UnresolvedVariable(var)),
-            Content::RigidVar(_) => Err(UnresolvedVariable(var)),
+            Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _) => Err(UnresolvedVariable(var)),
             Content::RecursionVar {
                 structure,
                 opt_name: _,

@@ -20,9 +20,35 @@ pub struct Annotation {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NamedOrAbleVariable<'a> {
+    Named(&'a NamedVariable),
+    Able(&'a AbleVariable),
+}
+
+impl<'a> NamedOrAbleVariable<'a> {
+    pub fn first_seen(&self) -> Region {
+        match self {
+            NamedOrAbleVariable::Named(nv) => nv.first_seen,
+            NamedOrAbleVariable::Able(av) => av.first_seen,
+        }
+    }
+}
+
+/// A named type variable, not bound to an ability.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NamedVariable {
     pub variable: Variable,
     pub name: Lowercase,
+    // NB: there may be multiple occurrences of a variable
+    pub first_seen: Region,
+}
+
+/// A type variable bound to an ability, like "a has Hash".
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AbleVariable {
+    pub variable: Variable,
+    pub name: Lowercase,
+    pub ability: Symbol,
     // NB: there may be multiple occurrences of a variable
     pub first_seen: Region,
 }
@@ -33,15 +59,24 @@ pub struct IntroducedVariables {
     pub lambda_sets: Vec<Variable>,
     pub inferred: Vec<Loc<Variable>>,
     pub named: Vec<NamedVariable>,
+    pub able: Vec<AbleVariable>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {
+    #[inline(always)]
+    fn debug_assert_not_already_present(&self, var: Variable) {
+        debug_assert!((self.wildcards.iter().map(|v| &v.value))
+            .chain(self.lambda_sets.iter())
+            .chain(self.inferred.iter().map(|v| &v.value))
+            .chain(self.named.iter().map(|nv| &nv.variable))
+            .chain(self.able.iter().map(|av| &av.variable))
+            .chain(self.host_exposed_aliases.values())
+            .all(|&v| v != var));
+    }
+
     pub fn insert_named(&mut self, name: Lowercase, var: Loc<Variable>) {
-        debug_assert!(!self
-            .named
-            .iter()
-            .any(|nv| nv.name == name || nv.variable == var.value));
+        self.debug_assert_not_already_present(var.value);
 
         let named_variable = NamedVariable {
             name,
@@ -52,19 +87,36 @@ impl IntroducedVariables {
         self.named.push(named_variable);
     }
 
+    pub fn insert_able(&mut self, name: Lowercase, var: Loc<Variable>, ability: Symbol) {
+        self.debug_assert_not_already_present(var.value);
+
+        let able_variable = AbleVariable {
+            name,
+            ability,
+            variable: var.value,
+            first_seen: var.region,
+        };
+
+        self.able.push(able_variable);
+    }
+
     pub fn insert_wildcard(&mut self, var: Loc<Variable>) {
+        self.debug_assert_not_already_present(var.value);
         self.wildcards.push(var);
     }
 
     pub fn insert_inferred(&mut self, var: Loc<Variable>) {
+        self.debug_assert_not_already_present(var.value);
         self.inferred.push(var);
     }
 
     fn insert_lambda_set(&mut self, var: Variable) {
+        self.debug_assert_not_already_present(var);
         self.lambda_sets.push(var);
     }
 
     pub fn insert_host_exposed_alias(&mut self, symbol: Symbol, var: Variable) {
+        self.debug_assert_not_already_present(var);
         self.host_exposed_aliases.insert(symbol, var);
     }
 
@@ -78,6 +130,10 @@ impl IntroducedVariables {
         self.named.extend(other.named.iter().cloned());
         self.named.sort();
         self.named.dedup();
+
+        self.able.extend(other.able.iter().cloned());
+        self.able.sort();
+        self.able.dedup();
     }
 
     pub fn union_owned(&mut self, other: Self) {
@@ -91,15 +147,26 @@ impl IntroducedVariables {
         self.named.dedup();
     }
 
-    pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {
-        self.named
-            .iter()
-            .find(|nv| &nv.name == name)
-            .map(|nv| &nv.variable)
+    pub fn var_by_name(&self, name: &Lowercase) -> Option<Variable> {
+        (self.named.iter().map(|nv| (&nv.name, nv.variable)))
+            .chain(self.able.iter().map(|av| (&av.name, av.variable)))
+            .find(|(cand, _)| cand == &name)
+            .map(|(_, var)| var)
     }
 
-    pub fn named_var_by_name(&self, name: &Lowercase) -> Option<&NamedVariable> {
-        self.named.iter().find(|nv| &nv.name == name)
+    pub fn named_var_by_name(&self, name: &Lowercase) -> Option<NamedOrAbleVariable> {
+        if let Some(nav) = self
+            .named
+            .iter()
+            .find(|nv| &nv.name == name)
+            .map(|nv| NamedOrAbleVariable::Named(nv))
+        {
+            return Some(nav);
+        }
+        self.able
+            .iter()
+            .find(|av| &av.name == name)
+            .map(|av| NamedOrAbleVariable::Able(av))
     }
 }
 
@@ -140,13 +207,6 @@ pub fn canonicalize_annotation(
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct HasClause {
-    pub var_name: Lowercase,
-    pub var: Variable,
-    pub ability: Symbol,
-}
-
 pub fn canonicalize_annotation_with_possible_clauses(
     env: &mut Env,
     scope: &mut Scope,
@@ -154,16 +214,17 @@ pub fn canonicalize_annotation_with_possible_clauses(
     region: Region,
     var_store: &mut VarStore,
     abilities_in_scope: &[Symbol],
-) -> (Annotation, Vec<Loc<HasClause>>) {
+) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = MutSet::default();
     let mut aliases = SendMap::default();
 
-    let (annotation, region, clauses) = match annotation {
+    let (annotation, region) = match annotation {
         TypeAnnotation::Where(annotation, clauses) => {
-            let mut can_clauses = Vec::with_capacity(clauses.len());
+            // Add each "has" clause. The association of a variable to an ability will be saved on
+            // `introduced_variables`, which we'll process later.
             for clause in clauses.iter() {
-                match canonicalize_has_clause(
+                let opt_err = canonicalize_has_clause(
                     env,
                     scope,
                     var_store,
@@ -171,24 +232,19 @@ pub fn canonicalize_annotation_with_possible_clauses(
                     clause,
                     abilities_in_scope,
                     &mut references,
-                ) {
-                    Ok(result) => can_clauses.push(Loc::at(clause.region, result)),
-                    Err(err_type) => {
-                        return (
-                            Annotation {
-                                typ: err_type,
-                                introduced_variables,
-                                references,
-                                aliases,
-                            },
-                            can_clauses,
-                        )
-                    }
-                };
+                );
+                if let Err(err_type) = opt_err {
+                    return Annotation {
+                        typ: err_type,
+                        introduced_variables,
+                        references,
+                        aliases,
+                    };
+                }
             }
-            (&annotation.value, annotation.region, can_clauses)
+            (&annotation.value, annotation.region)
         }
-        annot => (annot, region, vec![]),
+        annot => (annot, region),
     };
 
     let typ = can_annotation_help(
@@ -209,7 +265,7 @@ pub fn canonicalize_annotation_with_possible_clauses(
         aliases,
     };
 
-    (annot, clauses)
+    annot
 }
 
 fn make_apply_symbol(
@@ -495,7 +551,7 @@ fn can_annotation_help(
             let name = Lowercase::from(*v);
 
             match introduced_variables.var_by_name(&name) {
-                Some(var) => Type::Variable(*var),
+                Some(var) => Type::Variable(var),
                 None => {
                     let var = var_store.fresh();
 
@@ -559,8 +615,8 @@ fn can_annotation_help(
                 let var_name = Lowercase::from(var);
 
                 if let Some(var) = introduced_variables.var_by_name(&var_name) {
-                    vars.push((var_name.clone(), Type::Variable(*var)));
-                    lowercase_vars.push(Loc::at(loc_var.region, (var_name, *var)));
+                    vars.push((var_name.clone(), Type::Variable(var)));
+                    lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
                 } else {
                     let var = var_store.fresh();
 
@@ -792,7 +848,7 @@ fn canonicalize_has_clause(
     clause: &Loc<roc_parse::ast::HasClause<'_>>,
     abilities_in_scope: &[Symbol],
     references: &mut MutSet<Symbol>,
-) -> Result<HasClause, Type> {
+) -> Result<(), Type> {
     let Loc {
         region,
         value: roc_parse::ast::HasClause { var, ability },
@@ -829,25 +885,21 @@ fn canonicalize_has_clause(
         let var_name_ident = var_name.to_string().into();
         let shadow = Loc::at(region, var_name_ident);
         env.problem(roc_problem::can::Problem::Shadowing {
-            original_region: shadowing.first_seen,
+            original_region: shadowing.first_seen(),
             shadow: shadow.clone(),
             kind: ShadowKind::Variable,
         });
         return Err(Type::Erroneous(Problem::Shadowed(
-            shadowing.first_seen,
+            shadowing.first_seen(),
             shadow,
         )));
     }
 
     let var = var_store.fresh();
 
-    introduced_variables.insert_named(var_name.clone(), Loc::at(region, var));
+    introduced_variables.insert_able(var_name.clone(), Loc::at(region, var), ability);
 
-    Ok(HasClause {
-        var_name,
-        var,
-        ability,
-    })
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1098,7 +1150,7 @@ fn can_assigned_fields<'a>(
                     let field_name = Lowercase::from(loc_field_name.value);
                     let field_type = {
                         if let Some(var) = introduced_variables.var_by_name(&field_name) {
-                            Type::Variable(*var)
+                            Type::Variable(var)
                         } else {
                             let field_var = var_store.fresh();
                             introduced_variables.insert_named(

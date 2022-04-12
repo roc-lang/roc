@@ -2,6 +2,7 @@ use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_constrain::module::ExposedByModule;
 use roc_module::symbol::{ModuleId, Symbol};
+use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
 use roc_types::subs::{Subs, Variable};
 use std::path::{Path, PathBuf};
@@ -18,6 +19,7 @@ fn load<'a>(
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
+    render: RenderTarget,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let cached_subs = read_cached_subs();
 
@@ -29,6 +31,7 @@ fn load<'a>(
         goal_phase,
         target_info,
         cached_subs,
+        render,
     )
 }
 
@@ -39,6 +42,7 @@ pub fn load_and_monomorphize_from_str<'a>(
     src_dir: &Path,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
+    render: RenderTarget,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
@@ -51,6 +55,7 @@ pub fn load_and_monomorphize_from_str<'a>(
         exposed_types,
         Phase::MakeSpecializations,
         target_info,
+        render,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -63,10 +68,11 @@ pub fn load_and_monomorphize<'a>(
     src_dir: &Path,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
+    render: RenderTarget,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename)?;
+    let load_start = LoadStart::from_path(arena, filename, render)?;
 
     match load(
         arena,
@@ -75,6 +81,7 @@ pub fn load_and_monomorphize<'a>(
         exposed_types,
         Phase::MakeSpecializations,
         target_info,
+        render,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -87,10 +94,11 @@ pub fn load_and_typecheck<'a>(
     src_dir: &Path,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
+    render: RenderTarget,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename)?;
+    let load_start = LoadStart::from_path(arena, filename, render)?;
 
     match load(
         arena,
@@ -99,6 +107,7 @@ pub fn load_and_typecheck<'a>(
         exposed_types,
         Phase::SolveTypes,
         target_info,
+        render,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),

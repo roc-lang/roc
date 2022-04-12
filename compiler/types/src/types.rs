@@ -1744,6 +1744,11 @@ pub enum Reason {
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Region>),
     RecordDefaultField(Lowercase),
     NumericLiteralSuffix,
+    InvalidAbilityMemberSpecialization {
+        member_name: Symbol,
+        def_region: Region,
+        unimplemented_abilities: DoesNotImplementAbility,
+    },
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -1783,6 +1788,8 @@ pub enum Category {
     Accessor(Lowercase),
     Access(Lowercase),
     DefaultValue(Lowercase), // for setting optional fields
+
+    AbilityMemberSpecialization(Symbol),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1867,7 +1874,10 @@ pub enum Mismatch {
     InconsistentWhenBranches,
     CanonicalizationProblem,
     TypeNotInRange,
+    DoesNotImplementAbiity(Variable, Symbol),
 }
+
+pub type DoesNotImplementAbility = Vec<(ErrorType, Symbol)>;
 
 #[derive(PartialEq, Eq, Clone, Hash)]
 pub enum ErrorType {
@@ -1875,6 +1885,8 @@ pub enum ErrorType {
     Type(Symbol, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
+    FlexAbleVar(Lowercase, Symbol),
+    RigidAbleVar(Lowercase, Symbol),
     Record(SendMap<Lowercase, RecordField<ErrorType>>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
@@ -1905,10 +1917,7 @@ impl ErrorType {
         match self {
             Infinite => {}
             Type(_, ts) => ts.iter().for_each(|t| t.add_names(taken)),
-            FlexVar(v) => {
-                taken.insert(v.clone());
-            }
-            RigidVar(v) => {
+            FlexVar(v) | RigidVar(v) | FlexAbleVar(v, _) | RigidAbleVar(v, _) => {
                 taken.insert(v.clone());
             }
             Record(fields, ext) => {
@@ -2087,8 +2096,18 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
     match error_type {
         Infinite => buf.push('∞'),
         Error => buf.push('?'),
-        FlexVar(name) => buf.push_str(name.as_str()),
-        RigidVar(name) => buf.push_str(name.as_str()),
+        FlexVar(name) | RigidVar(name) => buf.push_str(name.as_str()),
+        FlexAbleVar(name, symbol) | RigidAbleVar(name, symbol) => {
+            let write_parens = parens == Parens::InTypeParam;
+            if write_parens {
+                buf.push('(');
+            }
+            buf.push_str(name.as_str());
+            buf.push_str(&format!(" has {:?}", symbol));
+            if write_parens {
+                buf.push(')');
+            }
+        }
         Type(symbol, arguments) => {
             let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
 

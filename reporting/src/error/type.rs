@@ -950,6 +950,62 @@ fn to_expr_report<'b>(
                 None,
             ),
 
+            Reason::InvalidAbilityMemberSpecialization {
+                member_name,
+                def_region: _,
+                unimplemented_abilities,
+            } => {
+                let problem = alloc.concat(vec![
+                    alloc.reflow("Something is off with this specialization of "),
+                    alloc.symbol_unqualified(member_name),
+                    alloc.reflow(":"),
+                ]);
+                let this_is = alloc.reflow("This value is");
+                let instead_of = alloc.concat(vec![
+                    alloc.reflow("But the type annotation on "),
+                    alloc.symbol_unqualified(member_name),
+                    alloc.reflow(" says it must match:"),
+                ]);
+
+                let hint = if unimplemented_abilities.is_empty() {
+                    None
+                } else {
+                    let mut stack = Vec::with_capacity(unimplemented_abilities.len());
+                    for (err_type, ability) in unimplemented_abilities.into_iter() {
+                        stack.push(alloc.concat(vec![
+                            to_doc(alloc, Parens::Unnecessary, err_type).0,
+                            alloc.reflow(" does not implement "),
+                            alloc.symbol_unqualified(ability),
+                        ]));
+                    }
+
+                    let hint = alloc.stack(vec![
+                        alloc.concat(vec![
+                            alloc.note(""),
+                            alloc.reflow("Some types in this specialization don't implement the abilities they are expected to. I found the following missing implementations:"),
+                        ]),
+                        alloc.type_block(alloc.stack(stack)),
+                    ]);
+
+                    Some(hint)
+                };
+
+                report_mismatch(
+                    alloc,
+                    lines,
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    problem,
+                    this_is,
+                    instead_of,
+                    hint,
+                )
+            }
+
             Reason::LowLevelOpArg { op, arg_index } => {
                 panic!(
                     "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
@@ -1281,6 +1337,10 @@ fn format_category<'b>(
             alloc.concat(vec![this_is, alloc.text(" a default field")]),
             alloc.text(" of type:"),
         ),
+        AbilityMemberSpecialization(_ability_member) => (
+            alloc.concat(vec![this_is, alloc.text(" a declared specialization")]),
+            alloc.text(" of type:"),
+        ),
     }
 }
 
@@ -1526,7 +1586,7 @@ fn to_circular_report<'b>(
                         You will see ∞ for parts of the type that repeat \
                         something already printed out infinitely.",
                     ),
-                    alloc.type_block(to_doc(alloc, Parens::Unnecessary, overall_type)),
+                    alloc.type_block(to_doc(alloc, Parens::Unnecessary, overall_type).0),
                 ]),
             ])
         },
@@ -1683,6 +1743,7 @@ pub struct Diff<T> {
     left: T,
     right: T,
     status: Status,
+    // TODO: include able variables
 }
 
 fn ext_to_doc<'b>(alloc: &'b RocDocAllocator<'b>, ext: TypeExt) -> Option<RocDocBuilder<'b>> {
@@ -1694,7 +1755,27 @@ fn ext_to_doc<'b>(alloc: &'b RocDocAllocator<'b>, ext: TypeExt) -> Option<RocDoc
     }
 }
 
+type AbleVariables = Vec<(Lowercase, Symbol)>;
+
+#[derive(Default)]
+struct Context {
+    able_variables: AbleVariables,
+}
+
 pub fn to_doc<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    parens: Parens,
+    tipe: ErrorType,
+) -> (RocDocBuilder<'b>, AbleVariables) {
+    let mut ctx = Context::default();
+
+    let doc = to_doc_help(&mut ctx, alloc, parens, dbg!(tipe));
+
+    (doc, ctx.able_variables)
+}
+
+fn to_doc_help<'b>(
+    ctx: &mut Context,
     alloc: &'b RocDocAllocator<'b>,
     parens: Parens,
     tipe: ErrorType,
@@ -1706,22 +1787,32 @@ pub fn to_doc<'b>(
             alloc,
             parens,
             args.into_iter()
-                .map(|arg| to_doc(alloc, Parens::InFn, arg))
+                .map(|arg| to_doc_help(ctx, alloc, Parens::InFn, arg))
                 .collect(),
-            to_doc(alloc, Parens::InFn, *ret),
+            to_doc_help(ctx, alloc, Parens::InFn, *ret),
         ),
         Infinite => alloc.text("∞"),
         Error => alloc.text("?"),
 
-        FlexVar(lowercase) => alloc.type_variable(lowercase),
-        RigidVar(lowercase) => alloc.type_variable(lowercase),
+        FlexVar(lowercase) | RigidVar(lowercase) => alloc.type_variable(lowercase),
+        FlexAbleVar(lowercase, ability) | RigidAbleVar(lowercase, ability) => {
+            // TODO we should be putting able variables on the toplevel of the type, not here
+            ctx.able_variables.push((lowercase.clone(), ability));
+            alloc.concat(vec![
+                alloc.type_variable(lowercase),
+                alloc.space(),
+                alloc.keyword("has"),
+                alloc.space(),
+                alloc.symbol_foreign_qualified(ability),
+            ])
+        }
 
         Type(symbol, args) => report_text::apply(
             alloc,
             parens,
             alloc.symbol_foreign_qualified(symbol),
             args.into_iter()
-                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+                .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
                 .collect(),
         ),
 
@@ -1730,7 +1821,7 @@ pub fn to_doc<'b>(
             parens,
             alloc.symbol_foreign_qualified(symbol),
             args.into_iter()
-                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+                .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
                 .collect(),
         ),
 
@@ -1746,15 +1837,24 @@ pub fn to_doc<'b>(
                         (
                             alloc.string(k.as_str().to_string()),
                             match value {
-                                RecordField::Optional(v) => {
-                                    RecordField::Optional(to_doc(alloc, Parens::Unnecessary, v))
-                                }
-                                RecordField::Required(v) => {
-                                    RecordField::Required(to_doc(alloc, Parens::Unnecessary, v))
-                                }
-                                RecordField::Demanded(v) => {
-                                    RecordField::Demanded(to_doc(alloc, Parens::Unnecessary, v))
-                                }
+                                RecordField::Optional(v) => RecordField::Optional(to_doc_help(
+                                    ctx,
+                                    alloc,
+                                    Parens::Unnecessary,
+                                    v,
+                                )),
+                                RecordField::Required(v) => RecordField::Required(to_doc_help(
+                                    ctx,
+                                    alloc,
+                                    Parens::Unnecessary,
+                                    v,
+                                )),
+                                RecordField::Demanded(v) => RecordField::Demanded(to_doc_help(
+                                    ctx,
+                                    alloc,
+                                    Parens::Unnecessary,
+                                    v,
+                                )),
                             },
                         )
                     })
@@ -1770,7 +1870,7 @@ pub fn to_doc<'b>(
                     (
                         name,
                         args.into_iter()
-                            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+                            .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
                             .collect::<Vec<_>>(),
                     )
                 })
@@ -1793,7 +1893,7 @@ pub fn to_doc<'b>(
                     (
                         name,
                         args.into_iter()
-                            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+                            .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
                             .collect::<Vec<_>>(),
                     )
                 })
@@ -1802,7 +1902,7 @@ pub fn to_doc<'b>(
 
             report_text::recursive_tag_union(
                 alloc,
-                to_doc(alloc, Parens::Unnecessary, *rec_var),
+                to_doc_help(ctx, alloc, Parens::Unnecessary, *rec_var),
                 tags.into_iter()
                     .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
@@ -1811,10 +1911,10 @@ pub fn to_doc<'b>(
         }
 
         Range(typ, range_types) => {
-            let typ = to_doc(alloc, parens, *typ);
+            let typ = to_doc_help(ctx, alloc, parens, *typ);
             let range_types = range_types
                 .into_iter()
-                .map(|arg| to_doc(alloc, Parens::Unnecessary, arg))
+                .map(|arg| to_doc_help(ctx, alloc, Parens::Unnecessary, arg))
                 .collect();
             report_text::range(alloc, typ, range_types)
         }
@@ -1826,7 +1926,7 @@ fn same<'b>(
     parens: Parens,
     tipe: ErrorType,
 ) -> Diff<RocDocBuilder<'b>> {
-    let doc = to_doc(alloc, parens, tipe);
+    let doc = to_doc(alloc, parens, tipe).0;
 
     Diff {
         left: doc.clone(),
@@ -1870,8 +1970,8 @@ fn to_diff<'b>(
                     status,
                 }
             } else {
-                let left = to_doc(alloc, Parens::InFn, type1);
-                let right = to_doc(alloc, Parens::InFn, type2);
+                let left = to_doc(alloc, Parens::InFn, type1).0;
+                let right = to_doc(alloc, Parens::InFn, type2).0;
 
                 Diff {
                     left,
@@ -1928,8 +2028,8 @@ fn to_diff<'b>(
         }
 
         (Alias(_, _, _, AliasKind::Opaque), _) | (_, Alias(_, _, _, AliasKind::Opaque)) => {
-            let left = to_doc(alloc, Parens::InFn, type1);
-            let right = to_doc(alloc, Parens::InFn, type2);
+            let left = to_doc(alloc, Parens::InFn, type1).0;
+            let right = to_doc(alloc, Parens::InFn, type2).0;
 
             Diff {
                 left,
@@ -1961,8 +2061,8 @@ fn to_diff<'b>(
 
         (RecursiveTagUnion(_rec1, _tags1, _ext1), RecursiveTagUnion(_rec2, _tags2, _ext2)) => {
             // TODO do a better job here
-            let left = to_doc(alloc, Parens::Unnecessary, type1);
-            let right = to_doc(alloc, Parens::Unnecessary, type2);
+            let left = to_doc(alloc, Parens::Unnecessary, type1).0;
+            let right = to_doc(alloc, Parens::Unnecessary, type2).0;
 
             Diff {
                 left,
@@ -1973,8 +2073,8 @@ fn to_diff<'b>(
 
         pair => {
             // We hit none of the specific cases where we give more detailed information
-            let left = to_doc(alloc, parens, type1);
-            let right = to_doc(alloc, parens, type2);
+            let left = to_doc(alloc, parens, type1).0;
+            let right = to_doc(alloc, parens, type2).0;
 
             let is_int = |t: &ErrorType| match t {
                 ErrorType::Type(Symbol::NUM_INT, _) => true,
@@ -2135,7 +2235,7 @@ fn diff_record<'b>(
         (
             field.clone(),
             alloc.string(field.as_str().to_string()),
-            tipe.map(|t| to_doc(alloc, Parens::Unnecessary, t.clone())),
+            tipe.map(|t| to_doc(alloc, Parens::Unnecessary, t.clone()).0),
         )
     };
     let shared_keys = fields1
@@ -2261,7 +2361,7 @@ fn diff_tag_union<'b>(
             alloc.tag_name(field.clone()),
             // TODO add spaces between args
             args.iter()
-                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg.clone()))
+                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg.clone()).0)
                 .collect(),
         )
     };
@@ -2518,7 +2618,7 @@ mod report_text {
         let entry_to_doc = |(name, tipe): (Lowercase, RecordField<ErrorType>)| {
             (
                 alloc.string(name.as_str().to_string()),
-                to_doc(alloc, Parens::Unnecessary, tipe.into_inner()),
+                to_doc(alloc, Parens::Unnecessary, tipe.into_inner()).0,
             )
         };
 
@@ -2863,7 +2963,14 @@ fn type_problem_to_pretty<'b>(
 
             match tipe {
                 Infinite | Error | FlexVar(_) => alloc.nil(),
-                RigidVar(y) => bad_double_rigid(x, y),
+                FlexAbleVar(_, ability) => bad_rigid_var(
+                    x,
+                    alloc.concat(vec![
+                        alloc.reflow("an instance of the ability "),
+                        alloc.symbol_unqualified(ability),
+                    ]),
+                ),
+                RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
                 Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),
                 TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
