@@ -1301,8 +1301,6 @@ fn check_ability_specialization(
                 );
 
                 problems.push(problem);
-
-                return;
             }
 
             Success {

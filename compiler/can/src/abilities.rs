@@ -140,9 +140,7 @@ impl AbilitiesStore {
 
     /// Returns an iterator over pairs (ability member, type) specifying that
     /// "ability member" has a specialization with type "type".
-    pub fn get_known_specializations<'lifetime_for_copied>(
-        &'lifetime_for_copied self,
-    ) -> impl Iterator<Item = (Symbol, Symbol)> + 'lifetime_for_copied {
+    pub fn get_known_specializations(&self) -> impl Iterator<Item = (Symbol, Symbol)> + '_ {
         self.declared_specializations.keys().copied()
     }
 
