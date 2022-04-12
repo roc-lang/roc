@@ -10,14 +10,40 @@ use std::os::raw::c_char;
 use winit::event::VirtualKeyCode;
 
 extern "C" {
+    // program
+
     #[link_name = "roc__programForHost_1_exposed_generic"]
     fn roc_program() -> ();
 
-    #[link_name = "roc__programForHost_1_Render_caller"]
-    fn call_Render(event: *const RocEvent, closure_data: *const u8, output: *mut RocList<RocElem>);
-
     #[link_name = "roc__programForHost_size"]
     fn roc_program_size() -> i64;
+
+    // init
+
+    #[link_name = "roc__programForHost_1_Init_caller"]
+    fn call_init(size: *const Bounds, closure_data: *const u8, output: Model);
+
+    #[link_name = "roc__programForHost_1_Init_size"]
+    fn init_size() -> i64;
+
+    #[link_name = "roc__mainForHost_1_Init_result_size"]
+    fn init_result_size() -> i64;
+
+    // update
+
+    #[link_name = "roc__programForHost_1_Update_caller"]
+    fn call_update(model: Model, event: *const RocEvent, closure_data: *const u8, output: Model);
+
+    #[link_name = "roc__programForHost_1_Update_size"]
+    fn update_size() -> i64;
+
+    #[link_name = "roc__mainForHost_1_Update_result_size"]
+    fn update_result_size() -> i64;
+
+    // render
+
+    #[link_name = "roc__programForHost_1_Render_caller"]
+    fn call_render(model: ConstModel, closure_data: *const u8, output: *mut RocList<RocElem>);
 
     #[link_name = "roc__programForHost_1_Render_size"]
     fn roc_render_size() -> i64;
@@ -263,7 +289,7 @@ pub fn app_render(event: RocEvent) -> RocList<RocElem> {
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        call_Render(&event, buffer, output.as_mut_ptr());
+        call_render(&event, buffer, output.as_mut_ptr());
 
         std::alloc::dealloc(buffer, layout);
 
@@ -276,4 +302,25 @@ pub fn app_render(event: RocEvent) -> RocList<RocElem> {
 pub struct Bounds {
     pub height: f32,
     pub width: f32,
+}
+
+struct Model(*mut c_void);
+
+impl Model {
+    fn new() -> Self {
+        const size = init_size();
+        const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
+
+        Self(raw_output as *mut c_void)
+    }
+}
+
+fn init(bounds: Bounds) -> Model {
+    const closure: [*]u8 = undefined;
+    const output = allocate_model(allocator);
+
+    roc__mainForHost_1_Init_caller(closure, closure, output);
+    fn call_init(&bounds, closure_data, output);
+
+    return output;
 }
