@@ -1224,7 +1224,8 @@ fn check_ability_specialization(
             .get_var_by_symbol(&root_symbol)
             .expect("Ability should be registered in env by now!");
 
-        // Check if they unify - if they don't, that's a type error!
+        // Check if they unify - if they don't, then the claimed specialization isn't really one,
+        // and that's a type error!
         let snapshot = subs.snapshot();
         let unified = unify(subs, symbol_loc_var.value, root_signature_var, Mode::EQ);
 
