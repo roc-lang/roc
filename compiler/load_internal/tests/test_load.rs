@@ -426,12 +426,12 @@ mod test_load {
             loaded_module,
             hashmap! {
                 "floatTest" => "Float *",
-                "divisionFn" => "Float a, Float a -> Result (Float a) [ DivByZero ]*",
-                "divisionTest" => "Result (Float *) [ DivByZero ]*",
+                "divisionFn" => "Float a, Float a -> Float a",
+                "divisionTest" => "Float a",
                 "intTest" => "I64",
                 "x" => "Float *",
                 "constantNum" => "Num *",
-                "divDep1ByDep2" => "Result (Float *) [ DivByZero ]*",
+                "divDep1ByDep2" => "Float *",
                 "fromDep2" => "Float *",
             },
         );
