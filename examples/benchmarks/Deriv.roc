@@ -42,7 +42,7 @@ Expr : [ Val I64, Var Str, Add Expr Expr, Mul Expr Expr, Pow Expr Expr, Ln Expr 
 divmod : I64, I64 -> Result { div : I64, mod : I64 } [ DivByZero ]*
 divmod = \l, r ->
     when Pair (l // r) (l % r) is
-        Pair (div) (Ok mod) ->
+        Pair div (Ok mod) ->
             Ok { div, mod }
 
         _ ->
