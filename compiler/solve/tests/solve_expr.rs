@@ -3340,7 +3340,7 @@ mod solve_expr {
                 Num.divCeilChecked
                 "#
             ),
-            "Int a, Int a -> Int a",
+            "Int a, Int a -> Result (Int a) [ DivByZero ]*",
         );
     }
 
