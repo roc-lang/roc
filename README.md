@@ -15,10 +15,9 @@ There's also a folder of [examples](https://github.com/rtfeldman/roc/tree/trunk/
 
 If you have a specific question, the [FAQ](FAQ.md) might have an answer, although [Roc Zulip chat](https://roc.zulipchat.com) is overall the best place to ask questions and get help! It's also where we discuss [ideas](https://roc.zulipchat.com/#narrow/stream/304641-ideas) for the language. If you want to get involved in contributing to the language, Zulip is also a great place to ask about good first projects.
 
-## State of Roc
+## WARNING
 
-**Roc is not ready for production yet.** You are likely to encounter bugs. Publishing packages or documentation is not yet supported.
-Many programs can however be compiled correctly. Check out [examples](examples) and [examples/benchmarks](examples/benchmarks). There are minimal platforms for Rust, Zig, C, Swift and an HTTP server. We are hard at work to make programming in Roc a delightful experience!
+**Roc is not ready for production yet.** You are likely to encounter bugs. Publishing packages or documentation is not yet supported. We are hard at work to make programming in Roc a delightful experience!
 
 ## Getting Started
 
@@ -26,7 +25,7 @@ Many programs can however be compiled correctly. Check out [examples](examples) 
 - [Windows](getting_started/windows.md)
 - [Other](getting_started/other.md)
 
-### Examples
+#### Examples
 
 Run examples as follows:
 ```
@@ -40,8 +39,6 @@ For NQueens, input 10 in the terminal and press enter.
 **Tip:** when programming in roc, we recommend to execute `./roc check myproject/Foo.roc` before `./roc myproject/Foo.roc` or `./roc build myproject/Foo.roc`. `./roc check` can produce clear error messages in cases where building/running may panic.
 
 ## Project Goals
-
-### Roc's Design
 
 **Applications and Platforms**
 
@@ -80,7 +77,7 @@ The core Roc language and standard library include no I/O operations, which give
 * A VR or [Arduino](https://www.arduino.cc/) platform can expose uncommon I/O operations supported by that hardware, while omitting common I/O operations that are unsupported (such as reading keyboard input from a terminal that doesn't exist).
 * A high-performance Web server written in Rust can be a Roc platform where all I/O operations are implemented in terms of Streams or Observables rather than a more traditional asynchronous abstraction like Futures or Promises. This would mean all code in that platform's ecosystem would be necessarily built on a common streaming abstraction.
 
-### Characteristic Goal
+#### Characteristic Goal
 
 Roc is in relatively early stages of development. It's currently possible to build both platforms and applications (see the [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) folder for some examples that aren't particularly organized at the moment), although [documentation](https://github.com/rtfeldman/roc/tree/trunk/compiler/builtins/docs) is in even earlier stages than the compiler itself.
 
@@ -100,17 +97,6 @@ Finally, some implementation goals:
 
 It's an ambitious project! It'll take a long time to get where it's going, but hopefully it'll be worth the wait.
 
-## Getting Involved
-
-The number of people involved in Roc's development has been steadily increasing
-over time - which has been great, because it's meant we've been able to onboard
-people at a nice pace. (Most people who have contributed to Roc had previously
-never done anything with Rust and also never worked on a compiler, but we've
-been able to find beginner-friendly projects to get people up to speed gradually.)
-
-If you're interested in getting involved, check out
-[CONTRIBUTING.md](https://github.com/rtfeldman/roc/blob/trunk/CONTRIBUTING.md)!
-
 ## Sponsor
 
 We are very grateful for our sponsor [NoRedInk](https://www.noredink.com/).
@@ -129,3 +115,14 @@ If you're curious about where the language's name and logo came from,
 [We're changing Roc's license, and we need your sign-off to do it! · Issue #1199](https://github.com/rtfeldman/roc/issues/1199)
 
 UPL v1.0 wants to achieve the same goal as MIT + Apache 2.0
+
+## Getting Involved
+
+The number of people involved in Roc's development has been steadily increasing
+over time - which has been great, because it's meant we've been able to onboard
+people at a nice pace. (Most people who have contributed to Roc had previously
+never done anything with Rust and also never worked on a compiler, but we've
+been able to find beginner-friendly projects to get people up to speed gradually.)
+
+If you're interested in getting involved, check out
+[CONTRIBUTING.md](https://github.com/rtfeldman/roc/blob/trunk/CONTRIBUTING.md)!
