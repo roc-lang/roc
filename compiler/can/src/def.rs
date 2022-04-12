@@ -522,8 +522,6 @@ pub fn canonicalize_defs<'a>(
             .register_ability(loc_ability_name.value, can_members);
     }
 
-    dbg!(&scope.abilities_store, pattern_type);
-
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
 

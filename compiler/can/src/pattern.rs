@@ -166,7 +166,7 @@ pub fn canonicalize_def_header_pattern<'a>(
     match pattern {
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
         Identifier(name) => match scope.introduce_or_shadow_ability_member(
-            dbg!((*name).into()),
+            (*name).into(),
             &env.exposed_ident_ids,
             &mut env.ident_ids,
             region,

@@ -1769,7 +1769,7 @@ pub fn to_doc<'b>(
 ) -> (RocDocBuilder<'b>, AbleVariables) {
     let mut ctx = Context::default();
 
-    let doc = to_doc_help(&mut ctx, alloc, parens, dbg!(tipe));
+    let doc = to_doc_help(&mut ctx, alloc, parens, tipe);
 
     (doc, ctx.able_variables)
 }

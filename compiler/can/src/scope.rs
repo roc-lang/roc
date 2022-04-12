@@ -248,17 +248,14 @@ impl Scope {
         all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
-        match dbg!(self.idents.get(&ident)) {
+        match self.idents.get(&ident) {
             Some(&(original_symbol, original_region)) => {
                 let shadow_ident_id = all_ident_ids.add(ident.clone());
                 let shadow_symbol = Symbol::new(self.home, shadow_ident_id);
 
                 self.symbols.insert(shadow_symbol, region);
 
-                if self
-                    .abilities_store
-                    .is_ability_member_name(dbg!(original_symbol))
-                {
+                if self.abilities_store.is_ability_member_name(original_symbol) {
                     self.abilities_store
                         .register_specializing_symbol(shadow_symbol, original_symbol);
                     // Add a symbol for the shadow, but don't re-associate the member name.
