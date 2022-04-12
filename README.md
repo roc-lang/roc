@@ -6,8 +6,8 @@
 # The Roc Programming Language
 
 </div>  
-  
-Roc is a language for making delightful software.
+
+Roc is a language for making **delightful** software.
 
 The [tutorial](TUTORIAL.md) is the best place to learn about how to use the language - it assumes no prior knowledge of Roc or similar languages. (If you already know [Elm](https://elm-lang.org/), then [Roc for Elm Programmers](https://github.com/rtfeldman/roc/blob/trunk/roc-for-elm-programmers.md) may be of interest.)
 
@@ -17,7 +17,7 @@ If you have a specific question, the [FAQ](FAQ.md) might have an answer, althoug
 
 ## State of Roc
 
-Roc is not ready for production yet. You are likely to encounter bugs. Publishing packages or documentation is not yet supported.
+**Roc is not ready for production yet.** You are likely to encounter bugs. Publishing packages or documentation is not yet supported.
 Many programs can however be compiled correctly. Check out [examples](examples) and [examples/benchmarks](examples/benchmarks). There are minimal platforms for Rust, Zig, C, Swift and an HTTP server. We are hard at work to make programming in Roc a delightful experience!
 
 ## Getting started
@@ -43,9 +43,15 @@ For NQueens, input 10 in the terminal and press enter.
 
 We are very grateful for our sponsor [NoRedInk](https://www.noredink.com/).
 
+[NoRedInk – Funding the Roc Programming Language](https://blog.noredink.com/post/676230051771138048/funding-the-roc-programming-language)
+
 <img src="https://www.noredink.com/assets/logo-red-black-f6989d7567cf90b349409137595e99c52d036d755b4403d25528e0fd83a3b084.svg" height="60" alt="NoRedInk logo"/>
 
-## Applications and Platforms
+## Project Goals
+
+### Roc's Design
+
+**Applications and Platforms**
 
 Applications are often built on a *framework.* Typically, both application and framework are written in the same language.
 * [Rails](https://rubyonrails.org/) applications are written in Ruby, and so is Rails.
@@ -69,9 +75,7 @@ Like in the previous examples, application authors building on these platforms g
 
 By using systems-level programming languages like C and C++, platform authors sacrifice development speed, but unlock the highest possible performance characteristics. This is a tradeoff many platform authors are happy to accept, for the sake of having applications built on their platforms run very fast.
 
-## Roc's Design
-
-Roc is designed to make the "systems-level platform, higher-level application" experience as nice as possible.
+**Roc is designed to make the "systems-level platform, higher-level application" experience as nice as possible.**
 
 * **Application** authors code exclusively in Roc. It's a language designed for nice ergonomics. The syntax resembles Ruby or CoffeeScript, and it has a fast compiler with full type inference.
 * **Platform** authors code almost exclusively in a systems-level language like C, C++, Rust, Swift or [Zig](https://ziglang.org/), except for the thin Roc API they expose to application authors. Roc application code compiles to machine code, and production builds of Roc apps benefit from the same [LLVM](https://llvm.org/) optimizations that C++, Rust, Swift and Zig do. Roc application authors do not need to know this lower-level code exists; all they have to interact with is the platform's API, which is exposed as an ordinary Roc API.
@@ -84,7 +88,7 @@ The core Roc language and standard library include no I/O operations, which give
 * A VR or [Arduino](https://www.arduino.cc/) platform can expose uncommon I/O operations supported by that hardware, while omitting common I/O operations that are unsupported (such as reading keyboard input from a terminal that doesn't exist).
 * A high-performance Web server written in Rust can be a Roc platform where all I/O operations are implemented in terms of Streams or Observables rather than a more traditional asynchronous abstraction like Futures or Promises. This would mean all code in that platform's ecosystem would be necessarily built on a common streaming abstraction.
 
-## Project Goals
+### Characteristic Goal
 
 Roc is in relatively early stages of development. It's currently possible to build both platforms and applications (see the [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) folder for some examples that aren't particularly organized at the moment), although [documentation](https://github.com/rtfeldman/roc/tree/trunk/compiler/builtins/docs) is in even earlier stages than the compiler itself.
 
