@@ -1,4 +1,4 @@
-# Code of Conduct for the Roc GitHub Repository and Zulip Chat
+# Code of Conduct
 
 ## Our Pledge
 
