@@ -5788,7 +5788,7 @@ mod solve_expr {
                 hash = \$Id n -> n
                 "#
             ),
-            [("Id", "hash")],
+            [("hash", "Id")],
         )
     }
 
@@ -5809,7 +5809,7 @@ mod solve_expr {
                 hash32 = \$Id n -> Num.toU32 n
                 "#
             ),
-            [("Id", "hash"), ("Id", "hash32")],
+            [("hash", "Id"), ("hash32", "Id")],
         )
     }
 
@@ -5837,7 +5837,7 @@ mod solve_expr {
                 le = \$Id m, $Id n -> m < n
                 "#
             ),
-            [("Id", "hash"), ("Id", "hash32"), ("Id", "eq"), ("Id", "le")],
+            [("hash", "Id"), ("hash32", "Id"), ("eq", "Id"), ("le", "Id")],
         )
     }
 }
