@@ -1,12 +1,17 @@
 use bumpalo::Bump;
 use const_format::concatcp;
+use home::home_dir;
 use inkwell::context::Context;
 use libloading::Library;
+use rustyline::error::ReadlineError;
 use rustyline::highlight::{Highlighter, PromptInfo};
+use rustyline::history::History;
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
+use std::fs;
 use std::io;
+use std::path::PathBuf;
 use target_lexicon::Triple;
 
 use roc_build::link::module_to_dylib;
@@ -43,6 +48,8 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
 pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
+
+pub const HISTORY_PATH: &str = ".roc_cache/repl_history.dat";
 
 #[derive(Completer, Helper, Hinter)]
 struct ReplHelper {
@@ -116,6 +123,76 @@ impl Validator for InputValidator {
                 _ => Ok(ValidationResult::Valid(None)),
             }
         }
+    }
+}
+
+struct CommandHistories {
+    local_history: History,
+    local_history_path: Option<PathBuf>,
+    session_history: History,
+    global_history: History,
+    global_history_path: Option<PathBuf>,
+}
+
+impl CommandHistories {
+    fn add_history_entry(&mut self, line: &str) {
+        self.local_history.add(line);
+        self.session_history.add(line);
+        self.global_history.add(line);
+    }
+
+    fn save_session_history(&mut self, path: &str) -> Result<(), ReadlineError> {
+        self.session_history.save(path)
+    }
+    fn append_histories(&mut self) -> Result<(), ReadlineError> {
+        Ok(())
+            .and_then(|()| match &self.global_history_path {
+                Some(path) => self.global_history.append(path),
+                None => Ok(()),
+            })
+            .and_then(|()| match &self.local_history_path {
+                Some(path) => self.local_history.append(path),
+                None => Ok(()),
+            })
+    }
+    fn new() -> CommandHistories {
+        CommandHistories {
+            local_history: History::new(),
+            local_history_path: None,
+            session_history: History::new(),
+            global_history: History::new(),
+            global_history_path: None,
+        }
+    }
+    fn load(local_path: Option<PathBuf>, global_path: Option<PathBuf>) -> CommandHistories {
+        let mut histories = Self::new();
+        local_path
+            .clone()
+            .map(|path| Some(histories.local_history.load(&path)));
+        global_path
+            .clone()
+            .map(|path| Some(histories.global_history.load(&path)));
+        CommandHistories {
+            local_history_path: local_path,
+            global_history_path: global_path,
+            ..histories
+        }
+    }
+}
+fn local_history_path() -> PathBuf {
+    PathBuf::from(HISTORY_PATH)
+}
+fn global_history_path() -> Option<PathBuf> {
+    home_dir().map(|path| path.join(PathBuf::from(HISTORY_PATH)))
+}
+fn touch(path: PathBuf) -> Result<PathBuf, std::io::Error> {
+    match fs::File::options()
+        .write(true)
+        .create(true)
+        .open(&local_history_path())
+    {
+        Ok(_) => Ok(path),
+        Err(e) => Err(e),
     }
 }
 
@@ -336,8 +413,7 @@ fn report_parse_error(fail: SyntaxError) {
     println!("TODO Gracefully report parse error in repl: {:?}", fail);
 }
 
-pub fn main() -> io::Result<()> {
-    use rustyline::error::ReadlineError;
+pub fn main(with_history: bool) -> io::Result<()> {
     use rustyline::Editor;
 
     // To debug rustyline:
@@ -347,6 +423,36 @@ pub fn main() -> io::Result<()> {
 
     let mut prev_line_blank = false;
     let mut editor = Editor::<ReplHelper>::new();
+
+    let global_history_path = if with_history {
+        global_history_path()
+            .map(
+                |path| match touch(path.clone()).map(|path| editor.load_history(&path)) {
+                    Ok(_) => Some(path),
+                    Err(_) => {
+                        println!("Failed to load or initialize global history");
+                        None
+                    }
+                },
+            )
+            .flatten()
+    } else {
+        None
+    };
+
+    let local_path = if with_history {
+        match touch(local_history_path()).map(|path| editor.load_history(&path)) {
+            Ok(_) => Some(local_history_path()),
+            Err(_) => {
+                println!("Failed to load or initialize local history");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut histories = CommandHistories::load(local_path, global_history_path);
+
     let repl_helper = ReplHelper::new();
     editor.set_helper(Some(repl_helper));
 
@@ -357,6 +463,12 @@ pub fn main() -> io::Result<()> {
             Ok(line) => {
                 let trim_line = line.trim();
                 editor.add_history_entry(trim_line);
+                if with_history {
+                    histories.add_history_entry(trim_line);
+                    histories
+                        .append_histories()
+                        .expect("failed to append histories");
+                }
 
                 let pending_src = &mut editor
                     .helper_mut()
@@ -388,13 +500,22 @@ pub fn main() -> io::Result<()> {
                         }
                     }
                     ":help" => {
-                        println!("Use :exit or :q to exit.");
+                        println!("Use :exit or :q to exit. Use :save <filename> to save your session to a file.");
                     }
                     ":exit" => {
                         break;
                     }
                     ":q" => {
                         break;
+                    }
+                    save_cmd if save_cmd.starts_with(":save") => {
+                        match save_cmd.split_once(" ") {
+                            Some((_, path)) => match histories.save_session_history(path) {
+                                Ok(_) => println!("History saved"),
+                                Err(err) => println!("Failed to save history: {err}"),
+                            },
+                            None => println!("Please supply a path to save your history to"),
+                        };
                     }
                     _ => {
                         let result = if pending_src.is_empty() {

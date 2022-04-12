@@ -21,6 +21,7 @@ libloading = "0.7.1"
 rustyline = {git = "https://github.com/rtfeldman/rustyline", rev = "e74333c"}
 rustyline-derive = {git = "https://github.com/rtfeldman/rustyline", rev = "e74333c"}
 target-lexicon = "0.12.2"
+home = "0.5.3"
 
 # TODO: make llvm optional
 roc_build = {path = "../compiler/build", features = ["llvm"]}
