@@ -159,14 +159,14 @@ impl IntroducedVariables {
             .named
             .iter()
             .find(|nv| &nv.name == name)
-            .map(|nv| NamedOrAbleVariable::Named(nv))
+            .map(NamedOrAbleVariable::Named)
         {
             return Some(nav);
         }
         self.able
             .iter()
             .find(|av| &av.name == name)
-            .map(|av| NamedOrAbleVariable::Able(av))
+            .map(NamedOrAbleVariable::Able)
     }
 }
 
@@ -258,14 +258,12 @@ pub fn canonicalize_annotation_with_possible_clauses(
         &mut references,
     );
 
-    let annot = Annotation {
+    Annotation {
         typ,
         introduced_variables,
         references,
         aliases,
-    };
-
-    annot
+    }
 }
 
 fn make_apply_symbol(
@@ -897,7 +895,7 @@ fn canonicalize_has_clause(
 
     let var = var_store.fresh();
 
-    introduced_variables.insert_able(var_name.clone(), Loc::at(region, var), ability);
+    introduced_variables.insert_able(var_name, Loc::at(region, var), ability);
 
     Ok(())
 }

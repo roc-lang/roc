@@ -118,8 +118,8 @@ impl AbilitiesStore {
         specializing_symbol: Symbol,
     ) -> Option<(Symbol, &AbilityMemberData)> {
         let root_symbol = self.specialization_to_root.get(&specializing_symbol)?;
-        debug_assert!(self.ability_members.contains_key(&root_symbol));
-        let root_data = self.ability_members.get(&root_symbol).unwrap();
+        debug_assert!(self.ability_members.contains_key(root_symbol));
+        let root_data = self.ability_members.get(root_symbol).unwrap();
         Some((*root_symbol, root_data))
     }
 

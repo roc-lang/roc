@@ -618,6 +618,7 @@ struct State<'a> {
 type CachedSubs = Arc<Mutex<MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>>>;
 
 impl<'a> State<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         root_id: ModuleId,
         target_info: TargetInfo,
@@ -3174,6 +3175,7 @@ fn add_imports(
     import_variables
 }
 
+#[allow(clippy::complexity)]
 fn run_solve_solve(
     imported_builtins: Vec<Symbol>,
     exposed_for_module: ExposedForModule,
