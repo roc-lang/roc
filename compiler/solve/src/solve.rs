@@ -1319,10 +1319,8 @@ fn check_ability_specialization(
                     .filter(|mia| mia.ability == root_data.parent_ability)
                     .collect::<Vec<_>>();
                 ability_implementations_for_specialization.dedup();
-                debug_assert_eq!(
-                    ability_implementations_for_specialization.len(), 1,
-                    "If there's more than one, the definition is ambiguous - this should be an error"
-                );
+
+                debug_assert!(ability_implementations_for_specialization.len() == 1, "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization");
 
                 // This is a valid specialization! Record it.
                 let specialization_type = ability_implementations_for_specialization[0].typ;

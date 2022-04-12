@@ -9577,4 +9577,46 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn ability_specialization_conflicting_specialization_types() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ eq ] to "./platform"
+
+                Eq has
+                    eq : a, a -> Bool | a has Eq
+
+                You := {}
+                AndI := {}
+
+                eq = \$You {}, $AndI {} -> False
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with this specialization of `eq`:
+
+                9│  eq = \$You {}, $AndI {} -> False
+                    ^^
+
+                This value is a declared specialization of type:
+
+                    You, AndI -> [ False, True ]
+
+                But the type annotation on `eq` says it must match:
+
+                    You, You -> Bool
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                "#
+            ),
+        )
+    }
 }
