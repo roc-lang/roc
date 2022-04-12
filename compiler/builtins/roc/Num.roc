@@ -69,6 +69,7 @@ interface Num
             isNegative,
             rem,
             div,
+            divChecked,
             modInt,
             modFloat,
             sqrt,
@@ -97,7 +98,9 @@ interface Num
             bytesToU16,
             bytesToU32,
             divCeil,
+            divCeilChecked,
             divFloor,
+            divFloorChecked,
             toStr,
             isMultipleOf,
             minI8,
@@ -229,10 +232,13 @@ atan : Float a -> Float a
 
 sqrt : Float a -> Result (Float a) [ SqrtOfNegative ]*
 log : Float a -> Result (Float a) [ LogNeedsPositive ]*
-div : Float a, Float a -> Result (Float a) [ DivByZero ]*
+div : Float a, Float a -> Float a
+divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
-divCeil: Int a, Int a -> Result (Int a) [ DivByZero ]*
-divFloor: Int a, Int a -> Result (Int a) [ DivByZero ]*
+divCeil : Int a, Int a -> Int a
+divCeilChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+divFloor : Int a, Int a -> Int a
+divFloorChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
 # mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
 rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
