@@ -824,7 +824,7 @@ fn gen_div_checked_by_zero_dec() {
                         Err _ -> -1
                 "#
         ),
-        -1,
+        RocDec::from_str_to_i128_unsafe("-1"),
         i128
     );
 }
