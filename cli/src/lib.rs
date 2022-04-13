@@ -558,7 +558,7 @@ impl Target {
                 architecture: Architecture::X86_64,
                 vendor: Vendor::Unknown,
                 operating_system: OperatingSystem::Linux,
-                environment: Environment::Gnu,
+                environment: Environment::Musl,
                 binary_format: BinaryFormat::Elf,
             },
             Wasm32 => Triple {
