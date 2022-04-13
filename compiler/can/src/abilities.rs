@@ -1,14 +1,13 @@
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
-use roc_types::{subs::Variable, types::Type};
+use roc_types::types::Type;
 
 /// Stores information about an ability member definition, including the parent ability, the
 /// defining type, and what type variables need to be instantiated with instances of the ability.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbilityMemberData {
     pub parent_ability: Symbol,
-    pub signature_var: Variable,
     pub signature: Type,
     pub region: Region,
 }
@@ -49,19 +48,14 @@ pub struct AbilitiesStore {
 
 impl AbilitiesStore {
     /// Records the definition of an ability, including its members.
-    pub fn register_ability(
-        &mut self,
-        ability: Symbol,
-        members: Vec<(Symbol, Region, Variable, Type)>,
-    ) {
+    pub fn register_ability(&mut self, ability: Symbol, members: Vec<(Symbol, Region, Type)>) {
         let mut members_vec = Vec::with_capacity(members.len());
-        for (member, region, signature_var, signature) in members.into_iter() {
+        for (member, region, signature) in members.into_iter() {
             members_vec.push(member);
             let old_member = self.ability_members.insert(
                 member,
                 AbilityMemberData {
                     parent_ability: ability,
-                    signature_var,
                     signature,
                     region,
                 },

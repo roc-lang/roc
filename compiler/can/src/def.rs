@@ -533,7 +533,7 @@ pub fn canonicalize_defs<'a>(
                 .introduced_variables
                 .union(&member_annot.introduced_variables);
 
-            can_members.push((member_sym, name_region, var_store.fresh(), member_annot.typ));
+            can_members.push((member_sym, name_region, member_annot.typ));
         }
 
         // Store what symbols a type must define implementations for to have this ability.
