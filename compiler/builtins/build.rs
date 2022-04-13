@@ -54,6 +54,13 @@ fn main() {
         "i386-unknown-linux-musl",
     );
 
+    generate_bc_file(
+        &bitcode_path,
+        &build_script_dir_path,
+        "ir-x86_64",
+        "x86_64-unknown-linux-musl",
+    );
+
     // OBJECT FILES
     #[cfg(windows)]
     const BUILTINS_HOST_FILE: &str = "builtins-host.obj";

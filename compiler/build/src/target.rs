@@ -60,6 +60,12 @@ pub fn target_zig_str(target: &Triple) -> &'static str {
         Triple {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Linux,
+            environment: Environment::Musl,
+            ..
+        } => "x86_64-linux-musl",
+        Triple {
+            architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Linux,
             ..
         } => "x86_64-linux-gnu",
         Triple {

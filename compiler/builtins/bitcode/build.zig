@@ -29,11 +29,13 @@ pub fn build(b: *Builder) void {
         },
     });
     const linux32_target = makeLinux32Target();
+    const linux64_target = makeLinux64Target();
     const wasm32_target = makeWasm32Target();
 
     // LLVM IR
     generateLlvmIrFile(b, mode, host_target, main_path, "ir", "host");
     generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "i386-unknown-linux-musl");
+    generateLlvmIrFile(b, mode, linux64_target, main_path, "ir-x86_64", "x86_64-unknown-linux-musl");
     generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "wasm32-unknown-unknown");
 
     // Generate Object Files
@@ -91,6 +93,16 @@ fn makeLinux32Target() CrossTarget {
     var target = CrossTarget.parse(.{}) catch unreachable;
 
     target.cpu_arch = std.Target.Cpu.Arch.i386;
+    target.os_tag = std.Target.Os.Tag.linux;
+    target.abi = std.Target.Abi.musl;
+
+    return target;
+}
+
+fn makeLinux64Target() CrossTarget {
+    var target = CrossTarget.parse(.{}) catch unreachable;
+
+    target.cpu_arch = std.Target.Cpu.Arch.x86_64;
     target.os_tag = std.Target.Os.Tag.linux;
     target.abi = std.Target.Abi.musl;
 
