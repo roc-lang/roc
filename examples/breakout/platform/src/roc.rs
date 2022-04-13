@@ -21,7 +21,7 @@ extern "C" {
     // init
 
     #[link_name = "roc__programForHost_1_Init_caller"]
-    fn call_init(size: *const Bounds, closure_data: *const u8, output: Model);
+    fn call_init(size: *const Bounds, closure_data: *const u8, output: *mut Model);
 
     #[link_name = "roc__programForHost_1_Init_size"]
     fn init_size() -> i64;
@@ -32,7 +32,12 @@ extern "C" {
     // update
 
     #[link_name = "roc__programForHost_1_Update_caller"]
-    fn call_update(model: Model, event: *const RocEvent, closure_data: *const u8, output: Model);
+    fn call_update(
+        model: *const Model,
+        event: *const RocEvent,
+        closure_data: *const u8,
+        output: *mut Model,
+    );
 
     #[link_name = "roc__programForHost_1_Update_size"]
     fn update_size() -> i64;
@@ -43,7 +48,7 @@ extern "C" {
     // render
 
     #[link_name = "roc__programForHost_1_Render_caller"]
-    fn call_render(model: ConstModel, closure_data: *const u8, output: *mut RocList<RocElem>);
+    fn call_render(model: *const Model, closure_data: *const u8, output: *mut RocList<RocElem>);
 
     #[link_name = "roc__programForHost_1_Render_size"]
     fn roc_render_size() -> i64;
@@ -279,7 +284,7 @@ pub struct ButtonStyles {
     pub text_color: Rgba,
 }
 
-pub fn app_render(event: RocEvent) -> RocList<RocElem> {
+pub fn render(event: RocEvent) -> RocList<RocElem> {
     let mut output = MaybeUninit::uninit();
 
     // Call the program's render function
@@ -304,23 +309,39 @@ pub struct Bounds {
     pub width: f32,
 }
 
-struct Model(*mut c_void);
+type Model = c_void;
 
-impl Model {
-    fn new() -> Self {
-        const size = init_size();
-        const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
+/// Call the app's init function
+pub fn init(bounds: Bounds) -> RocList<RocElem> {
+    let closure_data_buf;
+    let layout;
 
-        Self(raw_output as *mut c_void)
+    // Call init to get the initial model
+    let model = unsafe {
+        let mut ret_val = MaybeUninit::uninit();
+
+        layout = Layout::array::<u8>(init_size() as usize).unwrap();
+
+        // TODO allocate on the stack if it's under a certain size
+        closure_data_buf = std::alloc::alloc(layout);
+
+        call_init(&bounds, closure_data_buf, ret_val.as_mut_ptr());
+
+        ret_val.assume_init()
+    };
+
+    // Call render passing the model to get the initial Elem
+    unsafe {
+        let mut ret_val = MaybeUninit::uninit();
+
+        // Reuse the buffer from the previous closure if possible
+        let closure_data_buf =
+            std::alloc::realloc(closure_data_buf, layout, roc_render_size() as usize);
+
+        call_render(&model, closure_data_buf, ret_val.as_mut_ptr());
+
+        std::alloc::dealloc(closure_data_buf, layout);
+
+        ret_val.assume_init()
     }
-}
-
-fn init(bounds: Bounds) -> Model {
-    const closure: [*]u8 = undefined;
-    const output = allocate_model(allocator);
-
-    roc__mainForHost_1_Init_caller(closure, closure, output);
-    fn call_init(&bounds, closure_data, output);
-
-    return output;
 }

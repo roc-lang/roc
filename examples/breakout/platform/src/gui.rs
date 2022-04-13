@@ -37,6 +37,8 @@ use winit::{
 const TIME_BETWEEN_RENDERS: Duration = Duration::new(0, 1000 / 60);
 
 pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn Error>> {
+    let mut elems = roc::init(window_bounds);
+
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
 
@@ -45,8 +47,6 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
         .with_title(title)
         .build(&event_loop)
         .unwrap();
-
-    let mut elems = roc::app_render(RocEvent::resize(window_bounds));
 
     let instance = wgpu::Instance::new(wgpu::Backends::all());
 
