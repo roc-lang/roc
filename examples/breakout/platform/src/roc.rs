@@ -312,7 +312,7 @@ pub struct Bounds {
 type Model = c_void;
 
 /// Call the app's init function
-pub fn init(bounds: Bounds) -> RocList<RocElem> {
+pub fn init_and_render(bounds: Bounds) -> (*const Model, RocList<RocElem>) {
     let closure_data_buf;
     let layout;
 
@@ -330,8 +330,9 @@ pub fn init(bounds: Bounds) -> RocList<RocElem> {
         ret_val.assume_init()
     };
 
-    // Call render passing the model to get the initial Elem
     unsafe {
+    // Call render passing the model to get the initial Elems
+    let elems = unsafe {
         let mut ret_val = MaybeUninit::uninit();
 
         // Reuse the buffer from the previous closure if possible
@@ -343,5 +344,7 @@ pub fn init(bounds: Bounds) -> RocList<RocElem> {
         std::alloc::dealloc(closure_data_buf, layout);
 
         ret_val.assume_init()
-    }
+    };
+
+    (&model, elems)
 }
