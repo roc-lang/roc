@@ -709,6 +709,19 @@ fn solve(
 
                 let mut new_env = env.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
+                    check_ability_specialization(
+                        arena,
+                        subs,
+                        &new_env,
+                        pools,
+                        rank,
+                        abilities_store,
+                        problems,
+                        deferred_must_implement_abilities,
+                        *symbol,
+                        *loc_var,
+                    );
+
                     new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                 }
 

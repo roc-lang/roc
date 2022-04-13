@@ -1306,7 +1306,9 @@ fn canonicalize_pending_value_def<'a>(
             // which also implies it's not a self tail call!
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
+            if let Pattern::Identifier(symbol)
+            | Pattern::AbilityMemberSpecialization { ident: symbol, .. } = loc_can_pattern.value
+            {
                 if let Closure(ClosureData {
                     function_type,
                     closure_type,
