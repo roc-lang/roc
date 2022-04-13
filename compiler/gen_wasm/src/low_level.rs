@@ -1016,22 +1016,17 @@ pub fn call_higher_order_lowlevel<'a>(
 
     let wrapper_fn_idx = backend.register_helper_proc(wrapper_sym, wrapper_layout, source);
     let wrapper_fn_ptr = backend.get_fn_table_index(wrapper_fn_idx);
-    let inc_fn_ptr = backend.get_refcount_fn_ptr(closure_data_layout, HelperOp::Inc);
-
-    match op {
-        // List.map : List elem_x, (elem_x -> elem_ret) -> List elem_ret
-        ListMap { xs } => {
-            let list_x = backend.storage.symbol_layouts[xs];
-
-            let (elem_x, elem_ret) = match (list_x, return_layout) {
-                (
-                    Layout::Builtin(Builtin::List(elem_x)),
-                    Layout::Builtin(Builtin::List(elem_ret)),
-                ) => (elem_x, elem_ret),
-                _ => internal_error!("invalid arguments layout for {:?}", op),
-            };
-            let elem_x_size = elem_x.stack_size(TARGET_INFO);
-            let (elem_ret_size, elem_ret_align) = elem_ret.stack_size_and_alignment(TARGET_INFO);
+    let inc_fn_ptr = match closure_data_layout {
+        Layout::Struct {
+            field_layouts: &[], ..
+        } => {
+            // Our code gen would ignore the Unit arg, but the Zig builtin passes a pointer for it!
+            // That results in an exception (type signature mismatch in indirect call).
+            // The workaround is to use I32 layout, treating the (ignored) pointer as an integer.
+            backend.get_refcount_fn_ptr(Layout::Builtin(Builtin::Int(IntWidth::I32)), HelperOp::Inc)
+        }
+        _ => backend.get_refcount_fn_ptr(closure_data_layout, HelperOp::Inc),
+    };
 
     match op {
         ListMap { xs } => list_map_n(
