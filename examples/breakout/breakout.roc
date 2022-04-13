@@ -1,23 +1,23 @@
 app "breakout"
     packages { pf: "platform" }
-    imports []# [ pf.Action.{ Action }, pf.Elem.{ button, text, row, col } ]
+    imports []
     provides [ program ] { Model } to pf
 
 Model : { height : F32, width : F32, pos : F32 }
 
 program = { init, update, render }
 
-#init : { height : F32, width : F32 } -> Model
+# init : { height : F32, width : F32 } -> Model
 init = \_ -> { width: 1900, height: 1000, pos: 100 }
 
-#update : Model, Event -> Model
+# update : Model, Event -> Model
 update = \model, event ->
     when event is
         Resize size -> { model & width: size.width, height: size.height }
-        KeyUp keyCode -> model
+        KeyUp _ -> model
         KeyDown keyCode -> { model & pos: model.pos + 50 }
 
-#render : Model -> List Elem
+# render : Model -> List Elem
 render = \model ->
     numRows = 4
     numCols = 8
@@ -31,18 +31,17 @@ render = \model ->
 
         row =
             index // numCols
-                |> Result.withDefault 0
                 |> Num.toF32
 
-        red = (col / Num.toF32 numCols) |> Result.withDefault 0
-        green = ((row / Num.toF32 numRows) |> Result.withDefault 0)
-        blue = (Num.toF32 index / Num.toF32 numBlocks) |> Result.withDefault 0
+        red = col / Num.toF32 numCols
+        green = row / Num.toF32 numRows
+        blue = Num.toF32 index / Num.toF32 numBlocks
 
         color = { r: red * 0.8, g: 0.2 + green * 0.6, b: 0.2 + blue * 0.8, a: 1 }
 
         { row, col, color }
 
-    blockWidth = model.width / numCols |> Result.withDefault 0
+    blockWidth = model.width / numCols
     blockHeight = 80
 
     rects =
