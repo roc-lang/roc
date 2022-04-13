@@ -568,6 +568,12 @@ impl Target {
     }
 }
 
+impl From<&Target> for Triple {
+    fn from(target: &Target) -> Self {
+        target.to_triple()
+    }
+}
+
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
