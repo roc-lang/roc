@@ -551,14 +551,14 @@ impl Target {
                 architecture: Architecture::X86_32(X86_32Architecture::I386),
                 vendor: Vendor::Unknown,
                 operating_system: OperatingSystem::Linux,
-                environment: Environment::Unknown,
+                environment: Environment::Musl,
                 binary_format: BinaryFormat::Elf,
             },
             Linux64 => Triple {
                 architecture: Architecture::X86_64,
                 vendor: Vendor::Unknown,
                 operating_system: OperatingSystem::Linux,
-                environment: Environment::Unknown,
+                environment: Environment::Gnu,
                 binary_format: BinaryFormat::Elf,
             },
             Wasm32 => Triple {
