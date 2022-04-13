@@ -9659,4 +9659,57 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn ability_specialization_checked_against_annotation() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash : Id -> U32
+                hash = \$Id n -> n
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of this definition:
+
+                8│  hash : Id -> U32
+                9│  hash = \$Id n -> n
+                                     ^
+
+                This `n` value is a:
+
+                    U64
+
+                But the type annotation says it should be:
+
+                    U32
+
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with this specialization of `hash`:
+
+                9│  hash = \$Id n -> n
+                    ^^^^
+
+                This value is a declared specialization of type:
+
+                    Id -> U32
+
+                But the type annotation on `hash` says it must match:
+
+                    Id -> U64
+                "#
+            ),
+        )
+    }
 }
