@@ -15,7 +15,9 @@ use std::path::PathBuf;
 use std::process;
 use std::process::Command;
 use target_lexicon::BinaryFormat;
-use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
+use target_lexicon::{
+    Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
+};
 
 pub mod build;
 mod format;
@@ -509,8 +511,8 @@ fn run_with_wasmer(_wasm_path: &std::path::Path, _args: &[String]) {
 
 enum Target {
     Host,
-    X86_32,
-    X86_64,
+    Linux32,
+    Linux64,
     Wasm32,
 }
 
@@ -522,48 +524,50 @@ impl Default for Target {
 
 impl Target {
     const fn as_str(&self) -> &'static str {
+        use Target::*;
+
         match self {
-            Target::Host => "host",
-            Target::X86_32 => "x86_32",
-            Target::X86_64 => "x86_64",
-            Target::Wasm32 => "wasm32",
+            Host => "host",
+            Linux32 => "linux32",
+            Linux64 => "linux64",
+            Wasm32 => "wasm32",
         }
     }
 
     /// NOTE keep up to date!
     const OPTIONS: &'static [&'static str] = &[
         Target::Host.as_str(),
-        Target::X86_32.as_str(),
-        Target::X86_64.as_str(),
+        Target::Linux32.as_str(),
+        Target::Linux64.as_str(),
         Target::Wasm32.as_str(),
     ];
 
     fn to_triple(&self) -> Triple {
-        let mut triple = Triple::unknown();
+        use Target::*;
 
         match self {
-            Target::Host => Triple::host(),
-            Target::X86_32 => {
-                triple.architecture = Architecture::X86_32(X86_32Architecture::I386);
-                triple.binary_format = BinaryFormat::Elf;
-
-                // TODO make this user-specified?
-                triple.operating_system = OperatingSystem::Linux;
-
-                triple
-            }
-            Target::X86_64 => {
-                triple.architecture = Architecture::X86_64;
-                triple.binary_format = BinaryFormat::Elf;
-
-                triple
-            }
-            Target::Wasm32 => {
-                triple.architecture = Architecture::Wasm32;
-                triple.binary_format = BinaryFormat::Wasm;
-
-                triple
-            }
+            Host => Triple::host(),
+            Linux32 => Triple {
+                architecture: Architecture::X86_32(X86_32Architecture::I386),
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Linux,
+                environment: Environment::Unknown,
+                binary_format: BinaryFormat::Elf,
+            },
+            Linux64 => Triple {
+                architecture: Architecture::X86_64,
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Linux,
+                environment: Environment::Unknown,
+                binary_format: BinaryFormat::Elf,
+            },
+            Wasm32 => Triple {
+                architecture: Architecture::Wasm32,
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Unknown,
+                environment: Environment::Unknown,
+                binary_format: BinaryFormat::Wasm,
+            },
         }
     }
 }
@@ -586,8 +590,8 @@ impl std::str::FromStr for Target {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "host" => Ok(Target::Host),
-            "x86_32" => Ok(Target::X86_32),
-            "x86_64" => Ok(Target::X86_64),
+            "linux32" => Ok(Target::Linux32),
+            "linux64" => Ok(Target::Linux64),
             "wasm32" => Ok(Target::Wasm32),
             _ => Err(()),
         }
