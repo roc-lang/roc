@@ -1,3 +1,4 @@
+use crate::ability::{AbilityImplError, DeferredMustImplementAbility};
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
 use roc_can::constraint::Constraint::{self, *};
@@ -17,7 +18,7 @@ use roc_types::types::{
     gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, PatternCategory,
     Reason, TypeExtension,
 };
-use roc_unify::unify::{unify, Mode, MustImplementAbility, Unified::*};
+use roc_unify::unify::{unify, Mode, Unified::*};
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
@@ -70,19 +71,34 @@ use roc_unify::unify::{unify, Mode, MustImplementAbility, Unified::*};
 // of the let (so those used in inferring the type of `\x -> x`) are considered.
 
 #[derive(PartialEq, Debug, Clone)]
+pub struct IncompleteAbilityImplementation {
+    // TODO(abilities): have general types here, not just opaques
+    pub typ: Symbol,
+    pub ability: Symbol,
+    pub specialized_members: Vec<Loc<Symbol>>,
+    pub missing_members: Vec<Loc<Symbol>>,
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
     BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
-    IncompleteAbilityImplementation {
-        // TODO(abilities): have general types here, not just opaques
-        typ: Symbol,
-        ability: Symbol,
-        specialized_members: Vec<Loc<Symbol>>,
-        missing_members: Vec<Loc<Symbol>>,
-    },
+    IncompleteAbilityImplementation(IncompleteAbilityImplementation),
+    BadExprMissingAbility(
+        Region,
+        Category,
+        ErrorType,
+        Vec<IncompleteAbilityImplementation>,
+    ),
+    BadPatternMissingAbility(
+        Region,
+        PatternCategory,
+        ErrorType,
+        Vec<IncompleteAbilityImplementation>,
+    ),
 }
 
 use roc_types::types::Alias;
@@ -558,7 +574,7 @@ pub fn run_in_place(
 
     let arena = Bump::new();
 
-    let mut deferred_must_implement_abilities = Vec::new();
+    let mut deferred_must_implement_abilities = DeferredMustImplementAbility::default();
 
     let state = solve(
         &arena,
@@ -577,32 +593,7 @@ pub fn run_in_place(
 
     // Now that the module has been solved, we can run through and check all
     // types claimed to implement abilities.
-    deferred_must_implement_abilities.dedup();
-    for MustImplementAbility { typ, ability } in deferred_must_implement_abilities.into_iter() {
-        let members_of_ability = abilities_store.members_of_ability(ability).unwrap();
-        let mut specialized_members = Vec::with_capacity(members_of_ability.len());
-        let mut missing_members = Vec::with_capacity(members_of_ability.len());
-        for &member in members_of_ability {
-            match abilities_store.get_specialization(member, typ) {
-                None => {
-                    let root_data = abilities_store.member_def(member).unwrap();
-                    missing_members.push(Loc::at(root_data.region, member));
-                }
-                Some(specialization) => {
-                    specialized_members.push(Loc::at(specialization.region, member));
-                }
-            }
-        }
-
-        if !missing_members.is_empty() {
-            problems.push(TypeError::IncompleteAbilityImplementation {
-                typ,
-                ability,
-                specialized_members,
-                missing_members,
-            });
-        }
-    }
+    problems.extend(deferred_must_implement_abilities.check(subs, &abilities_store));
 
     state.env
 }
@@ -656,7 +647,7 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
     abilities_store: &mut AbilitiesStore,
-    deferred_must_implement_abilities: &mut Vec<MustImplementAbility>,
+    deferred_must_implement_abilities: &mut DeferredMustImplementAbility,
 ) -> State {
     let initial = Work::Constraint {
         env,
@@ -877,9 +868,15 @@ fn solve(
                 match unify(subs, actual, expected, Mode::EQ) {
                     Success {
                         vars,
-                        must_implement_ability: _,
+                        must_implement_ability,
                     } => {
                         introduce(subs, rank, pools, &vars);
+                        if !must_implement_ability.is_empty() {
+                            deferred_must_implement_abilities.add(
+                                must_implement_ability,
+                                AbilityImplError::BadExpr(*region, category.clone(), actual),
+                            );
+                        }
 
                         state
                     }
@@ -922,6 +919,7 @@ fn solve(
                 match unify(subs, actual, target, Mode::EQ) {
                     Success {
                         vars,
+                        // ERROR NOT REPORTED
                         must_implement_ability: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
@@ -977,9 +975,19 @@ fn solve(
                         match unify(subs, actual, expected, Mode::EQ) {
                             Success {
                                 vars,
-                                must_implement_ability: _,
+                                must_implement_ability,
                             } => {
                                 introduce(subs, rank, pools, &vars);
+                                if !must_implement_ability.is_empty() {
+                                    deferred_must_implement_abilities.add(
+                                        must_implement_ability,
+                                        AbilityImplError::BadExpr(
+                                            *region,
+                                            Category::Lookup(*symbol),
+                                            actual,
+                                        ),
+                                    );
+                                }
 
                                 state
                             }
@@ -1044,9 +1052,15 @@ fn solve(
                 match unify(subs, actual, expected, mode) {
                     Success {
                         vars,
-                        must_implement_ability: _,
+                        must_implement_ability,
                     } => {
                         introduce(subs, rank, pools, &vars);
+                        if !must_implement_ability.is_empty() {
+                            deferred_must_implement_abilities.add(
+                                must_implement_ability,
+                                AbilityImplError::BadPattern(*region, category.clone(), actual),
+                            );
+                        }
 
                         state
                     }
@@ -1216,9 +1230,19 @@ fn solve(
                 match unify(subs, actual, includes, Mode::PRESENT) {
                     Success {
                         vars,
-                        must_implement_ability: _,
+                        must_implement_ability,
                     } => {
                         introduce(subs, rank, pools, &vars);
+                        if !must_implement_ability.is_empty() {
+                            deferred_must_implement_abilities.add(
+                                must_implement_ability,
+                                AbilityImplError::BadPattern(
+                                    *region,
+                                    pattern_category.clone(),
+                                    actual,
+                                ),
+                            );
+                        }
 
                         state
                     }
@@ -1263,7 +1287,7 @@ fn check_ability_specialization(
     rank: Rank,
     abilities_store: &mut AbilitiesStore,
     problems: &mut Vec<TypeError>,
-    deferred_must_implement_abilities: &mut Vec<MustImplementAbility>,
+    deferred_must_implement_abilities: &mut DeferredMustImplementAbility,
     symbol: Symbol,
     symbol_loc_var: Loc<Variable>,
 ) {
@@ -1349,7 +1373,8 @@ fn check_ability_specialization(
 
                 // Store the checks for what abilities must be implemented to be checked after the
                 // whole module is complete.
-                deferred_must_implement_abilities.extend(must_implement_ability);
+                deferred_must_implement_abilities
+                    .add(must_implement_ability, AbilityImplError::IncompleteAbility);
             }
             Failure(vars, actual_type, expected_type, unimplemented_abilities) => {
                 subs.commit_snapshot(snapshot);
