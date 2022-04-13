@@ -3,19 +3,22 @@ app "breakout"
     imports []# [ pf.Action.{ Action }, pf.Elem.{ button, text, row, col } ]
     provides [ program ] { Model } to pf
 
-Model : { height : F32, width : F32 }
+Model : { height : F32, width : F32, pos : F32 }
 
 program = { init, update, render }
 
-init = \_ -> { width: 1900, height: 1000 }
+#init : { height : F32, width : F32 } -> Model
+init = \_ -> { width: 1900, height: 1000, pos: 100 }
 
-update = \state, event ->
+#update : Model, Event -> Model
+update = \model, event ->
     when event is
-        Resize size -> size
-        KeyUp keyCode -> { width: 200, height: 200 }
-        KeyDown keyCode -> { width: 200, height: 200 }
+        Resize size -> { model & width: size.width, height: size.height }
+        KeyUp keyCode -> model
+        KeyDown keyCode -> { model & pos: model.pos + 50 }
 
-render = \state ->
+#render : Model -> List Elem
+render = \model ->
     numRows = 4
     numCols = 8
     numBlocks = numRows * numCols
@@ -39,7 +42,7 @@ render = \state ->
 
         { row, col, color }
 
-    blockWidth = state.width / numCols |> Result.withDefault 0
+    blockWidth = model.width / numCols |> Result.withDefault 0
     blockHeight = 80
 
     rects =
@@ -51,10 +54,10 @@ render = \state ->
 
     paddle =
         color = { r: 0.8, g: 0.8, b: 0.8, a: 1.0 }
-        width = state.width * 0.25
+        width = model.width * 0.25
         height = blockHeight
-        left = (state.width * 0.5) - (width * 0.5)
-        top = state.height - (height * 2)
+        left = (model.width * 0.5) - (width * 0.5) + model.pos
+        top = model.height - (height * 2)
 
         Rect { left, top, width, height, color }
 
