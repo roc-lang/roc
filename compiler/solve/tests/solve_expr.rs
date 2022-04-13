@@ -5860,4 +5860,23 @@ mod solve_expr {
             [("hash", "Id")],
         )
     }
+
+    #[test]
+    fn ability_checked_specialization_with_annotation_only() {
+        check_inferred_abilities(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash : Id -> U64
+                "#
+            ),
+            [("hash", "Id")],
+        )
+    }
 }

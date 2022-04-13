@@ -1218,7 +1218,9 @@ fn canonicalize_pending_value_def<'a>(
                 }
             };
 
-            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
+            if let Pattern::Identifier(symbol)
+            | Pattern::AbilityMemberSpecialization { ident: symbol, .. } = loc_can_pattern.value
+            {
                 let def = single_can_def(
                     loc_can_pattern,
                     loc_can_expr,
