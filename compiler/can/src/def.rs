@@ -491,6 +491,26 @@ pub fn canonicalize_defs<'a>(
                 bad_has_clauses = true;
             }
 
+            if variables_bound_to_ability.len() > 1 {
+                // There is more than one variable bound to the member signature, so something like
+                //   Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                // We have no way of telling what type implements a particular instance of Eq in
+                // this case (a or b?), so disallow it.
+                let span_has_clauses =
+                    Region::across_all(variables_bound_to_ability.iter().map(|v| &v.first_seen));
+                let bound_var_names = variables_bound_to_ability
+                    .iter()
+                    .map(|v| v.name.clone())
+                    .collect();
+                env.problem(Problem::AbilityMemberMultipleBoundVars {
+                    member: member_sym,
+                    ability: loc_ability_name.value,
+                    span_has_clauses,
+                    bound_var_names,
+                });
+                bad_has_clauses = true;
+            }
+
             if !variables_bound_to_other_abilities.is_empty() {
                 // Disallow variables bound to other abilities, for now.
                 for bad_variable in variables_bound_to_other_abilities.iter() {

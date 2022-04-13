@@ -9398,6 +9398,46 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
+    fn ability_member_binds_parent_twice() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ ] to "./platform"
+
+                Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ABILITY MEMBER BINDS MULTIPLE VARIABLES ─────────────────────────────────────
+
+                The definition of the ability member `eq` includes multiple variables
+                bound to the `Eq`` ability:`
+
+                3│  Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                                               ^^^^^^^^^^^^^^^^^^
+
+                Ability members can only bind one type variable to their parent
+                ability. Otherwise, I wouldn't know what type implements an ability by
+                looking at specializations!
+
+                Hint: Did you mean to only bind `a` to `Eq`?
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `eq` is not used anywhere in your code.
+
+                3│  Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                           ^^
+
+                If you didn't intend on using `eq` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn has_clause_outside_of_ability() {
         new_report_problem_as(
             indoc!(
