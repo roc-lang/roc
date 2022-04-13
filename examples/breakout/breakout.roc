@@ -12,8 +12,8 @@ init = \_ -> { width: 1900, height: 1000 }
 update = \state, event ->
     when event is
         Resize size -> size
-        KeyUp keyCode -> { width: 1900, height: 1000 }
-        KeyDown keyCode -> { width: 1900, height: 1000 }
+        KeyUp keyCode -> { width: 200, height: 200 }
+        KeyDown keyCode -> { width: 200, height: 200 }
 
 render = \state ->
     numRows = 4

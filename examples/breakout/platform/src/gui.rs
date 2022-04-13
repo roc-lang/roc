@@ -37,7 +37,7 @@ use winit::{
 const TIME_BETWEEN_RENDERS: Duration = Duration::new(0, 1000 / 60);
 
 pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn Error>> {
-    let (model, mut elems) = roc::init_and_render(window_bounds);
+    let (mut model, mut elems) = roc::init_and_render(window_bounds);
 
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
@@ -150,10 +150,14 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
                     &cmd_queue,
                 );
 
-                elems = roc::app_render(RocEvent::resize(Bounds {
+                // TODO use (model, elems) =  ... once we've upgraded rust versions
+                let pair = roc::update_and_render(model, RocEvent::resize(Bounds {
                     height: size.height as f32,
                     width: size.width as f32,
                 }));
+
+                model = pair.0;
+                elems = pair.1;
 
                 window.request_redraw();
             }
@@ -176,7 +180,11 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
                     ElementState::Released => RocEvent::key_up(keycode),
                 };
 
-                elems = roc::app_render(roc_event);
+                // TODO use (model, elems) =  ... once we've upgraded rust versions
+                let pair = roc::update_and_render(model, roc_event);
+
+                model = pair.0;
+                elems = pair.1;
 
                 window.request_redraw();
             }
