@@ -1,3 +1,4 @@
+use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::canonicalize_annotation_with_possible_clauses;
 use crate::annotation::IntroducedVariables;
@@ -533,7 +534,15 @@ pub fn canonicalize_defs<'a>(
                 .introduced_variables
                 .union(&member_annot.introduced_variables);
 
-            can_members.push((member_sym, name_region, member_annot.typ));
+            let iv = member_annot.introduced_variables;
+
+            let variables = MemberVariables {
+                able_vars: iv.collect_able(),
+                rigid_vars: iv.collect_rigid(),
+                flex_vars: iv.collect_flex(),
+            };
+
+            can_members.push((member_sym, name_region, member_annot.typ, variables));
         }
 
         // Store what symbols a type must define implementations for to have this ability.

@@ -168,6 +168,22 @@ impl IntroducedVariables {
             .find(|av| &av.name == name)
             .map(NamedOrAbleVariable::Able)
     }
+
+    pub fn collect_able(&self) -> Vec<Variable> {
+        self.able.iter().map(|av| av.variable).collect()
+    }
+
+    pub fn collect_rigid(&self) -> Vec<Variable> {
+        (self.named.iter().map(|nv| nv.variable))
+            .chain(self.wildcards.iter().map(|wc| wc.value))
+            // For our purposes, lambda set vars are treated like rigids
+            .chain(self.lambda_sets.iter().copied())
+            .collect()
+    }
+
+    pub fn collect_flex(&self) -> Vec<Variable> {
+        self.inferred.iter().map(|iv| iv.value).collect()
+    }
 }
 
 fn malformed(env: &mut Env, region: Region, name: &str) {

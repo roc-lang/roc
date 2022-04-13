@@ -5879,4 +5879,25 @@ mod solve_expr {
             [("hash", "Id")],
         )
     }
+
+    #[test]
+    fn ability_specialization_called() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ zero ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash = \$Id n -> n
+
+                zero = hash ($Id 0)
+                "#
+            ),
+            "U64",
+        )
+    }
 }
