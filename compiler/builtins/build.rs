@@ -122,7 +122,12 @@ fn generate_object_file(
         println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
 
         // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
-        fs::copy(src_obj, dest_obj).expect("Failed to copy object file.");
+        fs::copy(src_obj, dest_obj).unwrap_or_else(|err| {
+            panic!(
+                "Failed to copy object file {} to {}: {:?}",
+                src_obj, dest_obj, err
+            );
+        });
     }
 }
 
