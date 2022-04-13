@@ -26,7 +26,7 @@ extern "C" {
     #[link_name = "roc__programForHost_1_Init_size"]
     fn init_size() -> i64;
 
-    #[link_name = "roc__mainForHost_1_Init_result_size"]
+    #[link_name = "roc__programForHost_1_Init_result_size"]
     fn init_result_size() -> i64;
 
     // update
@@ -42,7 +42,7 @@ extern "C" {
     #[link_name = "roc__programForHost_1_Update_size"]
     fn update_size() -> i64;
 
-    #[link_name = "roc__mainForHost_1_Update_result_size"]
+    #[link_name = "roc__programForHost_1_Update_result_size"]
     fn update_result_size() -> i64;
 
     // render
@@ -317,43 +317,40 @@ type Model = c_void;
 /// Call the app's init function
 pub fn init_and_render(bounds: Bounds) -> (*const Model, RocList<RocElem>) {
     let closure_data_buf;
-    let layout;
+    let closure_layout;
 
     // Call init to get the initial model
     let model = unsafe {
-        let mut ret_val = MaybeUninit::uninit();
-
-        layout = Layout::array::<u8>(init_size() as usize).unwrap();
+        let ret_val_layout = Layout::array::<u8>(init_result_size() as usize).unwrap();
+        let mut ret_val: MaybeUninit<Model> = MaybeUninit::uninit();
 
         // TODO allocate on the stack if it's under a certain size
-        closure_data_buf = std::alloc::alloc(layout);
+        let ret_val_buf = std::alloc::alloc(ret_val_layout) as *mut Model;
 
-        dbg!(&bounds);
+        closure_layout = Layout::array::<u8>(init_size() as usize).unwrap();
 
-        call_init(&bounds, closure_data_buf, ret_val.as_mut_ptr());
+        // TODO allocate on the stack if it's under a certain size
+        closure_data_buf = std::alloc::alloc(closure_layout);
 
-        ret_val.assume_init()
+        call_init(&bounds, closure_data_buf, ret_val_buf);
+
+        ret_val_buf
     };
-
-    unsafe {
-        let model_returned_by_init: Bounds = *std::mem::transmute::<&c_void, *const Bounds>(&model);
-        dbg!(model_returned_by_init);
-    }
 
     // Call render passing the model to get the initial Elems
     let elems = unsafe {
-        let mut ret_val = MaybeUninit::uninit();
+        let mut ret_val: MaybeUninit<RocList<RocElem>> = MaybeUninit::uninit();
 
         // Reuse the buffer from the previous closure if possible
         let closure_data_buf =
-            std::alloc::realloc(closure_data_buf, layout, roc_render_size() as usize);
+            std::alloc::realloc(closure_data_buf, closure_layout, roc_render_size() as usize);
 
-        call_render(&model, closure_data_buf, ret_val.as_mut_ptr());
+        call_render(model, closure_data_buf, ret_val.as_mut_ptr());
 
-        std::alloc::dealloc(closure_data_buf, layout);
+        std::alloc::dealloc(closure_data_buf, closure_layout);
 
         ret_val.assume_init()
     };
 
-    (&model, elems)
+    (model, elems)
 }
