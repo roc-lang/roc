@@ -593,7 +593,7 @@ pub fn run_in_place(
 
     // Now that the module has been solved, we can run through and check all
     // types claimed to implement abilities.
-    problems.extend(deferred_must_implement_abilities.check(subs, &abilities_store));
+    problems.extend(deferred_must_implement_abilities.check(subs, abilities_store));
 
     state.env
 }
