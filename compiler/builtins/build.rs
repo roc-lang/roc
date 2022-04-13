@@ -36,14 +36,14 @@ fn main() {
 
     // LLVM .bc FILES
 
-    generate_bc_file(&bitcode_path, &build_script_dir_path, "ir", "host");
+    generate_bc_file(&bitcode_path, &build_script_dir_path, "ir", "builtins-host");
 
     if !DEBUG {
         generate_bc_file(
             &bitcode_path,
             &build_script_dir_path,
             "ir-wasm32",
-            "wasm32-unknown-unknown",
+            "builtins-wasm32",
         );
     }
 
@@ -51,14 +51,14 @@ fn main() {
         &bitcode_path,
         &build_script_dir_path,
         "ir-i386",
-        "i386-unknown-linux-musl",
+        "builtins-i386",
     );
 
     generate_bc_file(
         &bitcode_path,
         &build_script_dir_path,
         "ir-x86_64",
-        "x86_64-unknown-linux-musl",
+        "builtins-x86_64",
     );
 
     // OBJECT FILES

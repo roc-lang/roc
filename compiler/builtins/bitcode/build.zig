@@ -33,14 +33,14 @@ pub fn build(b: *Builder) void {
     const wasm32_target = makeWasm32Target();
 
     // LLVM IR
-    generateLlvmIrFile(b, mode, host_target, main_path, "ir", "host");
-    generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "i386-unknown-linux-musl");
-    generateLlvmIrFile(b, mode, linux64_target, main_path, "ir-x86_64", "x86_64-unknown-linux-musl");
-    generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "wasm32-unknown-unknown");
+    generateLlvmIrFile(b, mode, host_target, main_path, "ir", "builtins-host");
+    generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "builtins-i386");
+    generateLlvmIrFile(b, mode, linux64_target, main_path, "ir-x86_64", "builtins-x86_64");
+    generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "wasm32");
 
     // Generate Object Files
-    generateObjectFile(b, mode, host_target, main_path, "object", "host");
-    generateObjectFile(b, mode, wasm32_target, main_path, "wasm32-object", "wasm32");
+    generateObjectFile(b, mode, host_target, main_path, "object", "builtins-host");
+    generateObjectFile(b, mode, wasm32_target, main_path, "wasm32-object", "builtins-wasm32");
 
     removeInstallSteps(b);
 }
