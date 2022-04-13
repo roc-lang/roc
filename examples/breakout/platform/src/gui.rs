@@ -39,6 +39,8 @@ const TIME_BETWEEN_RENDERS: Duration = Duration::new(0, 1000 / 60);
 pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn Error>> {
     let (model, mut elems) = roc::init_and_render(window_bounds);
 
+    dbg!(&elems);
+
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
 

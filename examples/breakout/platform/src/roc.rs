@@ -294,7 +294,10 @@ pub fn render(event: RocEvent) -> RocList<RocElem> {
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        call_render(&event, buffer, output.as_mut_ptr());
+        if true {
+            todo!("call render here");
+            // call_render(&event, buffer, output.as_mut_ptr());
+        }
 
         std::alloc::dealloc(buffer, layout);
 
@@ -325,12 +328,18 @@ pub fn init_and_render(bounds: Bounds) -> (*const Model, RocList<RocElem>) {
         // TODO allocate on the stack if it's under a certain size
         closure_data_buf = std::alloc::alloc(layout);
 
+        dbg!(&bounds);
+
         call_init(&bounds, closure_data_buf, ret_val.as_mut_ptr());
 
         ret_val.assume_init()
     };
 
     unsafe {
+        let model_returned_by_init: Bounds = *std::mem::transmute::<&c_void, *const Bounds>(&model);
+        dbg!(model_returned_by_init);
+    }
+
     // Call render passing the model to get the initial Elems
     let elems = unsafe {
         let mut ret_val = MaybeUninit::uninit();

@@ -58,4 +58,5 @@ render = \state ->
 
         Rect { left, top, width, height, color }
 
-    List.append rects paddle
+    # List.append rects paddle
+    [ Rect { left: 1, top: 2, width: state.width, height: state.height, color: { r: 0.8, g: 0.8, b: 0.8, a: 1.0 } } ]
