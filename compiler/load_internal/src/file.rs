@@ -3859,6 +3859,7 @@ fn add_def_to_module<'a>(
                         // This is a top-level definition, so it cannot capture anything
                         captured_symbols: CapturedSymbols::None,
                         body,
+                        body_var: def.expr_var,
                         // This is a 0-arity thunk, so it cannot be recursive
                         is_self_recursive: false,
                     };
