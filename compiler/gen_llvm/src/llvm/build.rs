@@ -411,21 +411,21 @@ pub fn module_from_builtins<'ctx>(
     // In the build script for the builtins module, we compile the builtins into LLVM bitcode
 
     let bitcode_bytes: &[u8] = if target == &target_lexicon::Triple::host() {
-        include_bytes!("../../../builtins/bitcode/builtins-host.bc")
+        include_bytes!("../../../builtins/bitcode/host.bc")
     } else {
         match target {
             Triple {
                 architecture: Architecture::Wasm32,
                 ..
             } => {
-                include_bytes!("../../../builtins/bitcode/builtins-wasm32.bc")
+                include_bytes!("../../../builtins/bitcode/wasm32-unknown-unknown.bc")
             }
             Triple {
                 architecture: Architecture::X86_32(_),
                 operating_system: OperatingSystem::Linux,
                 ..
             } => {
-                include_bytes!("../../../builtins/bitcode/builtins-i386.bc")
+                include_bytes!("../../../builtins/bitcode/i386-unknown-linux-musl.bc")
             }
             _ => panic!(
                 "The zig builtins are not currently built for this target: {:?}",

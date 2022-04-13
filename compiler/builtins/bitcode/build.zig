@@ -28,17 +28,17 @@ pub fn build(b: *Builder) void {
             // TODO allow for native target for maximum speed
         },
     });
-    const i386_target = makeI386Target();
+    const linux32_target = makeLinux32Target();
     const wasm32_target = makeWasm32Target();
 
     // LLVM IR
-    generateLlvmIrFile(b, mode, host_target, main_path, "ir", "builtins-host");
-    generateLlvmIrFile(b, mode, i386_target, main_path, "ir-i386", "builtins-i386");
-    generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "builtins-wasm32");
+    generateLlvmIrFile(b, mode, host_target, main_path, "ir", "host");
+    generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "i386-unknown-linux-musl");
+    generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "wasm32-unknown-unknown");
 
     // Generate Object Files
-    generateObjectFile(b, mode, host_target, main_path, "object", "builtins-host");
-    generateObjectFile(b, mode, wasm32_target, main_path, "wasm32-object", "builtins-wasm32");
+    generateObjectFile(b, mode, host_target, main_path, "object", "host");
+    generateObjectFile(b, mode, wasm32_target, main_path, "wasm32-object", "wasm32");
 
     removeInstallSteps(b);
 }
@@ -87,7 +87,7 @@ fn generateObjectFile(
     obj_step.dependOn(&obj.step);
 }
 
-fn makeI386Target() CrossTarget {
+fn makeLinux32Target() CrossTarget {
     var target = CrossTarget.parse(.{}) catch unreachable;
 
     target.cpu_arch = std.Target.Cpu.Arch.i386;
