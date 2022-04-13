@@ -1240,6 +1240,8 @@ fn solve(
 /// If a symbol claims to specialize an ability member, check that its solved type in fact
 /// does specialize the ability, and record the specialization.
 #[allow(clippy::too_many_arguments)]
+// Aggressive but necessary - there aren't many usages.
+#[inline(always)]
 fn check_ability_specialization(
     arena: &Bump,
     subs: &mut Subs,
