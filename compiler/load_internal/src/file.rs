@@ -3128,6 +3128,18 @@ fn send_header<'a>(
         }
     }
 
+    // make sure when we run the bulitin modules in /compiler/builtins/roc that we
+    // mark these modules as Builtin. Otherwise the builtin functions are not instantiated
+    // and we just have a bunch of definitions with runtime errors in their bodies
+    let extra = {
+        match extra {
+            HeaderFor::Interface if home.is_builtin() => HeaderFor::Builtin {
+                generates_with: &[],
+            },
+            _ => extra,
+        }
+    };
+
     (
         home,
         Msg::Header(ModuleHeader {
