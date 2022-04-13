@@ -1130,7 +1130,7 @@ so calculations involving them take longer.
 
 Roc does not let floating point calculations result in `Infinity`, `-Infinity`,
 or `NaN`.  Any operation which would result in one of these
-(such as `sqrt` or `/`) will return a `Result`.
+(such as `sqrt` or `/`) will panic.
 
 Similarly to how there are different sizes of floating point numbers,
 there are also different sizes of integer to choose from:
