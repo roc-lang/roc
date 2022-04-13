@@ -523,7 +523,7 @@ mod test_reporting {
         let buf = list_reports_new(&arena, src, finalize_render);
 
         // convenient to copy-paste the generated message
-        if true && buf != expected_rendering {
+        if buf != expected_rendering {
             for line in buf.split('\n') {
                 println!("                {}", line);
             }
