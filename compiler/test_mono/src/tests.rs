@@ -274,7 +274,7 @@ fn ir_round() {
 #[mono_test]
 fn ir_when_idiv() {
     r#"
-    when 1000 // 10 is
+    when Num.divFloorChecked 1000 10 is
         Ok val -> val
         Err _ -> -1
     "#

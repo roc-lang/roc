@@ -3598,17 +3598,14 @@ fn run_solve<'a>(
     let (solved_subs, exposed_vars_by_symbol, problems) = {
         if module_id.is_builtin() {
             match cached_subs.lock().remove(&module_id) {
-                None => {
-                    // this should never happen
-                    run_solve_solve(
-                        imported_builtins,
-                        exposed_for_module,
-                        constraints,
-                        constraint,
-                        var_store,
-                        module,
-                    )
-                }
+                None => run_solve_solve(
+                    imported_builtins,
+                    exposed_for_module,
+                    constraints,
+                    constraint,
+                    var_store,
+                    module,
+                ),
                 Some((subs, exposed_vars_by_symbol)) => {
                     (Solved(subs), exposed_vars_by_symbol.to_vec(), vec![])
                 }

@@ -723,11 +723,24 @@ fn gen_wrap_add_nums() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_div_f64() {
-    // FIXME this works with normal types, but fails when checking uniqueness types
     assert_evals_to!(
         indoc!(
             r#"
-                    when 48 / 2 is
+                    48 / 2
+                "#
+        ),
+        24.0,
+        f64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when Num.divChecked 48 2 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -736,6 +749,23 @@ fn gen_div_f64() {
         f64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_by_zero_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when Num.divChecked 47 0 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        -1.0,
+        f64
+    );
+}
+
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_div_dec() {
@@ -748,12 +778,53 @@ fn gen_div_dec() {
                     y : Dec
                     y = 3
 
-                    when x / y is
+                    x / y
+                "#
+        ),
+        RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
+        i128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_dec() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x : Dec
+                    x = 10
+
+                    y : Dec
+                    y = 3
+
+                    when Num.divChecked x y is
                         Ok val -> val
                         Err _ -> -1
                 "#
         ),
         RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
+        i128
+    );
+}
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_by_zero_dec() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x : Dec
+                    x = 10
+
+                    y : Dec
+                    y = 0
+
+                    when Num.divChecked x y is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        RocDec::from_str_to_i128_unsafe("-1"),
         i128
     );
 }
@@ -965,7 +1036,21 @@ fn gen_div_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when 1000 // 10 is
+                    1000 // 10
+                "#
+        ),
+        100,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when Num.divFloorChecked 1000 10 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -977,11 +1062,11 @@ fn gen_div_i64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn gen_div_by_zero_i64() {
+fn gen_div_checked_by_zero_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when 1000 // 0 is
+                    when Num.divFloorChecked 1000 0 is
                         Err DivByZero -> 99
                         _ -> -24
                 "#
