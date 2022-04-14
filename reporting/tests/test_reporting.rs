@@ -9755,7 +9755,7 @@ I need all branches in an `if` to have the same type!
 
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This expression has a type does not implement the abilities it's expected to:
+                This expression has a type that does not implement the abilities it's expected to:
 
                 14│          nope: hash ($User {}),
                                          ^^^^^^^^
