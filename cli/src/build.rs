@@ -245,8 +245,11 @@ pub fn build_file<'a>(
     let link_start = SystemTime::now();
     let outcome = if surgically_link {
         roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path)
-            .map_err(|_| {
-                todo!("gracefully handle failing to surgically link");
+            .map_err(|err| {
+                todo!(
+                    "gracefully handle failing to surgically link with error: {:?}",
+                    err
+                );
             })?;
         BuildOutcome::NoProblems
     } else if matches!(link_type, LinkType::None) {
