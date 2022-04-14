@@ -335,6 +335,47 @@ pub fn build_c_host_native(
     command.output().unwrap()
 }
 
+pub fn build_cc_host_native(
+    env_path: &str,
+    env_home: &str,
+    dest: &str,
+    sources: &[&str],
+    opt_level: OptLevel,
+    shared_lib_path: Option<&Path>,
+) -> Output {
+    let mut command = Command::new("clang++");
+    command
+        .env_clear()
+        .env("PATH", &env_path)
+        .env("HOME", &env_home)
+        .args(sources)
+        .args(&["-o", dest]);
+    if let Some(shared_lib_path) = shared_lib_path {
+        command.args(&[
+            shared_lib_path.to_str().unwrap(),
+            bitcode::BUILTINS_HOST_OBJ_PATH,
+            "-fPIE",
+            "-pie",
+            "-lm",
+            "-lpthread",
+            "-ldl",
+            "-lrt",
+            "-lutil",
+            "-I/usr/include/SDL2",
+            "-D_REENTRANT",
+            "-lSDL2"
+        ]);
+    } else {
+        command.args(&["-fPIC", "-c"]);
+    }
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.arg("-O3");
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.arg("-Os");
+    }
+    dbg!(command).output().unwrap()
+}
+
 pub fn build_swift_host_native(
     env_path: &str,
     env_home: &str,
@@ -380,6 +421,7 @@ pub fn rebuild_host(
 ) {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
+    let cc_host_src = host_input_path.with_file_name("host.cc");
     let zig_host_src = host_input_path.with_file_name("host.zig");
     let rust_host_src = host_input_path.with_file_name("host.rs");
     let rust_host_dest = host_input_path.with_file_name("rust_host.o");
@@ -620,6 +662,17 @@ pub fn rebuild_host(
             shared_lib_path,
         );
         validate_output("host.c", "clang", output);
+    } else if cc_host_src.exists() {
+        // Compile host.cc, if it exists
+        let output = build_cc_host_native(
+            &env_path,
+            &env_home,
+            host_dest_native.to_str().unwrap(),
+            &[cc_host_src.to_str().unwrap()],
+            opt_level,
+            shared_lib_path,
+        );
+        validate_output("host.cc", "clang++", output);
     } else if swift_host_src.exists() {
         // Compile host.swift, if it exists
         let output = build_swift_host_native(
