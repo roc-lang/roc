@@ -135,7 +135,7 @@ pub fn type_problem<'b>(
             let snippet = alloc.region(lines.convert_region(region));
             let mut stack = vec![
                 alloc.text(
-                    "This expression has a type does not implement the abilities it's expected to:",
+                    "This expression has a type that does not implement the abilities it's expected to:",
                 ),
                 snippet,
                 lone_type(
