@@ -5900,4 +5900,23 @@ mod solve_expr {
             "U64",
         )
     }
+
+    #[test]
+    fn alias_ability_member() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ thething ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                thething =
+                    itis = hash
+                    itis
+                "#
+            ),
+            "a -> U64 | a has Hash",
+        )
+    }
 }

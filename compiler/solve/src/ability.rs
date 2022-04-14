@@ -168,7 +168,10 @@ pub fn type_implementing_member(
         .collect::<Vec<_>>();
     ability_implementations_for_specialization.dedup();
 
-    debug_assert!(ability_implementations_for_specialization.len() == 1, "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization");
+    debug_assert!(
+        ability_implementations_for_specialization.len() == 1,
+        "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization: {:?}",
+        ability_implementations_for_specialization);
 
     ability_implementations_for_specialization
         .pop()
