@@ -10,7 +10,7 @@ use roc_target::{PtrWidth, TargetInfo};
 use roc_types::subs::{
     Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
 };
-use roc_types::types::{gather_fields_unsorted_iter, RecordField};
+use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
 use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -1683,7 +1683,11 @@ fn layout_from_flat_type<'a>(
             // extract any values from the ext_var
 
             let mut pairs = Vec::with_capacity_in(fields.len(), arena);
-            for (label, field) in fields.unsorted_iterator(subs, ext_var) {
+            let it = match fields.unsorted_iterator(subs, ext_var) {
+                Ok(it) => it,
+                Err(RecordFieldsError) => return Err(LayoutProblem::Erroneous),
+            };
+            for (label, field) in it {
                 // drop optional fields
                 let var = match field {
                     RecordField::Optional(_) => continue,

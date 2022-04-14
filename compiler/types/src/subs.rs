@@ -1,5 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-use crate::types::{name_type_var, AliasKind, ErrorType, Problem, RecordField, TypeExt};
+use crate::types::{
+    name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt,
+};
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
@@ -2713,11 +2715,11 @@ impl RecordFields {
         &'a self,
         subs: &'a Subs,
         ext: Variable,
-    ) -> impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a {
-        let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext)
-            .expect("Something weird ended up in a record type");
+    ) -> Result<impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a, RecordFieldsError>
+    {
+        let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext)?;
 
-        it
+        Ok(it)
     }
 
     #[inline(always)]
