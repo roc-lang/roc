@@ -31,7 +31,9 @@ fn tag_union_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, ET
             word1(b',', ETypeTagUnion::End),
             word1(b']', ETypeTagUnion::End),
             min_indent,
+            0,
             ETypeTagUnion::Open,
+            ETypeTagUnion::IndentEnd,
             ETypeTagUnion::IndentEnd,
             Tag::SpaceBefore
         )
@@ -323,7 +325,9 @@ fn record_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, EType
             // word1_check_indent!(b'}', TRecord::End, min_indent, TRecord::IndentEnd),
             word1(b'}', ETypeRecord::End),
             min_indent,
+            0,
             ETypeRecord::Open,
+            ETypeRecord::IndentEnd,
             ETypeRecord::IndentEnd,
             AssignedField::SpaceBefore
         )

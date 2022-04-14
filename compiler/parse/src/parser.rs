@@ -407,6 +407,7 @@ pub enum ERecord<'a> {
     IndentBar(Position),
     IndentAmpersand(Position),
     IndentEnd(Position),
+    OutdentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -448,6 +449,7 @@ pub enum EList<'a> {
 
     IndentOpen(Position),
     IndentEnd(Position),
+    OutdentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1211,7 +1213,7 @@ macro_rules! collection {
 
 #[macro_export]
 macro_rules! collection_trailing_sep_e {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $open_problem:expr, $indent_problem:expr, $space_before:expr) => {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr, $outdent_col:expr, $open_problem:expr, $indent_problem:expr, $outdent_problem:expr, $space_before:expr) => {
         skip_first!(
             $opening_brace,
             |arena, state| {
@@ -1230,11 +1232,12 @@ macro_rules! collection_trailing_sep_e {
                                         )
                                     ),
                                     $crate::blankspace::space0_e(
-                                        // we use min_indent=0 because we want to parse incorrectly indented closing braces
-                                        // and later fix these up in the formatter.
-                                        0 /* min_indent */,
+                                        0,
                                         $indent_problem)
                                 ).parse(arena, state)?;
+
+                let closing_brace_col = state.column();
+                let closing_brace_pos = state.pos();
 
                 let (_,_, state) =
                         if parsed_elems.is_empty() {
@@ -1242,6 +1245,13 @@ macro_rules! collection_trailing_sep_e {
                         } else {
                             $closing_brace.parse(arena, state)?
                         };
+
+                #[allow(unused_comparisons)] // sometimes $outdent_col is 0
+                if closing_brace_col < $outdent_col {
+                    // We successfully parsed the collection but the closing brace was outdented
+                    // further than expected.
+                    return Err((MadeProgress, $outdent_problem(closing_brace_pos), state));
+                }
 
                 if !spaces.is_empty() {
                     if let Some(first) = parsed_elems.first_mut() {

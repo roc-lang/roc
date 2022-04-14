@@ -1,4 +1,4 @@
-use roc_parse::parser::{ENumber, FileError, SyntaxError};
+use roc_parse::parser::{ENumber, ERecord, FileError, SyntaxError};
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
 
@@ -516,23 +516,42 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Record(_erecord, pos) => {
-            let surroundings = Region::new(start, *pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+        EExpr::Record(erecord, pos) => match erecord {
+            &ERecord::OutdentEnd(pos) => {
+                let surroundings = Region::new(start, pos);
+                let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
-            let doc = alloc.stack(vec![
-                alloc.reflow(r"I am partway through parsing an record, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat(vec![alloc.reflow("TODO provide more context.")]),
-            ]);
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I found the end of this record, but it's outdented too far:"),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.reflow(r"Did you mean to indent it further?"),
+                ]);
 
-            Report {
-                filename,
-                doc,
-                title: "RECORD PARSE PROBLEM".to_string(),
-                severity: Severity::RuntimeError,
+                Report {
+                    filename,
+                    doc,
+                    title: "RECORD END OUDENTED TOO FAR".to_string(),
+                    severity: Severity::RuntimeError,
+                }
             }
-        }
+            _ => {
+                let surroundings = Region::new(start, *pos);
+                let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+                let doc = alloc.stack(vec![
+                    alloc.reflow(r"I am partway through parsing an record, but I got stuck here:"),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                    alloc.concat(vec![alloc.reflow("TODO provide more context.")]),
+                ]);
+
+                Report {
+                    filename,
+                    doc,
+                    title: "RECORD PARSE PROBLEM".to_string(),
+                    severity: Severity::RuntimeError,
+                }
+            }
+        },
 
         EExpr::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
 
@@ -542,6 +561,23 @@ fn to_expr_report<'a>(
 
         EExpr::Ability(err, pos) => to_ability_def_report(alloc, lines, filename, err, *pos),
 
+        EExpr::IndentEnd(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack(vec![
+                alloc.reflow("Indentation unexpectedly ended here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INDENTATION ENDED EARLY".to_string(),
+                // In an ideal world, this is recoverable and we keep parsing.
+                severity: Severity::Warning,
+            }
+        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -1113,6 +1149,24 @@ fn to_list_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED LIST".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        EList::OutdentEnd(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I found the end of this list, but it's outdented too far:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow(r"Did you mean to indent it further?"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "LIST END OUDENTED TOO FAR".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
