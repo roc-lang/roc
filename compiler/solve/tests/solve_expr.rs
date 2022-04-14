@@ -186,19 +186,27 @@ mod solve_expr {
         use std::collections::HashSet;
         let pretty_specializations = known_specializations
             .into_iter()
-            .map(|(typ, member)| {
+            .map(|(member, typ)| {
+                let member_data = abilities_store.member_def(member).unwrap();
+                let member_str = member.ident_str(&interns).as_str();
+                let ability_str = member_data.parent_ability.ident_str(&interns).as_str();
                 (
+                    format!("{}:{}", ability_str, member_str),
                     typ.ident_str(&interns).as_str(),
-                    member.ident_str(&interns).as_str(),
                 )
             })
             .collect::<HashSet<_>>();
 
-        for expected_spec in expected_specializations.into_iter() {
+        for (parent, specialization) in expected_specializations.into_iter() {
+            let has_the_one = pretty_specializations
+                .iter()
+                // references are annoying so we do this
+                .find(|(p, s)| p == parent && s == &specialization)
+                .is_some();
             assert!(
-                pretty_specializations.contains(&expected_spec),
+                has_the_one,
                 "{:#?} not in {:#?}",
-                expected_spec,
+                (parent, specialization),
                 pretty_specializations,
             );
         }
@@ -5788,7 +5796,7 @@ mod solve_expr {
                 hash = \$Id n -> n
                 "#
             ),
-            [("hash", "Id")],
+            [("Hash:hash", "Id")],
         )
     }
 
@@ -5809,7 +5817,7 @@ mod solve_expr {
                 hash32 = \$Id n -> Num.toU32 n
                 "#
             ),
-            [("hash", "Id"), ("hash32", "Id")],
+            [("Hash:hash", "Id"), ("Hash:hash32", "Id")],
         )
     }
 
@@ -5837,7 +5845,12 @@ mod solve_expr {
                 le = \$Id m, $Id n -> m < n
                 "#
             ),
-            [("hash", "Id"), ("hash32", "Id"), ("eq", "Id"), ("le", "Id")],
+            [
+                ("Hash:hash", "Id"),
+                ("Hash:hash32", "Id"),
+                ("Ord:eq", "Id"),
+                ("Ord:le", "Id"),
+            ],
         )
     }
 
@@ -5857,7 +5870,7 @@ mod solve_expr {
                 hash = \$Id n -> n
                 "#
             ),
-            [("hash", "Id")],
+            [("Hash:hash", "Id")],
         )
     }
 
@@ -5876,7 +5889,7 @@ mod solve_expr {
                 hash : Id -> U64
                 "#
             ),
-            [("hash", "Id")],
+            [("Hash:hash", "Id")],
         )
     }
 
