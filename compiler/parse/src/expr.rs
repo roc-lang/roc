@@ -2,7 +2,9 @@ use crate::ast::{
     AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Has, Pattern, Spaceable,
     TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
-use crate::blankspace::{space0_after_e, space0_around_ee, space0_before_e, space0_e};
+use crate::blankspace::{
+    space0_after_e, space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
+};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::keyword;
 use crate::parser::{
@@ -2591,14 +2593,15 @@ fn record_help<'a>(
                     and!(
                         trailing_sep_by0(
                             word1(b',', ERecord::End),
-                            space0_around_ee(
+                            space0_before_optional_after(
                                 loc!(record_field_help(min_indent)),
                                 min_indent,
                                 ERecord::IndentEnd,
                                 ERecord::IndentEnd
                             ),
                         ),
-                        space0_e(min_indent, ERecord::IndentEnd)
+                        // Allow outdented closing braces
+                        space0_e(0, ERecord::IndentEnd)
                     ),
                     word1(b'}', ERecord::End)
                 )

@@ -1,0 +1,51 @@
+Defs(
+    [
+        @0-23 Value(
+            Body(
+                @0-1 Identifier(
+                    "x",
+                ),
+                @4-23 Apply(
+                    @4-7 Var {
+                        module_name: "",
+                        ident: "foo",
+                    },
+                    [
+                        @8-23 Record(
+                            Collection {
+                                items: [
+                                    @12-21 SpaceBefore(
+                                        RequiredValue(
+                                            @12-15 "bar",
+                                            [],
+                                            @17-21 Var {
+                                                module_name: "",
+                                                ident: "blah",
+                                            },
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                ],
+                                final_comments: [
+                                    Newline,
+                                ],
+                            },
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+        ),
+    ],
+    @24-25 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "x",
+        },
+        [
+            Newline,
+        ],
+    ),
+)
