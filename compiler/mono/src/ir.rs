@@ -7,6 +7,7 @@ use crate::layout::{
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_exhaustive::{Ctor, Guard, RenderAs, TagId};
@@ -1119,6 +1120,7 @@ pub struct Env<'a, 'i> {
     pub target_info: TargetInfo,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
+    pub abilities_store: &'i AbilitiesStore,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
