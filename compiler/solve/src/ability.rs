@@ -1,4 +1,5 @@
 use roc_can::abilities::AbilitiesStore;
+use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Subs;
 use roc_types::subs::Variable;
@@ -153,4 +154,24 @@ impl DeferredMustImplementAbility {
 
         problems
     }
+}
+
+/// Determines what type implements an ability member of a specialized signature, given the
+/// [MustImplementAbility] constraints of the signature.
+pub fn type_implementing_member(
+    specialization_must_implement_constraints: &[MustImplementAbility],
+    ability: Symbol,
+) -> Symbol {
+    let mut ability_implementations_for_specialization = specialization_must_implement_constraints
+        .iter()
+        .filter(|mia| mia.ability == ability)
+        .collect::<Vec<_>>();
+    ability_implementations_for_specialization.dedup();
+
+    debug_assert!(ability_implementations_for_specialization.len() == 1, "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization");
+
+    ability_implementations_for_specialization
+        .pop()
+        .unwrap()
+        .typ
 }

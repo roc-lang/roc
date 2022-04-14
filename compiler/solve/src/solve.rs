@@ -1,4 +1,4 @@
-use crate::ability::{AbilityImplError, DeferredMustImplementAbility};
+use crate::ability::{type_implementing_member, AbilityImplError, DeferredMustImplementAbility};
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
 use roc_can::constraint::Constraint::{self, *};
@@ -1346,16 +1346,8 @@ fn check_ability_specialization(
 
                 // First, figure out and register for what type does this symbol specialize
                 // the ability member.
-                let mut ability_implementations_for_specialization = must_implement_ability
-                    .iter()
-                    .filter(|mia| mia.ability == root_data.parent_ability)
-                    .collect::<Vec<_>>();
-                ability_implementations_for_specialization.dedup();
-
-                debug_assert!(ability_implementations_for_specialization.len() == 1, "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization");
-
-                // This is a valid specialization! Record it.
-                let specialization_type = ability_implementations_for_specialization[0].typ;
+                let specialization_type =
+                    type_implementing_member(&must_implement_ability, root_data.parent_ability);
                 let specialization = MemberSpecialization {
                     symbol,
                     region: symbol_loc_var.region,

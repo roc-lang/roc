@@ -140,6 +140,18 @@ pub enum Unified {
     BadType(Pool, roc_types::types::Problem),
 }
 
+impl Unified {
+    pub fn expect_success(self, err_msg: &'static str) -> (Pool, Vec<MustImplementAbility>) {
+        match self {
+            Unified::Success {
+                vars,
+                must_implement_ability,
+            } => (vars, must_implement_ability),
+            _ => panic!("{}", err_msg),
+        }
+    }
+}
+
 /// Specifies that `type` must implement the ability `ability`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MustImplementAbility {

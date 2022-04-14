@@ -4220,10 +4220,14 @@ pub fn with_hole<'a>(
                 // a proc in this module, or an imported symbol
                 procs.partial_procs.contains_key(key)
                     || (env.is_imported_symbol(key) && !procs.is_imported_module_thunk(key))
+                    || env.abilities_store.is_ability_member_name(key)
             };
 
             match loc_expr.value {
                 roc_can::expr::Expr::Var(proc_name) if is_known(proc_name) => {
+                    // This might be an ability member - if so, use the appropriate specialization.
+                    let proc_name = repoint_to_specialization(env, fn_var, proc_name);
+
                     // a call by a known name
                     call_by_name(
                         env,
@@ -4704,6 +4708,43 @@ pub fn with_hole<'a>(
             }
         }
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
+    }
+}
+
+#[inline(always)]
+fn repoint_to_specialization<'a>(
+    env: &mut Env<'a, '_>,
+    symbol_var: Variable,
+    symbol: Symbol,
+) -> Symbol {
+    use roc_solve::ability::type_implementing_member;
+    use roc_unify::unify::unify;
+
+    match env.abilities_store.member_def(symbol) {
+        None => {
+            // This is not an ability member, it doesn't need specialization.
+            symbol
+        }
+        Some(member) => {
+            let snapshot = env.subs.snapshot();
+            let (_, must_implement_ability) = unify(
+                env.subs,
+                symbol_var,
+                member.signature_var,
+                roc_unify::unify::Mode::EQ,
+            )
+            .expect_success("This typechecked previously");
+            env.subs.rollback_to(snapshot);
+            let specializing_type =
+                type_implementing_member(&must_implement_ability, member.parent_ability);
+
+            let specialization = env
+                .abilities_store
+                .get_specialization(symbol, specializing_type)
+                .expect("No specialization is recorded - I thought there would only be a type error here.");
+
+            specialization.symbol
+        }
     }
 }
 
