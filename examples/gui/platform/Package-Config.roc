@@ -1,9 +1,9 @@
 platform "gui"
-    requires {} { program : Program State }
+    requires {} { render : Elem }
     exposes []
     packages {}
     imports []
-    provides [ programForHost ]
+    provides [ renderForHost ]
 
 Rgba : { r : F32, g : F32, b : F32, a : F32 }
 
@@ -11,10 +11,5 @@ ButtonStyles : { bgColor : Rgba, borderColor : Rgba, borderWidth : F32, textColo
 
 Elem : [ Button Elem ButtonStyles, Col (List Elem), Row (List Elem), Text Str ]
 
-State : { width : F32, height : F32 }
-
-Program state : { render : state -> Elem }
-
-# TODO allow changing the title - maybe via Action.setTitle
-programForHost : { render : (State -> Elem) as Render }
-programForHost = program
+renderForHost : Elem
+renderForHost = render

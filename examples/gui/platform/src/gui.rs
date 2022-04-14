@@ -9,11 +9,12 @@ use crate::{
             text::build_glyph_brush,
         },
     },
-    roc::{self, RocElem, RocElemTag},
+    roc::{RocElem, RocElemTag},
 };
 use cgmath::{Vector2, Vector4};
 use glyph_brush::OwnedSection;
 use pipelines::RectResources;
+use roc_std::RocStr;
 use std::error::Error;
 use wgpu::{CommandEncoder, LoadOp, RenderPass, TextureView};
 use wgpu_glyph::{GlyphBrush, GlyphCruncher};
@@ -31,17 +32,15 @@ use winit::{
 //
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
-pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Error>> {
+fn run_event_loop(title: &str, root: RocElem) -> Result<(), Box<dyn Error>> {
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
-        .with_inner_size(PhysicalSize::new(state.width, state.height))
+        .with_inner_size(PhysicalSize::new(1900.0, 1000.0))
         .with_title(title)
         .build(&event_loop)
         .unwrap();
-
-    let mut root = roc::app_render(state);
 
     let instance = wgpu::Instance::new(wgpu::Backends::all());
 
@@ -144,41 +143,42 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
                     &cmd_queue,
                 );
             }
-            // Keyboard input
+            //Received Character
             Event::WindowEvent {
-                event:
-                    event::WindowEvent::KeyboardInput {
-                        input:
-                            event::KeyboardInput {
-                                virtual_keycode: Some(keycode),
-                                state: input_state,
-                                ..
-                            },
-                        ..
-                    },
+                event: event::WindowEvent::ReceivedCharacter(_ch),
                 ..
             } => {
-                use event::ElementState::*;
-                use event::VirtualKeyCode::*;
+                // let input_outcome_res =
+                //     app_update::handle_new_char(&ch, &mut app_model, keyboard_modifiers);
+                // if let Err(e) = input_outcome_res {
+                //     print_err(&e)
+                // } else if let Ok(InputOutcome::Ignored) = input_outcome_res {
+                //     println!("Input '{}' ignored!", ch);
+                // }
+                todo!("TODO handle character input");
+            }
+            //Keyboard Input
+            Event::WindowEvent {
+                event: event::WindowEvent::KeyboardInput { input: _, .. },
+                ..
+            } => {
+                // if let Some(virtual_keycode) = input.virtual_keycode {
+                //     if let Some(ref mut ed_model) = app_model.ed_model_opt {
+                //         if ed_model.has_focus {
+                //             let keydown_res = keyboard_input::handle_keydown(
+                //                 input.state,
+                //                 virtual_keycode,
+                //                 keyboard_modifiers,
+                //                 &mut app_model,
+                //             );
 
-                match keycode {
-                    Left => match input_state {
-                        Pressed => println!("Left pressed!"),
-                        Released => println!("Left released!"),
-                    },
-                    Right => match input_state {
-                        Pressed => println!("Right pressed!"),
-                        Released => println!("Right released!"),
-                    },
-                    _ => {
-                        println!("Other!");
-                    }
-                };
-
-                root = roc::app_render(roc::State {
-                    height: 0.0,
-                    width: 0.0,
-                });
+                //             if let Err(e) = keydown_res {
+                //                 print_err(&e)
+                //             }
+                //         }
+                //     }
+                // }
+                // TODO todo!("TODO handle keyboard input");
             }
             //Modifiers Changed
             Event::WindowEvent {
@@ -230,15 +230,9 @@ pub fn run_event_loop(title: &str, state: roc::State) -> Result<(), Box<dyn Erro
                 //     wgpu::LoadOp::Load,
                 // );
 
-                let focus_ancestry: Vec<(*const RocElem, usize)> = Vec::new(); // TODO test that root node can get focus!
-                let focused_elem: *const RocElem = match focus_ancestry.first() {
-                    Some((ptr_ref, _)) => *ptr_ref,
-                    None => std::ptr::null(),
-                };
-
+                // TODO use with_capacity based on some heuristic
                 let (_bounds, drawable) = to_drawable(
                     &root,
-                    focused_elem,
                     Bounds {
                         width: size.width as f32,
                         height: size.height as f32,
@@ -344,6 +338,10 @@ fn begin_render_pass<'a>(
         depth_stencil_attachment: None,
         label: None,
     })
+}
+
+pub fn render(title: RocStr, root: RocElem) {
+    run_event_loop(title.as_str(), root).expect("Error running event loop");
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -497,23 +495,18 @@ fn draw(
     }
 }
 
-/// focused_elem is the currently-focused element (or NULL if nothing has the focus)
 fn to_drawable(
     elem: &RocElem,
-    focused_elem: *const RocElem,
     bounds: Bounds,
     glyph_brush: &mut GlyphBrush<()>,
 ) -> (Bounds, Drawable) {
     use RocElemTag::*;
 
-    let is_focused = focused_elem == elem as *const RocElem;
-
     match elem.tag() {
         Button => {
             let button = unsafe { &elem.entry().button };
             let styles = button.styles;
-            let (child_bounds, child_drawable) =
-                to_drawable(&*button.child, focused_elem, bounds, glyph_brush);
+            let (child_bounds, child_drawable) = to_drawable(&*button.child, bounds, glyph_brush);
 
             let button_drawable = Drawable {
                 bounds: child_bounds,
@@ -580,8 +573,7 @@ fn to_drawable(
             let mut offset_entries = Vec::with_capacity(row.children.len());
 
             for child in row.children.as_slice().iter() {
-                let (child_bounds, child_drawable) =
-                    to_drawable(&child, focused_elem, bounds, glyph_brush);
+                let (child_bounds, child_drawable) = to_drawable(&child, bounds, glyph_brush);
 
                 offset_entries.push((offset, child_drawable));
 
@@ -610,8 +602,7 @@ fn to_drawable(
             let mut offset_entries = Vec::with_capacity(col.children.len());
 
             for child in col.children.as_slice().iter() {
-                let (child_bounds, child_drawable) =
-                    to_drawable(&child, focused_elem, bounds, glyph_brush);
+                let (child_bounds, child_drawable) = to_drawable(&child, bounds, glyph_brush);
 
                 offset_entries.push((offset, child_drawable));
 

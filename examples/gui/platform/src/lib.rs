@@ -1,16 +1,20 @@
-mod focus;
 mod graphics;
 mod gui;
+mod rects_and_texts;
 mod roc;
+
+use crate::roc::RocElem;
+
+extern "C" {
+    #[link_name = "roc__renderForHost_1_exposed"]
+    fn roc_render() -> RocElem;
+}
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    let state = roc::State {
-        width: 1900.0,
-        height: 1000.0,
-    };
+    let root_elem = unsafe { roc_render() };
 
-    gui::run_event_loop("test title", state).expect("Error running event loop");
+    gui::render("test title".into(), root_elem);
 
     // Exit code
     0
