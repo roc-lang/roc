@@ -220,7 +220,6 @@ mod test_parse {
         pass/ops_with_newlines.expr,
         pass/outdented_list.expr,
         pass/outdented_record.expr,
-        pass/outdented_app_with_record.expr,
         pass/packed_singleton_list.expr,
         pass/parenthetical_apply.expr,
         pass/parenthetical_basic_field.expr,

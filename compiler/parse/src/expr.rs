@@ -190,7 +190,6 @@ fn record_field_access<'a>() -> impl Parser<'a, &'a str, EExpr<'a>> {
 /// pattern later
 fn parse_loc_term_or_underscore<'a>(
     min_indent: u32,
-    outdent_col: u32,
     options: ExprParseOptions,
     arena: &'a Bump,
     state: State<'a>,
@@ -202,11 +201,8 @@ fn parse_loc_term_or_underscore<'a>(
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
         loc!(underscore_expression()),
-        loc!(record_literal_help(min_indent, outdent_col)),
-        loc!(specialize(
-            EExpr::List,
-            list_literal_help(min_indent, outdent_col)
-        )),
+        loc!(record_literal_help(min_indent)),
+        loc!(specialize(EExpr::List, list_literal_help(min_indent))),
         loc!(map_with_arena!(
             assign_or_destructure_identifier(),
             ident_to_expr
@@ -217,7 +213,6 @@ fn parse_loc_term_or_underscore<'a>(
 
 fn parse_loc_term<'a>(
     min_indent: u32,
-    outdent_col: u32,
     options: ExprParseOptions,
     arena: &'a Bump,
     state: State<'a>,
@@ -228,11 +223,8 @@ fn parse_loc_term<'a>(
         loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
-        loc!(record_literal_help(min_indent, outdent_col)),
-        loc!(specialize(
-            EExpr::List,
-            list_literal_help(min_indent, outdent_col)
-        )),
+        loc!(record_literal_help(min_indent)),
+        loc!(specialize(EExpr::List, list_literal_help(min_indent))),
         loc!(map_with_arena!(
             assign_or_destructure_identifier(),
             ident_to_expr
@@ -260,7 +252,6 @@ fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 
 fn loc_possibly_negative_or_negated_term<'a>(
     min_indent: u32,
-    outdent_col: u32,
     options: ExprParseOptions,
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of![
@@ -268,11 +259,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
             let initial = state.clone();
 
             let (_, (loc_op, loc_expr), state) = and!(loc!(unary_negate()), |a, s| parse_loc_term(
-                min_indent,
-                outdent_col,
-                options,
-                a,
-                s
+                min_indent, options, a, s
             ))
             .parse(arena, state)?;
 
@@ -284,15 +271,13 @@ fn loc_possibly_negative_or_negated_term<'a>(
         loc!(specialize(EExpr::Number, number_literal_help())),
         loc!(map_with_arena!(
             and!(loc!(word1(b'!', EExpr::Start)), |a, s| {
-                parse_loc_term(min_indent, outdent_col, options, a, s)
+                parse_loc_term(min_indent, options, a, s)
             }),
             |arena: &'a Bump, (loc_op, loc_expr): (Loc<_>, _)| {
                 Expr::UnaryOp(arena.alloc(loc_expr), Loc::at(loc_op.region, UnaryOp::Not))
             }
         )),
-        |arena, state| {
-            parse_loc_term_or_underscore(min_indent, outdent_col, options, arena, state)
-        }
+        |arena, state| { parse_loc_term_or_underscore(min_indent, options, arena, state) }
     ]
 }
 
@@ -351,8 +336,8 @@ fn parse_expr_operator_chain<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let (_, expr, state) = loc_possibly_negative_or_negated_term(min_indent, start_column, options)
-        .parse(arena, state)?;
+    let (_, expr, state) =
+        loc_possibly_negative_or_negated_term(min_indent, options).parse(arena, state)?;
 
     let initial = state.clone();
     let end = state.pos();
@@ -1348,8 +1333,7 @@ fn parse_expr_operator<'a>(
         BinOp::Minus if expr_state.end != op_start && op_end == new_start => {
             // negative terms
 
-            let (_, negated_expr, state) =
-                parse_loc_term(min_indent, start_column, options, arena, state)?;
+            let (_, negated_expr, state) = parse_loc_term(min_indent, options, arena, state)?;
             let new_end = state.pos();
 
             let arg = numeric_negate_expression(
@@ -1483,9 +1467,7 @@ fn parse_expr_operator<'a>(
                 _ => unreachable!(),
             },
         ),
-        _ => match loc_possibly_negative_or_negated_term(min_indent, start_column, options)
-            .parse(arena, state)
-        {
+        _ => match loc_possibly_negative_or_negated_term(min_indent, options).parse(arena, state) {
             Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
             Ok((_, mut new_expr, state)) => {
                 let new_end = state.pos();
@@ -1544,7 +1526,7 @@ fn parse_expr_end<'a>(
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let parser = skip_first!(
         crate::blankspace::check_indent(min_indent, EExpr::IndentEnd),
-        move |a, s| parse_loc_term(min_indent, start_column, options, a, s)
+        move |a, s| parse_loc_term(min_indent, options, a, s)
     );
 
     match parser.parse(arena, state.clone()) {
@@ -2485,10 +2467,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     }
 }
 
-fn list_literal_help<'a>(
-    min_indent: u32,
-    outdent_col: u32,
-) -> impl Parser<'a, Expr<'a>, EList<'a>> {
+fn list_literal_help<'a>(min_indent: u32) -> impl Parser<'a, Expr<'a>, EList<'a>> {
     move |arena, state| {
         let (_, elements, state) = collection_trailing_sep_e!(
             word1(b'[', EList::Open),
@@ -2499,10 +2478,8 @@ fn list_literal_help<'a>(
             word1(b',', EList::End),
             word1(b']', EList::End),
             min_indent,
-            outdent_col,
             EList::Open,
             EList::IndentEnd,
-            EList::OutdentEnd,
             Expr::SpaceBefore
         )
         .parse(arena, state)?;
@@ -2578,7 +2555,6 @@ fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> 
 
 fn record_help<'a>(
     min_indent: u32,
-    outdent_col: u32,
 ) -> impl Parser<
     'a,
     (
@@ -2613,8 +2589,8 @@ fn record_help<'a>(
                 // `{  }` can be successfully parsed as an empty record, and then
                 // changed by the formatter back into `{}`.
                 zero_or_more!(word1(b' ', ERecord::End)),
-                |arena, state| {
-                    let (_, (parsed_elems, comments), state) = and!(
+                skip_second!(
+                    and!(
                         trailing_sep_by0(
                             word1(b',', ERecord::End),
                             space0_before_optional_after(
@@ -2624,35 +2600,19 @@ fn record_help<'a>(
                                 ERecord::IndentEnd
                             ),
                         ),
-                        space0_e(0, ERecord::OutdentEnd)
-                    )
-                    .parse(arena, state)?;
-
-                    let closing_brace_col = state.column();
-                    let closing_brace_pos = state.pos();
-
-                    let (_, _, state) = word1(b'}', ERecord::End).parse(arena, state)?;
-
-                    if closing_brace_col < outdent_col {
-                        return Err((MadeProgress, ERecord::OutdentEnd(closing_brace_pos), state));
-                    }
-
-                    Ok((MadeProgress, (parsed_elems, comments), state))
-                }
+                        // Allow outdented closing braces
+                        space0_e(0, ERecord::IndentEnd)
+                    ),
+                    word1(b'}', ERecord::End)
+                )
             ))
         )
     )
 }
 
-fn record_literal_help<'a>(
-    min_indent: u32,
-    outdent_col: u32,
-) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+fn record_literal_help<'a>(min_indent: u32) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     then(
-        loc!(specialize(
-            EExpr::Record,
-            record_help(min_indent, outdent_col)
-        )),
+        loc!(specialize(EExpr::Record, record_help(min_indent))),
         move |arena, state, _, loc_record| {
             let (opt_update, loc_assigned_fields_with_comments) = loc_record.value;
 

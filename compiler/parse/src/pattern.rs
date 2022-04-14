@@ -365,9 +365,7 @@ fn record_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Pattern<'a>, PRec
             // word1_check_indent!(b'}', PRecord::End, min_indent, PRecord::IndentEnd),
             word1(b'}', PRecord::End),
             min_indent,
-            0,
             PRecord::Open,
-            PRecord::IndentEnd,
             PRecord::IndentEnd,
             Pattern::SpaceBefore
         )

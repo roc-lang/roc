@@ -416,7 +416,6 @@ fn provides_without_to<'a>() -> impl Parser<
     EProvides<'a>,
 > {
     let min_indent = 1;
-    let outdent_col = 0;
     and!(
         spaces_around_keyword(
             min_indent,
@@ -432,9 +431,7 @@ fn provides_without_to<'a>() -> impl Parser<
                 word1(b',', EProvides::ListEnd),
                 word1(b']', EProvides::ListEnd),
                 min_indent,
-                outdent_col,
                 EProvides::Open,
-                EProvides::IndentListEnd,
                 EProvides::IndentListEnd,
                 Spaced::SpaceBefore
             ),
@@ -448,7 +445,6 @@ fn provides_without_to<'a>() -> impl Parser<
 fn provides_types<'a>(
 ) -> impl Parser<'a, Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>, EProvides<'a>> {
     let min_indent = 1;
-    let outdent_col = 0;
 
     skip_first!(
         // We only support spaces here, not newlines, because this is not intended
@@ -468,9 +464,7 @@ fn provides_types<'a>(
             word1(b',', EProvides::ListEnd),
             word1(b'}', EProvides::ListEnd),
             min_indent,
-            outdent_col,
             EProvides::Open,
-            EProvides::IndentListEnd,
             EProvides::IndentListEnd,
             Spaced::SpaceBefore
         )
@@ -551,9 +545,7 @@ fn requires_rigids<'a>(
         word1(b',', ERequires::ListEnd),
         word1(b'}', ERequires::ListEnd),
         min_indent,
-        0,
         ERequires::Open,
-        ERequires::IndentListEnd,
         ERequires::IndentListEnd,
         Spaced::SpaceBefore
     )
@@ -585,7 +577,6 @@ fn exposes_values<'a>() -> impl Parser<
     EExposes,
 > {
     let min_indent = 1;
-    let outdent_col = 0;
 
     and!(
         spaces_around_keyword(
@@ -601,9 +592,7 @@ fn exposes_values<'a>() -> impl Parser<
             word1(b',', EExposes::ListEnd),
             word1(b']', EExposes::ListEnd),
             min_indent,
-            outdent_col,
             EExposes::Open,
-            EExposes::IndentListEnd,
             EExposes::IndentListEnd,
             Spaced::SpaceBefore
         )
@@ -639,7 +628,6 @@ fn exposes_modules<'a>() -> impl Parser<
     EExposes,
 > {
     let min_indent = 1;
-    let outdent_col = 0;
 
     and!(
         spaces_around_keyword(
@@ -655,9 +643,7 @@ fn exposes_modules<'a>() -> impl Parser<
             word1(b',', EExposes::ListEnd),
             word1(b']', EExposes::ListEnd),
             min_indent,
-            outdent_col,
             EExposes::Open,
-            EExposes::IndentListEnd,
             EExposes::IndentListEnd,
             Spaced::SpaceBefore
         )
@@ -688,7 +674,6 @@ struct Packages<'a> {
 #[inline(always)]
 fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages<'a>> {
     let min_indent = 1;
-    let outdent_col = 0;
 
     map!(
         and!(
@@ -705,9 +690,7 @@ fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages<'a>> {
                 word1(b',', EPackages::ListEnd),
                 word1(b'}', EPackages::ListEnd),
                 min_indent,
-                outdent_col,
                 EPackages::Open,
-                EPackages::IndentListEnd,
                 EPackages::IndentListEnd,
                 Spaced::SpaceBefore
             )
@@ -758,7 +741,6 @@ fn generates_with<'a>() -> impl Parser<
     EGeneratesWith,
 > {
     let min_indent = 1;
-    let outdent_col = 0;
 
     and!(
         spaces_around_keyword(
@@ -774,9 +756,7 @@ fn generates_with<'a>() -> impl Parser<
             word1(b',', EGeneratesWith::ListEnd),
             word1(b']', EGeneratesWith::ListEnd),
             min_indent,
-            outdent_col,
             EGeneratesWith::Open,
-            EGeneratesWith::IndentListEnd,
             EGeneratesWith::IndentListEnd,
             Spaced::SpaceBefore
         )
@@ -793,7 +773,6 @@ fn imports<'a>() -> impl Parser<
     EImports,
 > {
     let min_indent = 1;
-    let outdent_col = 0;
 
     and!(
         spaces_around_keyword(
@@ -809,9 +788,7 @@ fn imports<'a>() -> impl Parser<
             word1(b',', EImports::ListEnd),
             word1(b']', EImports::ListEnd),
             min_indent,
-            outdent_col,
             EImports::Open,
-            EImports::IndentListEnd,
             EImports::IndentListEnd,
             Spaced::SpaceBefore
         )
@@ -872,7 +849,6 @@ where
 #[inline(always)]
 fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports> {
     let min_indent = 1;
-    let outdent_col = 0;
 
     type Temp<'a> = (
         (Option<&'a str>, ModuleName<'a>),
@@ -899,9 +875,7 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                     word1(b',', EImports::SetEnd),
                     word1(b'}', EImports::SetEnd),
                     min_indent,
-                    outdent_col,
                     EImports::Open,
-                    EImports::IndentSetEnd,
                     EImports::IndentSetEnd,
                     Spaced::SpaceBefore
                 )
