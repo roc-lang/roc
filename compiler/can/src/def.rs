@@ -542,7 +542,13 @@ pub fn canonicalize_defs<'a>(
                 flex_vars: iv.collect_flex(),
             };
 
-            can_members.push((member_sym, name_region, member_annot.typ, variables));
+            can_members.push((
+                member_sym,
+                name_region,
+                var_store.fresh(),
+                member_annot.typ,
+                variables,
+            ));
         }
 
         // Store what symbols a type must define implementations for to have this ability.

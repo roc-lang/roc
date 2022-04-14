@@ -703,7 +703,6 @@ fn solve(
                     check_ability_specialization(
                         arena,
                         subs,
-                        &new_env,
                         pools,
                         rank,
                         abilities_store,
@@ -812,7 +811,6 @@ fn solve(
                     check_ability_specialization(
                         arena,
                         subs,
-                        &new_env,
                         pools,
                         rank,
                         abilities_store,
@@ -1282,7 +1280,6 @@ fn solve(
 fn check_ability_specialization(
     arena: &Bump,
     subs: &mut Subs,
-    env: &Env,
     pools: &mut Pools,
     rank: Rank,
     abilities_store: &mut AbilitiesStore,
@@ -1295,9 +1292,7 @@ fn check_ability_specialization(
     // inferred type for the specialization actually aligns with the expected
     // implementation.
     if let Some((root_symbol, root_data)) = abilities_store.root_name_and_def(symbol) {
-        let root_signature_var = env
-            .get_var_by_symbol(&root_symbol)
-            .expect("Ability should be registered in env by now!");
+        let root_signature_var = root_data.signature_var;
 
         // Check if they unify - if they don't, then the claimed specialization isn't really one,
         // and that's a type error!
