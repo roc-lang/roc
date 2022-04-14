@@ -2768,7 +2768,11 @@ fn num_to_str_u16() {
     assert_evals_to!(r#"Num.toStr 10u16"#, RocStr::from("10"), RocStr);
 
     let max = format!("{}", u16::MAX);
-    assert_evals_to!(r#"Num.toStr Num.maxU16"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxU16"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
 }
 
 #[test]
@@ -2781,7 +2785,11 @@ fn num_to_str_u32() {
     assert_evals_to!(r#"Num.toStr 10u32"#, RocStr::from("10"), RocStr);
 
     let max = format!("{}", u32::MAX);
-    assert_evals_to!(r#"Num.toStr Num.maxU32"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxU32"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
 }
 
 #[test]
@@ -2794,7 +2802,11 @@ fn num_to_str_u64() {
     assert_evals_to!(r#"Num.toStr 10u64"#, RocStr::from("10"), RocStr);
 
     let max = format!("{}", u64::MAX);
-    assert_evals_to!(r#"Num.toStr Num.maxU64"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxU64"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
 }
 
 #[test]
@@ -2827,10 +2839,18 @@ fn num_to_str_i16() {
     assert_evals_to!(r#"Num.toStr 10i16"#, RocStr::from("10"), RocStr);
 
     let max = format!("{}", i16::MAX);
-    assert_evals_to!(r#"Num.toStr Num.maxI16"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxI16"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
 
     let max = format!("{}", i16::MIN);
-    assert_evals_to!(r#"Num.toStr Num.minI16"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(
+        r#"Num.toStr Num.minI16"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
 }
 
 #[test]
@@ -2845,10 +2865,18 @@ fn num_to_str_i32() {
     assert_evals_to!(r#"Num.toStr 10i32"#, RocStr::from("10"), RocStr);
 
     let max = format!("{}", i32::MAX);
-    assert_evals_to!(r#"Num.toStr Num.maxI32"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxI32"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
 
     let max = format!("{}", i32::MIN);
-    assert_evals_to!(r#"Num.toStr Num.minI32"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(
+        r#"Num.toStr Num.minI32"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
 }
 
 #[test]
@@ -2863,10 +2891,18 @@ fn num_to_str_i64() {
     assert_evals_to!(r#"Num.toStr 10i64"#, RocStr::from("10"), RocStr);
 
     let max = format!("{}", i64::MAX);
-    assert_evals_to!(r#"Num.toStr Num.maxI64"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxI64"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
 
     let max = format!("{}", i64::MIN);
-    assert_evals_to!(r#"Num.toStr Num.minI64"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(
+        r#"Num.toStr Num.minI64"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
 }
 
 #[test]
