@@ -1,23 +1,23 @@
 app "breakout"
     packages { pf: "platform" }
-    imports []
+    imports [ pf.Game.{ Bounds, Elem, Event } ]
     provides [ program ] { Model } to pf
 
 Model : { height : F32, width : F32, pos : F32 }
 
 program = { init, update, render }
 
-init : { height : F32, width : F32 } -> Model
+init : Bounds -> Model
 init = \_ -> { width: 1900, height: 1000, pos: 100 }
 
-# update : Model, Event -> Model
+update : Model, Event -> Model
 update = \model, event ->
     when event is
         Resize size -> { model & width: size.width, height: size.height }
         KeyUp _ -> model
         KeyDown keyCode -> { model & pos: model.pos + 50 }
 
-# render : Model -> List Elem
+render : Model -> List Elem
 render = \model ->
     numRows = 4
     numCols = 8
