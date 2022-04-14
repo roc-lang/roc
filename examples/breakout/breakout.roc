@@ -7,7 +7,7 @@ Model : { height : F32, width : F32, pos : F32 }
 
 program = { init, update, render }
 
-# init : { height : F32, width : F32 } -> Model
+init : { height : F32, width : F32 } -> Model
 init = \_ -> { width: 1900, height: 1000, pos: 100 }
 
 # update : Model, Event -> Model
