@@ -1023,6 +1023,8 @@ fn link_wasm32(
     let zig_str_path = find_zig_str_path();
     let wasi_libc_path = find_wasi_libc_path();
 
+    dbg!(input_paths);
+
     let child = Command::new(&zig_executable())
         // .env_clear()
         // .env("PATH", &env_path)
