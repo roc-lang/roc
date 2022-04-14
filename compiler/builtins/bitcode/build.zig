@@ -36,7 +36,7 @@ pub fn build(b: *Builder) void {
     generateLlvmIrFile(b, mode, host_target, main_path, "ir", "builtins-host");
     generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "builtins-i386");
     generateLlvmIrFile(b, mode, linux64_target, main_path, "ir-x86_64", "builtins-x86_64");
-    generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "wasm32");
+    generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "builtins-wasm32");
 
     // Generate Object Files
     generateObjectFile(b, mode, host_target, main_path, "object", "builtins-host");
