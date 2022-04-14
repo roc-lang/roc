@@ -1121,3 +1121,20 @@ fn issue_2582_specialize_result_value() {
         r"<function> : Num *, List Str -> Result Str [ ListWasEmpty ]*",
     )
 }
+
+#[test]
+#[cfg(not(feature = "wasm"))]
+fn issue_2818() {
+    expect_success(
+        indoc!(
+            r#"
+            f : {} -> List Str
+            f = \_ ->
+              x = []
+              x
+            f
+            "#
+        ),
+        r"<function> : {} -> List Str",
+    )
+}
