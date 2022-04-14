@@ -267,6 +267,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
             } => {
                 keyboard_modifiers = modifiers;
             }
+            Event::MainEventsCleared => window.request_redraw(),
             Event::RedrawRequested { .. } => {
                 // Get a command encoder for the current frame
                 let mut encoder =
