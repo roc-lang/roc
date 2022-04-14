@@ -5,6 +5,7 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::std::borrow_stdlib;
+use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
@@ -31,6 +32,7 @@ use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
+use roc_reporting::report::RenderTarget;
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_target::TargetInfo;
@@ -347,6 +349,7 @@ pub struct LoadedModule {
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
+    pub abilities_store: AbilitiesStore,
 }
 
 impl LoadedModule {
@@ -508,6 +511,7 @@ enum Msg<'a> {
         decls: Vec<Declaration>,
         dep_idents: MutMap<ModuleId, IdentIds>,
         module_timing: ModuleTiming,
+        abilities_store: AbilitiesStore,
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
@@ -515,6 +519,7 @@ enum Msg<'a> {
         exposed_aliases_by_symbol: MutMap<Symbol, (bool, Alias)>,
         dep_idents: MutMap<ModuleId, IdentIds>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
+        abilities_store: AbilitiesStore,
     },
     FoundSpecializations {
         module_id: ModuleId,
@@ -604,6 +609,8 @@ struct State<'a> {
     // (Granted, this has not been attempted or measured!)
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 
+    pub render: RenderTarget,
+
     // cached subs (used for builtin modules, could include packages in the future too)
     cached_subs: CachedSubs,
 }
@@ -611,6 +618,7 @@ struct State<'a> {
 type CachedSubs = Arc<Mutex<MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>>>;
 
 impl<'a> State<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         root_id: ModuleId,
         target_info: TargetInfo,
@@ -619,6 +627,7 @@ impl<'a> State<'a> {
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
         cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+        render: RenderTarget,
     ) -> Self {
         let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
@@ -643,6 +652,7 @@ impl<'a> State<'a> {
             timings: MutMap::default(),
             layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
+            render,
         }
     }
 }
@@ -824,6 +834,7 @@ pub fn load_and_typecheck_str<'a>(
     src_dir: &Path,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
+    render: RenderTarget,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
@@ -841,10 +852,17 @@ pub fn load_and_typecheck_str<'a>(
         Phase::SolveTypes,
         target_info,
         cached_subs,
+        render,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum PrintTarget {
+    ColorTerminal,
+    Generic,
 }
 
 pub struct LoadStart<'a> {
@@ -855,7 +873,11 @@ pub struct LoadStart<'a> {
 }
 
 impl<'a> LoadStart<'a> {
-    pub fn from_path(arena: &'a Bump, filename: PathBuf) -> Result<Self, LoadingProblem<'a>> {
+    pub fn from_path(
+        arena: &'a Bump,
+        filename: PathBuf,
+        render: RenderTarget,
+    ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
@@ -887,7 +909,12 @@ impl<'a> LoadStart<'a> {
 
                     // if parsing failed, this module did not add any identifiers
                     let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                    let buf = to_parse_problem_report(problem, module_ids, root_exposed_ident_ids);
+                    let buf = to_parse_problem_report(
+                        problem,
+                        module_ids,
+                        root_exposed_ident_ids,
+                        render,
+                    );
                     return Err(LoadingProblem::FormattedReport(buf));
                 }
                 Err(LoadingProblem::FileProblem { filename, error }) => {
@@ -995,6 +1022,7 @@ pub fn load<'a>(
     goal_phase: Phase,
     target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+    render: RenderTarget,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     // When compiling to wasm, we cannot spawn extra threads
     // so we have a single-threaded implementation
@@ -1007,6 +1035,7 @@ pub fn load<'a>(
             goal_phase,
             target_info,
             cached_subs,
+            render,
         )
     } else {
         load_multi_threaded(
@@ -1017,6 +1046,7 @@ pub fn load<'a>(
             goal_phase,
             target_info,
             cached_subs,
+            render,
         )
     }
 }
@@ -1031,12 +1061,14 @@ fn load_single_threaded<'a>(
     goal_phase: Phase,
     target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+    render: RenderTarget,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
         ident_ids_by_module,
         root_id,
         root_msg,
+        ..
     } = load_start;
 
     let (msg_tx, msg_rx) = bounded(1024);
@@ -1053,6 +1085,7 @@ fn load_single_threaded<'a>(
         arc_modules,
         ident_ids_by_module,
         cached_subs,
+        render,
     );
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
@@ -1115,6 +1148,7 @@ fn state_thread_step<'a>(
                     exposed_aliases_by_symbol,
                     dep_idents,
                     documentation,
+                    abilities_store,
                 } => {
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
@@ -1131,6 +1165,7 @@ fn state_thread_step<'a>(
                         exposed_vars_by_symbol,
                         dep_idents,
                         documentation,
+                        abilities_store,
                     );
 
                     Ok(ControlFlow::Break(LoadResult::TypeChecked(typechecked)))
@@ -1153,8 +1188,12 @@ fn state_thread_step<'a>(
 
                 Msg::FailedToParse(problem) => {
                     let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
-                    let buf =
-                        to_parse_problem_report(problem, module_ids, state.constrained_ident_ids);
+                    let buf = to_parse_problem_report(
+                        problem,
+                        module_ids,
+                        state.constrained_ident_ids,
+                        state.render,
+                    );
                     Err(LoadingProblem::FormattedReport(buf))
                 }
                 msg => {
@@ -1163,6 +1202,8 @@ fn state_thread_step<'a>(
                     // system which lets this logic work efficiently.
                     let constrained_ident_ids = state.constrained_ident_ids.clone();
                     let arc_modules = state.arc_modules.clone();
+
+                    let render = state.render;
 
                     let res_state = update(
                         state,
@@ -1185,8 +1226,12 @@ fn state_thread_step<'a>(
                                 .into_inner()
                                 .into_module_ids();
 
-                            let buf =
-                                to_parse_problem_report(problem, module_ids, constrained_ident_ids);
+                            let buf = to_parse_problem_report(
+                                problem,
+                                module_ids,
+                                constrained_ident_ids,
+                                render,
+                            );
                             Err(LoadingProblem::FormattedReport(buf))
                         }
                         Err(e) => Err(e),
@@ -1210,12 +1255,14 @@ fn load_multi_threaded<'a>(
     goal_phase: Phase,
     target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+    render: RenderTarget,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
         ident_ids_by_module,
         root_id,
         root_msg,
+        ..
     } = load_start;
 
     let mut state = State::new(
@@ -1226,6 +1273,7 @@ fn load_multi_threaded<'a>(
         arc_modules,
         ident_ids_by_module,
         cached_subs,
+        render,
     );
 
     let (msg_tx, msg_rx) = bounded(1024);
@@ -1746,6 +1794,7 @@ fn update<'a>(
             decls,
             dep_idents,
             mut module_timing,
+            abilities_store,
         } => {
             log!("solved types for {:?}", module_id);
             module_timing.end_time = SystemTime::now();
@@ -1798,6 +1847,7 @@ fn update<'a>(
                         exposed_aliases_by_symbol: solved_module.aliases,
                         dep_idents,
                         documentation,
+                        abilities_store,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
@@ -2126,6 +2176,7 @@ fn finish(
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     dep_idents: MutMap<ModuleId, IdentIds>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
+    abilities_store: AbilitiesStore,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
@@ -2160,6 +2211,7 @@ fn finish(
         sources,
         timings: state.timings,
         documentation,
+        abilities_store,
     }
 }
 
@@ -3102,6 +3154,10 @@ fn add_imports(
                     rigid_vars.extend(copied_import.rigid);
                     rigid_vars.extend(copied_import.flex);
 
+                    // Rigid vars bound to abilities are also treated like rigids.
+                    rigid_vars.extend(copied_import.rigid_able);
+                    rigid_vars.extend(copied_import.flex_able);
+
                     import_variables.extend(copied_import.registered);
 
                     def_types.push((
@@ -3119,6 +3175,7 @@ fn add_imports(
     import_variables
 }
 
+#[allow(clippy::complexity)]
 fn run_solve_solve(
     imported_builtins: Vec<Symbol>,
     exposed_for_module: ExposedForModule,
@@ -3126,11 +3183,17 @@ fn run_solve_solve(
     constraint: ConstraintSoa,
     mut var_store: VarStore,
     module: Module,
-) -> (Solved<Subs>, Vec<(Symbol, Variable)>, Vec<solve::TypeError>) {
+) -> (
+    Solved<Subs>,
+    Vec<(Symbol, Variable)>,
+    Vec<solve::TypeError>,
+    AbilitiesStore,
+) {
     let Module {
         exposed_symbols,
         aliases,
         rigid_variables,
+        abilities_store,
         ..
     } = module;
 
@@ -3155,12 +3218,13 @@ fn run_solve_solve(
         solve_aliases.insert(*name, alias.clone());
     }
 
-    let (solved_subs, solved_env, problems) = roc_solve::module::run_solve(
+    let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
         &constraints,
         actual_constraint,
         rigid_variables,
         subs,
         solve_aliases,
+        abilities_store,
     );
 
     let solved_subs = if true {
@@ -3179,7 +3243,12 @@ fn run_solve_solve(
         .filter(|(k, _)| exposed_symbols.contains(k))
         .collect();
 
-    (solved_subs, exposed_vars_by_symbol, problems)
+    (
+        solved_subs,
+        exposed_vars_by_symbol,
+        problems,
+        abilities_store,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3203,7 +3272,7 @@ fn run_solve<'a>(
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
 
-    let (solved_subs, exposed_vars_by_symbol, problems) = {
+    let (solved_subs, exposed_vars_by_symbol, problems, abilities_store) = {
         if module_id.is_builtin() {
             match cached_subs.lock().remove(&module_id) {
                 None => {
@@ -3217,9 +3286,13 @@ fn run_solve<'a>(
                         module,
                     )
                 }
-                Some((subs, exposed_vars_by_symbol)) => {
-                    (Solved(subs), exposed_vars_by_symbol.to_vec(), vec![])
-                }
+                Some((subs, exposed_vars_by_symbol)) => (
+                    Solved(subs),
+                    exposed_vars_by_symbol.to_vec(),
+                    vec![],
+                    // TODO(abilities) replace when we have abilities for builtins
+                    AbilitiesStore::default(),
+                ),
             }
         } else {
             run_solve_solve(
@@ -3258,6 +3331,7 @@ fn run_solve<'a>(
         dep_idents,
         solved_module,
         module_timing,
+        abilities_store,
     }
 }
 
@@ -3385,8 +3459,12 @@ fn canonicalize_and_constrain<'a>(
 
             let mut constraints = Constraints::new();
 
-            let constraint =
-                constrain_module(&mut constraints, &module_output.declarations, module_id);
+            let constraint = constrain_module(
+                &mut constraints,
+                &module_output.scope.abilities_store,
+                &module_output.declarations,
+                module_id,
+            );
 
             let after = roc_types::types::get_type_clone_count();
 
@@ -3426,6 +3504,7 @@ fn canonicalize_and_constrain<'a>(
                 referenced_types: module_output.referenced_types,
                 aliases,
                 rigid_variables: module_output.rigid_variables,
+                abilities_store: module_output.scope.abilities_store,
             };
 
             let constrained_module = ConstrainedModule {
@@ -3859,6 +3938,7 @@ fn add_def_to_module<'a>(
                         // This is a top-level definition, so it cannot capture anything
                         captured_symbols: CapturedSymbols::None,
                         body,
+                        body_var: def.expr_var,
                         // This is a 0-arity thunk, so it cannot be recursive
                         is_self_recursive: false,
                     };
@@ -4068,6 +4148,7 @@ fn to_parse_problem_report<'a>(
     problem: FileError<'a, SyntaxError<'a>>,
     mut module_ids: ModuleIds,
     all_ident_ids: MutMap<ModuleId, IdentIds>,
+    render: RenderTarget,
 ) -> String {
     use roc_reporting::report::{parse_problem, RocDocAllocator, DEFAULT_PALETTE};
 
@@ -4102,7 +4183,7 @@ fn to_parse_problem_report<'a>(
     let mut buf = String::new();
     let palette = DEFAULT_PALETTE;
 
-    report.render_color_terminal(&mut buf, &alloc, &palette);
+    report.render(render, &mut buf, &alloc, &palette);
 
     buf
 }

@@ -60,7 +60,7 @@ Its one thing to actually write these functions, its _another_ thing to let the 
 
 ## Specifying how we pass args to the function
 ### builtins/mono/src/borrow.rs
-After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelevant. Towards the bottom of this file, add a new case for you builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
+After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelevant. Towards the bottom of this file, add a new case for your builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
 
 ## Testing it
 ### solve/tests/solve_expr.rs
@@ -87,7 +87,7 @@ In this directory, there are a couple files like `gen_num.rs`, `gen_str.rs`, etc
 fn atan() {
     assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
 }
-    ```
+```
 But replace `Num.atan`, the return value, and the return type with your new builtin.
 
 # Mistakes that are easy to make!!

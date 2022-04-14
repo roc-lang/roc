@@ -227,12 +227,16 @@ fn solve<'a>(
             );
 
             match unify(subs, actual, expected, Mode::EQ) {
-                Success(vars) => {
+                Success {
+                    vars,
+                    must_implement_ability: _,
+                } => {
+                    // TODO(abilities) record deferred ability checks
                     introduce(subs, rank, pools, &vars);
 
                     state
                 }
-                Failure(vars, actual_type, expected_type) => {
+                Failure(vars, actual_type, expected_type, _bad_impl) => {
                     introduce(subs, rank, pools, &vars);
 
                     let problem = TypeError::BadExpr(
@@ -267,7 +271,7 @@ fn solve<'a>(
         //
         //                    state
         //                }
-        //                Failure(vars, _actual_type, _expected_type) => {
+        //                Failure(vars, _actual_type, _expected_type, _bad_impl) => {
         //                    introduce(subs, rank, pools, &vars);
         //
         //                    // ERROR NOT REPORTED
@@ -320,13 +324,17 @@ fn solve<'a>(
                     );
 
                     match unify(subs, actual, expected, Mode::EQ) {
-                        Success(vars) => {
+                        Success {
+                            vars,
+                            must_implement_ability: _,
+                        } => {
+                            // TODO(abilities) record deferred ability checks
                             introduce(subs, rank, pools, &vars);
 
                             state
                         }
 
-                        Failure(vars, actual_type, expected_type) => {
+                        Failure(vars, actual_type, expected_type, _bad_impl) => {
                             introduce(subs, rank, pools, &vars);
 
                             let problem = TypeError::BadExpr(
@@ -391,12 +399,16 @@ fn solve<'a>(
 
             // TODO(ayazhafiz): presence constraints for Expr2/Type2
             match unify(subs, actual, expected, Mode::EQ) {
-                Success(vars) => {
+                Success {
+                    vars,
+                    must_implement_ability: _,
+                } => {
+                    // TODO(abilities) record deferred ability checks
                     introduce(subs, rank, pools, &vars);
 
                     state
                 }
-                Failure(vars, actual_type, expected_type) => {
+                Failure(vars, actual_type, expected_type, _bad_impl) => {
                     introduce(subs, rank, pools, &vars);
 
                     let problem = TypeError::BadPattern(
@@ -699,12 +711,16 @@ fn solve<'a>(
             let includes = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, &tag_ty);
 
             match unify(subs, actual, includes, Mode::PRESENT) {
-                Success(vars) => {
+                Success {
+                    vars,
+                    must_implement_ability: _,
+                } => {
+                    // TODO(abilities) record deferred ability checks
                     introduce(subs, rank, pools, &vars);
 
                     state
                 }
-                Failure(vars, actual_type, expected_type) => {
+                Failure(vars, actual_type, expected_type, _bad_impl) => {
                     introduce(subs, rank, pools, &vars);
 
                     // TODO: do we need a better error type here?
@@ -1281,7 +1297,7 @@ fn adjust_rank_content(
     use roc_types::subs::FlatType::*;
 
     match content {
-        FlexVar(_) | RigidVar(_) | Error => group_rank,
+        FlexVar(_) | RigidVar(_) | FlexAbleVar(..) | RigidAbleVar(..) | Error => group_rank,
 
         RecursionVar { .. } => group_rank,
 
@@ -1536,7 +1552,7 @@ fn instantiate_rigids_help(
             };
         }
 
-        FlexVar(_) | Error => {}
+        FlexVar(_) | FlexAbleVar(_, _) | Error => {}
 
         RecursionVar { structure, .. } => {
             instantiate_rigids_help(subs, max_rank, pools, structure);
@@ -1545,6 +1561,11 @@ fn instantiate_rigids_help(
         RigidVar(name) => {
             // what it's all about: convert the rigid var into a flex var
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
+        }
+
+        RigidAbleVar(name, ability) => {
+            // what it's all about: convert the rigid var into a flex var
+            subs.set(copy, make_descriptor(FlexAbleVar(Some(name), ability)));
         }
 
         Alias(_, args, real_type_var, _) => {
@@ -1772,7 +1793,7 @@ fn deep_copy_var_help(
             copy
         }
 
-        FlexVar(_) | Error => copy,
+        FlexVar(_) | FlexAbleVar(_, _) | Error => copy,
 
         RecursionVar {
             opt_name,
@@ -1793,6 +1814,12 @@ fn deep_copy_var_help(
 
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
+
+            copy
+        }
+
+        RigidAbleVar(name, ability) => {
+            subs.set(copy, make_descriptor(FlexAbleVar(Some(name), ability)));
 
             copy
         }

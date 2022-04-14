@@ -109,7 +109,7 @@ Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specifi
 
 For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal developtment you should be fine without it.
 
-### libcxb libraries
+### libxcb libraries
 
 You may see an error like this during builds:
 

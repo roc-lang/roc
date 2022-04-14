@@ -1,4 +1,3 @@
-use crate::abilities::AbilitiesStore;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::canonicalize_annotation_with_possible_clauses;
 use crate::annotation::IntroducedVariables;
@@ -430,12 +429,11 @@ pub fn canonicalize_defs<'a>(
     }
 
     // Now we can go through and resolve all pending abilities, to add them to scope.
-    let mut abilities_store = AbilitiesStore::default();
     for (loc_ability_name, members) in abilities.into_values() {
         let mut can_members = Vec::with_capacity(members.len());
 
         for member in members {
-            let (member_annot, clauses) = canonicalize_annotation_with_possible_clauses(
+            let member_annot = canonicalize_annotation_with_possible_clauses(
                 env,
                 &mut scope,
                 &member.typ.value,
@@ -450,13 +448,14 @@ pub fn canonicalize_defs<'a>(
                 output.references.referenced_type_defs.insert(symbol);
             }
 
+            let name_region = member.name.region;
             let member_name = member.name.extract_spaces().item;
 
             let member_sym = match scope.introduce(
                 member_name.into(),
                 &env.exposed_ident_ids,
                 &mut env.ident_ids,
-                member.name.region,
+                name_region,
             ) {
                 Ok(sym) => sym,
                 Err((original_region, shadow, _new_symbol)) => {
@@ -473,9 +472,11 @@ pub fn canonicalize_defs<'a>(
             // What variables in the annotation are bound to the parent ability, and what variables
             // are bound to some other ability?
             let (variables_bound_to_ability, variables_bound_to_other_abilities): (Vec<_>, Vec<_>) =
-                clauses
-                    .into_iter()
-                    .partition(|has_clause| has_clause.value.ability == loc_ability_name.value);
+                member_annot
+                    .introduced_variables
+                    .able
+                    .iter()
+                    .partition(|av| av.ability == loc_ability_name.value);
 
             let mut bad_has_clauses = false;
 
@@ -485,18 +486,38 @@ pub fn canonicalize_defs<'a>(
                 env.problem(Problem::AbilityMemberMissingHasClause {
                     member: member_sym,
                     ability: loc_ability_name.value,
-                    region: member.name.region,
+                    region: name_region,
+                });
+                bad_has_clauses = true;
+            }
+
+            if variables_bound_to_ability.len() > 1 {
+                // There is more than one variable bound to the member signature, so something like
+                //   Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                // We have no way of telling what type implements a particular instance of Eq in
+                // this case (a or b?), so disallow it.
+                let span_has_clauses =
+                    Region::across_all(variables_bound_to_ability.iter().map(|v| &v.first_seen));
+                let bound_var_names = variables_bound_to_ability
+                    .iter()
+                    .map(|v| v.name.clone())
+                    .collect();
+                env.problem(Problem::AbilityMemberMultipleBoundVars {
+                    member: member_sym,
+                    ability: loc_ability_name.value,
+                    span_has_clauses,
+                    bound_var_names,
                 });
                 bad_has_clauses = true;
             }
 
             if !variables_bound_to_other_abilities.is_empty() {
                 // Disallow variables bound to other abilities, for now.
-                for bad_clause in variables_bound_to_other_abilities.iter() {
+                for bad_variable in variables_bound_to_other_abilities.iter() {
                     env.problem(Problem::AbilityMemberBindsExternalAbility {
                         member: member_sym,
                         ability: loc_ability_name.value,
-                        region: bad_clause.region,
+                        region: bad_variable.first_seen,
                     });
                 }
                 bad_has_clauses = true;
@@ -507,15 +528,18 @@ pub fn canonicalize_defs<'a>(
                 continue;
             }
 
-            let has_clauses = variables_bound_to_ability
-                .into_iter()
-                .map(|clause| clause.value)
-                .collect();
-            can_members.push((member_sym, member_annot.typ, has_clauses));
+            // The introduced variables are good; add them to the output.
+            output
+                .introduced_variables
+                .union(&member_annot.introduced_variables);
+
+            can_members.push((member_sym, name_region, member_annot.typ));
         }
 
         // Store what symbols a type must define implementations for to have this ability.
-        abilities_store.register_ability(loc_ability_name.value, can_members);
+        scope
+            .abilities_store
+            .register_ability(loc_ability_name.value, can_members);
     }
 
     // Now that we have the scope completely assembled, and shadowing resolved,
@@ -526,14 +550,7 @@ pub fn canonicalize_defs<'a>(
     // once we've finished assembling the entire scope.
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
     for loc_def in value_defs.into_iter() {
-        match to_pending_value_def(
-            env,
-            var_store,
-            loc_def.value,
-            &mut scope,
-            &abilities_store,
-            pattern_type,
-        ) {
+        match to_pending_value_def(env, var_store, loc_def.value, &mut scope, pattern_type) {
             None => { /* skip */ }
             Some((new_output, pending_def)) => {
                 // store the top-level defs, used to ensure that closures won't capture them
@@ -1561,7 +1578,9 @@ pub fn can_defs_with_return<'a>(
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
     for (symbol, region) in symbols_introduced {
-        if !output.references.has_value_lookup(symbol) && !output.references.has_type_lookup(symbol)
+        if !output.references.has_value_lookup(symbol)
+            && !output.references.has_type_lookup(symbol)
+            && !scope.abilities_store.is_specialization_name(symbol)
         {
             env.problem(Problem::UnusedDef(symbol, region));
         }
@@ -1772,7 +1791,6 @@ fn to_pending_value_def<'a>(
     var_store: &mut VarStore,
     def: &'a ast::ValueDef<'a>,
     scope: &mut Scope,
-    abilities_store: &AbilitiesStore,
     pattern_type: PatternType,
 ) -> Option<(Output, PendingValueDef<'a>)> {
     use ast::ValueDef::*;
@@ -1784,7 +1802,6 @@ fn to_pending_value_def<'a>(
                 env,
                 var_store,
                 scope,
-                abilities_store,
                 pattern_type,
                 &loc_pattern.value,
                 loc_pattern.region,
@@ -1801,7 +1818,6 @@ fn to_pending_value_def<'a>(
                 env,
                 var_store,
                 scope,
-                abilities_store,
                 pattern_type,
                 &loc_pattern.value,
                 loc_pattern.region,
@@ -1832,7 +1848,6 @@ fn to_pending_value_def<'a>(
                     env,
                     var_store,
                     scope,
-                    abilities_store,
                     pattern_type,
                     &body_pattern.value,
                     body_pattern.region,

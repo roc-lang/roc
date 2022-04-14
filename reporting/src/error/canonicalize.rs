@@ -44,6 +44,7 @@ const ALIAS_USES_ABILITY: &str = "ALIAS USES ABILITY";
 const ILLEGAL_HAS_CLAUSE: &str = "ILLEGAL HAS CLAUSE";
 const ABILITY_MEMBER_MISSING_HAS_CLAUSE: &str = "ABILITY MEMBER MISSING HAS CLAUSE";
 const ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE: &str = "ABILITY MEMBER HAS EXTRANEOUS HAS CLAUSE";
+const ABILITY_MEMBER_BINDS_MULTIPLE_VARIABLES: &str = "ABILITY MEMBER BINDS MULTIPLE VARIABLES";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -681,6 +682,34 @@ pub fn can_problem<'b>(
                 )]),
             ]);
             title = ABILITY_MEMBER_MISSING_HAS_CLAUSE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AbilityMemberMultipleBoundVars {
+            member,
+            ability,
+            span_has_clauses,
+            mut bound_var_names,
+        } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The definition of the ability member "),
+                    alloc.symbol_unqualified(member),
+                    alloc.reflow(" includes multiple variables bound to the "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.keyword(" ability:"),
+                ]),
+                alloc.region(lines.convert_region(span_has_clauses)),
+                alloc.reflow("Ability members can only bind one type variable to their parent ability. Otherwise, I wouldn't know what type implements an ability by looking at specializations!"),
+                alloc.concat(vec![
+                    alloc.hint("Did you mean to only bind "),
+                    alloc.type_variable(bound_var_names.swap_remove(0)),
+                    alloc.reflow(" to "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow("?"),
+                ])
+            ]);
+            title = ABILITY_MEMBER_BINDS_MULTIPLE_VARIABLES.to_string();
             severity = Severity::RuntimeError;
         }
 

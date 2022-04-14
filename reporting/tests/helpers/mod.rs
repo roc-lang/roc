@@ -1,6 +1,7 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
+use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::env::Env;
 use roc_can::expected::Expected;
@@ -31,10 +32,19 @@ pub fn infer_expr(
     constraints: &Constraints,
     constraint: &Constraint,
     aliases: &mut Aliases,
+    abilities_store: &mut AbilitiesStore,
     expr_var: Variable,
 ) -> (Content, Subs) {
     let env = solve::Env::default();
-    let (solved, _) = solve::run(constraints, &env, problems, subs, aliases, constraint);
+    let (solved, _) = solve::run(
+        constraints,
+        &env,
+        problems,
+        subs,
+        aliases,
+        constraint,
+        abilities_store,
+    );
 
     let content = *solved.inner().get_content_without_compacting(expr_var);
 
