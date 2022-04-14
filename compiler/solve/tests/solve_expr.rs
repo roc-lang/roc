@@ -5840,4 +5840,64 @@ mod solve_expr {
             [("hash", "Id"), ("hash32", "Id"), ("eq", "Id"), ("le", "Id")],
         )
     }
+
+    #[test]
+    fn ability_checked_specialization_with_typed_body() {
+        check_inferred_abilities(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash : Id -> U64
+                hash = \$Id n -> n
+                "#
+            ),
+            [("hash", "Id")],
+        )
+    }
+
+    #[test]
+    fn ability_checked_specialization_with_annotation_only() {
+        check_inferred_abilities(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash : Id -> U64
+                "#
+            ),
+            [("hash", "Id")],
+        )
+    }
+
+    #[test]
+    fn ability_specialization_called() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ zero ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash = \$Id n -> n
+
+                zero = hash ($Id 0)
+                "#
+            ),
+            "U64",
+        )
+    }
 }
