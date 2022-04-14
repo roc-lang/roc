@@ -60,6 +60,7 @@ pub fn compile_to_mono<'a>(
         src_dir,
         exposed_types,
         target_info,
+        roc_reporting::report::RenderTarget::ColorTerminal,
     );
 
     let mut loaded = match loaded {

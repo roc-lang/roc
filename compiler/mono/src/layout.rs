@@ -3,6 +3,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, MutMap};
+use roc_error_macros::todo_abilities;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
@@ -72,6 +73,7 @@ impl<'a> RawFunctionLayout<'a> {
         use roc_types::subs::Content::*;
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
+            FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
@@ -952,6 +954,7 @@ impl<'a> Layout<'a> {
         use roc_types::subs::Content::*;
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
+            FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
@@ -2661,6 +2664,7 @@ fn layout_from_num_content<'a>(
             // (e.g. for (5 + 5) assume both 5s are 64-bit integers.)
             Ok(Layout::default_integer())
         }
+        FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
         Structure(Apply(symbol, args)) => match *symbol {
             // Ints
             Symbol::NUM_NAT => Ok(Layout::usize(target_info)),

@@ -19,6 +19,7 @@ pub fn load_module(src_file: &Path) -> LoadedModule {
         }),
         subs_by_module,
         TargetInfo::default_x86_64(),
+        roc_reporting::report::RenderTarget::ColorTerminal,
     );
 
     match loaded {

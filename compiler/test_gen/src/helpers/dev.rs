@@ -54,6 +54,7 @@ pub fn helper(
         src_dir,
         Default::default(),
         roc_target::TargetInfo::default_x86_64(),
+        roc_reporting::report::RenderTarget::ColorTerminal,
     );
 
     let mut loaded = loaded.expect("failed to load module");
