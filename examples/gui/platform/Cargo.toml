@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
+links = "app"
 
 # Needed to be able to run on non-Windows systems for some reason. Without this, cargo panics with:
 #
