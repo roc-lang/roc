@@ -23,11 +23,12 @@ mod cli_run {
     use roc_collections::all::MutMap;
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    const TEST_SURGICAL_LINKER: bool = true;
+    const TEST_LEGACY_LINKER: bool = true;
 
-    // Surgical linker currently only supports linux x86_64.
+    // Surgical linker currently only supports linux x86_64,
+    // so we're always testing the legacy linker on other targets.
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-    const TEST_SURGICAL_LINKER: bool = false;
+    const TEST_LEGACY_LINKER: bool = false;
 
     #[cfg(not(target_os = "macos"))]
     const ALLOW_VALGRIND: bool = true;
@@ -287,14 +288,14 @@ mod cli_run {
                         example.use_valgrind,
                     );
 
-                    // Also check with the surgical linker.
+                    // Also check with the legacy linker.
 
-                    if TEST_SURGICAL_LINKER {
+                    if TEST_LEGACY_LINKER {
                         check_output_with_stdin(
                             &file_name,
                             example.stdin,
                             example.executable_filename,
-                            &["--roc-linker"],
+                            &["--linker", "legacy"],
                             example.input_file.and_then(|file| Some(example_file(dir_name, file))),
                             example.expected_ending,
                             example.use_valgrind,
