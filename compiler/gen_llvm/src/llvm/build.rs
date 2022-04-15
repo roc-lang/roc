@@ -5814,9 +5814,9 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumAddSaturated | NumDivUnchecked
-        | NumDivCeilUnchecked | NumPow | NumPowInt | NumSubWrap | NumSubChecked
-        | NumSubSaturated | NumMulWrap | NumMulChecked => {
+        | NumModUnchecked | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumAddSaturated
+        | NumDivUnchecked | NumDivCeilUnchecked | NumPow | NumPowInt | NumSubWrap
+        | NumSubChecked | NumSubSaturated | NumMulWrap | NumMulChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -6578,6 +6578,11 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 bd.build_int_unsigned_rem(lhs, rhs, "rem_uint").into()
             }
         }
+        NumModUnchecked => {
+            // there generally is not hardware support for flooring mod;
+            // it could probably be implemented in pure Roc in terms of Num.rem.
+            todo!("mod is not implemented")
+        }
         NumIsMultipleOf => {
             // this builds the following construct
             //
@@ -6908,7 +6913,6 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),
         NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
-        NumRemUnchecked => bd.build_float_rem(lhs, rhs, "rem_float").into(),
         NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
         NumPow => env.call_intrinsic(&LLVM_POW[float_width], &[lhs.into(), rhs.into()]),
         _ => {
