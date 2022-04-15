@@ -113,7 +113,7 @@ pub fn build_app<'a>() -> App<'a> {
             .arg(
                 Arg::new(FLAG_LINK)
                     .long(FLAG_LINK)
-                    .about("Deprecated in favor of --force-roc-linker and --legacy-linker")
+                    .about("Deprecated in favor of --linker")
                     .required(false),
             )
             .arg(
@@ -335,7 +335,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         process::exit(1);
     }
 
-    // Use surgical linking when supported, or when explicitly requested with --force-roc-linker
+    // Use surgical linking when supported, or when explicitly requested with --linker surgical
     let surgically_link = if matches.is_present(FLAG_LINKER) {
         matches.value_of(FLAG_LINKER) == Some("surgical")
     } else {
