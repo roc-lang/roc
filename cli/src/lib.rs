@@ -573,7 +573,7 @@ impl Target {
         Target::Wasm32.as_str(),
     ];
 
-    fn to_triple(&self) -> Triple {
+    fn to_triple(self) -> Triple {
         use Target::*;
 
         match self {
