@@ -387,7 +387,15 @@ fn write_content<'a>(
                                     false,
                                 );
                             }
-                            Symbol::NUM_FLOATINGPOINT => buf.push_str("F64"),
+                            Symbol::NUM_FLOATINGPOINT => write_float(
+                                env,
+                                ctx,
+                                get_single_arg(subs, &args),
+                                subs,
+                                buf,
+                                parens,
+                                write_parens,
+                            ),
 
                             _ => write_parens!(write_parens, buf, {
                                 buf.push_str("Num ");
@@ -408,26 +416,15 @@ fn write_content<'a>(
                     write_integer(env, ctx, content, subs, buf, parens, write_parens)
                 }
 
-                Symbol::NUM_FLOAT => {
-                    debug_assert_eq!(args.len(), 1);
-
-                    let arg_var_index = args
-                        .into_iter()
-                        .next()
-                        .expect("Num was not applied to a type argument!");
-                    let arg_var = subs[arg_var_index];
-                    let content = subs.get_content_without_compacting(arg_var);
-
-                    match content {
-                        Alias(Symbol::NUM_BINARY32, _, _, _) => buf.push_str("F32"),
-                        Alias(Symbol::NUM_BINARY64, _, _, _) => buf.push_str("F64"),
-                        Alias(Symbol::NUM_DECIMAL, _, _, _) => buf.push_str("Dec"),
-                        _ => write_parens!(write_parens, buf, {
-                            buf.push_str("Float ");
-                            write_content(env, ctx, content, subs, buf, parens);
-                        }),
-                    }
-                }
+                Symbol::NUM_FLOAT => write_float(
+                    env,
+                    ctx,
+                    get_single_arg(subs, args),
+                    subs,
+                    buf,
+                    parens,
+                    write_parens,
+                ),
 
                 _ => write_parens!(write_parens, buf, {
                     write_symbol(env, *symbol, buf);
@@ -464,6 +461,27 @@ fn write_content<'a>(
             parens,
         ),
         Error => buf.push_str("<type mismatch>"),
+    }
+}
+
+fn write_float<'a>(
+    env: &Env,
+    ctx: &mut Context<'a>,
+    content: &Content,
+    subs: &'a Subs,
+    buf: &mut String,
+    parens: Parens,
+    write_parens: bool,
+) {
+    use crate::subs::Content::*;
+    match content {
+        Alias(Symbol::NUM_BINARY32, _, _, _) => buf.push_str("F32"),
+        Alias(Symbol::NUM_BINARY64, _, _, _) => buf.push_str("F64"),
+        Alias(Symbol::NUM_DECIMAL, _, _, _) => buf.push_str("Dec"),
+        _ => write_parens!(write_parens, buf, {
+            buf.push_str("Float ");
+            write_content(env, ctx, content, subs, buf, parens);
+        }),
     }
 }
 
