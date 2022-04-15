@@ -262,7 +262,7 @@ enum PolymorphicExpr {
 
 #[derive(Clone, Debug)]
 enum PartialExprLink {
-    /// The root polymorphic expresison
+    /// The root polymorphic expression
     Sink(PolymorphicExpr),
     /// A hop in a partial expression alias chain
     Aliases(Symbol),
