@@ -59,3 +59,28 @@ fn hash_specialization_multiple_add() {
         u64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn alias_member_specialization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            Hash has
+                hash : a -> U64 | a has Hash
+
+            Id := U64
+
+            hash = \$Id n -> n
+
+            main =
+                aliasedHash = hash
+                aliasedHash ($Id 1234)
+            "#
+        ),
+        1234,
+        u64
+    );
+}

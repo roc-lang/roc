@@ -252,9 +252,20 @@ impl<'a> PartialProc<'a> {
 }
 
 #[derive(Clone, Debug)]
-enum PartialExprLink {
-    Aliases(Symbol),
+enum PolymorphicExpr {
+    /// A root ability member, which must be specialized at a call site, for example
+    /// "hash" which must be specialized to an exact symbol implementing "hash" for a type.
+    AbilityMember(Symbol),
+    /// A polymorphic expression we inline at the usage site.
     Expr(roc_can::expr::Expr, Variable),
+}
+
+#[derive(Clone, Debug)]
+enum PartialExprLink {
+    /// The root polymorphic expresison
+    Sink(PolymorphicExpr),
+    /// A hop in a partial expression alias chain
+    Aliases(Symbol),
 }
 
 /// A table of symbols to polymorphic expressions. For example, in the program
@@ -282,8 +293,8 @@ impl PartialExprs {
         Self(BumpMap::new_in(arena))
     }
 
-    fn insert(&mut self, symbol: Symbol, expr: roc_can::expr::Expr, expr_var: Variable) {
-        self.0.insert(symbol, PartialExprLink::Expr(expr, expr_var));
+    fn insert(&mut self, symbol: Symbol, expr: PolymorphicExpr) {
+        self.0.insert(symbol, PartialExprLink::Sink(expr));
     }
 
     fn insert_alias(&mut self, symbol: Symbol, aliases: Symbol) {
@@ -294,7 +305,7 @@ impl PartialExprs {
         self.0.contains_key(&symbol)
     }
 
-    fn get(&mut self, mut symbol: Symbol) -> Option<(&roc_can::expr::Expr, Variable)> {
+    fn get(&mut self, mut symbol: Symbol) -> Option<&PolymorphicExpr> {
         // In practice the alias chain is very short
         loop {
             match self.0.get(&symbol) {
@@ -304,8 +315,8 @@ impl PartialExprs {
                 Some(&PartialExprLink::Aliases(real_symbol)) => {
                     symbol = real_symbol;
                 }
-                Some(PartialExprLink::Expr(expr, var)) => {
-                    return Some((expr, *var));
+                Some(PartialExprLink::Sink(expr)) => {
+                    return Some(expr);
                 }
             }
         }
@@ -4226,7 +4237,7 @@ pub fn with_hole<'a>(
             match loc_expr.value {
                 roc_can::expr::Expr::Var(proc_name) if is_known(proc_name) => {
                     // This might be an ability member - if so, use the appropriate specialization.
-                    let proc_name = repoint_to_specialization(env, fn_var, proc_name);
+                    let proc_name = get_specialization(env, fn_var, proc_name).unwrap_or(proc_name);
 
                     // a call by a known name
                     call_by_name(
@@ -4336,47 +4347,68 @@ pub fn with_hole<'a>(
                                 unreachable!("calling a non-closure layout")
                             }
                         },
-                        UnspecializedExpr(symbol) => match full_layout {
-                            RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
-                                let closure_data_symbol = env.unique_symbol();
+                        UnspecializedExpr(symbol) => match procs.partial_exprs.get(symbol).unwrap()
+                        {
+                            &PolymorphicExpr::AbilityMember(member) => {
+                                let proc_name = get_specialization(env, fn_var, member).expect("Recorded as an ability member, but it doesn't have a specialization");
 
-                                result = match_on_lambda_set(
+                                // a call by a known name
+                                return call_by_name(
                                     env,
-                                    lambda_set,
-                                    closure_data_symbol,
-                                    arg_symbols,
-                                    arg_layouts,
-                                    ret_layout,
+                                    procs,
+                                    fn_var,
+                                    proc_name,
+                                    loc_args,
+                                    layout_cache,
                                     assigned,
                                     hole,
                                 );
-
-                                let (lambda_expr, lambda_expr_var) =
-                                    procs.partial_exprs.get(symbol).unwrap();
-
-                                let snapshot = env.subs.snapshot();
-                                let cache_snapshot = layout_cache.snapshot();
-                                let _unified = roc_unify::unify::unify(
-                                    env.subs,
-                                    fn_var,
-                                    lambda_expr_var,
-                                    roc_unify::unify::Mode::EQ,
-                                );
-
-                                result = with_hole(
-                                    env,
-                                    lambda_expr.clone(),
-                                    fn_var,
-                                    procs,
-                                    layout_cache,
-                                    closure_data_symbol,
-                                    env.arena.alloc(result),
-                                );
-                                env.subs.rollback_to(snapshot);
-                                layout_cache.rollback_to(cache_snapshot);
                             }
-                            RawFunctionLayout::ZeroArgumentThunk(_) => {
-                                unreachable!("calling a non-closure layout")
+                            PolymorphicExpr::Expr(lambda_expr, lambda_expr_var) => {
+                                match full_layout {
+                                    RawFunctionLayout::Function(
+                                        arg_layouts,
+                                        lambda_set,
+                                        ret_layout,
+                                    ) => {
+                                        let closure_data_symbol = env.unique_symbol();
+
+                                        result = match_on_lambda_set(
+                                            env,
+                                            lambda_set,
+                                            closure_data_symbol,
+                                            arg_symbols,
+                                            arg_layouts,
+                                            ret_layout,
+                                            assigned,
+                                            hole,
+                                        );
+
+                                        let snapshot = env.subs.snapshot();
+                                        let cache_snapshot = layout_cache.snapshot();
+                                        let _unified = roc_unify::unify::unify(
+                                            env.subs,
+                                            fn_var,
+                                            *lambda_expr_var,
+                                            roc_unify::unify::Mode::EQ,
+                                        );
+
+                                        result = with_hole(
+                                            env,
+                                            lambda_expr.clone(),
+                                            fn_var,
+                                            procs,
+                                            layout_cache,
+                                            closure_data_symbol,
+                                            env.arena.alloc(result),
+                                        );
+                                        env.subs.rollback_to(snapshot);
+                                        layout_cache.rollback_to(cache_snapshot);
+                                    }
+                                    RawFunctionLayout::ZeroArgumentThunk(_) => {
+                                        unreachable!("calling a non-closure layout")
+                                    }
+                                }
                             }
                         },
                         NotASymbol => {
@@ -4712,18 +4744,18 @@ pub fn with_hole<'a>(
 }
 
 #[inline(always)]
-fn repoint_to_specialization<'a>(
+fn get_specialization<'a>(
     env: &mut Env<'a, '_>,
     symbol_var: Variable,
     symbol: Symbol,
-) -> Symbol {
+) -> Option<Symbol> {
     use roc_solve::ability::type_implementing_member;
     use roc_unify::unify::unify;
 
     match env.abilities_store.member_def(symbol) {
         None => {
             // This is not an ability member, it doesn't need specialization.
-            symbol
+            None
         }
         Some(member) => {
             let snapshot = env.subs.snapshot();
@@ -4743,7 +4775,7 @@ fn repoint_to_specialization<'a>(
                 .get_specialization(symbol, specializing_type)
                 .expect("No specialization is recorded - I thought there would only be a type error here.");
 
-            specialization.symbol
+            Some(specialization.symbol)
         }
     }
 }
@@ -5664,9 +5696,10 @@ pub fn from_can<'a>(
                         // At the definition site `n = 1` we only know `1` to have the type `[Int *]`,
                         // which won't be refined until the call `asU8 n`. Add it as a partial expression
                         // that will be specialized at each concrete usage site.
-                        procs
-                            .partial_exprs
-                            .insert(*symbol, def.loc_expr.value, def.expr_var);
+                        procs.partial_exprs.insert(
+                            *symbol,
+                            PolymorphicExpr::Expr(def.loc_expr.value, def.expr_var),
+                        );
 
                         let result = from_can(env, variable, cont.value, procs, layout_cache);
 
@@ -6372,7 +6405,7 @@ fn store_pattern_help<'a>(
 
     match can_pat {
         Identifier(symbol) => {
-            if let Some((_, var)) = procs.partial_exprs.get(outer_symbol) {
+            if let Some(&PolymorphicExpr::Expr(_, var)) = procs.partial_exprs.get(outer_symbol) {
                 // It might be the case that symbol we're storing hasn't been reified to a value
                 // yet, if it's polymorphic. Do that now.
                 stmt = specialize_symbol(
@@ -6770,6 +6803,13 @@ fn handle_variable_aliasing<'a, BuildRest>(
 where
     BuildRest: FnOnce(&mut Env<'a, '_>, &mut Procs<'a>, &mut LayoutCache<'a>) -> Stmt<'a>,
 {
+    if env.abilities_store.is_ability_member_name(right) {
+        procs
+            .partial_exprs
+            .insert(left, PolymorphicExpr::AbilityMember(right));
+        return build_rest(env, procs, layout_cache);
+    }
+
     if procs.partial_exprs.contains(right) {
         // If `right` links to a partial expression, make sure we link `left` to it as well, so
         // that usages of it will be specialized when building the rest of the program.
@@ -6847,7 +6887,7 @@ fn specialize_symbol<'a>(
     result: Stmt<'a>,
     original: Symbol,
 ) -> Stmt<'a> {
-    if let Some((expr, expr_var)) = procs.partial_exprs.get(original) {
+    if let Some(PolymorphicExpr::Expr(expr, expr_var)) = procs.partial_exprs.get(original) {
         // Specialize the expression type now, based off the `arg_var` we've been given.
         // TODO: cache the specialized result
         let snapshot = env.subs.snapshot();
@@ -6855,14 +6895,14 @@ fn specialize_symbol<'a>(
         let _unified = roc_unify::unify::unify(
             env.subs,
             arg_var.unwrap(),
-            expr_var,
+            *expr_var,
             roc_unify::unify::Mode::EQ,
         );
 
         let result = with_hole(
             env,
             expr.clone(),
-            expr_var,
+            *expr_var,
             procs,
             layout_cache,
             symbol,
