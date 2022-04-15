@@ -129,10 +129,30 @@ impl<'b> Report<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
+            let header_width = 80;
+            let title_width = self.title.len() + 4;
+            let full_path = self.filename.to_str().unwrap();
+            let full_path_width = full_path.len() + 3;
+            let available_path_width = header_width - title_width - 1;
+
+            // If path is too long to fit in 80 characters with everything else then truncate it
+            let path_width = if full_path_width <= available_path_width {
+                full_path_width
+            } else {
+                available_path_width
+            };
+            let path_trim = full_path_width - path_width;
+            let path = if path_trim > 0 {
+                format!("...{}", &full_path[(path_trim + 3)..])
+            } else {
+                full_path.to_string()
+            };
+
             let header = format!(
-                "── {} {}",
+                "── {} {} {} ─",
                 self.title,
-                "─".repeat(80 - (self.title.len() + 4))
+                "─".repeat(header_width - (title_width + path_width)),
+                path
             );
 
             alloc.stack([alloc.text(header).annotate(Annotation::Header), self.doc])
