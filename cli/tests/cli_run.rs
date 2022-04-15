@@ -252,12 +252,7 @@ mod cli_run {
                         }
                         "hello-gui" => {
                             // Since this one requires opening a window, we do `roc build` on it but don't run it.
-                            if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-                                // The surgical linker can successfully link this on Linux, but the legacy linker errors!
-                                build_example(&file_name, &["--optimize", "--roc-linker"]);
-                            } else {
-                                build_example(&file_name, &["--optimize"]);
-                            }
+                            build_example(&file_name, &["--optimize"]);
 
                             return;
                         }
