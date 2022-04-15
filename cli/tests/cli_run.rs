@@ -2,12 +2,10 @@
 extern crate pretty_assertions;
 
 extern crate bumpalo;
+extern crate indoc;
 extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
-
-#[macro_use]
-extern crate indoc;
 
 #[cfg(test)]
 mod cli_run {
@@ -25,11 +23,12 @@ mod cli_run {
     use roc_collections::all::MutMap;
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    const TEST_SURGICAL_LINKER: bool = true;
+    const TEST_LEGACY_LINKER: bool = true;
 
-    // Surgical linker currently only supports linux x86_64.
+    // Surgical linker currently only supports linux x86_64,
+    // so we're always testing the legacy linker on other targets.
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-    const TEST_SURGICAL_LINKER: bool = false;
+    const TEST_LEGACY_LINKER: bool = false;
 
     #[cfg(not(target_os = "macos"))]
     const ALLOW_VALGRIND: bool = true;
@@ -228,6 +227,7 @@ mod cli_run {
         ($($test_name:ident:$name:expr => $example:expr,)+) => {
             $(
                 #[test]
+                #[allow(non_snake_case)]
                 fn $test_name() {
                     let dir_name = $name;
                     let example = $example;
@@ -252,12 +252,7 @@ mod cli_run {
                         }
                         "hello-gui" => {
                             // Since this one requires opening a window, we do `roc build` on it but don't run it.
-                            if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-                                // The surgical linker can successfully link this on Linux, but the legacy linker errors!
-                                build_example(&file_name, &["--optimize", "--roc-linker"]);
-                            } else {
-                                build_example(&file_name, &["--optimize"]);
-                            }
+                            build_example(&file_name, &["--optimize"]);
 
                             return;
                         }
@@ -288,14 +283,14 @@ mod cli_run {
                         example.use_valgrind,
                     );
 
-                    // Also check with the surgical linker.
+                    // Also check with the legacy linker.
 
-                    if TEST_SURGICAL_LINKER {
+                    if TEST_LEGACY_LINKER {
                         check_output_with_stdin(
                             &file_name,
                             example.stdin,
                             example.executable_filename,
-                            &["--roc-linker"],
+                            &["--linker", "legacy"],
                             example.input_file.and_then(|file| Some(example_file(dir_name, file))),
                             example.expected_ending,
                             example.use_valgrind,
