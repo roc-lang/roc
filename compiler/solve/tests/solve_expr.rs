@@ -2397,7 +2397,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num a, y : F64 }",
+            "{ numIdentity : Num a -> Num a, x : Num a, y : Float * }",
         );
     }
 
@@ -3820,7 +3820,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : F64, z : Int * }",
+            "{ x : Num a, y : Float *, z : Int * }",
         );
     }
 
@@ -3837,7 +3837,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num a, y : F64, z : c }, b : { blah : Str, x : Num a, y : F64, z : c } }",
+            "{ a : { x : Num a, y : Float *, z : c }, b : { blah : Str, x : Num a, y : Float *, z : c } }",
         );
     }
 

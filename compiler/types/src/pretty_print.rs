@@ -387,7 +387,18 @@ fn write_content<'a>(
                                     false,
                                 );
                             }
-                            Symbol::NUM_FLOATINGPOINT => buf.push_str("F64"),
+                            Symbol::NUM_FLOATINGPOINT => {
+                                let content = get_single_arg(subs, &args);
+                                match content {
+                                    Alias(Symbol::NUM_BINARY32, _, _, _) => buf.push_str("F32"),
+                                    Alias(Symbol::NUM_BINARY64, _, _, _) => buf.push_str("F64"),
+                                    Alias(Symbol::NUM_DECIMAL, _, _, _) => buf.push_str("Dec"),
+                                    _ => write_parens!(write_parens, buf, {
+                                        buf.push_str("Float ");
+                                        write_content(env, ctx, content, subs, buf, parens);
+                                    }),
+                                }
+                            }
 
                             _ => write_parens!(write_parens, buf, {
                                 buf.push_str("Num ");

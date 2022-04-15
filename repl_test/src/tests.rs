@@ -50,7 +50,7 @@ fn int_addition() {
 
 #[test]
 fn float_addition() {
-    expect_success("1.1 + 2", "3.1 : F64");
+    expect_success("1.1 + 2", "3.1 : Float *");
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -309,7 +309,7 @@ fn nested_int_list() {
 fn nested_float_list() {
     expect_success(
         r#"[ [ [ 4, 3, 2 ], [ 1, 0.0 ] ], [ [] ], [] ]"#,
-        r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List F64))"#,
+        r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List (Float *)))"#,
     );
 }
 
@@ -403,7 +403,7 @@ fn list_contains() {
 fn list_sum() {
     expect_success("List.sum []", "0 : Num *");
     expect_success("List.sum [ 1, 2, 3 ]", "6 : Num *");
-    expect_success("List.sum [ 1.1, 2.2, 3.3 ]", "6.6 : F64");
+    expect_success("List.sum [ 1.1, 2.2, 3.3 ]", "6.6 : Float *");
 }
 
 #[cfg(not(feature = "wasm"))]
