@@ -3,6 +3,7 @@ use crate::types::{
     name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt,
 };
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
@@ -4551,6 +4552,13 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
     // We have already marked the variable as copied, so we
     // will not repeat this work or crawl this variable again.
     match desc.content {
+        Structure(Erroneous(_)) => {
+            // Make this into a flex var so that we don't have to copy problems across module
+            // boundaries - the error will be reported locally.
+            env.target.set(copy, make_descriptor(FlexVar(None)));
+
+            copy
+        }
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, arguments) => {
@@ -4581,7 +4589,9 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                     Func(new_arguments, new_closure_var, new_ret_var)
                 }
 
-                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+                Erroneous(_) => internal_error!("I thought this was handled above"),
+
+                same @ EmptyRecord | same @ EmptyTagUnion => same,
 
                 Record(fields, ext_var) => {
                     let record_fields = {

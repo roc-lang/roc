@@ -235,8 +235,10 @@ pub fn unify_pool(
     }
 }
 
-fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    if false {
+#[cfg(debug_assertions)]
+fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, before_unified: bool) {
+    if std::env::var("ROC_PRINT_UNIFICATIONS").is_ok() {
+        let time = if before_unified { "START" } else { "END" };
         // if true, print the types that are unified.
         //
         // NOTE: names are generated here (when creating an error type) and that modifies names
@@ -252,8 +254,11 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         let content_1 = subs.get(ctx.first).content;
         let content_2 = subs.get(ctx.second).content;
         let mode = if ctx.mode.is_eq() { "~" } else { "+=" };
-        println!(
-            "{:?} {:?} {} {:?} {:?}",
+        eprintln!(
+            "{}({:?}-{:?}): {:?} {:?} {} {:?} {:?}",
+            time,
+            ctx.first,
+            ctx.second,
             ctx.first,
             roc_types::subs::SubsFmtContent(&content_1, subs),
             mode,
@@ -261,7 +266,13 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
             roc_types::subs::SubsFmtContent(&content_2, subs),
         );
     }
-    match &ctx.first_desc.content {
+}
+
+fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
+    #[cfg(debug_assertions)]
+    debug_print_unified_types(subs, &ctx, true);
+
+    let result = match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, None, &ctx.second_desc.content),
         FlexAbleVar(opt_name, ability) => unify_flex(
             subs,
@@ -296,7 +307,12 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
         }
-    }
+    };
+
+    #[cfg(debug_assertions)]
+    debug_print_unified_types(subs, &ctx, true);
+
+    result
 }
 
 #[inline(always)]
