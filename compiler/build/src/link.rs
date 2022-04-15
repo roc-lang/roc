@@ -385,7 +385,7 @@ pub fn build_cc_host_native(
     } else if matches!(opt_level, OptLevel::Size) {
         command.arg("-Os");
     }
-    dbg!(command).output().unwrap()
+    command.output().unwrap()
 }
 
 pub fn build_swift_host_native(
