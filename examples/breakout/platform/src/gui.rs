@@ -151,10 +151,13 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
                 );
 
                 // TODO use (model, elems) =  ... once we've upgraded rust versions
-                let pair = roc::update_and_render(model, RocEvent::resize(Bounds {
-                    height: size.height as f32,
-                    width: size.width as f32,
-                }));
+                let pair = roc::update_and_render(
+                    model,
+                    RocEvent::resize(Bounds {
+                        height: size.height as f32,
+                        width: size.width as f32,
+                    }),
+                );
 
                 model = pair.0;
                 elems = pair.1;
@@ -176,8 +179,8 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
                 ..
             } => {
                 let roc_event = match input_state {
-                    ElementState::Pressed => RocEvent::key_down(keycode),
-                    ElementState::Released => RocEvent::key_up(keycode),
+                    ElementState::Pressed => RocEvent::key_down(keycode.into()),
+                    ElementState::Released => RocEvent::key_up(keycode.into()),
                 };
 
                 // TODO use (model, elems) =  ... once we've upgraded rust versions

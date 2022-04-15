@@ -36,7 +36,9 @@ update = \model, event ->
     when event is
         Resize size -> { model & width: size.width, height: size.height }
         KeyUp _ -> model
-        KeyDown keyCode -> { model & paddleX: model.paddleX + 50 }
+        KeyDown Left -> { model & paddleX: model.paddleX - 50 }
+        KeyDown Right -> { model & paddleX: model.paddleX + 50 }
+        KeyDown _ -> model
 
 render : Model -> List Elem
 render = \model ->

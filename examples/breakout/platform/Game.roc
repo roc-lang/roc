@@ -8,5 +8,7 @@ Bounds : { height : F32, width: F32 }
 
 Elem : [ Rect { color : Rgba, left : F32, top : F32, width : F32, height : F32 }, Text Str ]
 
-Event : [ Resize { width : F32, height : F32 }, KeyDown U32, KeyUp U32 ]
+KeyCode : [ Left, Right, Other ]
+
+Event : [ Resize { width : F32, height : F32 }, KeyDown KeyCode, KeyUp KeyCode ]
 

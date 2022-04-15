@@ -56,8 +56,8 @@ extern "C" {
 
 #[repr(C)]
 pub union RocEventEntry {
-    pub key_down: winit::event::VirtualKeyCode,
-    pub key_up: winit::event::VirtualKeyCode,
+    pub key_down: RocKeyCode,
+    pub key_up: RocKeyCode,
     pub resize: Bounds,
 }
 
@@ -106,17 +106,38 @@ impl RocEvent {
         }
     }
 
-    pub fn key_down(keycode: VirtualKeyCode) -> Self {
+    pub fn key_down(keycode: RocKeyCode) -> Self {
         Self {
             tag: RocEventTag::KeyDown,
             entry: RocEventEntry { key_down: keycode },
         }
     }
 
-    pub fn key_up(keycode: VirtualKeyCode) -> Self {
+    pub fn key_up(keycode: RocKeyCode) -> Self {
         Self {
             tag: RocEventTag::KeyUp,
             entry: RocEventEntry { key_up: keycode },
+        }
+    }
+}
+
+#[repr(u8)]
+#[allow(unused)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RocKeyCode {
+    Left = 0,
+    Other,
+    Right,
+}
+
+impl From<VirtualKeyCode> for RocKeyCode {
+    fn from(keycode: VirtualKeyCode) -> Self {
+        use VirtualKeyCode::*;
+
+        match keycode {
+            Left => RocKeyCode::Left,
+            Right => RocKeyCode::Right,
+            _ => RocKeyCode::Other,
         }
     }
 }
