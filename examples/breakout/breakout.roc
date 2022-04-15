@@ -3,6 +3,10 @@ app "breakout"
     imports [ pf.Game.{ Bounds, Elem, Event } ]
     provides [ program ] { Model } to pf
 
+paddleWidth = 0.2 # width of the paddle, as a % of screen width
+paddleHeight = 50 # height of the paddle, in pixels
+paddleSpeed = 60 # how many pixels the paddle moves per keypress
+
 Model : {
     # Screen height and width
     height : F32,
@@ -24,7 +28,7 @@ init = \{ width, height } ->
         height,
 
         # Paddle X-coordinate
-        paddleX: (width * 0.5),
+        paddleX: (width * 0.5) - (paddleWidth * width * 0.5),
 
         # Ball coordinates
         ballX: (width * 0.5),
@@ -35,10 +39,9 @@ update : Model, Event -> Model
 update = \model, event ->
     when event is
         Resize size -> { model & width: size.width, height: size.height }
-        KeyUp _ -> model
-        KeyDown Left -> { model & paddleX: model.paddleX - 50 }
-        KeyDown Right -> { model & paddleX: model.paddleX + 50 }
-        KeyDown _ -> model
+        KeyDown Left -> { model & paddleX: model.paddleX - paddleSpeed }
+        KeyDown Right -> { model & paddleX: model.paddleX + paddleSpeed }
+        _ -> model
 
 render : Model -> List Elem
 render = \model ->
@@ -85,10 +88,10 @@ render = \model ->
 
     paddle =
         color = { r: 0.8, g: 0.8, b: 0.8, a: 1.0 }
-        width = model.width * 0.25
-        height = blockHeight
-        left = (model.width * 0.5) - (width * 0.5) + model.paddleX
-        top = model.height - (height * 2)
+        width = model.width * paddleWidth
+        height = paddleHeight
+        left = model.paddleX
+        top = model.height - blockHeight - height
 
         Rect { left, top, width, height, color }
 
