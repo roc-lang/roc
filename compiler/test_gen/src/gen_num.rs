@@ -473,7 +473,7 @@ fn f64_sqrt() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.sqrt 100 is
+                    when Num.sqrtChecked 100 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -489,9 +489,7 @@ fn f64_log() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log 7.38905609893 is
-                        Ok val -> val
-                        Err _ -> -1
+                    Num.log 7.38905609893
                 "#
         ),
         1.999999999999912,
@@ -501,11 +499,11 @@ fn f64_log() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn f64_log_one() {
+fn f64_log_checked_one() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log 1 is
+                    when Num.logChecked 1 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -521,7 +519,7 @@ fn f64_sqrt_zero() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.sqrt 0 is
+                    when Num.sqrtChecked 0 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -537,7 +535,7 @@ fn f64_sqrt_negative() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.sqrt -1 is
+                    when Num.sqrtChecked -1 is
                         Err _ -> 42
                         Ok val -> val
                 "#
@@ -549,11 +547,11 @@ fn f64_sqrt_negative() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn f64_log_zero() {
+fn f64_log_checked_zero() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log 0 is
+                    when Num.logChecked 0 is
                         Err _ -> 42
                         Ok val -> val
                 "#
@@ -565,16 +563,15 @@ fn f64_log_zero() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+#[should_panic(expected = r#"Roc failed with message: "log needs a positive input"#)]
 fn f64_log_negative() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log -1 is
-                        Err _ -> 42
-                        Ok val -> val
+                    Num.log -1
                 "#
         ),
-        42.0,
+        0.0,
         f64
     );
 }
@@ -1082,9 +1079,7 @@ fn gen_rem_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.rem 8 3 is
-                        Ok val -> val
-                        Err _ -> -1
+                    Num.rem 8 3
                 "#
         ),
         2,
@@ -1094,11 +1089,26 @@ fn gen_rem_i64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+#[should_panic(expected = r#"Roc failed with message: "division by zero"#)]
 fn gen_rem_div_by_zero_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.rem 8 0 is
+                    Num.remChecked 8 0
+                "#
+        ),
+        0,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_rem_checked_div_by_zero_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when Num.remChecked 8 0 is
                         Err DivByZero -> 4
                         Ok _ -> -23
                 "#

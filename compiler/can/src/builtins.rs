@@ -203,9 +203,14 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ABS => num_abs,
         NUM_NEG => num_neg,
         NUM_REM => num_rem,
+        NUM_REM_CHECKED => num_rem_checked,
+        NUM_MOD => num_mod,
+        NUM_MOD_CHECKED => num_mod_checked,
         NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         NUM_SQRT => num_sqrt,
+        NUM_SQRT_CHECKED => num_sqrt_checked,
         NUM_LOG => num_log,
+        NUM_LOG_CHECKED => num_log_checked,
         NUM_ROUND => num_round,
         NUM_IS_ODD => num_is_odd,
         NUM_IS_EVEN => num_is_even,
@@ -730,6 +735,23 @@ fn bool_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+fn num_unaryop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
+    let num_var = var_store.fresh();
+    let body = RunLowLevel {
+        op,
+        args: vec![(num_var, Var(Symbol::ARG_1))],
+        ret_var: num_var,
+    };
+
+    defn(
+        symbol,
+        vec![(num_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        num_var,
+    )
+}
+
 /// Num a, Num a -> Num a
 fn num_binop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
     let num_var = var_store.fresh();
@@ -1169,8 +1191,13 @@ fn num_to_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.sqrt : Float -> Result Float [ SqrtOfNegative ]*
+/// Num.sqrt : Float a -> Float a
 fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_unaryop(symbol, var_store, LowLevel::NumSqrtUnchecked)
+}
+
+/// Num.sqrtChecked : Float a -> Result (Float a) [ SqrtOfNegative ]*
+fn num_sqrt_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let float_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
@@ -1218,8 +1245,13 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.log : Float -> Result Float [ LogNeedsPositive ]*
+/// Num.log : Float a -> Float a
 fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_unaryop(symbol, var_store, LowLevel::NumLogUnchecked)
+}
+
+/// Num.logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
+fn num_log_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let float_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
@@ -4196,8 +4228,13 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
+/// Num.rem : Int a, Int a -> Int a
 fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumRemUnchecked)
+}
+
+/// Num.remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+fn num_rem_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -4228,6 +4265,70 @@ fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         // Num.#remUnsafe arg1 arg2
                         RunLowLevel {
                             op: LowLevel::NumRemUnchecked,
+                            args: vec![
+                                (num_var, Var(Symbol::ARG_1)),
+                                (num_var, Var(Symbol::ARG_2)),
+                            ],
+                            ret_var: num_var,
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(no_region(tag(
+            "Err",
+            vec![tag("DivByZero", Vec::new(), var_store)],
+            var_store,
+        ))),
+    };
+
+    defn(
+        symbol,
+        vec![(num_var, Symbol::ARG_1), (num_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+/// Num.mod : Int a, Int a -> Int a
+fn num_mod(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumModUnchecked)
+}
+
+/// Num.modChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+fn num_mod_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let num_var = var_store.fresh();
+    let unbound_zero_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if condition
+            no_region(
+                // Num.isNeq arg2 0
+                RunLowLevel {
+                    op: LowLevel::NotEq,
+                    args: vec![
+                        (num_var, Var(Symbol::ARG_2)),
+                        (num_var, num(unbound_zero_var, 0, num_no_bound())),
+                    ],
+                    ret_var: bool_var,
+                },
+            ),
+            // arg1 was not zero
+            no_region(
+                // Ok (Int.#modUnsafe arg1 arg2)
+                tag(
+                    "Ok",
+                    vec![
+                        // Num.#modUnsafe arg1 arg2
+                        RunLowLevel {
+                            op: LowLevel::NumModUnchecked,
                             args: vec![
                                 (num_var, Var(Symbol::ARG_1)),
                                 (num_var, Var(Symbol::ARG_2)),

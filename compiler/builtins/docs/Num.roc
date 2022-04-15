@@ -61,6 +61,7 @@ interface Num
             isPositive,
             isZero,
             log,
+            logChecked,
             maxFloat,
             maxI8,
             maxU8,
@@ -81,8 +82,8 @@ interface Num
             minI64,
             minU64,
             minI128,
-            modInt,
-            modFloat,
+            mod,
+            modChecked,
             mul,
             mulChecked,
             mulWrap,
@@ -90,6 +91,7 @@ interface Num
             pow,
             powInt,
             rem,
+            remChecked,
             round,
             shiftLeftBy,
             shiftRightBy,
@@ -99,6 +101,7 @@ interface Num
             subChecked,
             subWrap,
             sqrt,
+            sqrtChecked,
             tan,
             toI8,
             toI8Checked,
@@ -1316,7 +1319,7 @@ isInfinite : Float * -> Bool
 ##
 ## >>> Num.isNaN 12.3
 ##
-## >>> Num.isNaN (Num.sqrt -2)
+## >>> Num.isNaN (Num.pow -1 0.5)
 ##
 ## *NaN* is unusual from other numberic values in that:
 ## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `False` if either argument is *NaN*.

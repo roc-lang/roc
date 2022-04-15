@@ -144,6 +144,7 @@ enum FirstOrder {
     NumCompare,
     NumDivUnchecked,
     NumRemUnchecked,
+    NumModUnchecked,
     NumIsMultipleOf,
     NumAbs,
     NumNeg,

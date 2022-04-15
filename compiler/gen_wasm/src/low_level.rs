@@ -434,6 +434,11 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?} for {:?}", self.lowlevel, self.ret_layout),
                 }
             }
+            NumModUnchecked => {
+                // wasm does not provide a flooring modulo instruction,
+                // so it would need to be emulated.
+                todo!("{:?}", self.lowlevel)
+            }
             NumIsMultipleOf => todo!("{:?}", self.lowlevel),
             NumAbs => {
                 self.load_args(backend);
