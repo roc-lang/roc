@@ -347,7 +347,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     } else {
         // When compiling for a different target, default to assuming a precompiled host.
         // Otherwise compilation would most likely fail!
-        target != Target::Host
+        target != Target::System
     };
     let path = Path::new(filename);
 
@@ -541,7 +541,7 @@ fn run_with_wasmer(_wasm_path: &std::path::Path, _args: &[String]) {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Target {
-    Host,
+    System,
     Linux32,
     Linux64,
     Wasm32,
@@ -549,7 +549,7 @@ enum Target {
 
 impl Default for Target {
     fn default() -> Self {
-        Target::Host
+        Target::System
     }
 }
 
@@ -558,7 +558,7 @@ impl Target {
         use Target::*;
 
         match self {
-            Host => "host",
+            System => "system",
             Linux32 => "linux32",
             Linux64 => "linux64",
             Wasm32 => "wasm32",
@@ -567,7 +567,7 @@ impl Target {
 
     /// NOTE keep up to date!
     const OPTIONS: &'static [&'static str] = &[
-        Target::Host.as_str(),
+        Target::System.as_str(),
         Target::Linux32.as_str(),
         Target::Linux64.as_str(),
         Target::Wasm32.as_str(),
@@ -577,7 +577,7 @@ impl Target {
         use Target::*;
 
         match self {
-            Host => Triple::host(),
+            System => Triple::host(),
             Linux32 => Triple {
                 architecture: Architecture::X86_32(X86_32Architecture::I386),
                 vendor: Vendor::Unknown,
@@ -620,7 +620,7 @@ impl std::str::FromStr for Target {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "host" => Ok(Target::Host),
+            "system" => Ok(Target::System),
             "linux32" => Ok(Target::Linux32),
             "linux64" => Ok(Target::Linux64),
             "wasm32" => Ok(Target::Wasm32),
