@@ -82,7 +82,7 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
                     .about("Choose a different target")
-                .default_value(Target::default().as_str())
+                    .default_value(Target::default().as_str())
                     .possible_values(Target::OPTIONS)
                     .required(false),
             )
