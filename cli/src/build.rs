@@ -255,13 +255,6 @@ pub fn build_file<'a>(
     } else if matches!(link_type, LinkType::None) {
         // Just copy the object file to the output folder.
         binary_path.set_extension(app_extension);
-
-        if cfg!(target_os = "macos") {
-            // See https://apple.stackexchange.com/a/428388
-            // for why we need to remove the file before copying it.
-            std::fs::remove_file(&binary_path).unwrap();
-        }
-
         std::fs::copy(app_o_file, &binary_path).unwrap();
         BuildOutcome::NoProblems
     } else {
@@ -353,13 +346,6 @@ fn spawn_rebuild_thread(
         if surgically_link {
             // Copy preprocessed host to executable location.
             let prehost = host_input_path.with_file_name("preprocessedhost");
-
-            if cfg!(target_os = "macos") {
-                // See https://apple.stackexchange.com/a/428388
-                // for why we need to remove the file before copying it.
-                std::fs::remove_file(&binary_path).unwrap();
-            }
-
             std::fs::copy(prehost, binary_path.as_path()).unwrap();
         }
         let rebuild_host_end = rebuild_host_start.elapsed().unwrap();

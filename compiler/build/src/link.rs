@@ -499,13 +499,6 @@ pub fn rebuild_host(
 
         if shared_lib_path.is_some() {
             // For surgical linking, just copy the dynamically linked rust app.
-
-            if cfg!(target_os = "macos") {
-                // See https://apple.stackexchange.com/a/428388
-                // for why we need to remove the file before copying it.
-                std::fs::remove_file(&host_dest_native).unwrap();
-            }
-
             std::fs::copy(cargo_out_dir.join("host"), host_dest_native).unwrap();
         } else {
             // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
