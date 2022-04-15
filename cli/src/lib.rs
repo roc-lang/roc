@@ -128,7 +128,7 @@ pub fn build_app<'a>() -> App<'a> {
                     .long(FLAG_PRECOMPILED)
                     .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using a --target other than `--target host`)")
                     .possible_values(["true", "false"])
-                    .default_value("true")
+                    .default_value("false")
                     .required(false),
             )
             .arg(
@@ -234,7 +234,7 @@ pub fn build_app<'a>() -> App<'a> {
                 .long(FLAG_PRECOMPILED)
                 .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using a --target other than `--target host`)")
                 .possible_values(["true", "false"])
-                .default_value("true")
+                .default_value("false")
                 .required(false),
         )
         .arg(
