@@ -815,4 +815,65 @@ mod test_load {
             err
         );
     }
+
+    #[test]
+    fn issue_2863_module_type_does_not_exist() {
+        let modules = vec![
+            (
+                "platform/Package-Config.roc",
+                indoc!(
+                    r#"
+                    platform "testplatform"
+                        requires {} { main : Str }
+                        exposes []
+                        packages {}
+                        imports []
+                        provides [ mainForHost ]
+
+                    mainForHost : Str
+                    mainForHost = main
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                    app "test"
+                        packages { pf: "platform" }
+                        provides [ main ] to pf
+
+                    main : DoesNotExist
+                    main = 1
+                    "#
+                ),
+            ),
+        ];
+
+        match multiple_modules(modules) {
+            Err(report) => {
+                assert_eq!(
+                    report,
+                    indoc!(
+                        "
+                        ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                        I cannot find a `DoesNotExist` value
+
+                        5│  main : DoesNotExist
+                                   ^^^^^^^^^^^^
+
+                        Did you mean one of these?
+
+                            Dict
+                            Result
+                            List
+                            Nat
+                        "
+                    )
+                )
+            }
+            Ok(_) => unreachable!("we expect failure here"),
+        }
+    }
 }
