@@ -5,6 +5,7 @@ use roc_types::subs::Subs;
 use roc_types::subs::Variable;
 use roc_types::types::{Category, PatternCategory};
 use roc_unify::unify::MustImplementAbility;
+use roc_unify::unify::MustImplementConstraints;
 
 use crate::solve::{IncompleteAbilityImplementation, TypeError};
 
@@ -19,17 +20,14 @@ pub enum AbilityImplError {
 }
 
 #[derive(Default)]
-pub struct DeferredMustImplementAbility(Vec<(Vec<MustImplementAbility>, AbilityImplError)>);
+pub struct DeferredMustImplementAbility(Vec<(MustImplementConstraints, AbilityImplError)>);
 
 impl DeferredMustImplementAbility {
-    pub fn add(&mut self, must_implement: Vec<MustImplementAbility>, on_error: AbilityImplError) {
+    pub fn add(&mut self, must_implement: MustImplementConstraints, on_error: AbilityImplError) {
         self.0.push((must_implement, on_error));
     }
 
     pub fn check(self, subs: &mut Subs, abilities_store: &AbilitiesStore) -> Vec<TypeError> {
-        // Two passes here. First up let's build up records of what types fully implement
-        // abilities, and what specializations are available/missing for the ones that don't.
-        // Use a vec since these lists should usually be pretty small.
         let mut good = vec![];
         let mut bad = vec![];
 
@@ -46,8 +44,21 @@ impl DeferredMustImplementAbility {
             };
         }
 
-        for (mias, _) in self.0.iter() {
-            for &mia @ MustImplementAbility { typ, ability } in mias {
+        let mut problems = vec![];
+
+        // Keep track of which types that have an incomplete ability were reported as part of
+        // another type error (from an expression or pattern). If we reported an error for a type
+        // that doesn't implement an ability in that context, we don't want to repeat the error
+        // message.
+        let mut reported_in_context = vec![];
+        let mut incomplete_not_in_context = vec![];
+
+        for (constraints, on_error) in self.0.into_iter() {
+            let must_implement = constraints.get_unique();
+
+            // First off, make sure we populate information about which of the "must implement"
+            // constraints are met, and which aren't.
+            for &mia @ MustImplementAbility { typ, ability } in must_implement.iter() {
                 if is_good!(&mia) || get_bad!(mia).is_some() {
                     continue;
                 }
@@ -81,22 +92,16 @@ impl DeferredMustImplementAbility {
                     ));
                 }
             }
-        }
 
-        // Now figure out what errors we need to report.
-        let mut problems = vec![];
-
-        // Keep track of which types that have an incomplete ability were reported as part of
-        // another type error (from an expression or pattern). If we reported an error for a type
-        // that doesn't implement an ability in that context, we don't want to repeat the error
-        // message.
-        let mut reported_in_context = vec![];
-        let mut incomplete_not_in_context = vec![];
-
-        for (must_implement, on_error) in self.0.into_iter() {
+            // Now, figure out what errors we need to report.
             use AbilityImplError::*;
             match on_error {
                 IncompleteAbility => {
+                    // These aren't attached to another type error, so if these must_implement
+                    // constraints aren't met, we'll emit a generic "this type doesn't implement an
+                    // ability" error message at the end. We only want to do this if it turns out
+                    // the "must implement" constraint indeed wasn't part of a more specific type
+                    // error.
                     incomplete_not_in_context.extend(must_implement);
                 }
                 BadExpr(region, category, var) => {
@@ -139,9 +144,11 @@ impl DeferredMustImplementAbility {
                         reported_in_context.extend(must_implement);
                     }
                 }
-            };
+            }
         }
 
+        // Go through and attach generic "type does not implement ability" errors, if they were not
+        // part of a larger context.
         for mia in incomplete_not_in_context.into_iter() {
             if let Some(must_implement) = get_bad!(mia) {
                 if !reported_in_context.contains(&mia) {
@@ -159,22 +166,25 @@ impl DeferredMustImplementAbility {
 /// Determines what type implements an ability member of a specialized signature, given the
 /// [MustImplementAbility] constraints of the signature.
 pub fn type_implementing_member(
-    specialization_must_implement_constraints: &[MustImplementAbility],
+    specialization_must_implement_constraints: &MustImplementConstraints,
     ability: Symbol,
 ) -> Symbol {
-    let mut ability_implementations_for_specialization = specialization_must_implement_constraints
-        .iter()
-        .filter(|mia| mia.ability == ability)
-        .collect::<Vec<_>>();
-    ability_implementations_for_specialization.dedup();
+    debug_assert_eq!({
+            let ability_implementations_for_specialization =
+                specialization_must_implement_constraints
+                    .clone()
+                    .get_unique();
 
-    debug_assert!(
-        ability_implementations_for_specialization.len() == 1,
+            ability_implementations_for_specialization.len()
+        },
+        1,
         "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization: {:?}",
-        ability_implementations_for_specialization);
+        specialization_must_implement_constraints
+    );
 
-    ability_implementations_for_specialization
-        .pop()
+    specialization_must_implement_constraints
+        .iter_for_ability(ability)
+        .next()
         .unwrap()
         .typ
 }

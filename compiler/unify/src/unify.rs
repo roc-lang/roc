@@ -134,14 +134,14 @@ pub struct Context {
 pub enum Unified {
     Success {
         vars: Pool,
-        must_implement_ability: Vec<MustImplementAbility>,
+        must_implement_ability: MustImplementConstraints,
     },
     Failure(Pool, ErrorType, ErrorType, DoesNotImplementAbility),
     BadType(Pool, roc_types::types::Problem),
 }
 
 impl Unified {
-    pub fn expect_success(self, err_msg: &'static str) -> (Pool, Vec<MustImplementAbility>) {
+    pub fn expect_success(self, err_msg: &'static str) -> (Pool, MustImplementConstraints) {
         match self {
             Unified::Success {
                 vars,
@@ -153,7 +153,7 @@ impl Unified {
 }
 
 /// Specifies that `type` must implement the ability `ability`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MustImplementAbility {
     // This only points to opaque type names currently.
     // TODO(abilities) support structural types in general
@@ -161,12 +161,39 @@ pub struct MustImplementAbility {
     pub ability: Symbol,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MustImplementConstraints(Vec<MustImplementAbility>);
+
+impl MustImplementConstraints {
+    pub fn push(&mut self, must_implement: MustImplementAbility) {
+        self.0.push(must_implement)
+    }
+
+    pub fn extend(&mut self, other: Self) {
+        self.0.extend(other.0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn get_unique(mut self) -> Vec<MustImplementAbility> {
+        self.0.sort();
+        self.0.dedup();
+        self.0
+    }
+
+    pub fn iter_for_ability(&self, ability: Symbol) -> impl Iterator<Item = &MustImplementAbility> {
+        self.0.iter().filter(move |mia| mia.ability == ability)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Outcome {
     mismatches: Vec<Mismatch>,
     /// We defer these checks until the end of a solving phase.
     /// NOTE: this vector is almost always empty!
-    must_implement_ability: Vec<MustImplementAbility>,
+    must_implement_ability: MustImplementConstraints,
 }
 
 impl Outcome {
