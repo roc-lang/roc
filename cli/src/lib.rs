@@ -40,8 +40,7 @@ pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINK: &str = "roc-linker";
-pub const FLAG_FORCE_LINK: &str = "force-roc-linker";
-pub const FLAG_LEGACY_LINK: &str = "legacy-linker";
+pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const FLAG_VALGRIND: &str = "valgrind";
 pub const FLAG_CHECK: &str = "check";
@@ -118,15 +117,10 @@ pub fn build_app<'a>() -> App<'a> {
                     .required(false),
             )
             .arg(
-                Arg::new(FLAG_FORCE_LINK)
-                    .long(FLAG_FORCE_LINK)
-                    .about("Forces using the roc linker. Useful for trying out the Roc linker on new targets.")
-                    .required(false),
-            )
-            .arg(
-                Arg::new(FLAG_LEGACY_LINK)
-                    .long(FLAG_LEGACY_LINK)
-                    .about("Uses the legacy linker when otherwise the roc linker would be used. (Currently, only Linux x64 uses the Roc linker by default.)")
+                Arg::new(FLAG_LINKER)
+                    .long(FLAG_LINKER)
+                    .about("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+                    .possible_values(["surgical", "legacy"])
                     .required(false),
             )
             .arg(
@@ -223,25 +217,20 @@ pub fn build_app<'a>() -> App<'a> {
         .arg(
             Arg::new(FLAG_LINK)
                 .long(FLAG_LINK)
-                .about("Deprecated in favor of --force-roc-linker and --legacy-linker")
+                .about("Deprecated in favor of --linker")
                 .required(false),
         )
         .arg(
-            Arg::new(FLAG_FORCE_LINK)
-                .long(FLAG_FORCE_LINK)
-                .about("Forces using the roc linker. Useful for trying out the Roc linker on new targets.")
-                .required(false),
-        )
-        .arg(
-            Arg::new(FLAG_LEGACY_LINK)
-                .long(FLAG_LEGACY_LINK)
-                .about("Uses the legacy linker when otherwise the roc linker would be used. (Currently, only Linux x64 uses the Roc linker by default.)")
+            Arg::new(FLAG_LINKER)
+                .long(FLAG_LINKER)
+                .about("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+                .possible_values(["surgical", "legacy"])
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_PRECOMPILED)
                 .long(FLAG_PRECOMPILED)
-                .about("Assumes the host has been precompiled and skips recompiling the host.")
+                .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using --target other than --target host)")
                 .required(false),
         )
         .arg(
@@ -335,16 +324,23 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         (false, true) => LinkType::None,
         (false, false) => LinkType::Executable,
     };
-    let surgically_link = matches.is_present(FLAG_LINK);
-    let precompiled = matches.is_present(FLAG_PRECOMPILED);
 
-    if surgically_link && !roc_linker::supported(&link_type, &triple) {
-        panic!(
-            "Link type, {:?}, with target, {}, not supported by roc linker",
-            link_type, triple
-        );
+    // TODO remove FLAG_LINK from the code base anytime after the end of May 2022
+    if matches.is_present(FLAG_LINK) {
+        eprintln!("ERROR: The --roc-linker flag has been deprecated because the roc linker is now used automatically where it's supported. (Currently that's only x64 Linux.) No need to use --roc-linker anymore, but you can use the --linker flag to switch linkers.");
+        process::exit(1);
     }
 
+    // Use surgical linking when supported, or when explicitly requested with --force-roc-linker
+    let surgically_link = if matches.is_present(FLAG_LINKER) {
+        matches.value_of(FLAG_LINKER) == Some("surgical")
+    } else {
+        roc_linker::supported(&link_type, &triple)
+    };
+
+    // When compiling for a different target, we assume a precompiled host.
+    // Otherwise compilation would most likely fail!
+    let precompiled = target != Target::Host || matches.is_present(FLAG_PRECOMPILED);
     let path = Path::new(filename);
 
     // Spawn the root task
@@ -535,6 +531,7 @@ fn run_with_wasmer(_wasm_path: &std::path::Path, _args: &[String]) {
     println!("Running wasm files not support");
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Target {
     Host,
     Linux32,
