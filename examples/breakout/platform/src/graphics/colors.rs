@@ -19,7 +19,7 @@ impl Rgba {
     }
 
     pub const fn to_array(self) -> [f32; 4] {
-        [self.r, self.b, self.g, self.a]
+        [self.r, self.g, self.b, self.a]
     }
 
     pub fn from_hsb(hue: usize, saturation: usize, brightness: usize) -> Self {
