@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use roc_error_macros::todo_abilities;
+use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
@@ -147,7 +147,7 @@ impl Unified {
                 vars,
                 must_implement_ability,
             } => (vars, must_implement_ability),
-            _ => panic!("{}", err_msg),
+            _ => internal_error!("{}", err_msg),
         }
     }
 }
