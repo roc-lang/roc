@@ -1,3 +1,4 @@
+use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::canonicalize_annotation_with_possible_clauses;
 use crate::annotation::IntroducedVariables;
@@ -533,7 +534,15 @@ pub fn canonicalize_defs<'a>(
                 .introduced_variables
                 .union(&member_annot.introduced_variables);
 
-            can_members.push((member_sym, name_region, member_annot.typ));
+            let iv = member_annot.introduced_variables;
+
+            let variables = MemberVariables {
+                able_vars: iv.collect_able(),
+                rigid_vars: iv.collect_rigid(),
+                flex_vars: iv.collect_flex(),
+            };
+
+            can_members.push((member_sym, name_region, member_annot.typ, variables));
         }
 
         // Store what symbols a type must define implementations for to have this ability.
@@ -1218,7 +1227,9 @@ fn canonicalize_pending_value_def<'a>(
                 }
             };
 
-            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
+            if let Pattern::Identifier(symbol)
+            | Pattern::AbilityMemberSpecialization { ident: symbol, .. } = loc_can_pattern.value
+            {
                 let def = single_can_def(
                     loc_can_pattern,
                     loc_can_expr,
@@ -1306,7 +1317,9 @@ fn canonicalize_pending_value_def<'a>(
             // which also implies it's not a self tail call!
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
+            if let Pattern::Identifier(symbol)
+            | Pattern::AbilityMemberSpecialization { ident: symbol, .. } = loc_can_pattern.value
+            {
                 if let Closure(ClosureData {
                     function_type,
                     closure_type,

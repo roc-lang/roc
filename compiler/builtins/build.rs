@@ -54,6 +54,13 @@ fn main() {
         "builtins-i386",
     );
 
+    generate_bc_file(
+        &bitcode_path,
+        &build_script_dir_path,
+        "ir-x86_64",
+        "builtins-x86_64",
+    );
+
     // OBJECT FILES
     #[cfg(windows)]
     const BUILTINS_HOST_FILE: &str = "builtins-host.obj";
@@ -115,7 +122,12 @@ fn generate_object_file(
         println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
 
         // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
-        fs::copy(src_obj, dest_obj).expect("Failed to copy object file.");
+        fs::copy(src_obj, dest_obj).unwrap_or_else(|err| {
+            panic!(
+                "Failed to copy object file {} to {}: {:?}",
+                src_obj, dest_obj, err
+            );
+        });
     }
 }
 

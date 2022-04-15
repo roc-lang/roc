@@ -186,19 +186,27 @@ mod solve_expr {
         use std::collections::HashSet;
         let pretty_specializations = known_specializations
             .into_iter()
-            .map(|(typ, member)| {
+            .map(|(member, typ)| {
+                let member_data = abilities_store.member_def(member).unwrap();
+                let member_str = member.ident_str(&interns).as_str();
+                let ability_str = member_data.parent_ability.ident_str(&interns).as_str();
                 (
+                    format!("{}:{}", ability_str, member_str),
                     typ.ident_str(&interns).as_str(),
-                    member.ident_str(&interns).as_str(),
                 )
             })
             .collect::<HashSet<_>>();
 
-        for expected_spec in expected_specializations.into_iter() {
+        for (parent, specialization) in expected_specializations.into_iter() {
+            let has_the_one = pretty_specializations
+                .iter()
+                // references are annoying so we do this
+                .find(|(p, s)| p == parent && s == &specialization)
+                .is_some();
             assert!(
-                pretty_specializations.contains(&expected_spec),
+                has_the_one,
                 "{:#?} not in {:#?}",
-                expected_spec,
+                (parent, specialization),
                 pretty_specializations,
             );
         }
@@ -2389,7 +2397,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num a, y : F64 }",
+            "{ numIdentity : Num a -> Num a, x : Num a, y : Float * }",
         );
     }
 
@@ -3812,7 +3820,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : F64, z : Int * }",
+            "{ x : Num a, y : Float *, z : Int * }",
         );
     }
 
@@ -3829,7 +3837,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num a, y : F64, z : c }, b : { blah : Str, x : Num a, y : F64, z : c } }",
+            "{ a : { x : Num a, y : Float *, z : c }, b : { blah : Str, x : Num a, y : Float *, z : c } }",
         );
     }
 
@@ -5788,7 +5796,7 @@ mod solve_expr {
                 hash = \$Id n -> n
                 "#
             ),
-            [("hash", "Id")],
+            [("Hash:hash", "Id")],
         )
     }
 
@@ -5809,7 +5817,7 @@ mod solve_expr {
                 hash32 = \$Id n -> Num.toU32 n
                 "#
             ),
-            [("hash", "Id"), ("hash32", "Id")],
+            [("Hash:hash", "Id"), ("Hash:hash32", "Id")],
         )
     }
 
@@ -5837,7 +5845,72 @@ mod solve_expr {
                 le = \$Id m, $Id n -> m < n
                 "#
             ),
-            [("hash", "Id"), ("hash32", "Id"), ("eq", "Id"), ("le", "Id")],
+            [
+                ("Hash:hash", "Id"),
+                ("Hash:hash32", "Id"),
+                ("Ord:eq", "Id"),
+                ("Ord:le", "Id"),
+            ],
+        )
+    }
+
+    #[test]
+    fn ability_checked_specialization_with_typed_body() {
+        check_inferred_abilities(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash : Id -> U64
+                hash = \$Id n -> n
+                "#
+            ),
+            [("Hash:hash", "Id")],
+        )
+    }
+
+    #[test]
+    fn ability_checked_specialization_with_annotation_only() {
+        check_inferred_abilities(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash : Id -> U64
+                "#
+            ),
+            [("Hash:hash", "Id")],
+        )
+    }
+
+    #[test]
+    fn ability_specialization_called() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ zero ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash = \$Id n -> n
+
+                zero = hash ($Id 0)
+                "#
+            ),
+            "U64",
         )
     }
 }

@@ -9659,4 +9659,125 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn ability_specialization_checked_against_annotation() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash : Id -> U32
+                hash = \$Id n -> n
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of this definition:
+
+                8│  hash : Id -> U32
+                9│  hash = \$Id n -> n
+                                     ^
+
+                This `n` value is a:
+
+                    U64
+
+                But the type annotation says it should be:
+
+                    U32
+
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with this specialization of `hash`:
+
+                9│  hash = \$Id n -> n
+                    ^^^^
+
+                This value is a declared specialization of type:
+
+                    Id -> U32
+
+                But the type annotation on `hash` says it must match:
+
+                    Id -> U64
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_specialization_called_with_non_specializing() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ noGoodVeryBadTerrible ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash = \$Id n -> n
+
+                User := {}
+
+                noGoodVeryBadTerrible =
+                    {
+                        nope: hash ($User {}),
+                        notYet: hash (A 1),
+                    }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `hash` is not what I expect:
+
+                15│          notYet: hash (A 1),
+                                           ^^^
+
+                This `A` global tag application has the type:
+
+                    [ A (Num a) ]b
+
+                But `hash` needs the 1st argument to be:
+
+                    a | a has Hash
+
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This expression has a type that does not implement the abilities it's expected to:
+
+                14│          nope: hash ($User {}),
+                                         ^^^^^^^^
+
+                This User opaque wrapping has the type:
+
+                    User
+
+                The ways this expression is used requires that the following types
+                implement the following abilities, which they do not:
+
+                    User does not implement Hash
+
+                The type `User` does not fully implement the ability `Hash`. The following
+                specializations are missing:
+
+                A specialization for `hash`, which is defined here:
+
+                4│      hash : a -> U64 | a has Hash
+                        ^^^^
+                "#
+            ),
+        )
+    }
 }
