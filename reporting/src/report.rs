@@ -72,6 +72,12 @@ pub enum Severity {
     Warning,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum RenderTarget {
+    ColorTerminal,
+    Generic,
+}
+
 /// A textual report.
 pub struct Report<'b> {
     pub title: String,
@@ -81,6 +87,19 @@ pub struct Report<'b> {
 }
 
 impl<'b> Report<'b> {
+    pub fn render(
+        self,
+        target: RenderTarget,
+        buf: &'b mut String,
+        alloc: &'b RocDocAllocator<'b>,
+        palette: &'b Palette,
+    ) {
+        match target {
+            RenderTarget::Generic => self.render_ci(buf, alloc),
+            RenderTarget::ColorTerminal => self.render_color_terminal(buf, alloc, palette),
+        }
+    }
+
     /// Render to CI console output, where no colors are available.
     pub fn render_ci(self, buf: &'b mut String, alloc: &'b RocDocAllocator<'b>) {
         let err_msg = "<buffer is not a utf-8 encoded string>";

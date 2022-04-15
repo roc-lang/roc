@@ -723,11 +723,24 @@ fn gen_wrap_add_nums() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_div_f64() {
-    // FIXME this works with normal types, but fails when checking uniqueness types
     assert_evals_to!(
         indoc!(
             r#"
-                    when 48 / 2 is
+                    48 / 2
+                "#
+        ),
+        24.0,
+        f64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when Num.divChecked 48 2 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -736,6 +749,23 @@ fn gen_div_f64() {
         f64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_by_zero_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when Num.divChecked 47 0 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        -1.0,
+        f64
+    );
+}
+
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_div_dec() {
@@ -748,12 +778,53 @@ fn gen_div_dec() {
                     y : Dec
                     y = 3
 
-                    when x / y is
+                    x / y
+                "#
+        ),
+        RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
+        i128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_dec() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x : Dec
+                    x = 10
+
+                    y : Dec
+                    y = 3
+
+                    when Num.divChecked x y is
                         Ok val -> val
                         Err _ -> -1
                 "#
         ),
         RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
+        i128
+    );
+}
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_by_zero_dec() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x : Dec
+                    x = 10
+
+                    y : Dec
+                    y = 0
+
+                    when Num.divChecked x y is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        RocDec::from_str_to_i128_unsafe("-1"),
         i128
     );
 }
@@ -965,7 +1036,21 @@ fn gen_div_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when 1000 // 10 is
+                    1000 // 10
+                "#
+        ),
+        100,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when Num.divFloorChecked 1000 10 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -977,11 +1062,11 @@ fn gen_div_i64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn gen_div_by_zero_i64() {
+fn gen_div_checked_by_zero_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when 1000 // 0 is
+                    when Num.divFloorChecked 1000 0 is
                         Err DivByZero -> 99
                         _ -> -24
                 "#
@@ -2656,6 +2741,166 @@ fn num_to_str() {
     assert_evals_to!(
         r#"Num.toStr Num.minI64"#,
         RocStr::from(min.as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_u8() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr 0u8"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1u8"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10u8"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", u8::MAX);
+    assert_evals_to!(r#"Num.toStr Num.maxU8"#, RocStr::from(max.as_str()), RocStr);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_u16() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr 0u16"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1u16"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10u16"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", u16::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxU16"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_u32() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr 0u32"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1u32"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10u32"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", u32::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxU32"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_u64() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr 0u64"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1u64"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10u64"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", u64::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxU64"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_i8() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10i8"#, RocStr::from("-10"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1i8"#, RocStr::from("-1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0i8"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1i8"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10i8"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", i8::MAX);
+    assert_evals_to!(r#"Num.toStr Num.maxI8"#, RocStr::from(max.as_str()), RocStr);
+
+    let max = format!("{}", i8::MIN);
+    assert_evals_to!(r#"Num.toStr Num.minI8"#, RocStr::from(max.as_str()), RocStr);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_i16() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10i16"#, RocStr::from("-10"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1i16"#, RocStr::from("-1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0i16"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1i16"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10i16"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", i16::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxI16"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+
+    let max = format!("{}", i16::MIN);
+    assert_evals_to!(
+        r#"Num.toStr Num.minI16"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_i32() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10i32"#, RocStr::from("-10"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1i32"#, RocStr::from("-1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0i32"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1i32"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10i32"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", i32::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxI32"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+
+    let max = format!("{}", i32::MIN);
+    assert_evals_to!(
+        r#"Num.toStr Num.minI32"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_i64() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10i64"#, RocStr::from("-10"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1i64"#, RocStr::from("-1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0i64"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1i64"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10i64"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", i64::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxI64"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+
+    let max = format!("{}", i64::MIN);
+    assert_evals_to!(
+        r#"Num.toStr Num.minI64"#,
+        RocStr::from(max.as_str()),
         RocStr
     );
 }

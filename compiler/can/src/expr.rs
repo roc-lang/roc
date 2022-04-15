@@ -1083,6 +1083,7 @@ fn canonicalize_when_branch<'a>(
             && !branch_output.references.has_value_lookup(symbol)
             && !branch_output.references.has_type_lookup(symbol)
             && !original_scope.contains_symbol(symbol)
+            && !scope.abilities_store.is_specialization_name(symbol)
         {
             env.problem(Problem::UnusedDef(symbol, *region));
         }

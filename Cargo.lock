@@ -3351,6 +3351,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_target",
  "roc_types",
  "roc_unify",
@@ -3519,6 +3520,7 @@ dependencies = [
  "roc_module",
  "roc_parse",
  "roc_region",
+ "roc_reporting",
  "roc_target",
  "roc_types",
  "snafu",
@@ -3703,6 +3705,7 @@ dependencies = [
  "roc_constrain",
  "roc_load_internal",
  "roc_module",
+ "roc_reporting",
  "roc_target",
  "roc_types",
 ]
@@ -3734,7 +3737,6 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
- "strip-ansi-escapes",
  "tempfile",
  "ven_pretty",
 ]
@@ -3893,6 +3895,7 @@ dependencies = [
  "roc_collections",
  "roc_constrain",
  "roc_exhaustive",
+ "roc_load",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -3902,6 +3905,7 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "roc_types",
+ "tempfile",
  "ven_pretty",
 ]
 
@@ -3916,11 +3920,13 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_load",
  "roc_module",
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_solve",
  "roc_target",
  "roc_types",
@@ -3968,6 +3974,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_types",
 ]
@@ -4518,6 +4525,7 @@ dependencies = [
  "roc_load",
  "roc_module",
  "roc_mono",
+ "roc_reporting",
  "roc_target",
  "test_mono_macros",
 ]

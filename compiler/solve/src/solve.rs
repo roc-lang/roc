@@ -1,4 +1,6 @@
+use crate::ability::{AbilityImplError, DeferredMustImplementAbility};
 use bumpalo::Bump;
+use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Constraints, LetConstraint};
 use roc_can::expected::{Expected, PExpected};
@@ -14,7 +16,7 @@ use roc_types::subs::{
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
     gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, PatternCategory,
-    TypeExtension,
+    Reason, TypeExtension,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
 
@@ -69,12 +71,34 @@ use roc_unify::unify::{unify, Mode, Unified::*};
 // of the let (so those used in inferring the type of `\x -> x`) are considered.
 
 #[derive(PartialEq, Debug, Clone)]
+pub struct IncompleteAbilityImplementation {
+    // TODO(abilities): have general types here, not just opaques
+    pub typ: Symbol,
+    pub ability: Symbol,
+    pub specialized_members: Vec<Loc<Symbol>>,
+    pub missing_members: Vec<Loc<Symbol>>,
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
     BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
+    IncompleteAbilityImplementation(IncompleteAbilityImplementation),
+    BadExprMissingAbility(
+        Region,
+        Category,
+        ErrorType,
+        Vec<IncompleteAbilityImplementation>,
+    ),
+    BadPatternMissingAbility(
+        Region,
+        PatternCategory,
+        ErrorType,
+        Vec<IncompleteAbilityImplementation>,
+    ),
 }
 
 use roc_types::types::Alias;
@@ -515,8 +539,17 @@ pub fn run(
     mut subs: Subs,
     aliases: &mut Aliases,
     constraint: &Constraint,
+    abilities_store: &mut AbilitiesStore,
 ) -> (Solved<Subs>, Env) {
-    let env = run_in_place(constraints, env, problems, &mut subs, aliases, constraint);
+    let env = run_in_place(
+        constraints,
+        env,
+        problems,
+        &mut subs,
+        aliases,
+        constraint,
+        abilities_store,
+    );
 
     (Solved(subs), env)
 }
@@ -529,6 +562,7 @@ pub fn run_in_place(
     subs: &mut Subs,
     aliases: &mut Aliases,
     constraint: &Constraint,
+    abilities_store: &mut AbilitiesStore,
 ) -> Env {
     let mut pools = Pools::default();
 
@@ -539,6 +573,8 @@ pub fn run_in_place(
     let rank = Rank::toplevel();
 
     let arena = Bump::new();
+
+    let mut deferred_must_implement_abilities = DeferredMustImplementAbility::default();
 
     let state = solve(
         &arena,
@@ -551,7 +587,13 @@ pub fn run_in_place(
         aliases,
         subs,
         constraint,
+        abilities_store,
+        &mut deferred_must_implement_abilities,
     );
+
+    // Now that the module has been solved, we can run through and check all
+    // types claimed to implement abilities.
+    problems.extend(deferred_must_implement_abilities.check(subs, abilities_store));
 
     state.env
 }
@@ -604,6 +646,8 @@ fn solve(
     aliases: &mut Aliases,
     subs: &mut Subs,
     constraint: &Constraint,
+    abilities_store: &mut AbilitiesStore,
+    deferred_must_implement_abilities: &mut DeferredMustImplementAbility,
 ) -> State {
     let initial = Work::Constraint {
         env,
@@ -656,6 +700,19 @@ fn solve(
 
                 let mut new_env = env.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
+                    check_ability_specialization(
+                        arena,
+                        subs,
+                        &new_env,
+                        pools,
+                        rank,
+                        abilities_store,
+                        problems,
+                        deferred_must_implement_abilities,
+                        *symbol,
+                        *loc_var,
+                    );
+
                     new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                 }
 
@@ -752,6 +809,19 @@ fn solve(
 
                 let mut new_env = env.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
+                    check_ability_specialization(
+                        arena,
+                        subs,
+                        &new_env,
+                        pools,
+                        rank,
+                        abilities_store,
+                        problems,
+                        deferred_must_implement_abilities,
+                        *symbol,
+                        *loc_var,
+                    );
+
                     new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                 }
 
@@ -796,12 +866,21 @@ fn solve(
                 let expected = type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
 
                 match unify(subs, actual, expected, Mode::EQ) {
-                    Success(vars) => {
+                    Success {
+                        vars,
+                        must_implement_ability,
+                    } => {
                         introduce(subs, rank, pools, &vars);
+                        if !must_implement_ability.is_empty() {
+                            deferred_must_implement_abilities.add(
+                                must_implement_ability,
+                                AbilityImplError::BadExpr(*region, category.clone(), actual),
+                            );
+                        }
 
                         state
                     }
-                    Failure(vars, actual_type, expected_type) => {
+                    Failure(vars, actual_type, expected_type, _bad_impls) => {
                         introduce(subs, rank, pools, &vars);
 
                         let problem = TypeError::BadExpr(
@@ -838,12 +917,16 @@ fn solve(
                 let target = *target;
 
                 match unify(subs, actual, target, Mode::EQ) {
-                    Success(vars) => {
+                    Success {
+                        vars,
+                        // ERROR NOT REPORTED
+                        must_implement_ability: _,
+                    } => {
                         introduce(subs, rank, pools, &vars);
 
                         state
                     }
-                    Failure(vars, _actual_type, _expected_type) => {
+                    Failure(vars, _actual_type, _expected_type, _bad_impls) => {
                         introduce(subs, rank, pools, &vars);
 
                         // ERROR NOT REPORTED
@@ -890,13 +973,26 @@ fn solve(
                             type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
 
                         match unify(subs, actual, expected, Mode::EQ) {
-                            Success(vars) => {
+                            Success {
+                                vars,
+                                must_implement_ability,
+                            } => {
                                 introduce(subs, rank, pools, &vars);
+                                if !must_implement_ability.is_empty() {
+                                    deferred_must_implement_abilities.add(
+                                        must_implement_ability,
+                                        AbilityImplError::BadExpr(
+                                            *region,
+                                            Category::Lookup(*symbol),
+                                            actual,
+                                        ),
+                                    );
+                                }
 
                                 state
                             }
 
-                            Failure(vars, actual_type, expected_type) => {
+                            Failure(vars, actual_type, expected_type, _bad_impls) => {
                                 introduce(subs, rank, pools, &vars);
 
                                 let problem = TypeError::BadExpr(
@@ -954,12 +1050,21 @@ fn solve(
                 };
 
                 match unify(subs, actual, expected, mode) {
-                    Success(vars) => {
+                    Success {
+                        vars,
+                        must_implement_ability,
+                    } => {
                         introduce(subs, rank, pools, &vars);
+                        if !must_implement_ability.is_empty() {
+                            deferred_must_implement_abilities.add(
+                                must_implement_ability,
+                                AbilityImplError::BadPattern(*region, category.clone(), actual),
+                            );
+                        }
 
                         state
                     }
-                    Failure(vars, actual_type, expected_type) => {
+                    Failure(vars, actual_type, expected_type, _bad_impls) => {
                         introduce(subs, rank, pools, &vars);
 
                         let problem = TypeError::BadPattern(
@@ -1123,12 +1228,25 @@ fn solve(
                 let includes = type_to_var(subs, rank, pools, aliases, &tag_ty);
 
                 match unify(subs, actual, includes, Mode::PRESENT) {
-                    Success(vars) => {
+                    Success {
+                        vars,
+                        must_implement_ability,
+                    } => {
                         introduce(subs, rank, pools, &vars);
+                        if !must_implement_ability.is_empty() {
+                            deferred_must_implement_abilities.add(
+                                must_implement_ability,
+                                AbilityImplError::BadPattern(
+                                    *region,
+                                    pattern_category.clone(),
+                                    actual,
+                                ),
+                            );
+                        }
 
                         state
                     }
-                    Failure(vars, actual_type, expected_to_include_type) => {
+                    Failure(vars, actual_type, expected_to_include_type, _bad_impls) => {
                         introduce(subs, rank, pools, &vars);
 
                         let problem = TypeError::BadPattern(
@@ -1154,6 +1272,137 @@ fn solve(
     }
 
     state
+}
+
+/// If a symbol claims to specialize an ability member, check that its solved type in fact
+/// does specialize the ability, and record the specialization.
+#[allow(clippy::too_many_arguments)]
+// Aggressive but necessary - there aren't many usages.
+#[inline(always)]
+fn check_ability_specialization(
+    arena: &Bump,
+    subs: &mut Subs,
+    env: &Env,
+    pools: &mut Pools,
+    rank: Rank,
+    abilities_store: &mut AbilitiesStore,
+    problems: &mut Vec<TypeError>,
+    deferred_must_implement_abilities: &mut DeferredMustImplementAbility,
+    symbol: Symbol,
+    symbol_loc_var: Loc<Variable>,
+) {
+    // If the symbol specializes an ability member, we need to make sure that the
+    // inferred type for the specialization actually aligns with the expected
+    // implementation.
+    if let Some((root_symbol, root_data)) = abilities_store.root_name_and_def(symbol) {
+        let root_signature_var = env
+            .get_var_by_symbol(&root_symbol)
+            .expect("Ability should be registered in env by now!");
+
+        // Check if they unify - if they don't, then the claimed specialization isn't really one,
+        // and that's a type error!
+        // This also fixes any latent type variables that need to be specialized to exactly what
+        // the ability signature expects.
+
+        // We need to freshly instantiate the root signature so that all unifications are reflected
+        // in the specialization type, but not the original signature type.
+        let root_signature_var =
+            deep_copy_var_in(subs, Rank::toplevel(), pools, root_signature_var, arena);
+        let snapshot = subs.snapshot();
+        let unified = unify(subs, symbol_loc_var.value, root_signature_var, Mode::EQ);
+
+        match unified {
+            Success {
+                vars: _,
+                must_implement_ability,
+            } if must_implement_ability.is_empty() => {
+                // This can happen when every ability constriant on a type variable went
+                // through only another type variable. That means this def is not specialized
+                // for one type - for now, we won't admit this.
+
+                // Rollback the snapshot so we unlink the root signature with the specialization,
+                // so we can have two separate error types.
+                subs.rollback_to(snapshot);
+
+                let (expected_type, _problems) = subs.var_to_error_type(root_signature_var);
+                let (actual_type, _problems) = subs.var_to_error_type(symbol_loc_var.value);
+
+                let reason = Reason::GeneralizedAbilityMemberSpecialization {
+                    member_name: root_symbol,
+                    def_region: root_data.region,
+                };
+
+                let problem = TypeError::BadExpr(
+                    symbol_loc_var.region,
+                    Category::AbilityMemberSpecialization(root_symbol),
+                    actual_type,
+                    Expected::ForReason(reason, expected_type, symbol_loc_var.region),
+                );
+
+                problems.push(problem);
+            }
+
+            Success {
+                vars,
+                must_implement_ability,
+            } => {
+                subs.commit_snapshot(snapshot);
+                introduce(subs, rank, pools, &vars);
+
+                // First, figure out and register for what type does this symbol specialize
+                // the ability member.
+                let mut ability_implementations_for_specialization = must_implement_ability
+                    .iter()
+                    .filter(|mia| mia.ability == root_data.parent_ability)
+                    .collect::<Vec<_>>();
+                ability_implementations_for_specialization.dedup();
+
+                debug_assert!(ability_implementations_for_specialization.len() == 1, "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization");
+
+                // This is a valid specialization! Record it.
+                let specialization_type = ability_implementations_for_specialization[0].typ;
+                let specialization = MemberSpecialization {
+                    symbol,
+                    region: symbol_loc_var.region,
+                };
+                abilities_store.register_specialization_for_type(
+                    root_symbol,
+                    specialization_type,
+                    specialization,
+                );
+
+                // Store the checks for what abilities must be implemented to be checked after the
+                // whole module is complete.
+                deferred_must_implement_abilities
+                    .add(must_implement_ability, AbilityImplError::IncompleteAbility);
+            }
+            Failure(vars, actual_type, expected_type, unimplemented_abilities) => {
+                subs.commit_snapshot(snapshot);
+                introduce(subs, rank, pools, &vars);
+
+                let reason = Reason::InvalidAbilityMemberSpecialization {
+                    member_name: root_symbol,
+                    def_region: root_data.region,
+                    unimplemented_abilities,
+                };
+
+                let problem = TypeError::BadExpr(
+                    symbol_loc_var.region,
+                    Category::AbilityMemberSpecialization(root_symbol),
+                    actual_type,
+                    Expected::ForReason(reason, expected_type, symbol_loc_var.region),
+                );
+
+                problems.push(problem);
+            }
+            BadType(vars, problem) => {
+                subs.commit_snapshot(snapshot);
+                introduce(subs, rank, pools, &vars);
+
+                problems.push(TypeError::BadType(problem));
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1288,7 +1537,7 @@ impl RegisterVariable {
         use RegisterVariable::*;
 
         match typ {
-            Variable(var) => Direct(*var),
+            Type::Variable(var) => Direct(*var),
             EmptyRec => Direct(Variable::EMPTY_RECORD),
             EmptyTagUnion => Direct(Variable::EMPTY_TAG_UNION),
             Type::DelayedAlias(AliasCommon { symbol, .. }) => {
@@ -2180,7 +2429,7 @@ fn adjust_rank_content(
     use roc_types::subs::FlatType::*;
 
     match content {
-        FlexVar(_) | RigidVar(_) | Error => group_rank,
+        FlexVar(_) | RigidVar(_) | FlexAbleVar(_, _) | RigidAbleVar(_, _) | Error => group_rank,
 
         RecursionVar { .. } => group_rank,
 
@@ -2396,7 +2645,14 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                 desc.mark = Mark::NONE;
                 desc.copy = OptVariable::NONE;
             }
-            FlexVar(_) | Error => (),
+            &RigidAbleVar(name, ability) => {
+                // Same as `RigidVar` above
+                desc.content = FlexAbleVar(Some(name), ability);
+                desc.rank = max_rank;
+                desc.mark = Mark::NONE;
+                desc.copy = OptVariable::NONE;
+            }
+            FlexVar(_) | FlexAbleVar(_, _) | Error => (),
 
             RecursionVar { structure, .. } => {
                 stack.push(*structure);
@@ -2684,7 +2940,7 @@ fn deep_copy_var_help(
             copy
         }
 
-        FlexVar(_) | Error => copy,
+        FlexVar(_) | FlexAbleVar(_, _) | Error => copy,
 
         RecursionVar {
             opt_name,
@@ -2705,6 +2961,12 @@ fn deep_copy_var_help(
 
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
+
+            copy
+        }
+
+        RigidAbleVar(name, ability) => {
+            subs.set(copy, make_descriptor(FlexAbleVar(Some(name), ability)));
 
             copy
         }

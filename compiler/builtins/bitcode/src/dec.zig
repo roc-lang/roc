@@ -310,9 +310,7 @@ pub const RocDec = extern struct {
 
         // (n / 0) is an error
         if (denominator_i128 == 0) {
-            // The compiler frontend does the `denominator == 0` check for us,
-            // therefore this case is unreachable from roc user code
-            unreachable;
+            @panic("TODO runtime exception for dividing by 0!");
         }
 
         // If they're both negative, or if neither is negative, the final answer

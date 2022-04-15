@@ -468,8 +468,10 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
     const size = comptime blk: {
         // the string representation of the minimum i128 value uses at most 40 characters
         var buf: [40]u8 = undefined;
-        var result = std.fmt.bufPrint(&buf, "{}", .{std.math.minInt(T)}) catch unreachable;
-        break :blk result.len;
+        var resultMin = std.fmt.bufPrint(&buf, "{}", .{std.math.minInt(T)}) catch unreachable;
+        var resultMax = std.fmt.bufPrint(&buf, "{}", .{std.math.maxInt(T)}) catch unreachable;
+        var result = if (resultMin.len > resultMax.len) resultMin.len else resultMax.len;
+        break :blk result;
     };
 
     var buf: [size]u8 = undefined;

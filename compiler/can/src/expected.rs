@@ -44,6 +44,15 @@ impl<T> PExpected<T> {
             PExpected::ForReason(reason, _val, region) => PExpected::ForReason(reason, new, region),
         }
     }
+
+    pub fn replace_ref<U>(&self, new: U) -> PExpected<U> {
+        match self {
+            PExpected::NoExpectation(_val) => PExpected::NoExpectation(new),
+            PExpected::ForReason(reason, _val, region) => {
+                PExpected::ForReason(reason.clone(), new, *region)
+            }
+        }
+    }
 }
 
 impl<T> Expected<T> {
