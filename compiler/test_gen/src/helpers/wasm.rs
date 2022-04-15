@@ -91,6 +91,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         src_dir,
         Default::default(),
         roc_target::TargetInfo::default_wasm32(),
+        roc_reporting::report::RenderTarget::ColorTerminal,
     );
 
     let loaded = loaded.expect("failed to load module");

@@ -1,4 +1,5 @@
 use roc_builtins::std::StdLib;
+use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
 use roc_collections::all::MutMap;
@@ -100,10 +101,32 @@ pub enum ExposedModuleTypes {
 
 pub fn constrain_module(
     constraints: &mut Constraints,
+    abilities_store: &AbilitiesStore,
     declarations: &[Declaration],
     home: ModuleId,
 ) -> Constraint {
-    crate::expr::constrain_decls(constraints, home, declarations)
+    let mut constraint = crate::expr::constrain_decls(constraints, home, declarations);
+
+    for (member_name, member_data) in abilities_store.root_ability_members().iter() {
+        let vars = &member_data.variables;
+        let rigids = (vars.rigid_vars.iter())
+            // For our purposes, in the let constraint, able vars are treated like rigids.
+            .chain(vars.able_vars.iter())
+            .copied();
+        let flex = vars.flex_vars.iter().copied();
+        constraint = constraints.let_constraint(
+            rigids,
+            flex,
+            [(*member_name, Loc::at_zero(member_data.signature.clone()))],
+            Constraint::True,
+            constraint,
+        );
+    }
+
+    // The module constraint should always save the environment at the end.
+    debug_assert!(constraints.contains_save_the_environment(&constraint));
+
+    constraint
 }
 
 #[derive(Debug, Clone)]

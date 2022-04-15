@@ -61,23 +61,41 @@ fn num_rem() {
 
 #[cfg(not(feature = "wasm"))]
 #[test]
-fn num_floor_division_success() {
-    expect_success("Num.divFloor 4 3", "Ok 1 : Result (Int *) [ DivByZero ]*");
+fn num_floor_division() {
+    expect_success("Num.divFloor 4 3", "1 : Int *");
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
-fn num_floor_division_divby_zero() {
+fn num_floor_checked_division_success() {
     expect_success(
-        "Num.divFloor 4 0",
+        "Num.divFloorChecked 4 3",
+        "Ok 1 : Result (Int *) [ DivByZero ]*",
+    );
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn num_floor_checked_division_divby_zero() {
+    expect_success(
+        "Num.divFloorChecked 4 0",
         "Err DivByZero : Result (Int *) [ DivByZero ]*",
     );
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
-fn num_ceil_division_success() {
-    expect_success("Num.divCeil 4 3", "Ok 2 : Result (Int *) [ DivByZero ]*")
+fn num_ceil_division() {
+    expect_success("Num.divCeil 4 3", "2 : Int *")
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn num_ceil_checked_division_success() {
+    expect_success(
+        "Num.divCeilChecked 4 3",
+        "Ok 2 : Result (Int *) [ DivByZero ]*",
+    )
 }
 
 #[test]
@@ -1101,5 +1119,22 @@ fn issue_2582_specialize_result_value() {
     expect_success(
         r#"\x, list -> if x > 0 then List.first list else Ok """#,
         r"<function> : Num *, List Str -> Result Str [ ListWasEmpty ]*",
+    )
+}
+
+#[test]
+#[cfg(not(feature = "wasm"))]
+fn issue_2818() {
+    expect_success(
+        indoc!(
+            r#"
+            f : {} -> List Str
+            f = \_ ->
+              x = []
+              x
+            f
+            "#
+        ),
+        r"<function> : {} -> List Str",
     )
 }

@@ -1,4 +1,3 @@
-use crate::abilities::AbilitiesStore;
 use crate::annotation::freshen_opaque_def;
 use crate::env::Env;
 use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
@@ -157,7 +156,6 @@ pub fn canonicalize_def_header_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    abilities_store: &AbilitiesStore,
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
     region: Region,
@@ -172,7 +170,6 @@ pub fn canonicalize_def_header_pattern<'a>(
             &env.exposed_ident_ids,
             &mut env.ident_ids,
             region,
-            abilities_store,
         ) {
             Ok((symbol, shadowing_ability_member)) => {
                 output.references.bound_symbols.insert(symbol);

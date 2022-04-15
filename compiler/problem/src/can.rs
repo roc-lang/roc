@@ -119,6 +119,13 @@ pub enum Problem {
         ability: Symbol,
         region: Region,
     },
+    AbilityMemberMultipleBoundVars {
+        member: Symbol,
+        ability: Symbol,
+        span_has_clauses: Region,
+        bound_var_names: Vec<Lowercase>,
+    },
+    // TODO(abilities): remove me when ability hierarchies are supported
     AbilityMemberBindsExternalAbility {
         member: Symbol,
         ability: Symbol,

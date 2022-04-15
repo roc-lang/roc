@@ -6,6 +6,7 @@ use roc_build::{
 use roc_builtins::bitcode;
 use roc_load::LoadingProblem;
 use roc_mono::ir::OptLevel;
+use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -68,6 +69,8 @@ pub fn build_file<'a>(
         src_dir.as_path(),
         subs_by_module,
         target_info,
+        // TODO: expose this from CLI?
+        RenderTarget::ColorTerminal,
     )?;
 
     use target_lexicon::Architecture;
@@ -242,8 +245,11 @@ pub fn build_file<'a>(
     let link_start = SystemTime::now();
     let outcome = if surgically_link {
         roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path)
-            .map_err(|_| {
-                todo!("gracefully handle failing to surgically link");
+            .map_err(|err| {
+                todo!(
+                    "gracefully handle failing to surgically link with error: {:?}",
+                    err
+                );
             })?;
         BuildOutcome::NoProblems
     } else if matches!(link_type, LinkType::None) {
@@ -374,6 +380,8 @@ pub fn check_file(
         src_dir.as_path(),
         subs_by_module,
         target_info,
+        // TODO: expose this from CLI?
+        RenderTarget::ColorTerminal,
     )?;
 
     let buf = &mut String::with_capacity(1024);

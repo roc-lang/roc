@@ -1,6 +1,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-use crate::types::{name_type_var, AliasKind, ErrorType, Problem, RecordField, TypeExt};
+use crate::types::{
+    name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt,
+};
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
@@ -754,7 +757,9 @@ impl<'a> fmt::Debug for SubsFmtContent<'a> {
 fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt::Result {
     match this {
         Content::FlexVar(name) => write!(f, "Flex({:?})", name),
+        Content::FlexAbleVar(name, symbol) => write!(f, "FlexAble({:?}, {:?})", name, symbol),
         Content::RigidVar(name) => write!(f, "Rigid({:?})", name),
+        Content::RigidAbleVar(name, symbol) => write!(f, "RigidAble({:?}, {:?})", name, symbol),
         Content::RecursionVar {
             structure,
             opt_name,
@@ -794,7 +799,19 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
         }
         FlatType::Func(arguments, lambda_set, result) => {
             let slice = subs.get_subs_slice(*arguments);
-            write!(f, "Func({:?}, {:?}, {:?})", slice, lambda_set, result)
+            write!(f, "Func([")?;
+            for var in slice {
+                let content = subs.get_content_without_compacting(*var);
+                write!(f, "<{:?}>{:?},", *var, SubsFmtContent(content, subs))?;
+            }
+            let result_content = subs.get_content_without_compacting(*result);
+            write!(
+                f,
+                "], {:?}, <{:?}>{:?})",
+                lambda_set,
+                *result,
+                SubsFmtContent(result_content, subs)
+            )
         }
         FlatType::Record(fields, ext) => {
             write!(f, "{{ ")?;
@@ -1737,6 +1754,14 @@ impl Subs {
         self.set(var, desc);
     }
 
+    pub fn rigid_able_var(&mut self, var: Variable, name: Lowercase, ability: Symbol) {
+        let name_index = SubsIndex::push_new(&mut self.field_names, name);
+        let content = Content::RigidAbleVar(name_index, ability);
+        let desc = Descriptor::from(content);
+
+        self.set(var, desc);
+    }
+
     /// Unions two keys without the possibility of failure.
     pub fn union(&mut self, left: Variable, right: Variable, desc: Descriptor) {
         let l_root = self.utable.inlined_get_root_key(left);
@@ -2118,6 +2143,12 @@ pub enum Content {
     FlexVar(Option<SubsIndex<Lowercase>>),
     /// name given in a user-written annotation
     RigidVar(SubsIndex<Lowercase>),
+    /// Like a [Self::FlexVar], but is also bound to an ability.
+    /// This can only happen when unified with a [Self::RigidAbleVar].
+    FlexAbleVar(Option<SubsIndex<Lowercase>>, Symbol),
+    /// Like a [Self::RigidVar], but is also bound to an ability.
+    /// For example, "a has Hash".
+    RigidAbleVar(SubsIndex<Lowercase>, Symbol),
     /// name given to a recursion variable
     RecursionVar {
         structure: Variable,
@@ -2713,11 +2744,11 @@ impl RecordFields {
         &'a self,
         subs: &'a Subs,
         ext: Variable,
-    ) -> impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a {
-        let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext)
-            .expect("Something weird ended up in a record type");
+    ) -> Result<impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a, RecordFieldsError>
+    {
+        let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext)?;
 
-        it
+        Ok(it)
     }
 
     #[inline(always)]
@@ -2838,7 +2869,12 @@ fn occurs(
         Err((root_var, vec![]))
     } else {
         match subs.get_content_without_compacting(root_var) {
-            FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => Ok(()),
+            FlexVar(_)
+            | RigidVar(_)
+            | FlexAbleVar(_, _)
+            | RigidAbleVar(_, _)
+            | RecursionVar { .. }
+            | Error => Ok(()),
 
             Structure(flat_type) => {
                 let mut new_seen = seen.to_owned();
@@ -2966,7 +3002,12 @@ fn explicit_substitute(
             to
         } else {
             match subs.get(in_var).content {
-                FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => in_var,
+                FlexVar(_)
+                | RigidVar(_)
+                | FlexAbleVar(_, _)
+                | RigidAbleVar(_, _)
+                | RecursionVar { .. }
+                | Error => in_var,
 
                 Structure(flat_type) => {
                     match flat_type {
@@ -3134,9 +3175,9 @@ fn get_var_names(
         subs.set_mark(var, Mark::GET_VAR_NAMES);
 
         match desc.content {
-            Error | FlexVar(None) => taken_names,
+            Error | FlexVar(None) | FlexAbleVar(None, _) => taken_names,
 
-            FlexVar(Some(name_index)) => add_name(
+            FlexVar(Some(name_index)) | FlexAbleVar(Some(name_index), _) => add_name(
                 subs,
                 0,
                 name_index,
@@ -3163,7 +3204,9 @@ fn get_var_names(
                 None => taken_names,
             },
 
-            RigidVar(name_index) => add_name(subs, 0, name_index, var, RigidVar, taken_names),
+            RigidVar(name_index) | RigidAbleVar(name_index, _) => {
+                add_name(subs, 0, name_index, var, RigidVar, taken_names)
+            }
 
             Alias(_, args, _, _) => args.into_iter().fold(taken_names, |answer, arg_var| {
                 get_var_names(subs, subs[arg_var], answer)
@@ -3329,11 +3372,6 @@ fn content_to_err_type(
     match content {
         Structure(flat_type) => flat_type_to_err_type(subs, state, flat_type),
 
-        FlexVar(Some(name_index)) => {
-            let name = subs.field_names[name_index.index as usize].clone();
-            ErrorType::FlexVar(name)
-        }
-
         FlexVar(opt_name) => {
             let name = match opt_name {
                 Some(name_index) => subs.field_names[name_index.index as usize].clone(),
@@ -3354,6 +3392,28 @@ fn content_to_err_type(
         RigidVar(name_index) => {
             let name = subs.field_names[name_index.index as usize].clone();
             ErrorType::RigidVar(name)
+        }
+
+        FlexAbleVar(opt_name, ability) => {
+            let name = match opt_name {
+                Some(name_index) => subs.field_names[name_index.index as usize].clone(),
+                None => {
+                    // set the name so when this variable occurs elsewhere in the type it gets the same name
+                    let name = get_fresh_var_name(state);
+                    let name_index = SubsIndex::push_new(&mut subs.field_names, name.clone());
+
+                    subs.set_content(var, FlexVar(Some(name_index)));
+
+                    name
+                }
+            };
+
+            ErrorType::FlexAbleVar(name, ability)
+        }
+
+        RigidAbleVar(name_index, ability) => {
+            let name = subs.field_names[name_index.index as usize].clone();
+            ErrorType::RigidAbleVar(name, ability)
         }
 
         RecursionVar { opt_name, .. } => {
@@ -3628,7 +3688,7 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
             use FlatType::*;
 
             match &desc.content {
-                FlexVar(_) | RigidVar(_) | Error => (),
+                FlexVar(_) | RigidVar(_) | FlexAbleVar(_, _) | RigidAbleVar(_, _) | Error => (),
 
                 RecursionVar { structure, .. } => {
                     stack.push(*structure);
@@ -3857,6 +3917,8 @@ impl StorageSubs {
         match content {
             FlexVar(opt_name) => FlexVar(*opt_name),
             RigidVar(name) => RigidVar(*name),
+            FlexAbleVar(opt_name, ability) => FlexAbleVar(*opt_name, *ability),
+            RigidAbleVar(name, ability) => RigidAbleVar(*name, *ability),
             RecursionVar {
                 structure,
                 opt_name,
@@ -4253,6 +4315,29 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
             copy
         }
 
+        FlexAbleVar(opt_name_index, ability) => {
+            let new_name_index = opt_name_index.map(|name_index| {
+                let name = env.source.field_names[name_index.index as usize].clone();
+                SubsIndex::push_new(&mut env.target.field_names, name)
+            });
+
+            let content = FlexAbleVar(new_name_index, ability);
+            env.target.set_content(copy, content);
+
+            copy
+        }
+
+        RigidAbleVar(name_index, ability) => {
+            let name = env.source.field_names[name_index.index as usize].clone();
+            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+            env.target.set(
+                copy,
+                make_descriptor(FlexAbleVar(Some(new_name_index), ability)),
+            );
+
+            copy
+        }
+
         Alias(symbol, arguments, real_type_var, kind) => {
             let new_variables =
                 SubsSlice::reserve_into_subs(env.target, arguments.all_variables_len as _);
@@ -4312,6 +4397,8 @@ pub struct CopiedImport {
     pub variable: Variable,
     pub flex: Vec<Variable>,
     pub rigid: Vec<Variable>,
+    pub flex_able: Vec<Variable>,
+    pub rigid_able: Vec<Variable>,
     pub translations: Vec<(Variable, Variable)>,
     pub registered: Vec<Variable>,
 }
@@ -4322,6 +4409,8 @@ struct CopyImportEnv<'a> {
     target: &'a mut Subs,
     flex: Vec<Variable>,
     rigid: Vec<Variable>,
+    flex_able: Vec<Variable>,
+    rigid_able: Vec<Variable>,
     translations: Vec<(Variable, Variable)>,
     registered: Vec<Variable>,
 }
@@ -4343,6 +4432,8 @@ pub fn copy_import_to(
             target,
             flex: Vec::new(),
             rigid: Vec::new(),
+            flex_able: Vec::new(),
+            rigid_able: Vec::new(),
             translations: Vec::new(),
             registered: Vec::new(),
         };
@@ -4354,6 +4445,8 @@ pub fn copy_import_to(
             source,
             flex,
             rigid,
+            flex_able,
+            rigid_able,
             translations,
             registered,
             target: _,
@@ -4376,6 +4469,8 @@ pub fn copy_import_to(
             variable: copy,
             flex,
             rigid,
+            flex_able,
+            rigid_able,
             translations,
             registered,
         }
@@ -4393,7 +4488,10 @@ pub fn copy_import_to(
 /// standard variables
 fn is_registered(content: &Content) -> bool {
     match content {
-        Content::FlexVar(_) | Content::RigidVar(_) => false,
+        Content::FlexVar(_)
+        | Content::RigidVar(_)
+        | Content::FlexAbleVar(..)
+        | Content::RigidAbleVar(..) => false,
         Content::Structure(FlatType::EmptyRecord | FlatType::EmptyTagUnion) => false,
 
         Content::Structure(_)
@@ -4454,6 +4552,13 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
     // We have already marked the variable as copied, so we
     // will not repeat this work or crawl this variable again.
     match desc.content {
+        Structure(Erroneous(_)) => {
+            // Make this into a flex var so that we don't have to copy problems across module
+            // boundaries - the error will be reported locally.
+            env.target.set(copy, make_descriptor(FlexVar(None)));
+
+            copy
+        }
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, arguments) => {
@@ -4484,7 +4589,9 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                     Func(new_arguments, new_closure_var, new_ret_var)
                 }
 
-                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+                Erroneous(_) => internal_error!("I thought this was handled above"),
+
+                same @ EmptyRecord | same @ EmptyTagUnion => same,
 
                 Record(fields, ext_var) => {
                     let record_fields = {
@@ -4631,6 +4738,20 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             copy
         }
 
+        FlexAbleVar(opt_name_index, ability) => {
+            if let Some(name_index) = opt_name_index {
+                let name = env.source.field_names[name_index.index as usize].clone();
+                let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+
+                let content = FlexAbleVar(Some(new_name_index), ability);
+                env.target.set_content(copy, content);
+            }
+
+            env.flex_able.push(copy);
+
+            copy
+        }
+
         Error => {
             // Open question: should this return Error, or a Flex var?
 
@@ -4647,6 +4768,20 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                 .set(copy, make_descriptor(RigidVar(new_name_index)));
 
             env.rigid.push(copy);
+
+            env.translations.push((var, copy));
+
+            copy
+        }
+
+        RigidAbleVar(name_index, ability) => {
+            let name = env.source.field_names[name_index.index as usize].clone();
+            let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
+
+            env.target
+                .set(copy, make_descriptor(RigidAbleVar(new_name_index, ability)));
+
+            env.rigid_able.push(copy);
 
             env.translations.push((var, copy));
 
@@ -4746,7 +4881,7 @@ where
         use Content::*;
         use FlatType::*;
         match content {
-            FlexVar(_) | RigidVar(_) => {}
+            FlexVar(_) | RigidVar(_) | FlexAbleVar(_, _) | RigidAbleVar(_, _) => {}
             RecursionVar {
                 structure,
                 opt_name: _,

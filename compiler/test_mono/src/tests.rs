@@ -101,6 +101,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         src_dir,
         Default::default(),
         TARGET_INFO,
+        roc_reporting::report::RenderTarget::Generic,
     );
 
     let mut loaded = match loaded {
@@ -274,7 +275,7 @@ fn ir_round() {
 #[mono_test]
 fn ir_when_idiv() {
     r#"
-    when 1000 // 10 is
+    when Num.divFloorChecked 1000 10 is
         Ok val -> val
         Err _ -> -1
     "#

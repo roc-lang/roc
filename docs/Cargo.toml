@@ -21,6 +21,7 @@ roc_parse = { path = "../compiler/parse" }
 roc_target = { path = "../compiler/roc_target" }
 roc_collections = { path = "../compiler/collections" }
 roc_highlight = { path = "../highlight"}
+roc_reporting = { path = "../reporting"}
 bumpalo = { version = "3.8.0", features = ["collections"] }
 snafu = { version = "0.6.10", features = ["backtraces"] }
 peg = "0.8.0"

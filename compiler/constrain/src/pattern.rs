@@ -188,9 +188,23 @@ pub fn constrain_pattern(
             // Erroneous patterns don't add any constraints.
         }
 
-        Identifier(symbol) | Shadowed(_, _, symbol)
-        // TODO(abilities): handle linking the member def to the specialization ident
-        | AbilityMemberSpecialization {
+        Identifier(symbol) | Shadowed(_, _, symbol) => {
+            if could_be_a_tag_union(expected.get_type_ref()) {
+                state
+                    .constraints
+                    .push(constraints.is_open_type(expected.get_type_ref().clone()));
+            }
+
+            state.headers.insert(
+                *symbol,
+                Loc {
+                    region,
+                    value: expected.get_type(),
+                },
+            );
+        }
+
+        AbilityMemberSpecialization {
             ident: symbol,
             specializes: _,
         } => {

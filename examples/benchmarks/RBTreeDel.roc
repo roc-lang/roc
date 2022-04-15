@@ -47,7 +47,7 @@ makeMapHelp = \total, n, m ->
             isFrequency =
                 n |> Num.isMultipleOf 4
 
-            key = n1 + ((total - n1) // 5 |> resultWithDefault 0)
+            key = n1 + ((total - n1) // 5)
             t2 = if isFrequency then delete t1 key else t1
 
             makeMapHelp total n1 t2
