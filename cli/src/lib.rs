@@ -40,6 +40,8 @@ pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINK: &str = "roc-linker";
+pub const FLAG_FORCE_LINK: &str = "force-roc-linker";
+pub const FLAG_LEGACY_LINK: &str = "legacy-linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const FLAG_VALGRIND: &str = "valgrind";
 pub const FLAG_CHECK: &str = "check";
@@ -112,7 +114,19 @@ pub fn build_app<'a>() -> App<'a> {
             .arg(
                 Arg::new(FLAG_LINK)
                     .long(FLAG_LINK)
-                    .about("Uses the roc linker instead of the system linker.")
+                    .about("Deprecated in favor of --force-roc-linker and --legacy-linker")
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_FORCE_LINK)
+                    .long(FLAG_FORCE_LINK)
+                    .about("Forces using the roc linker. Useful for trying out the Roc linker on new targets.")
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_LEGACY_LINK)
+                    .long(FLAG_LEGACY_LINK)
+                    .about("Uses the legacy linker when otherwise the roc linker would be used. (Currently, only Linux x64 uses the Roc linker by default.)")
                     .required(false),
             )
             .arg(
@@ -209,7 +223,19 @@ pub fn build_app<'a>() -> App<'a> {
         .arg(
             Arg::new(FLAG_LINK)
                 .long(FLAG_LINK)
-                .about("Uses the roc linker instead of the system linker.")
+                .about("Deprecated in favor of --force-roc-linker and --legacy-linker")
+                .required(false),
+        )
+        .arg(
+            Arg::new(FLAG_FORCE_LINK)
+                .long(FLAG_FORCE_LINK)
+                .about("Forces using the roc linker. Useful for trying out the Roc linker on new targets.")
+                .required(false),
+        )
+        .arg(
+            Arg::new(FLAG_LEGACY_LINK)
+                .long(FLAG_LEGACY_LINK)
+                .about("Uses the legacy linker when otherwise the roc linker would be used. (Currently, only Linux x64 uses the Roc linker by default.)")
                 .required(false),
         )
         .arg(
