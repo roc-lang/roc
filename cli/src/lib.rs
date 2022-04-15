@@ -126,7 +126,9 @@ pub fn build_app<'a>() -> App<'a> {
             .arg(
                 Arg::new(FLAG_PRECOMPILED)
                     .long(FLAG_PRECOMPILED)
-                    .about("Assumes the host has been precompiled and skips recompiling the host.")
+                    .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using a --target other than `--target host`)")
+                    .possible_values(["true", "false"])
+                    .default_value("true")
                     .required(false),
             )
             .arg(
@@ -230,7 +232,9 @@ pub fn build_app<'a>() -> App<'a> {
         .arg(
             Arg::new(FLAG_PRECOMPILED)
                 .long(FLAG_PRECOMPILED)
-                .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using --target other than --target host)")
+                .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using a --target other than `--target host`)")
+                .possible_values(["true", "false"])
+                .default_value("true")
                 .required(false),
         )
         .arg(
@@ -338,9 +342,13 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         roc_linker::supported(&link_type, &triple)
     };
 
-    // When compiling for a different target, we assume a precompiled host.
-    // Otherwise compilation would most likely fail!
-    let precompiled = target != Target::Host || matches.is_present(FLAG_PRECOMPILED);
+    let precompiled = if matches.is_present(FLAG_PRECOMPILED) {
+        matches.value_of(FLAG_PRECOMPILED) == Some("true")
+    } else {
+        // When compiling for a different target, default to assuming a precompiled host.
+        // Otherwise compilation would most likely fail!
+        target != Target::Host
+    };
     let path = Path::new(filename);
 
     // Spawn the root task
