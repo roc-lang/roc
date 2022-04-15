@@ -3,19 +3,40 @@ app "breakout"
     imports [ pf.Game.{ Bounds, Elem, Event } ]
     provides [ program ] { Model } to pf
 
-Model : { height : F32, width : F32, pos : F32 }
+Model : {
+    # Screen height and width
+    height : F32,
+    width : F32,
 
-program = { init, update, render }
+    # Paddle X-coordinate
+    paddleX : F32,
+
+    # Ball coordinates
+    ballX : F32,
+    ballY : F32,
+}
 
 init : Bounds -> Model
-init = \_ -> { width: 1900, height: 1000, pos: 100 }
+init = \{ width, height } ->
+    {
+        # Screen height and width
+        width,
+        height,
+
+        # Paddle X-coordinate
+        paddleX: (width * 0.5),
+
+        # Ball coordinates
+        ballX: (width * 0.5),
+        ballY : (height * 0.5),
+    }
 
 update : Model, Event -> Model
 update = \model, event ->
     when event is
         Resize size -> { model & width: size.width, height: size.height }
         KeyUp _ -> model
-        KeyDown keyCode -> { model & pos: model.pos + 50 }
+        KeyDown keyCode -> { model & paddleX: model.paddleX + 50 }
 
 render : Model -> List Elem
 render = \model ->
@@ -51,13 +72,24 @@ render = \model ->
 
             Rect { left, top, width: blockWidth, height: blockHeight, color }
 
+    ball =
+        color = { r: 0.7, g: 0.3, b: 0.9, a: 1.0 }
+        width = 50
+        height = 50
+        left = model.ballX
+        top = model.ballY
+
+        Rect { left, top, width, height, color }
+
     paddle =
         color = { r: 0.8, g: 0.8, b: 0.8, a: 1.0 }
         width = model.width * 0.25
         height = blockHeight
-        left = (model.width * 0.5) - (width * 0.5) + model.pos
+        left = (model.width * 0.5) - (width * 0.5) + model.paddleX
         top = model.height - (height * 2)
 
         Rect { left, top, width, height, color }
 
-    List.append rects paddle
+    List.concat rects [ paddle, ball ]
+
+program = { init, update, render }
