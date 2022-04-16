@@ -589,7 +589,7 @@ mod test_load {
                 report,
                 indoc!(
                     "
-                    ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
+                    ── UNFINISHED LIST ────────────────────────────────────────────────────── Main ─
 
                     I cannot find the end of this list:
 
@@ -773,7 +773,7 @@ mod test_load {
             err,
             indoc!(
                 r#"
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ──────────────────────────────────────────
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─────────────────────────────────── Main ─
 
                 The unwrapped opaque type Age referenced here:
 
@@ -787,7 +787,7 @@ mod test_load {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ──────────────────────────────────────────
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─────────────────────────────────── Main ─
 
                 The unwrapped opaque type Age referenced here:
 
@@ -801,7 +801,7 @@ mod test_load {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── UNUSED IMPORT ───────────────────────────────────────────────────────────────
+                ── UNUSED IMPORT ──────────────────────────────────────────────────────── Main ─
 
                 Nothing from Age is used in this module.
 

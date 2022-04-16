@@ -41,7 +41,7 @@ mod test_reporting {
         Report {
             title: "".to_string(),
             doc,
-            filename: filename_from_string(r"\code\proj\Main.roc"),
+            filename: filename_from_string(r"/code/proj/Main.roc"),
             severity: Severity::RuntimeError,
         }
     }
@@ -205,7 +205,7 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
-        let filename = filename_from_string(r"\code\proj\Main.roc");
+        let filename = filename_from_string(r"/code/proj/Main.roc");
 
         let mut buf = String::new();
 
@@ -359,7 +359,7 @@ mod test_reporting {
         let src_lines: Vec<&str> = src.split('\n').collect();
         let lines = LineInfo::new(src);
 
-        let filename = filename_from_string(r"\code\proj\Main.roc");
+        let filename = filename_from_string(r"/code/proj/Main.roc");
 
         match infer_expr_help(arena, src) {
             Err(parse_err) => {
@@ -424,7 +424,7 @@ mod test_reporting {
 
         let state = State::new(src.as_bytes());
 
-        let filename = filename_from_string(r"\code\proj\Main.roc");
+        let filename = filename_from_string(r"/code/proj/Main.roc");
         let src_lines: Vec<&str> = src.split('\n').collect();
         let lines = LineInfo::new(src);
 
@@ -618,7 +618,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
+                ── DUPLICATE NAME ─────────────────────────────────────────────────── REPL.roc ─
 
                 The `i` name is first defined here:
 
@@ -655,7 +655,7 @@ mod test_reporting {
             // Booly is called a "variable"
             indoc!(
                 r#"
-                ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
+                ── DUPLICATE NAME ─────────────────────────────────────────────────── REPL.roc ─
 
                 The `Booly` name is first defined here:
 
@@ -807,7 +807,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
 
                 I cannot find a `bar` value
 
@@ -835,7 +835,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
 
                 I cannot find a `true` value
 
@@ -1000,7 +1000,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                <cyan>── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────<reset>
+                <cyan>── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─<reset>
 
                 I cannot find a `theAdmin` value
 
@@ -1783,7 +1783,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
 
                 I cannot find a `foo` value
 
@@ -2240,7 +2240,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
 
                 I cannot find a `ok` value
 
@@ -6173,7 +6173,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
 
                 I cannot find a `bar` value
 
@@ -8858,7 +8858,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
 
                 I cannot find a `UnknownType` value
 
@@ -8872,8 +8872,8 @@ I need all branches in an `if` to have the same type!
                     Box
                     Ok
                 
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
-                
+                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
+
                 I cannot find a `UnknownType` value
                 
                 3│  insertHelper : UnknownType, Type -> Type
@@ -9205,7 +9205,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
+                ── DUPLICATE NAME ─────────────────────────────────────────────────── REPL.roc ─
 
                 The `a` name is first defined here:
 
@@ -9282,8 +9282,8 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
-                
+                ── DUPLICATE NAME ─────────────────────────────────────────────────── REPL.roc ─
+
                 The `Ability` name is first defined here:
 
                 3│  Ability has ab : a -> U64 | a has Ability
