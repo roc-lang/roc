@@ -250,6 +250,12 @@ mod cli_run {
                                 return;
                             }
                         }
+                        "helloCrystal" => {
+                            let script_path = example_file(dir_name, "get-flags.sh");
+                            let script_out = run_cmd(&script_path.into_os_string().into_string().unwrap(), &[], &[]);
+
+                            std::env::set_var("ROC_LINK_FLAGS", script_out.stdout);
+                        }
                         "hello-gui" => {
                             // Since this one requires opening a window, we do `roc build` on it but don't run it.
                             build_example(&file_name, &["--optimize"]);
@@ -295,6 +301,13 @@ mod cli_run {
                             example.expected_ending,
                             example.use_valgrind,
                         );
+                    }
+
+                    match example.executable_filename {
+                        "helloCrystal" => {
+                            std::env::remove_var("ROC_LINK_FLAGS");
+                        }
+                        _ => {}
                     }
                 }
             )*
@@ -354,6 +367,14 @@ mod cli_run {
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
+            use_valgrind: true,
+        },
+        helloCrystal:"hello-world/crystal-platform" => Example {
+            filename: "helloCrystal.roc",
+            executable_filename: "helloCrystal",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"Hello Crystal, meet Roc\n",
             use_valgrind: true,
         },
         helloSwift:"hello-world/swift-platform" => Example {
@@ -719,6 +740,7 @@ mod cli_run {
                 if example_dir_name == "hello-world" {
                     for sub_dir in [
                         "c-platform",
+                        "crystal-platform",
                         "rust-platform",
                         "swift-platform",
                         "web-platform",
