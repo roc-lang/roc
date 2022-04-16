@@ -6844,9 +6844,10 @@ fn specialize_symbol<'a>(
         None => {
             match arg_var {
                 Some(arg_var) if env.is_imported_symbol(original) => {
-                    let raw = layout_cache
-                        .raw_from_var(env.arena, arg_var, env.subs)
-                        .expect("creating layout does not fail");
+                    let raw = match layout_cache.raw_from_var(env.arena, arg_var, env.subs) {
+                        Ok(v) => v,
+                        Err(e) => return_on_layout_error_help!(env, e),
+                    };
 
                     if procs.is_imported_module_thunk(original) {
                         let layout = match raw {
