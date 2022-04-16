@@ -60,6 +60,42 @@ pub fn cycle<'b>(
         .annotate(Annotation::TypeBlock)
 }
 
+pub fn pretty_header(title : &str, path : &PathBuf) -> String
+{
+    let cwd = std::env::current_dir().unwrap();
+    let relative_path = match path.strip_prefix(cwd) {
+        Ok(p) => p,
+        StripPrefixError => &path
+    }.to_str().unwrap();
+
+    let header_width = 80;
+    let title_width = title.len() + 4;
+    let relative_path_width = relative_path.len() + 3;
+    let available_path_width = header_width - title_width - 1;
+
+    // If path is too long to fit in 80 characters with everything else then truncate it
+    let path_width = if relative_path_width <= available_path_width {
+        relative_path_width
+    } else {
+        available_path_width
+    };
+    let path_trim = relative_path_width - path_width;
+    let path = if path_trim > 0 {
+        format!("...{}", &relative_path[(path_trim + 3)..])
+    } else {
+        relative_path.to_string()
+    };
+
+    let header = format!(
+        "── {} {} {} ─",
+        title,
+        "─".repeat(header_width - (title_width + path_width)),
+        path
+    );
+    
+    return header;
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Severity {
     /// This will cause a runtime error if some code get srun
@@ -129,31 +165,7 @@ impl<'b> Report<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
-            let header_width = 80;
-            let title_width = self.title.len() + 4;
-            let full_path = self.filename.to_str().unwrap();
-            let full_path_width = full_path.len() + 3;
-            let available_path_width = header_width - title_width - 1;
-
-            // If path is too long to fit in 80 characters with everything else then truncate it
-            let path_width = if full_path_width <= available_path_width {
-                full_path_width
-            } else {
-                available_path_width
-            };
-            let path_trim = full_path_width - path_width;
-            let path = if path_trim > 0 {
-                format!("...{}", &full_path[(path_trim + 3)..])
-            } else {
-                full_path.to_string()
-            };
-
-            let header = format!(
-                "── {} {} {} ─",
-                self.title,
-                "─".repeat(header_width - (title_width + path_width)),
-                path
-            );
+            let header = crate::report::pretty_header(&self.title, &self.filename);
 
             alloc.stack([alloc.text(header).annotate(Annotation::Header), self.doc])
         }
