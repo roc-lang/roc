@@ -60,13 +60,14 @@ pub fn cycle<'b>(
         .annotate(Annotation::TypeBlock)
 }
 
-pub fn pretty_header(title : &str, path : &PathBuf) -> String
-{
+pub fn pretty_header(title: &str, path: &std::path::Path) -> String {
     let cwd = std::env::current_dir().unwrap();
     let relative_path = match path.strip_prefix(cwd) {
         Ok(p) => p,
-        StripPrefixError => &path
-    }.to_str().unwrap();
+        _ => path,
+    }
+    .to_str()
+    .unwrap();
 
     let header_width = 80;
     let title_width = title.len() + 4;
@@ -92,8 +93,8 @@ pub fn pretty_header(title : &str, path : &PathBuf) -> String
         "─".repeat(header_width - (title_width + path_width)),
         path
     );
-    
-    return header;
+
+    header
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
