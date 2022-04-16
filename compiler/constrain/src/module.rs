@@ -64,17 +64,8 @@ impl ExposedForModule {
         let mut imported_values = Vec::new();
 
         for symbol in it {
-            // Today, builtins are not actually imported,
-            // but generated in each module that uses them
-            //
-            // This will change when we write builtins in roc
-            if symbol.is_builtin() {
-                continue;
-            }
-
-            if let Some(ExposedModuleTypes::Valid { .. }) =
-                exposed_by_module.exposed.get(&symbol.module_id())
-            {
+            let module = exposed_by_module.exposed.get(&symbol.module_id());
+            if let Some(ExposedModuleTypes::Valid { .. }) = module {
                 imported_values.push(*symbol);
             } else {
                 continue;
