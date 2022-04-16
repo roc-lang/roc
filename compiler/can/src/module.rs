@@ -534,17 +534,6 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
 
-            // TODO this loops over all symbols in the module, we can speed it up by having an
-            // iterator over all builtin symbols
-            for symbol in referenced_values.iter() {
-                if symbol.is_builtin() {
-                    // this can fail when the symbol is for builtin types, or has no implementation yet
-                    if let Some(def) = crate::builtins::builtin_defs_map(*symbol, var_store) {
-                        declarations.push(Declaration::Builtin(def));
-                    }
-                }
-            }
-
             let output = ModuleOutput {
                 scope,
                 aliases,
