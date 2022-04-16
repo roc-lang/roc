@@ -9190,16 +9190,6 @@ I need all branches in an `if` to have the same type!
 
                 3│  Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
                                                                         ^^^^^^^^^
-
-                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
-
-                `hash` is not used anywhere in your code.
-
-                3│  Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
-                             ^^^^
-
-                If you didn't intend on using `hash` then remove it so future readers of
-                your code don't wonder why it is there.
                 "#
             ),
         )
@@ -9294,27 +9284,27 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
-
+                
                 The `Ability` name is first defined here:
-
-                1│  Ability has ab : a -> Num.U64 | a has Ability
-                    ^^^^^^^
-
+                
+                4│      Ability has ab : a -> Num.U64 | a has Ability
+                        ^^^^^^^
+                
                 But then it's defined a second time here:
-
-                3│  Ability has ab1 : a -> Num.U64 | a has Ability
-                    ^^^^^^^
-
+                
+                6│      Ability has ab1 : a -> Num.U64 | a has Ability
+                        ^^^^^^^
+                
                 Since these abilities have the same name, it's easy to use the wrong
                 one on accident. Give one of them a new name.
-
+                
                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
-
+                
                 `ab` is not used anywhere in your code.
-
-                1│  Ability has ab : a -> Num.U64 | a has Ability
-                                ^^
-
+                
+                4│      Ability has ab : a -> Num.U64 | a has Ability
+                                    ^^
+                
                 If you didn't intend on using `ab` then remove it so future readers of
                 your code don't wonder why it is there.
                 "#
@@ -9393,6 +9383,7 @@ I need all branches in an `if` to have the same type!
 
                 4│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
                                                       ^^^^^^^^
+
                 Currently, ability members can only bind variables to the ability they
                 are a part of.
 
@@ -9430,7 +9421,7 @@ I need all branches in an `if` to have the same type!
                 bound to the `Eq`` ability:`
 
                 3│  Eq has eq : a, b -> Bool.Bool | a has Eq, b has Eq
-                                               ^^^^^^^^^^^^^^^^^^
+                                                    ^^^^^^^^^^^^^^^^^^
 
                 Ability members can only bind one type variable to their parent
                 ability. Otherwise, I wouldn't know what type implements an ability by
@@ -9471,7 +9462,7 @@ I need all branches in an `if` to have the same type!
                 A `has` clause is not allowed here:
 
                 5│  f : a -> Num.U64 | a has Hash
-                                   ^^^^^^^^^^
+                                       ^^^^^^^^^^
 
                 `has` clauses can only be specified on the top-level type annotation of
                 an ability member.
