@@ -22,7 +22,7 @@ pub struct Scope {
     pub aliases: SendMap<Symbol, Alias>,
 
     /// The abilities currently in scope, and their implementors.
-    pub abilities: SendMap<Symbol, Region>,
+    pub abilities_store: AbilitiesStore,
 
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
@@ -68,7 +68,7 @@ impl Scope {
             symbols: SendMap::default(),
             aliases,
             // TODO(abilities): default abilities in scope
-            abilities: SendMap::default(),
+            abilities_store: AbilitiesStore::default(),
         }
     }
 
@@ -251,7 +251,6 @@ impl Scope {
         exposed_ident_ids: &IdentIds,
         all_ident_ids: &mut IdentIds,
         region: Region,
-        abilities_store: &AbilitiesStore,
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
         match self.idents.get(&ident) {
             Some(&(original_symbol, original_region)) => {
@@ -260,7 +259,9 @@ impl Scope {
 
                 self.symbols.insert(shadow_symbol, region);
 
-                if abilities_store.is_ability_member_name(original_symbol) {
+                if self.abilities_store.is_ability_member_name(original_symbol) {
+                    self.abilities_store
+                        .register_specializing_symbol(shadow_symbol, original_symbol);
                     // Add a symbol for the shadow, but don't re-associate the member name.
                     Ok((shadow_symbol, Some(original_symbol)))
                 } else {

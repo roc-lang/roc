@@ -25,6 +25,7 @@ mod test_load {
     use roc_problem::can::Problem;
     use roc_region::all::LineInfo;
     use roc_reporting::report::can_problem;
+    use roc_reporting::report::RenderTarget;
     use roc_reporting::report::RocDocAllocator;
     use roc_target::TargetInfo;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
@@ -41,7 +42,7 @@ mod test_load {
     ) -> Result<LoadedModule, LoadingProblem<'a>> {
         use LoadResult::*;
 
-        let load_start = LoadStart::from_path(arena, filename)?;
+        let load_start = LoadStart::from_path(arena, filename, RenderTarget::Generic)?;
 
         match roc_load_internal::file::load(
             arena,
@@ -51,6 +52,7 @@ mod test_load {
             Phase::SolveTypes,
             target_info,
             Default::default(), // these tests will re-compile the builtins
+            RenderTarget::Generic,
         )? {
             Monomorphized(_) => unreachable!(""),
             TypeChecked(module) => Ok(module),
@@ -88,8 +90,6 @@ mod test_load {
     }
 
     fn multiple_modules(files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
-        use roc_load_internal::file::LoadingProblem;
-
         let arena = Bump::new();
         let arena = &arena;
 
@@ -589,18 +589,18 @@ mod test_load {
                 report,
                 indoc!(
                     "
-            \u{1b}[36m── UNFINISHED LIST ─────────────────────────────────────────────────────────────\u{1b}[0m
+                    ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
 
-            I cannot find the end of this list:
+                    I cannot find the end of this list:
 
-            \u{1b}[36m3\u{1b}[0m\u{1b}[36m│\u{1b}[0m  \u{1b}[37mmain = [\u{1b}[0m
-                        \u{1b}[31m^\u{1b}[0m
+                    3│  main = [
+                                ^
 
-            You could change it to something like \u{1b}[33m[ 1, 2, 3 ]\u{1b}[0m or even just \u{1b}[33m[]\u{1b}[0m.
-            Anything where there is an open and a close square bracket, and where
-            the elements of the list are separated by commas.
+                    You could change it to something like [ 1, 2, 3 ] or even just [].
+                    Anything where there is an open and a close square bracket, and where
+                    the elements of the list are separated by commas.
 
-            \u{1b}[4mNote\u{1b}[0m: I may be confused by indentation"
+                    Note: I may be confused by indentation"
                 )
             ),
             Ok(_) => unreachable!("we expect failure here"),
@@ -769,8 +769,6 @@ mod test_load {
         ];
 
         let err = multiple_modules(modules).unwrap_err();
-        let err = strip_ansi_escapes::strip(err).unwrap();
-        let err = String::from_utf8(err).unwrap();
         assert_eq!(
             err,
             indoc!(
@@ -816,5 +814,66 @@ mod test_load {
             "\n{}",
             err
         );
+    }
+
+    #[test]
+    fn issue_2863_module_type_does_not_exist() {
+        let modules = vec![
+            (
+                "platform/Package-Config.roc",
+                indoc!(
+                    r#"
+                    platform "testplatform"
+                        requires {} { main : Str }
+                        exposes []
+                        packages {}
+                        imports []
+                        provides [ mainForHost ]
+
+                    mainForHost : Str
+                    mainForHost = main
+                    "#
+                ),
+            ),
+            (
+                "Main",
+                indoc!(
+                    r#"
+                    app "test"
+                        packages { pf: "platform" }
+                        provides [ main ] to pf
+
+                    main : DoesNotExist
+                    main = 1
+                    "#
+                ),
+            ),
+        ];
+
+        match multiple_modules(modules) {
+            Err(report) => {
+                assert_eq!(
+                    report,
+                    indoc!(
+                        "
+                        ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+
+                        I cannot find a `DoesNotExist` value
+
+                        5│  main : DoesNotExist
+                                   ^^^^^^^^^^^^
+
+                        Did you mean one of these?
+
+                            Dict
+                            Result
+                            List
+                            Nat
+                        "
+                    )
+                )
+            }
+            Ok(_) => unreachable!("we expect failure here"),
+        }
     }
 }

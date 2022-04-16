@@ -8,17 +8,20 @@ mod helpers;
 
 #[cfg(test)]
 mod test_reporting {
-    use crate::helpers::test_home;
-    use crate::helpers::{can_expr, infer_expr, CanExprOut, ParseErrOut};
+    use crate::helpers::{can_expr, infer_expr, test_home, CanExprOut, ParseErrOut};
     use bumpalo::Bump;
     use indoc::indoc;
+    use roc_can::abilities::AbilitiesStore;
+    use roc_can::def::Declaration;
+    use roc_can::pattern::Pattern;
+    use roc_load::{self, LoadedModule, LoadingProblem};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_mono::ir::{Procs, Stmt, UpdateModeIds};
     use roc_mono::layout::LayoutCache;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
-        can_problem, mono_problem, parse_problem, type_problem, Report, Severity, ANSI_STYLE_CODES,
-        DEFAULT_PALETTE,
+        can_problem, mono_problem, parse_problem, type_problem, RenderTarget, Report, Severity,
+        ANSI_STYLE_CODES, DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
@@ -40,6 +43,214 @@ mod test_reporting {
             doc,
             filename: filename_from_string(r"\code\proj\Main.roc"),
             severity: Severity::RuntimeError,
+        }
+    }
+
+    fn promote_expr_to_module(src: &str) -> String {
+        let mut buffer =
+            String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
+
+        for line in src.lines() {
+            // indent the body!
+            buffer.push_str("    ");
+            buffer.push_str(line);
+            buffer.push('\n');
+        }
+
+        buffer
+    }
+
+    fn run_load_and_infer<'a>(
+        arena: &'a Bump,
+        src: &'a str,
+    ) -> (String, Result<LoadedModule, LoadingProblem<'a>>) {
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        let module_src = if src.starts_with("app") {
+            // this is already a module
+            src.to_string()
+        } else {
+            // this is an expression, promote it to a module
+            promote_expr_to_module(src)
+        };
+
+        let exposed_types = Default::default();
+        let loaded = {
+            let dir = tempdir().unwrap();
+            let filename = PathBuf::from("Test.roc");
+            let file_path = dir.path().join(filename);
+            let full_file_path = file_path.clone();
+            let mut file = File::create(file_path).unwrap();
+            writeln!(file, "{}", module_src).unwrap();
+            let result = roc_load::load_and_typecheck(
+                arena,
+                full_file_path,
+                dir.path(),
+                exposed_types,
+                roc_target::TargetInfo::default_x86_64(),
+                RenderTarget::Generic,
+            );
+            drop(file);
+
+            dir.close().unwrap();
+
+            result
+        };
+
+        (module_src, loaded)
+    }
+
+    fn infer_expr_help_new<'a>(
+        arena: &'a Bump,
+        expr_src: &'a str,
+    ) -> Result<
+        (
+            String,
+            Vec<solve::TypeError>,
+            Vec<roc_problem::can::Problem>,
+            Vec<roc_mono::ir::MonoProblem>,
+            ModuleId,
+            Interns,
+        ),
+        LoadingProblem<'a>,
+    > {
+        let (module_src, result) = run_load_and_infer(arena, expr_src);
+        let LoadedModule {
+            module_id: home,
+            mut can_problems,
+            mut type_problems,
+            interns,
+            mut solved,
+            exposed_to_host,
+            mut declarations_by_id,
+            ..
+        } = result?;
+
+        let can_problems = can_problems.remove(&home).unwrap_or_default();
+        let type_problems = type_problems.remove(&home).unwrap_or_default();
+
+        let subs = solved.inner_mut();
+
+        for var in exposed_to_host.values() {
+            name_all_type_vars(*var, subs);
+        }
+
+        let mut mono_problems = Vec::new();
+
+        // MONO
+
+        if type_problems.is_empty() && can_problems.is_empty() {
+            let arena = Bump::new();
+
+            assert!(exposed_to_host.len() == 1);
+            let (sym, _var) = exposed_to_host.into_iter().next().unwrap();
+
+            let home_decls = declarations_by_id.remove(&home).unwrap();
+            let (loc_expr, var) = home_decls
+                .into_iter()
+                .find_map(|decl| match decl {
+                    Declaration::Declare(def) => match def.loc_pattern.value {
+                        Pattern::Identifier(s) if s == sym => Some((def.loc_expr, def.expr_var)),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .expect("No expression to monomorphize found!");
+
+            // Compile and add all the Procs before adding main
+            let mut procs = Procs::new_in(&arena);
+            let mut ident_ids = interns.all_ident_ids.get(&home).unwrap().clone();
+            let mut update_mode_ids = UpdateModeIds::new();
+
+            // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
+            let target_info = roc_target::TargetInfo::default_x86_64();
+            let mut layout_cache = LayoutCache::new(target_info);
+            let mut mono_env = roc_mono::ir::Env {
+                arena: &arena,
+                subs,
+                problems: &mut mono_problems,
+                home,
+                ident_ids: &mut ident_ids,
+                update_mode_ids: &mut update_mode_ids,
+                target_info,
+                // call_specialization_counter=0 is reserved
+                call_specialization_counter: 1,
+            };
+            let _mono_expr = Stmt::new(
+                &mut mono_env,
+                loc_expr.value,
+                var,
+                &mut procs,
+                &mut layout_cache,
+            );
+        }
+
+        Ok((
+            module_src,
+            type_problems,
+            can_problems,
+            mono_problems,
+            home,
+            interns,
+        ))
+    }
+
+    fn list_reports_new<F>(arena: &Bump, src: &str, finalize_render: F) -> String
+    where
+        F: FnOnce(RocDocBuilder<'_>, &mut String),
+    {
+        use ven_pretty::DocAllocator;
+
+        let filename = filename_from_string(r"\code\proj\Main.roc");
+
+        let mut buf = String::new();
+
+        match infer_expr_help_new(arena, src) {
+            Err(LoadingProblem::FormattedReport(fail)) => fail,
+            Ok((module_src, type_problems, can_problems, mono_problems, home, interns)) => {
+                let lines = LineInfo::new(&module_src);
+                let src_lines: Vec<&str> = module_src.split('\n').collect();
+                let mut reports = Vec::new();
+
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+                for problem in can_problems {
+                    let report = can_problem(&alloc, &lines, filename.clone(), problem.clone());
+                    reports.push(report);
+                }
+
+                for problem in type_problems {
+                    if let Some(report) =
+                        type_problem(&alloc, &lines, filename.clone(), problem.clone())
+                    {
+                        reports.push(report);
+                    }
+                }
+
+                for problem in mono_problems {
+                    let report = mono_problem(&alloc, &lines, filename.clone(), problem.clone());
+                    reports.push(report);
+                }
+
+                let has_reports = !reports.is_empty();
+
+                let doc = alloc
+                    .stack(reports.into_iter().map(|v| v.pretty(&alloc)))
+                    .append(if has_reports {
+                        alloc.line()
+                    } else {
+                        alloc.nil()
+                    });
+
+                finalize_render(doc, &mut buf);
+                buf
+            }
+            Err(other) => {
+                assert!(false, "failed to load: {:?}", other);
+                unreachable!()
+            }
         }
     }
 
@@ -85,12 +296,14 @@ mod test_reporting {
         }
 
         let mut unify_problems = Vec::new();
+        let mut abilities_store = AbilitiesStore::default();
         let (_content, mut subs) = infer_expr(
             subs,
             &mut unify_problems,
             &constraints,
             &constraint,
             &mut solve_aliases,
+            &mut abilities_store,
             var,
         );
 
@@ -296,6 +509,27 @@ mod test_reporting {
         let readable = human_readable(&buf);
 
         assert_eq!(readable, expected_rendering);
+    }
+
+    fn new_report_problem_as(src: &str, expected_rendering: &str) {
+        let arena = Bump::new();
+
+        let finalize_render = |doc: RocDocBuilder<'_>, buf: &mut String| {
+            doc.1
+                .render_raw(70, &mut roc_reporting::report::CiWrite::new(buf))
+                .expect("list_reports")
+        };
+
+        let buf = list_reports_new(&arena, src, finalize_render);
+
+        // convenient to copy-paste the generated message
+        if buf != expected_rendering {
+            for line in buf.split('\n') {
+                println!("                {}", line);
+            }
+        }
+
+        assert_multiline_str_eq!(expected_rendering, buf.as_str());
     }
 
     fn human_readable(str: &str) -> String {
@@ -8688,7 +8922,7 @@ I need all branches in an `if` to have the same type!
 
     #[test]
     fn ability_demands_not_indented_with_first() {
-        report_problem_as(
+        new_report_problem_as(
             indoc!(
                 r#"
                 Eq has
@@ -8705,19 +8939,18 @@ I need all branches in an `if` to have the same type!
                 I was partway through parsing an ability definition, but I got stuck
                 here:
 
-                2│      eq : a, a -> U64 | a has Eq
-                3│          neq : a, a -> U64 | a has Eq
-                            ^
+                5│          eq : a, a -> U64 | a has Eq
+                6│              neq : a, a -> U64 | a has Eq
+                                ^
 
-                I suspect this line is indented too much (by 4 spaces)
-                "#
+                I suspect this line is indented too much (by 4 spaces)"#
             ),
         )
     }
 
     #[test]
     fn ability_demand_value_has_args() {
-        report_problem_as(
+        new_report_problem_as(
             indoc!(
                 r#"
                 Eq has
@@ -8733,12 +8966,11 @@ I need all branches in an `if` to have the same type!
                 I was partway through parsing an ability definition, but I got stuck
                 here:
 
-                2│      eq b c : a, a -> U64 | a has Eq
-                           ^
+                5│          eq b c : a, a -> U64 | a has Eq
+                               ^
 
                 I was expecting to see a : annotating the signature of this value
-                next.
-                "#
+                next."#
             ),
         )
     }
@@ -8904,8 +9136,8 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn bad_type_parameter_in_ability() {
-        report_problem_as(
+    fn ability_bad_type_parameter() {
+        new_report_problem_as(
             indoc!(
                 r#"
                 Hash a b c has
@@ -8920,8 +9152,8 @@ I need all branches in an `if` to have the same type!
 
                 The definition of the `Hash` ability includes type variables:
 
-                1│  Hash a b c has
-                         ^^^^^
+                4│      Hash a b c has
+                             ^^^^^
 
                 Abilities cannot depend on type variables, but their member values
                 can!
@@ -8930,8 +9162,8 @@ I need all branches in an `if` to have the same type!
 
                 `Hash` is not used anywhere in your code.
 
-                1│  Hash a b c has
-                    ^^^^
+                4│      Hash a b c has
+                        ^^^^
 
                 If you didn't intend on using `Hash` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -8942,12 +9174,12 @@ I need all branches in an `if` to have the same type!
 
     #[test]
     fn alias_in_has_clause() {
-        report_problem_as(
+        new_report_problem_as(
             indoc!(
                 r#"
-                Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
+                app "test" provides [ hash ] to "./platform"
 
-                1
+                Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
                 "#
             ),
             indoc!(
@@ -8956,14 +9188,14 @@ I need all branches in an `if` to have the same type!
 
                 The type referenced in this "has" clause is not an ability:
 
-                1│  Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
+                3│  Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
                                                                         ^^^^^^^^^
 
                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
 
                 `hash` is not used anywhere in your code.
 
-                1│  Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
+                3│  Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
                              ^^^^
 
                 If you didn't intend on using `hash` then remove it so future readers of
@@ -8975,12 +9207,12 @@ I need all branches in an `if` to have the same type!
 
     #[test]
     fn shadowed_type_variable_in_has_clause() {
-        report_problem_as(
+        new_report_problem_as(
             indoc!(
                 r#"
-                Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
+                app "test" provides [ ab1 ] to "./platform"
 
-                1
+                Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
                 "#
             ),
             indoc!(
@@ -8989,26 +9221,16 @@ I need all branches in an `if` to have the same type!
 
                 The `a` name is first defined here:
 
-                1│  Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
+                3│  Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
                                             ^^^^^^^^^
 
                 But then it's defined a second time here:
 
-                1│  Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
+                3│  Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
                                                        ^^^^^^^^^
 
                 Since these variables have the same name, it's easy to use the wrong
                 one on accident. Give one of them a new name.
-
-                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
-
-                `ab1` is not used anywhere in your code.
-
-                1│  Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
-                            ^^^
-
-                If you didn't intend on using `ab1` then remove it so future readers of
-                your code don't wonder why it is there.
                 "#
             ),
         )
@@ -9016,7 +9238,7 @@ I need all branches in an `if` to have the same type!
 
     #[test]
     fn alias_using_ability() {
-        report_problem_as(
+        new_report_problem_as(
             indoc!(
                 r#"
                 Ability has ab : a -> {} | a has Ability
@@ -9033,8 +9255,8 @@ I need all branches in an `if` to have the same type!
 
                 The definition of the `Alias` aliases references the ability `Ability`:
 
-                3│  Alias : Ability
-                    ^^^^^
+                6│      Alias : Ability
+                        ^^^^^
 
                 Abilities are not types, but you can add an ability constraint to a
                 type variable `a` by writing
@@ -9047,8 +9269,8 @@ I need all branches in an `if` to have the same type!
 
                 `ab` is not used anywhere in your code.
 
-                1│  Ability has ab : a -> {} | a has Ability
-                                ^^
+                4│      Ability has ab : a -> {} | a has Ability
+                                    ^^
 
                 If you didn't intend on using `ab` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -9059,7 +9281,7 @@ I need all branches in an `if` to have the same type!
 
     #[test]
     fn ability_shadows_ability() {
-        report_problem_as(
+        new_report_problem_as(
             indoc!(
                 r#"
                 Ability has ab : a -> Num.U64 | a has Ability
@@ -9102,12 +9324,12 @@ I need all branches in an `if` to have the same type!
 
     #[test]
     fn ability_member_does_not_bind_ability() {
-        report_problem_as(
+        new_report_problem_as(
             indoc!(
                 r#"
-                Ability has ab : {} -> {}
+                app "test" provides [ ] to "./platform"
 
-                1
+                Ability has ab : {} -> {}
                 "#
             ),
             indoc!(
@@ -9117,7 +9339,7 @@ I need all branches in an `if` to have the same type!
                 The definition of the ability member `ab` does not include a `has` clause
                 binding a type variable to the ability `Ability`:
 
-                1│  Ability has ab : {} -> {}
+                3│  Ability has ab : {} -> {}
                                 ^^
 
                 Ability members must include a `has` clause binding a type variable to
@@ -9131,7 +9353,7 @@ I need all branches in an `if` to have the same type!
 
                 `Ability` is not used anywhere in your code.
 
-                1│  Ability has ab : {} -> {}
+                3│  Ability has ab : {} -> {}
                     ^^^^^^^
 
                 If you didn't intend on using `Ability` then remove it so future readers
@@ -9141,7 +9363,7 @@ I need all branches in an `if` to have the same type!
 
                 `ab` is not used anywhere in your code.
 
-                1│  Ability has ab : {} -> {}
+                3│  Ability has ab : {} -> {}
                                 ^^
 
                 If you didn't intend on using `ab` then remove it so future readers of
@@ -9153,13 +9375,13 @@ I need all branches in an `if` to have the same type!
 
     #[test]
     fn ability_member_binds_extra_ability() {
-        report_problem_as(
+        new_report_problem_as(
             indoc!(
                 r#"
+                app "test" provides [ eq ] to "./platform"
+
                 Eq has eq : a, a -> Bool.Bool | a has Eq
                 Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
-
-                1
                 "#
             ),
             indoc!(
@@ -9169,9 +9391,8 @@ I need all branches in an `if` to have the same type!
                 The definition of the ability member `hash` includes a has clause
                 binding an ability it is not a part of:
 
-                2│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
+                4│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
                                                       ^^^^^^^^
-
                 Currently, ability members can only bind variables to the ability they
                 are a part of.
 
@@ -9179,19 +9400,9 @@ I need all branches in an `if` to have the same type!
 
                 ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
 
-                `eq` is not used anywhere in your code.
-
-                1│  Eq has eq : a, a -> Bool.Bool | a has Eq
-                           ^^
-
-                If you didn't intend on using `eq` then remove it so future readers of
-                your code don't wonder why it is there.
-
-                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
-
                 `hash` is not used anywhere in your code.
 
-                2│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
+                4│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
                              ^^^^
 
                 If you didn't intend on using `hash` then remove it so future readers of
@@ -9202,15 +9413,55 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn has_clause_outside_of_ability() {
-        report_problem_as(
+    fn ability_member_binds_parent_twice() {
+        new_report_problem_as(
             indoc!(
                 r#"
+                app "test" provides [ ] to "./platform"
+
+                Eq has eq : a, b -> Bool.Bool | a has Eq, b has Eq
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ABILITY MEMBER BINDS MULTIPLE VARIABLES ─────────────────────────────────────
+
+                The definition of the ability member `eq` includes multiple variables
+                bound to the `Eq`` ability:`
+
+                3│  Eq has eq : a, b -> Bool.Bool | a has Eq, b has Eq
+                                               ^^^^^^^^^^^^^^^^^^
+
+                Ability members can only bind one type variable to their parent
+                ability. Otherwise, I wouldn't know what type implements an ability by
+                looking at specializations!
+
+                Hint: Did you mean to only bind `a` to `Eq`?
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `eq` is not used anywhere in your code.
+
+                3│  Eq has eq : a, b -> Bool.Bool | a has Eq, b has Eq
+                           ^^
+
+                If you didn't intend on using `eq` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn has_clause_outside_of_ability() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ hash, f ] to "./platform"
+
                 Hash has hash : a -> Num.U64 | a has Hash
 
                 f : a -> Num.U64 | a has Hash
-
-                f
                 "#
             ),
             indoc!(
@@ -9219,21 +9470,327 @@ I need all branches in an `if` to have the same type!
 
                 A `has` clause is not allowed here:
 
-                3│  f : a -> Num.U64 | a has Hash
-                                       ^^^^^^^^^^
+                5│  f : a -> Num.U64 | a has Hash
+                                   ^^^^^^^^^^
 
                 `has` clauses can only be specified on the top-level type annotation of
                 an ability member.
+                "#
+            ),
+        )
+    }
 
-                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+    #[test]
+    fn ability_specialization_with_non_implementing_type() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
 
-                `hash` is not used anywhere in your code.
+                Hash has hash : a -> Num.U64 | a has Hash
 
-                1│  Hash has hash : a -> Num.U64 | a has Hash
-                             ^^^^
+                hash = \{} -> 0u64
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                If you didn't intend on using `hash` then remove it so future readers of
-                your code don't wonder why it is there.
+                Something is off with this specialization of `hash`:
+
+                5│  hash = \{} -> 0u64
+                    ^^^^
+
+                This value is a declared specialization of type:
+
+                    {}a -> U64
+
+                But the type annotation on `hash` says it must match:
+
+                    a -> U64 | a has Hash
+
+                Note: Some types in this specialization don't implement the abilities
+                they are expected to. I found the following missing implementations:
+
+                    {}a does not implement Hash
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_specialization_does_not_match_type() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
+
+                Hash has hash : a -> U64 | a has Hash
+
+                Id := U32
+
+                hash = \$Id n -> n
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with this specialization of `hash`:
+
+                7│  hash = \$Id n -> n
+                    ^^^^
+
+                This value is a declared specialization of type:
+
+                    Id -> U32
+
+                But the type annotation on `hash` says it must match:
+
+                    Id -> U64
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_specialization_is_incomplete() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ eq, le ] to "./platform"
+
+                Eq has
+                    eq : a, a -> Bool | a has Eq
+                    le : a, a -> Bool | a has Eq
+
+                Id := U64
+
+                eq = \$Id m, $Id n -> m == n
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────────────────────────────
+
+                The type `Id` does not fully implement the ability `Eq`. The following
+                specializations are missing:
+
+                A specialization for `le`, which is defined here:
+
+                5│      le : a, a -> Bool | a has Eq
+                        ^^
+
+                Note: `Id` specializes the following members of `Eq`:
+
+                `eq`, specialized here:
+
+                9│  eq = \$Id m, $Id n -> m == n
+                    ^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_specialization_overly_generalized() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                hash = \_ -> 0u64
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This specialization of `hash` is overly general:
+
+                6│  hash = \_ -> 0u64
+                    ^^^^
+
+                This value is a declared specialization of type:
+
+                    a -> U64
+
+                But the type annotation on `hash` says it must match:
+
+                    a -> U64 | a has Hash
+
+                Note: The specialized type is too general, and does not provide a
+                concrete type where a type variable is bound to an ability.
+
+                Specializations can only be made for concrete types. If you have a
+                generic implementation for this value, perhaps you don't need an
+                ability?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_specialization_conflicting_specialization_types() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ eq ] to "./platform"
+
+                Eq has
+                    eq : a, a -> Bool | a has Eq
+
+                You := {}
+                AndI := {}
+
+                eq = \$You {}, $AndI {} -> False
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with this specialization of `eq`:
+
+                9│  eq = \$You {}, $AndI {} -> False
+                    ^^
+
+                This value is a declared specialization of type:
+
+                    You, AndI -> [ False, True ]
+
+                But the type annotation on `eq` says it must match:
+
+                    You, You -> Bool
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_specialization_checked_against_annotation() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ hash ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash : Id -> U32
+                hash = \$Id n -> n
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of this definition:
+
+                8│  hash : Id -> U32
+                9│  hash = \$Id n -> n
+                                     ^
+
+                This `n` value is a:
+
+                    U64
+
+                But the type annotation says it should be:
+
+                    U32
+
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with this specialization of `hash`:
+
+                9│  hash = \$Id n -> n
+                    ^^^^
+
+                This value is a declared specialization of type:
+
+                    Id -> U32
+
+                But the type annotation on `hash` says it must match:
+
+                    Id -> U64
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_specialization_called_with_non_specializing() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ noGoodVeryBadTerrible ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash = \$Id n -> n
+
+                User := {}
+
+                noGoodVeryBadTerrible =
+                    {
+                        nope: hash ($User {}),
+                        notYet: hash (A 1),
+                    }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 1st argument to `hash` is not what I expect:
+
+                15│          notYet: hash (A 1),
+                                           ^^^
+
+                This `A` global tag application has the type:
+
+                    [ A (Num a) ]b
+
+                But `hash` needs the 1st argument to be:
+
+                    a | a has Hash
+
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This expression has a type that does not implement the abilities it's expected to:
+
+                14│          nope: hash ($User {}),
+                                         ^^^^^^^^
+
+                This User opaque wrapping has the type:
+
+                    User
+
+                The ways this expression is used requires that the following types
+                implement the following abilities, which they do not:
+
+                    User does not implement Hash
+
+                The type `User` does not fully implement the ability `Hash`. The following
+                specializations are missing:
+
+                A specialization for `hash`, which is defined here:
+
+                4│      hash : a -> U64 | a has Hash
+                        ^^^^
                 "#
             ),
         )

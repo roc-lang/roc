@@ -15,7 +15,9 @@ use std::path::PathBuf;
 use std::process;
 use std::process::Command;
 use target_lexicon::BinaryFormat;
-use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
+use target_lexicon::{
+    Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
+};
 
 pub mod build;
 mod format;
@@ -38,6 +40,7 @@ pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINK: &str = "roc-linker";
+pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const FLAG_VALGRIND: &str = "valgrind";
 pub const FLAG_CHECK: &str = "check";
@@ -79,7 +82,7 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
                     .about("Choose a different target")
-                .default_value(Target::default().as_str())
+                    .default_value(Target::default().as_str())
                     .possible_values(Target::OPTIONS)
                     .required(false),
             )
@@ -110,13 +113,21 @@ pub fn build_app<'a>() -> App<'a> {
             .arg(
                 Arg::new(FLAG_LINK)
                     .long(FLAG_LINK)
-                    .about("Uses the roc linker instead of the system linker.")
+                    .about("Deprecated in favor of --linker")
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_LINKER)
+                    .long(FLAG_LINKER)
+                    .about("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+                    .possible_values(["surgical", "legacy"])
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_PRECOMPILED)
                     .long(FLAG_PRECOMPILED)
-                    .about("Assumes the host has been precompiled and skips recompiling the host.")
+                    .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using a --target other than `--target host`)")
+                    .possible_values(["true", "false"])
                     .required(false),
             )
             .arg(
@@ -207,13 +218,21 @@ pub fn build_app<'a>() -> App<'a> {
         .arg(
             Arg::new(FLAG_LINK)
                 .long(FLAG_LINK)
-                .about("Uses the roc linker instead of the system linker.")
+                .about("Deprecated in favor of --linker")
+                .required(false),
+        )
+        .arg(
+            Arg::new(FLAG_LINKER)
+                .long(FLAG_LINKER)
+                .about("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+                .possible_values(["surgical", "legacy"])
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_PRECOMPILED)
                 .long(FLAG_PRECOMPILED)
-                .about("Assumes the host has been precompiled and skips recompiling the host.")
+                .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using a --target other than `--target host`)")
+                .possible_values(["true", "false"])
                 .required(false),
         )
         .arg(
@@ -307,16 +326,27 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         (false, true) => LinkType::None,
         (false, false) => LinkType::Executable,
     };
-    let surgically_link = matches.is_present(FLAG_LINK);
-    let precompiled = matches.is_present(FLAG_PRECOMPILED);
 
-    if surgically_link && !roc_linker::supported(&link_type, &triple) {
-        panic!(
-            "Link type, {:?}, with target, {}, not supported by roc linker",
-            link_type, triple
-        );
+    // TODO remove FLAG_LINK from the code base anytime after the end of May 2022
+    if matches.is_present(FLAG_LINK) {
+        eprintln!("ERROR: The --roc-linker flag has been deprecated because the roc linker is now used automatically where it's supported. (Currently that's only x64 Linux.) No need to use --roc-linker anymore, but you can use the --linker flag to switch linkers.");
+        process::exit(1);
     }
 
+    // Use surgical linking when supported, or when explicitly requested with --linker surgical
+    let surgically_link = if matches.is_present(FLAG_LINKER) {
+        matches.value_of(FLAG_LINKER) == Some("surgical")
+    } else {
+        roc_linker::supported(&link_type, &triple)
+    };
+
+    let precompiled = if matches.is_present(FLAG_PRECOMPILED) {
+        matches.value_of(FLAG_PRECOMPILED) == Some("true")
+    } else {
+        // When compiling for a different target, default to assuming a precompiled host.
+        // Otherwise compilation would most likely fail!
+        target != Target::System
+    };
     let path = Path::new(filename);
 
     // Spawn the root task
@@ -507,64 +537,73 @@ fn run_with_wasmer(_wasm_path: &std::path::Path, _args: &[String]) {
     println!("Running wasm files not support");
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Target {
-    Host,
-    X86_32,
-    X86_64,
+    System,
+    Linux32,
+    Linux64,
     Wasm32,
 }
 
 impl Default for Target {
     fn default() -> Self {
-        Target::Host
+        Target::System
     }
 }
 
 impl Target {
     const fn as_str(&self) -> &'static str {
+        use Target::*;
+
         match self {
-            Target::Host => "host",
-            Target::X86_32 => "x86_32",
-            Target::X86_64 => "x86_64",
-            Target::Wasm32 => "wasm32",
+            System => "system",
+            Linux32 => "linux32",
+            Linux64 => "linux64",
+            Wasm32 => "wasm32",
         }
     }
 
     /// NOTE keep up to date!
     const OPTIONS: &'static [&'static str] = &[
-        Target::Host.as_str(),
-        Target::X86_32.as_str(),
-        Target::X86_64.as_str(),
+        Target::System.as_str(),
+        Target::Linux32.as_str(),
+        Target::Linux64.as_str(),
         Target::Wasm32.as_str(),
     ];
 
-    fn to_triple(&self) -> Triple {
-        let mut triple = Triple::unknown();
+    fn to_triple(self) -> Triple {
+        use Target::*;
 
         match self {
-            Target::Host => Triple::host(),
-            Target::X86_32 => {
-                triple.architecture = Architecture::X86_32(X86_32Architecture::I386);
-                triple.binary_format = BinaryFormat::Elf;
-
-                // TODO make this user-specified?
-                triple.operating_system = OperatingSystem::Linux;
-
-                triple
-            }
-            Target::X86_64 => {
-                triple.architecture = Architecture::X86_64;
-                triple.binary_format = BinaryFormat::Elf;
-
-                triple
-            }
-            Target::Wasm32 => {
-                triple.architecture = Architecture::Wasm32;
-                triple.binary_format = BinaryFormat::Wasm;
-
-                triple
-            }
+            System => Triple::host(),
+            Linux32 => Triple {
+                architecture: Architecture::X86_32(X86_32Architecture::I386),
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Linux,
+                environment: Environment::Musl,
+                binary_format: BinaryFormat::Elf,
+            },
+            Linux64 => Triple {
+                architecture: Architecture::X86_64,
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Linux,
+                environment: Environment::Musl,
+                binary_format: BinaryFormat::Elf,
+            },
+            Wasm32 => Triple {
+                architecture: Architecture::Wasm32,
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Unknown,
+                environment: Environment::Unknown,
+                binary_format: BinaryFormat::Wasm,
+            },
         }
+    }
+}
+
+impl From<&Target> for Triple {
+    fn from(target: &Target) -> Self {
+        target.to_triple()
     }
 }
 
@@ -579,9 +618,9 @@ impl std::str::FromStr for Target {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "host" => Ok(Target::Host),
-            "x86_32" => Ok(Target::X86_32),
-            "x86_64" => Ok(Target::X86_64),
+            "system" => Ok(Target::System),
+            "linux32" => Ok(Target::Linux32),
+            "linux64" => Ok(Target::Linux64),
             "wasm32" => Ok(Target::Wasm32),
             _ => Err(()),
         }

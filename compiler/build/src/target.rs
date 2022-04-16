@@ -5,7 +5,7 @@ use inkwell::{
 };
 #[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
-use target_lexicon::{Architecture, OperatingSystem, Triple};
+use target_lexicon::{Architecture, Environment, OperatingSystem, Triple};
 
 pub fn target_triple_str(target: &Triple) -> &'static str {
     // Best guide I've found on how to determine these magic strings:
@@ -60,8 +60,20 @@ pub fn target_zig_str(target: &Triple) -> &'static str {
         Triple {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Linux,
+            environment: Environment::Musl,
+            ..
+        } => "x86_64-linux-musl",
+        Triple {
+            architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Linux,
             ..
         } => "x86_64-linux-gnu",
+        Triple {
+            architecture: Architecture::X86_32(target_lexicon::X86_32Architecture::I386),
+            operating_system: OperatingSystem::Linux,
+            environment: Environment::Musl,
+            ..
+        } => "i386-linux-musl",
         Triple {
             architecture: Architecture::X86_32(target_lexicon::X86_32Architecture::I386),
             operating_system: OperatingSystem::Linux,

@@ -195,6 +195,7 @@ pub struct PartialProc<'a> {
     pub pattern_symbols: &'a [Symbol],
     pub captured_symbols: CapturedSymbols<'a>,
     pub body: roc_can::expr::Expr,
+    pub body_var: Variable,
     pub is_self_recursive: bool,
 }
 
@@ -224,6 +225,7 @@ impl<'a> PartialProc<'a> {
                     pattern_symbols,
                     captured_symbols,
                     body: body.value,
+                    body_var: ret_var,
                     is_self_recursive,
                 }
             }
@@ -240,6 +242,7 @@ impl<'a> PartialProc<'a> {
                     pattern_symbols: pattern_symbols.into_bump_slice(),
                     captured_symbols: CapturedSymbols::None,
                     body: roc_can::expr::Expr::RuntimeError(error.value),
+                    body_var: ret_var,
                     is_self_recursive: false,
                 }
             }
@@ -902,6 +905,7 @@ impl<'a> Procs<'a> {
                                         pattern_symbols,
                                         captured_symbols,
                                         body: body.value,
+                                        body_var: ret_var,
                                         is_self_recursive,
                                     };
 
@@ -939,6 +943,7 @@ impl<'a> Procs<'a> {
                                     pattern_symbols,
                                     captured_symbols,
                                     body: body.value,
+                                    body_var: ret_var,
                                     is_self_recursive,
                                 };
 
@@ -2476,7 +2481,7 @@ fn specialize_external<'a>(
     };
 
     let body = partial_proc.body.clone();
-    let mut specialized_body = from_can(env, fn_var, body, procs, layout_cache);
+    let mut specialized_body = from_can(env, partial_proc.body_var, body, procs, layout_cache);
 
     match specialized {
         SpecializedLayout::FunctionPointerBody {

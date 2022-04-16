@@ -7,6 +7,7 @@ use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
+use roc_reporting::report::RenderTarget;
 use target_lexicon::Triple;
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -57,6 +58,7 @@ fn create_llvm_module<'a>(
         src_dir,
         Default::default(),
         target_info,
+        RenderTarget::ColorTerminal,
     );
 
     let mut loaded = match loaded {

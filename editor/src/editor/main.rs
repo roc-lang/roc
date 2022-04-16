@@ -236,6 +236,8 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                     print_err(&e)
                 } else if let Ok(InputOutcome::Ignored) = input_outcome_res {
                     println!("Input '{}' ignored!", ch);
+                } else {
+                    window.request_redraw()
                 }
             }
             //Keyboard Input
@@ -256,6 +258,8 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                             if let Err(e) = keydown_res {
                                 print_err(&e)
                             }
+
+                            window.request_redraw()
                         }
                     }
                 }

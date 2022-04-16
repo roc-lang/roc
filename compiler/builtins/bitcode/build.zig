@@ -28,12 +28,14 @@ pub fn build(b: *Builder) void {
             // TODO allow for native target for maximum speed
         },
     });
-    const i386_target = makeI386Target();
+    const linux32_target = makeLinux32Target();
+    const linux64_target = makeLinux64Target();
     const wasm32_target = makeWasm32Target();
 
     // LLVM IR
     generateLlvmIrFile(b, mode, host_target, main_path, "ir", "builtins-host");
-    generateLlvmIrFile(b, mode, i386_target, main_path, "ir-i386", "builtins-i386");
+    generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "builtins-i386");
+    generateLlvmIrFile(b, mode, linux64_target, main_path, "ir-x86_64", "builtins-x86_64");
     generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "builtins-wasm32");
 
     // Generate Object Files
@@ -87,10 +89,20 @@ fn generateObjectFile(
     obj_step.dependOn(&obj.step);
 }
 
-fn makeI386Target() CrossTarget {
+fn makeLinux32Target() CrossTarget {
     var target = CrossTarget.parse(.{}) catch unreachable;
 
     target.cpu_arch = std.Target.Cpu.Arch.i386;
+    target.os_tag = std.Target.Os.Tag.linux;
+    target.abi = std.Target.Abi.musl;
+
+    return target;
+}
+
+fn makeLinux64Target() CrossTarget {
+    var target = CrossTarget.parse(.{}) catch unreachable;
+
+    target.cpu_arch = std.Target.Cpu.Arch.x86_64;
     target.os_tag = std.Target.Os.Tag.linux;
     target.abi = std.Target.Abi.musl;
 

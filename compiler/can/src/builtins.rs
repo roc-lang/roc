@@ -197,8 +197,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_TAN => num_tan,
         NUM_DIV_FLOAT => num_div_float,
         NUM_DIV_FLOAT_CHECKED => num_div_float_checked,
-        NUM_DIV_INT => num_div_int,
-        NUM_DIV_INT_CHECKED => num_div_int_checked,
+        NUM_DIV_FLOOR => num_div_floor,
+        NUM_DIV_FLOOR_CHECKED => num_div_floor_checked,
         NUM_DIV_CEIL => num_div_ceil,
         NUM_DIV_CEIL_CHECKED => num_div_ceil_checked,
         NUM_ABS => num_abs,
@@ -4257,13 +4257,13 @@ fn num_div_float_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.div : Int a, Int a -> Int a
-fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Num.divFloor : Int a, Int a -> Int a
+fn num_div_floor(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumDivUnchecked)
 }
 
-/// Num.divChecked : Int a , Int a -> Result (Int a) [ DivByZero ]*
-fn num_div_int_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Num.divFloorChecked : Int a , Int a -> Result (Int a) [ DivByZero ]*
+fn num_div_floor_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();

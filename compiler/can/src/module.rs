@@ -1,3 +1,4 @@
+use crate::abilities::AbilitiesStore;
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
@@ -28,11 +29,13 @@ pub struct Module {
     /// all aliases. `bool` indicates whether it is exposed
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
+    pub abilities_store: AbilitiesStore,
 }
 
 #[derive(Debug, Default)]
 pub struct RigidVariables {
     pub named: MutMap<Variable, Lowercase>,
+    pub able: MutMap<Variable, (Lowercase, Symbol)>,
     pub wildcards: MutSet<Variable>,
 }
 
@@ -302,6 +305,7 @@ pub fn canonicalize_module_defs<'a>(
         if !output.references.has_value_lookup(symbol)
             && !output.references.has_type_lookup(symbol)
             && !exposed_symbols.contains(&symbol)
+            && !scope.abilities_store.is_specialization_name(symbol)
         {
             env.problem(Problem::UnusedDef(symbol, region));
         }
@@ -309,6 +313,12 @@ pub fn canonicalize_module_defs<'a>(
 
     for named in output.introduced_variables.named {
         rigid_variables.named.insert(named.variable, named.name);
+    }
+
+    for able in output.introduced_variables.able {
+        rigid_variables
+            .able
+            .insert(able.variable, (able.name, able.ability));
     }
 
     for var in output.introduced_variables.wildcards {
@@ -487,6 +497,10 @@ pub fn canonicalize_module_defs<'a>(
                 exposed_but_not_defined.remove(&symbol);
 
                 aliases.insert(symbol, alias);
+            }
+
+            for member in scope.abilities_store.root_ability_members().keys() {
+                exposed_but_not_defined.remove(member);
             }
 
             // By this point, all exposed symbols should have been removed from

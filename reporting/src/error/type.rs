@@ -4,7 +4,7 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_solve::solve;
+use roc_solve::solve::{self, IncompleteAbilityImplementation};
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
     AliasKind, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
@@ -118,7 +118,134 @@ pub fn type_problem<'b>(
                 other => panic!("unhandled bad type: {:?}", other),
             }
         }
+        IncompleteAbilityImplementation(incomplete) => {
+            let title = "INCOMPLETE ABILITY IMPLEMENTATION".to_string();
+
+            let doc = report_incomplete_ability(alloc, lines, incomplete);
+
+            report(title, doc, filename)
+        }
+        BadExprMissingAbility(region, category, found, incomplete) => {
+            let note = alloc.stack(vec![
+                alloc.reflow("The ways this expression is used requires that the following types implement the following abilities, which they do not:"),
+                alloc.type_block(alloc.stack(incomplete.iter().map(|incomplete| {
+                    symbol_does_not_implement(alloc, incomplete.typ, incomplete.ability)
+                }))),
+            ]);
+            let snippet = alloc.region(lines.convert_region(region));
+            let mut stack = vec![
+                alloc.text(
+                    "This expression has a type that does not implement the abilities it's expected to:",
+                ),
+                snippet,
+                lone_type(
+                    alloc,
+                    found.clone(),
+                    found,
+                    ExpectationContext::Arbitrary,
+                    add_category(alloc, alloc.text("Right now it's"), &category),
+                    note,
+                ),
+            ];
+            incomplete.into_iter().for_each(|incomplete| {
+                stack.push(report_incomplete_ability(alloc, lines, incomplete))
+            });
+
+            let report = Report {
+                title: "TYPE MISMATCH".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity: Severity::RuntimeError,
+            };
+            Some(report)
+        }
+        BadPatternMissingAbility(region, category, found, incomplete) => {
+            let note = alloc.stack(vec![
+                alloc.reflow("The ways this expression is used requires that the following types implement the following abilities, which they do not:"),
+                alloc.type_block(alloc.stack(incomplete.iter().map(|incomplete| {
+                    symbol_does_not_implement(alloc, incomplete.typ, incomplete.ability)
+                }))),
+            ]);
+            let snippet = alloc.region(lines.convert_region(region));
+            let mut stack = vec![
+                alloc.text(
+                    "This expression has a type does not implement the abilities it's expected to:",
+                ),
+                snippet,
+                lone_type(
+                    alloc,
+                    found.clone(),
+                    found,
+                    ExpectationContext::Arbitrary,
+                    add_pattern_category(alloc, alloc.text("Right now it's"), &category),
+                    note,
+                ),
+            ];
+            incomplete.into_iter().for_each(|incomplete| {
+                stack.push(report_incomplete_ability(alloc, lines, incomplete))
+            });
+
+            let report = Report {
+                title: "TYPE MISMATCH".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity: Severity::RuntimeError,
+            };
+            Some(report)
+        }
     }
+}
+
+fn report_incomplete_ability<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    incomplete: IncompleteAbilityImplementation,
+) -> RocDocBuilder<'a> {
+    let IncompleteAbilityImplementation {
+        typ,
+        ability,
+        specialized_members,
+        missing_members,
+    } = incomplete;
+
+    debug_assert!(!missing_members.is_empty());
+
+    let mut stack = vec![alloc.concat(vec![
+        alloc.reflow("The type "),
+        alloc.symbol_unqualified(typ),
+        alloc.reflow(" does not fully implement the ability "),
+        alloc.symbol_unqualified(ability),
+        alloc.reflow(". The following specializations are missing:"),
+    ])];
+
+    for member in missing_members.into_iter() {
+        stack.push(alloc.concat(vec![
+            alloc.reflow("A specialization for "),
+            alloc.symbol_unqualified(member.value),
+            alloc.reflow(", which is defined here:"),
+        ]));
+        stack.push(alloc.region(lines.convert_region(member.region)));
+    }
+
+    if !specialized_members.is_empty() {
+        stack.push(alloc.concat(vec![
+            alloc.note(""),
+            alloc.symbol_unqualified(typ),
+            alloc.reflow(" specializes the following members of "),
+            alloc.symbol_unqualified(ability),
+            alloc.reflow(":"),
+        ]));
+
+        for spec in specialized_members {
+            stack.push(alloc.concat(vec![
+                alloc.symbol_unqualified(spec.value),
+                alloc.reflow(", specialized here:"),
+            ]));
+            stack.push(alloc.region(lines.convert_region(spec.region)));
+        }
+    }
+
+    alloc.stack(stack)
 }
 
 fn report_shadowing<'b>(
@@ -950,24 +1077,105 @@ fn to_expr_report<'b>(
                 None,
             ),
 
-            Reason::LowLevelOpArg { op, arg_index } => report_mismatch(
-                alloc,
-                lines,
-                filename,
-                &category,
-                found,
-                expected_type,
-                region,
-                Some(expr_region),
-                alloc.text(format!(
-                    "The {} argument to low level operation {:?} has the wrong type:",
+            Reason::InvalidAbilityMemberSpecialization {
+                member_name,
+                def_region: _,
+                unimplemented_abilities,
+            } => {
+                let problem = alloc.concat(vec![
+                    alloc.reflow("Something is off with this specialization of "),
+                    alloc.symbol_unqualified(member_name),
+                    alloc.reflow(":"),
+                ]);
+                let this_is = alloc.reflow("This value is");
+                let instead_of = alloc.concat(vec![
+                    alloc.reflow("But the type annotation on "),
+                    alloc.symbol_unqualified(member_name),
+                    alloc.reflow(" says it must match:"),
+                ]);
+
+                let hint = if unimplemented_abilities.is_empty() {
+                    None
+                } else {
+                    let mut stack = Vec::with_capacity(unimplemented_abilities.len());
+                    for (err_type, ability) in unimplemented_abilities.into_iter() {
+                        stack.push(does_not_implement(alloc, err_type, ability));
+                    }
+
+                    let hint = alloc.stack(vec![
+                        alloc.concat(vec![
+                            alloc.note(""),
+                            alloc.reflow("Some types in this specialization don't implement the abilities they are expected to. I found the following missing implementations:"),
+                        ]),
+                        alloc.type_block(alloc.stack(stack)),
+                    ]);
+
+                    Some(hint)
+                };
+
+                report_mismatch(
+                    alloc,
+                    lines,
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    problem,
+                    this_is,
+                    instead_of,
+                    hint,
+                )
+            }
+
+            Reason::GeneralizedAbilityMemberSpecialization {
+                member_name,
+                def_region: _,
+            } => {
+                let problem = alloc.concat(vec![
+                    alloc.reflow("This specialization of "),
+                    alloc.symbol_unqualified(member_name),
+                    alloc.reflow(" is overly general:"),
+                ]);
+                let this_is = alloc.reflow("This value is");
+                let instead_of = alloc.concat(vec![
+                    alloc.reflow("But the type annotation on "),
+                    alloc.symbol_unqualified(member_name),
+                    alloc.reflow(" says it must match:"),
+                ]);
+
+                let note = alloc.stack(vec![
+                    alloc.concat(vec![
+                        alloc.note(""),
+                        alloc.reflow("The specialized type is too general, and does not provide a concrete type where a type variable is bound to an ability."),
+                    ]),
+                    alloc.reflow("Specializations can only be made for concrete types. If you have a generic implementation for this value, perhaps you don't need an ability?"),
+                ]);
+
+                report_mismatch(
+                    alloc,
+                    lines,
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    problem,
+                    this_is,
+                    instead_of,
+                    Some(note),
+                )
+            }
+
+            Reason::LowLevelOpArg { op, arg_index } => {
+                panic!(
+                    "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
                     arg_index.ordinal(),
                     op
-                )),
-                alloc.text("Here the value is used as a:"),
-                alloc.text("But the lowlevel expects it to be:"),
-                None,
-            ),
+                );
+            }
 
             Reason::ForeignCallArg {
                 foreign_symbol,
@@ -993,6 +1201,30 @@ fn to_expr_report<'b>(
             }
         },
     }
+}
+
+fn does_not_implement<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    err_type: ErrorType,
+    ability: Symbol,
+) -> RocDocBuilder<'a> {
+    alloc.concat(vec![
+        to_doc(alloc, Parens::Unnecessary, err_type).0,
+        alloc.reflow(" does not implement "),
+        alloc.symbol_unqualified(ability),
+    ])
+}
+
+fn symbol_does_not_implement<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    symbol: Symbol,
+    ability: Symbol,
+) -> RocDocBuilder<'a> {
+    alloc.concat(vec![
+        alloc.symbol_unqualified(symbol),
+        alloc.reflow(" does not implement "),
+        alloc.symbol_unqualified(ability),
+    ])
 }
 
 fn count_arguments(tipe: &ErrorType) -> usize {
@@ -1293,6 +1525,10 @@ fn format_category<'b>(
             alloc.concat(vec![this_is, alloc.text(" a default field")]),
             alloc.text(" of type:"),
         ),
+        AbilityMemberSpecialization(_ability_member) => (
+            alloc.concat(vec![this_is, alloc.text(" a declared specialization")]),
+            alloc.text(" of type:"),
+        ),
     }
 }
 
@@ -1538,7 +1774,7 @@ fn to_circular_report<'b>(
                         You will see ∞ for parts of the type that repeat \
                         something already printed out infinitely.",
                     ),
-                    alloc.type_block(to_doc(alloc, Parens::Unnecessary, overall_type)),
+                    alloc.type_block(to_doc(alloc, Parens::Unnecessary, overall_type).0),
                 ]),
             ])
         },
@@ -1639,10 +1875,12 @@ fn to_comparison<'b>(
     expected: ErrorType,
 ) -> Comparison<'b> {
     let diff = to_diff(alloc, Parens::Unnecessary, actual, expected);
+    let actual = type_with_able_vars(alloc, diff.left, diff.left_able);
+    let expected = type_with_able_vars(alloc, diff.right, diff.right_able);
 
     Comparison {
-        actual: alloc.type_block(diff.left),
-        expected: alloc.type_block(diff.right),
+        actual: alloc.type_block(actual),
+        expected: alloc.type_block(expected),
         problems: match diff.status {
             Status::Similar => vec![],
             Status::Different(problems) => problems,
@@ -1695,6 +1933,9 @@ pub struct Diff<T> {
     left: T,
     right: T,
     status: Status,
+    // idea: lift "able" type variables so they are shown at the top of a type.
+    left_able: AbleVariables,
+    right_able: AbleVariables,
 }
 
 fn ext_to_doc<'b>(alloc: &'b RocDocAllocator<'b>, ext: TypeExt) -> Option<RocDocBuilder<'b>> {
@@ -1706,7 +1947,27 @@ fn ext_to_doc<'b>(alloc: &'b RocDocAllocator<'b>, ext: TypeExt) -> Option<RocDoc
     }
 }
 
+type AbleVariables = Vec<(Lowercase, Symbol)>;
+
+#[derive(Default)]
+struct Context {
+    able_variables: AbleVariables,
+}
+
 pub fn to_doc<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    parens: Parens,
+    tipe: ErrorType,
+) -> (RocDocBuilder<'b>, AbleVariables) {
+    let mut ctx = Context::default();
+
+    let doc = to_doc_help(&mut ctx, alloc, parens, tipe);
+
+    (doc, ctx.able_variables)
+}
+
+fn to_doc_help<'b>(
+    ctx: &mut Context,
     alloc: &'b RocDocAllocator<'b>,
     parens: Parens,
     tipe: ErrorType,
@@ -1718,22 +1979,26 @@ pub fn to_doc<'b>(
             alloc,
             parens,
             args.into_iter()
-                .map(|arg| to_doc(alloc, Parens::InFn, arg))
+                .map(|arg| to_doc_help(ctx, alloc, Parens::InFn, arg))
                 .collect(),
-            to_doc(alloc, Parens::InFn, *ret),
+            to_doc_help(ctx, alloc, Parens::InFn, *ret),
         ),
         Infinite => alloc.text("∞"),
         Error => alloc.text("?"),
 
-        FlexVar(lowercase) => alloc.type_variable(lowercase),
-        RigidVar(lowercase) => alloc.type_variable(lowercase),
+        FlexVar(lowercase) | RigidVar(lowercase) => alloc.type_variable(lowercase),
+        FlexAbleVar(lowercase, ability) | RigidAbleVar(lowercase, ability) => {
+            // TODO we should be putting able variables on the toplevel of the type, not here
+            ctx.able_variables.push((lowercase.clone(), ability));
+            alloc.type_variable(lowercase)
+        }
 
         Type(symbol, args) => report_text::apply(
             alloc,
             parens,
             alloc.symbol_foreign_qualified(symbol),
             args.into_iter()
-                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+                .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
                 .collect(),
         ),
 
@@ -1742,7 +2007,7 @@ pub fn to_doc<'b>(
             parens,
             alloc.symbol_foreign_qualified(symbol),
             args.into_iter()
-                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+                .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
                 .collect(),
         ),
 
@@ -1758,15 +2023,24 @@ pub fn to_doc<'b>(
                         (
                             alloc.string(k.as_str().to_string()),
                             match value {
-                                RecordField::Optional(v) => {
-                                    RecordField::Optional(to_doc(alloc, Parens::Unnecessary, v))
-                                }
-                                RecordField::Required(v) => {
-                                    RecordField::Required(to_doc(alloc, Parens::Unnecessary, v))
-                                }
-                                RecordField::Demanded(v) => {
-                                    RecordField::Demanded(to_doc(alloc, Parens::Unnecessary, v))
-                                }
+                                RecordField::Optional(v) => RecordField::Optional(to_doc_help(
+                                    ctx,
+                                    alloc,
+                                    Parens::Unnecessary,
+                                    v,
+                                )),
+                                RecordField::Required(v) => RecordField::Required(to_doc_help(
+                                    ctx,
+                                    alloc,
+                                    Parens::Unnecessary,
+                                    v,
+                                )),
+                                RecordField::Demanded(v) => RecordField::Demanded(to_doc_help(
+                                    ctx,
+                                    alloc,
+                                    Parens::Unnecessary,
+                                    v,
+                                )),
                             },
                         )
                     })
@@ -1782,7 +2056,7 @@ pub fn to_doc<'b>(
                     (
                         name,
                         args.into_iter()
-                            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+                            .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
                             .collect::<Vec<_>>(),
                     )
                 })
@@ -1805,7 +2079,7 @@ pub fn to_doc<'b>(
                     (
                         name,
                         args.into_iter()
-                            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
+                            .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
                             .collect::<Vec<_>>(),
                     )
                 })
@@ -1814,7 +2088,7 @@ pub fn to_doc<'b>(
 
             report_text::recursive_tag_union(
                 alloc,
-                to_doc(alloc, Parens::Unnecessary, *rec_var),
+                to_doc_help(ctx, alloc, Parens::Unnecessary, *rec_var),
                 tags.into_iter()
                     .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
@@ -1823,10 +2097,10 @@ pub fn to_doc<'b>(
         }
 
         Range(typ, range_types) => {
-            let typ = to_doc(alloc, parens, *typ);
+            let typ = to_doc_help(ctx, alloc, parens, *typ);
             let range_types = range_types
                 .into_iter()
-                .map(|arg| to_doc(alloc, Parens::Unnecessary, arg))
+                .map(|arg| to_doc_help(ctx, alloc, Parens::Unnecessary, arg))
                 .collect();
             report_text::range(alloc, typ, range_types)
         }
@@ -1838,13 +2112,40 @@ fn same<'b>(
     parens: Parens,
     tipe: ErrorType,
 ) -> Diff<RocDocBuilder<'b>> {
-    let doc = to_doc(alloc, parens, tipe);
+    let (doc, able) = to_doc(alloc, parens, tipe);
 
     Diff {
         left: doc.clone(),
         right: doc,
         status: Status::Similar,
+        left_able: able.clone(),
+        right_able: able,
     }
+}
+
+fn type_with_able_vars<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    typ: RocDocBuilder<'b>,
+    able: AbleVariables,
+) -> RocDocBuilder<'b> {
+    if able.is_empty() {
+        // fast path: taken the vast majority of the time
+        return typ;
+    }
+
+    let mut doc = Vec::with_capacity(1 + 6 * able.len());
+    doc.push(typ);
+
+    for (i, (var, ability)) in able.into_iter().enumerate() {
+        doc.push(alloc.string(if i == 0 { " | " } else { ", " }.to_string()));
+        doc.push(alloc.type_variable(var));
+        doc.push(alloc.space());
+        doc.push(alloc.keyword("has"));
+        doc.push(alloc.space());
+        doc.push(alloc.symbol_foreign_qualified(ability));
+    }
+
+    alloc.concat(doc)
 }
 
 fn to_diff<'b>(
@@ -1875,15 +2176,21 @@ fn to_diff<'b>(
 
                 let left = report_text::function(alloc, parens, arg_diff.left, ret_diff.left);
                 let right = report_text::function(alloc, parens, arg_diff.right, ret_diff.right);
+                let mut left_able = arg_diff.left_able;
+                left_able.extend(ret_diff.left_able);
+                let mut right_able = arg_diff.right_able;
+                right_able.extend(ret_diff.right_able);
 
                 Diff {
                     left,
                     right,
                     status,
+                    left_able,
+                    right_able,
                 }
             } else {
-                let left = to_doc(alloc, Parens::InFn, type1);
-                let right = to_doc(alloc, Parens::InFn, type2);
+                let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
+                let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
 
                 Diff {
                     left,
@@ -1892,6 +2199,8 @@ fn to_diff<'b>(
                         args1.len(),
                         args2.len(),
                     )]),
+                    left_able,
+                    right_able,
                 }
             }
         }
@@ -1914,6 +2223,8 @@ fn to_diff<'b>(
                 left,
                 right,
                 status: args_diff.status,
+                left_able: args_diff.left_able,
+                right_able: args_diff.right_able,
             }
         }
 
@@ -1936,17 +2247,21 @@ fn to_diff<'b>(
                 left,
                 right,
                 status: args_diff.status,
+                left_able: args_diff.left_able,
+                right_able: args_diff.right_able,
             }
         }
 
         (Alias(_, _, _, AliasKind::Opaque), _) | (_, Alias(_, _, _, AliasKind::Opaque)) => {
-            let left = to_doc(alloc, Parens::InFn, type1);
-            let right = to_doc(alloc, Parens::InFn, type2);
+            let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
+            let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
 
             Diff {
                 left,
                 right,
                 status: Status::Different(vec![Problem::OpaqueComparedToNonOpaque]),
+                left_able,
+                right_able,
             }
         }
 
@@ -1973,20 +2288,22 @@ fn to_diff<'b>(
 
         (RecursiveTagUnion(_rec1, _tags1, _ext1), RecursiveTagUnion(_rec2, _tags2, _ext2)) => {
             // TODO do a better job here
-            let left = to_doc(alloc, Parens::Unnecessary, type1);
-            let right = to_doc(alloc, Parens::Unnecessary, type2);
+            let (left, left_able) = to_doc(alloc, Parens::Unnecessary, type1);
+            let (right, right_able) = to_doc(alloc, Parens::Unnecessary, type2);
 
             Diff {
                 left,
                 right,
                 status: Status::Similar,
+                left_able,
+                right_able,
             }
         }
 
         pair => {
             // We hit none of the specific cases where we give more detailed information
-            let left = to_doc(alloc, parens, type1);
-            let right = to_doc(alloc, parens, type2);
+            let (left, left_able) = to_doc(alloc, parens, type1);
+            let (right, right_able) = to_doc(alloc, parens, type2);
 
             let is_int = |t: &ErrorType| match t {
                 ErrorType::Type(Symbol::NUM_INT, _) => true,
@@ -2042,6 +2359,8 @@ fn to_diff<'b>(
                 left,
                 right,
                 status: Status::Different(problems),
+                left_able,
+                right_able,
             }
         }
     }
@@ -2061,6 +2380,8 @@ where
     // TODO use ExactSizeIterator to pre-allocate here
     let mut left = Vec::new();
     let mut right = Vec::new();
+    let mut left_able = Vec::new();
+    let mut right_able = Vec::new();
 
     for (arg1, arg2) in args1.into_iter().zip(args2.into_iter()) {
         let diff = to_diff(alloc, parens, arg1, arg2);
@@ -2068,12 +2389,16 @@ where
         left.push(diff.left);
         right.push(diff.right);
         status.merge(diff.status);
+        left_able.extend(diff.left_able);
+        right_able.extend(diff.right_able);
     }
 
     Diff {
         left,
         right,
         status,
+        left_able,
+        right_able,
     }
 }
 
@@ -2140,6 +2465,8 @@ fn diff_record<'b>(
                     _ => diff.status,
                 }
             },
+            left_able: diff.left_able,
+            right_able: diff.right_able,
         }
     };
 
@@ -2147,7 +2474,7 @@ fn diff_record<'b>(
         (
             field.clone(),
             alloc.string(field.as_str().to_string()),
-            tipe.map(|t| to_doc(alloc, Parens::Unnecessary, t.clone())),
+            tipe.map(|t| to_doc(alloc, Parens::Unnecessary, t.clone()).0),
         )
     };
     let shared_keys = fields1
@@ -2205,12 +2532,16 @@ fn diff_record<'b>(
             left: vec![],
             right: vec![],
             status: Status::Similar,
+            left_able: vec![],
+            right_able: vec![],
         };
 
     for diff in both {
         fields_diff.left.push(diff.left);
         fields_diff.right.push(diff.right);
         fields_diff.status.merge(diff.status);
+        fields_diff.left_able.extend(diff.left_able);
+        fields_diff.right_able.extend(diff.right_able);
     }
 
     if !all_fields_shared {
@@ -2248,6 +2579,8 @@ fn diff_record<'b>(
         left: doc1,
         right: doc2,
         status: fields_diff.status,
+        left_able: fields_diff.left_able,
+        right_able: fields_diff.right_able,
     }
 }
 
@@ -2265,16 +2598,26 @@ fn diff_tag_union<'b>(
             left: (field.clone(), alloc.tag_name(field.clone()), diff.left),
             right: (field.clone(), alloc.tag_name(field), diff.right),
             status: diff.status,
+            left_able: diff.left_able,
+            right_able: diff.right_able,
         }
     };
-    let to_unknown_docs = |(field, args): (&TagName, &Vec<ErrorType>)| {
-        (
-            field.clone(),
-            alloc.tag_name(field.clone()),
+    let to_unknown_docs = |(field, args): (&TagName, &Vec<ErrorType>)| -> (
+        TagName,
+        RocDocBuilder<'b>,
+        Vec<RocDocBuilder<'b>>,
+        AbleVariables,
+    ) {
+        let (args, able): (_, Vec<AbleVariables>) =
             // TODO add spaces between args
             args.iter()
                 .map(|arg| to_doc(alloc, Parens::InTypeParam, arg.clone()))
-                .collect(),
+                .unzip();
+        (
+            field.clone(),
+            alloc.tag_name(field.clone()),
+            args,
+            able.into_iter().flatten().collect(),
         )
     };
     let shared_keys = fields1
@@ -2292,7 +2635,7 @@ fn diff_tag_union<'b>(
 
     let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
         (true, true) => match left.peek() {
-            Some((f, _, _)) => Status::Different(vec![Problem::TagTypo(
+            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
                 fields2.keys().cloned().collect(),
             )]),
@@ -2309,14 +2652,14 @@ fn diff_tag_union<'b>(
             }
         },
         (false, true) => match left.peek() {
-            Some((f, _, _)) => Status::Different(vec![Problem::TagTypo(
+            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
                 fields2.keys().cloned().collect(),
             )]),
             None => Status::Similar,
         },
         (true, false) => match right.peek() {
-            Some((f, _, _)) => Status::Different(vec![Problem::TagTypo(
+            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
                 fields1.keys().cloned().collect(),
             )]),
@@ -2331,17 +2674,27 @@ fn diff_tag_union<'b>(
         left: vec![],
         right: vec![],
         status: Status::Similar,
+        left_able: vec![],
+        right_able: vec![],
     };
 
     for diff in both {
         fields_diff.left.push(diff.left);
         fields_diff.right.push(diff.right);
         fields_diff.status.merge(diff.status);
+        fields_diff.left_able.extend(diff.left_able);
+        fields_diff.right_able.extend(diff.right_able);
     }
 
     if !all_fields_shared {
-        fields_diff.left.extend(left);
-        fields_diff.right.extend(right);
+        for (tag, tag_doc, args, able) in left {
+            fields_diff.left.push((tag, tag_doc, args));
+            fields_diff.left_able.extend(able);
+        }
+        for (tag, tag_doc, args, able) in right {
+            fields_diff.right.push((tag, tag_doc, args));
+            fields_diff.right_able.extend(able);
+        }
         fields_diff.status.merge(Status::Different(vec![]));
     }
 
@@ -2368,6 +2721,8 @@ fn diff_tag_union<'b>(
         left: doc1,
         right: doc2,
         status: fields_diff.status,
+        left_able: fields_diff.left_able,
+        right_able: fields_diff.right_able,
     }
 }
 
@@ -2385,12 +2740,16 @@ fn ext_to_diff<'b>(
             left: ext_doc_1,
             right: ext_doc_2,
             status,
+            left_able: vec![],
+            right_able: vec![],
         },
         Status::Different(_) => Diff {
             // NOTE elm colors these differently at this point
             left: ext_doc_1,
             right: ext_doc_2,
             status,
+            left_able: vec![],
+            right_able: vec![],
         },
     }
 }
@@ -2530,7 +2889,7 @@ mod report_text {
         let entry_to_doc = |(name, tipe): (Lowercase, RecordField<ErrorType>)| {
             (
                 alloc.string(name.as_str().to_string()),
-                to_doc(alloc, Parens::Unnecessary, tipe.into_inner()),
+                to_doc(alloc, Parens::Unnecessary, tipe.into_inner()).0,
             )
         };
 
@@ -2875,7 +3234,14 @@ fn type_problem_to_pretty<'b>(
 
             match tipe {
                 Infinite | Error | FlexVar(_) => alloc.nil(),
-                RigidVar(y) => bad_double_rigid(x, y),
+                FlexAbleVar(_, ability) => bad_rigid_var(
+                    x,
+                    alloc.concat(vec![
+                        alloc.reflow("an instance of the ability "),
+                        alloc.symbol_unqualified(ability),
+                    ]),
+                ),
+                RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
                 Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),
                 TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
