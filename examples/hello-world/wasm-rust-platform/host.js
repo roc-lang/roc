@@ -17,17 +17,10 @@ async function roc_web_platform_run(wasm_filename) {
     },
   };
 
-  let wasm;
-
-  const response = await fetch(wasm_filename);
-
-  if (WebAssembly.instantiateStreaming) {
-    // streaming API has better performance if available
-    wasm = await WebAssembly.instantiateStreaming(response, importObj);
-  } else {
-    const module_bytes = await response.arrayBuffer();
-    wasm = await WebAssembly.instantiate(module_bytes, importObj);
-  }
+  // `instantiateStreaming` is faster than `instantiate`, especially if you don't `await` the response,
+  // so it can start compiling from the first received packet. Available in all browsers, but not Node.
+  const responsePromise = fetch(wasm_filename);
+  const wasm = await WebAssembly.instantiateStreaming(responsePromise, importObj);
 
   try {
     wasm.instance.exports._start();
