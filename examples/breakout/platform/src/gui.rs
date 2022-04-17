@@ -23,7 +23,7 @@ use wgpu_glyph::GlyphBrush;
 use winit::{
     dpi::PhysicalSize,
     event,
-    event::{ElementState, Event, ModifiersState},
+    event::{ElementState, Event, ModifiersState, StartCause},
     event_loop::ControlFlow,
     platform::run_return::EventLoopExtRunReturn,
 };
@@ -34,7 +34,7 @@ use winit::{
 //
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
-const TIME_BETWEEN_RENDERS: Duration = Duration::new(0, 1000 / 60);
+const TIME_BETWEEN_TICKS: Duration = Duration::new(0, 1000 / 60);
 
 pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn Error>> {
     let (mut model, mut elems) = roc::init_and_render(window_bounds);
@@ -48,8 +48,19 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
         .build(&event_loop)
         .unwrap();
 
-    let instance = wgpu::Instance::new(wgpu::Backends::all());
+    macro_rules! update_and_rerender {
+        ($event:expr) => {
+            // TODO use (model, elems) =  ... once we've upgraded rust versions
+            let pair = roc::update_and_render(model, $event);
 
+            model = pair.0;
+            elems = pair.1;
+
+            window.request_redraw();
+        };
+    }
+
+    let instance = wgpu::Instance::new(wgpu::Backends::all());
     let surface = unsafe { instance.create_surface(&window) };
 
     // Initialize GPU
@@ -100,31 +111,22 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
     let rect_resources = pipelines::make_rect_pipeline(&gpu_device, &surface_config);
 
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
-
-    let is_animating = true;
-
     let mut keyboard_modifiers = ModifiersState::empty();
 
     // Render loop
-    let mut next_render_time = Instant::now();
+    let app_start_time = Instant::now();
+    let mut next_tick = app_start_time + TIME_BETWEEN_TICKS;
+
     window.request_redraw();
 
     event_loop.run_return(|event, _, control_flow| {
-        // TODO dynamically switch this on/off depending on whether any
-        // animations are running. Should conserve CPU usage and battery life!
-        if is_animating {
-            *control_flow = ControlFlow::Poll;
-        } else {
-            *control_flow = ControlFlow::Wait;
-        }
-
         match event {
-            //Close
+            // Close
             Event::WindowEvent {
                 event: event::WindowEvent::CloseRequested,
                 ..
             } => *control_flow = ControlFlow::Exit,
-            //Resize
+            // Resize
             Event::WindowEvent {
                 event: event::WindowEvent::Resized(new_size),
                 ..
@@ -150,19 +152,10 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
                     &cmd_queue,
                 );
 
-                // TODO use (model, elems) =  ... once we've upgraded rust versions
-                let pair = roc::update_and_render(
-                    model,
-                    RocEvent::resize(Bounds {
-                        height: size.height as f32,
-                        width: size.width as f32,
-                    }),
-                );
-
-                model = pair.0;
-                elems = pair.1;
-
-                window.request_redraw();
+                update_and_rerender!(RocEvent::resize(Bounds {
+                    height: size.height as f32,
+                    width: size.width as f32,
+                }));
             }
             // Keyboard input
             Event::WindowEvent {
@@ -183,15 +176,9 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
                     ElementState::Released => RocEvent::key_up(keycode.into()),
                 };
 
-                // TODO use (model, elems) =  ... once we've upgraded rust versions
-                let pair = roc::update_and_render(model, roc_event);
-
-                model = pair.0;
-                elems = pair.1;
-
-                window.request_redraw();
+                model = roc::update(model, roc_event);
             }
-            //Modifiers Changed
+            // Modifiers Changed
             Event::WindowEvent {
                 event: event::WindowEvent::ModifiersChanged(modifiers),
                 ..
@@ -199,16 +186,6 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
                 keyboard_modifiers = modifiers;
             }
             Event::RedrawRequested { .. } => {
-                // If we shouldn't draw yet, keep waiting until we should.
-                let current_time = Instant::now();
-
-                if next_render_time.saturating_duration_since(current_time) > TIME_BETWEEN_RENDERS {
-                    // Keep waiting until it's time to draw again.
-                    return;
-                }
-
-                next_render_time = current_time + TIME_BETWEEN_RENDERS;
-
                 // Get a command cmd_encoder for the current frame
                 let mut cmd_encoder =
                     gpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -262,8 +239,27 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
 
                 local_pool.run_until_stalled();
             }
+            Event::NewEvents(StartCause::ResumeTimeReached {
+                requested_resume, ..
+            }) => {
+                // Only run this logic if this is the tick we originally requested.
+                if requested_resume == next_tick {
+                    let now = Instant::now();
+
+                    // Set a new next_tick *before* running update and rerender,
+                    // so their runtime isn't factored into when we want to render next.
+                    next_tick = now + TIME_BETWEEN_TICKS;
+
+                    let tick = now.saturating_duration_since(app_start_time);
+
+                    update_and_rerender!(RocEvent::tick(tick));
+
+                    *control_flow = winit::event_loop::ControlFlow::WaitUntil(next_tick);
+                }
+            }
             _ => {
-                *control_flow = winit::event_loop::ControlFlow::Wait;
+                // Keep waiting until the next tick.
+                *control_flow = winit::event_loop::ControlFlow::WaitUntil(next_tick);
             }
         }
     });

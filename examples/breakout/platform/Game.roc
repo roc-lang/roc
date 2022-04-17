@@ -10,5 +10,5 @@ Elem : [ Rect { color : Rgba, left : F32, top : F32, width : F32, height : F32 }
 
 KeyCode : [ Left, Right, Other ]
 
-Event : [ Resize { width : F32, height : F32 }, KeyDown KeyCode, KeyUp KeyCode ]
+Event : [ Resize { width : F32, height : F32 }, KeyDown KeyCode, KeyUp KeyCode, Tick U128 ]
 

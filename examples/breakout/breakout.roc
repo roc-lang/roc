@@ -41,6 +41,7 @@ update = \model, event ->
         Resize size -> { model & width: size.width, height: size.height }
         KeyDown Left -> { model & paddleX: model.paddleX - paddleSpeed }
         KeyDown Right -> { model & paddleX: model.paddleX + paddleSpeed }
+        Tick _ -> { model & ballY: model.ballY + 1 }
         _ -> model
 
 render : Model -> List Elem

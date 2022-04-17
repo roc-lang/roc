@@ -7,6 +7,7 @@ use std::ffi::CStr;
 use std::fmt::Debug;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
+use std::time::Duration;
 use winit::event::VirtualKeyCode;
 
 extern "C" {
@@ -59,6 +60,7 @@ pub union RocEventEntry {
     pub key_down: RocKeyCode,
     pub key_up: RocKeyCode,
     pub resize: Bounds,
+    pub tick: u128,
 }
 
 #[repr(u8)]
@@ -66,8 +68,9 @@ pub union RocEventEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RocEventTag {
     KeyDown = 0,
-    KeyUp = 1,
-    Resize = 2,
+    KeyUp,
+    Resize,
+    Tick,
 }
 
 #[repr(C)]
@@ -85,6 +88,7 @@ impl Debug for RocEvent {
             KeyDown => unsafe { self.entry().key_down }.fmt(f),
             KeyUp => unsafe { self.entry().key_up }.fmt(f),
             Resize => unsafe { self.entry().resize }.fmt(f),
+            Tick => unsafe { self.entry().tick }.fmt(f),
         }
     }
 }
@@ -117,6 +121,15 @@ impl RocEvent {
         Self {
             tag: RocEventTag::KeyUp,
             entry: RocEventEntry { key_up: keycode },
+        }
+    }
+
+    pub fn tick(duration: Duration) -> Self {
+        Self {
+            tag: RocEventTag::Tick,
+            entry: RocEventEntry {
+                tick: duration.as_nanos(),
+            },
         }
     }
 }
@@ -305,27 +318,6 @@ pub struct ButtonStyles {
     pub text_color: Rgba,
 }
 
-pub fn render(event: RocEvent) -> RocList<RocElem> {
-    let mut output = MaybeUninit::uninit();
-
-    // Call the program's render function
-    unsafe {
-        let layout = Layout::array::<u8>(roc_render_size() as usize).unwrap();
-
-        // TODO allocate on the stack if it's under a certain size
-        let buffer = std::alloc::alloc(layout);
-
-        if true {
-            todo!("call render here");
-            // call_render(&event, buffer, output.as_mut_ptr());
-        }
-
-        std::alloc::dealloc(buffer, layout);
-
-        output.assume_init()
-    }
-}
-
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 pub struct Bounds {
@@ -373,6 +365,29 @@ pub fn init_and_render(bounds: Bounds) -> (*const Model, RocList<RocElem>) {
     };
 
     (model, elems)
+}
+
+/// Call the app's update function, then render and return that result
+pub fn update(model: *const Model, event: RocEvent) -> *const Model {
+    let closure_data_buf;
+    let closure_layout;
+
+    // Call update to get the new model
+    unsafe {
+        let ret_val_layout = Layout::array::<u8>(update_result_size() as usize).unwrap();
+
+        // TODO allocate on the stack if it's under a certain size
+        let ret_val_buf = std::alloc::alloc(ret_val_layout) as *mut Model;
+
+        closure_layout = Layout::array::<u8>(update_size() as usize).unwrap();
+
+        // TODO allocate on the stack if it's under a certain size
+        closure_data_buf = std::alloc::alloc(closure_layout);
+
+        call_update(model, &event, closure_data_buf, ret_val_buf);
+
+        ret_val_buf
+    }
 }
 
 /// Call the app's update function, then render and return that result
