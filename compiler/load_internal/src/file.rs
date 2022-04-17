@@ -286,12 +286,15 @@ fn start_phase<'a>(
                     }
                 }
 
+                let skip_constraint_gen = state.cached_subs.lock().contains_key(&module_id);
+
                 BuildTask::CanonicalizeAndConstrain {
                     parsed,
                     dep_idents,
                     exposed_symbols,
                     module_ids,
                     aliases,
+                    skip_constraint_gen,
                 }
             }
 
@@ -810,6 +813,7 @@ enum BuildTask<'a> {
         dep_idents: MutMap<ModuleId, IdentIds>,
         exposed_symbols: MutSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
+        skip_constraint_gen: bool,
     },
     Solve {
         module: Module,
@@ -3767,6 +3771,7 @@ fn canonicalize_and_constrain<'a>(
     exposed_symbols: MutSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     parsed: ParsedModule<'a>,
+    skip_constraint_gen: bool,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let canonicalize_start = SystemTime::now();
 
@@ -3836,13 +3841,16 @@ fn canonicalize_and_constrain<'a>(
 
             let mut constraints = Constraints::new();
 
-            // TODO: don't generate constraints for a builtin module if it's cached
-            let constraint = constrain_module(
-                &mut constraints,
-                &module_output.scope.abilities_store,
-                &module_output.declarations,
-                module_id,
-            );
+            let constraint = if skip_constraint_gen {
+                roc_can::constraint::Constraint::True
+            } else {
+                constrain_module(
+                    &mut constraints,
+                    &module_output.scope.abilities_store,
+                    &module_output.declarations,
+                    module_id,
+                )
+            };
 
             let after = roc_types::types::get_type_clone_count();
 
@@ -4367,6 +4375,7 @@ fn run_task<'a>(
             dep_idents,
             exposed_symbols,
             aliases,
+            skip_constraint_gen,
         } => canonicalize_and_constrain(
             arena,
             &module_ids,
@@ -4374,6 +4383,7 @@ fn run_task<'a>(
             exposed_symbols,
             aliases,
             parsed,
+            skip_constraint_gen,
         ),
         Solve {
             module,
