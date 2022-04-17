@@ -1016,10 +1016,7 @@ fn solve(
                         }
                     }
                     None => {
-                        // TODO fix this properly
-                        if symbol.module_id() != ModuleId::ATTR {
-                            problems.push(TypeError::UnexposedLookup(*symbol));
-                        }
+                        problems.push(TypeError::UnexposedLookup(*symbol));
 
                         state
                     }
