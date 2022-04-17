@@ -1,5 +1,5 @@
 app "helloWeb"
-    packages { pf: "." }
+    packages { pf: "platform" }
     imports []
     provides [ main ] to pf
 
