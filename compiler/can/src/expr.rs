@@ -9,7 +9,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::all::{MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, MutSet, SendMap, VecSet};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -29,12 +29,12 @@ pub struct Output {
     pub tail_call: Option<Symbol>,
     pub introduced_variables: IntroducedVariables,
     pub aliases: SendMap<Symbol, Alias>,
-    pub non_closures: MutSet<Symbol>,
+    pub non_closures: VecSet<Symbol>,
 }
 
 impl Output {
     pub fn union(&mut self, other: Self) {
-        self.references.union_mut(other.references);
+        self.references.union_mut(&other.references);
 
         if let (None, Some(later)) = (self.tail_call, other.tail_call) {
             self.tail_call = Some(later);
@@ -354,7 +354,7 @@ pub fn canonicalize_expr<'a>(
             if let Var(symbol) = &can_update.value {
                 match canonicalize_fields(env, var_store, scope, region, fields.items) {
                     Ok((can_fields, mut output)) => {
-                        output.references = output.references.union(update_out.references);
+                        output.references.union_mut(&update_out.references);
 
                         let answer = Update {
                             record_var: var_store.fresh(),
@@ -432,7 +432,7 @@ pub fn canonicalize_expr<'a>(
                     let (can_expr, elem_out) =
                         canonicalize_expr(env, var_store, scope, loc_elem.region, &loc_elem.value);
 
-                    references = references.union(elem_out.references);
+                    references.union_mut(&elem_out.references);
 
                     can_elems.push(can_expr);
                 }
@@ -466,7 +466,7 @@ pub fn canonicalize_expr<'a>(
                     canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
 
                 args.push((var_store.fresh(), arg_expr));
-                output.references = output.references.union(arg_out.references);
+                output.references.union_mut(&arg_out.references);
             }
 
             if let ast::Expr::OpaqueRef(name) = loc_fn.value {
@@ -753,7 +753,7 @@ pub fn canonicalize_expr<'a>(
                 let (can_when_branch, branch_references) =
                     canonicalize_when_branch(env, var_store, scope, region, *branch, &mut output);
 
-                output.references = output.references.union(branch_references);
+                output.references.union_mut(&branch_references);
 
                 can_branches.push(can_when_branch);
             }
@@ -886,8 +886,8 @@ pub fn canonicalize_expr<'a>(
 
                 branches.push((loc_cond, loc_then));
 
-                output.references = output.references.union(cond_output.references);
-                output.references = output.references.union(then_output.references);
+                output.references.union_mut(&cond_output.references);
+                output.references.union_mut(&then_output.references);
             }
 
             let (loc_else, else_output) = canonicalize_expr(
@@ -898,7 +898,7 @@ pub fn canonicalize_expr<'a>(
                 &final_else_branch.value,
             );
 
-            output.references = output.references.union(else_output.references);
+            output.references.union_mut(&else_output.references);
 
             (
                 If {
@@ -1167,7 +1167,7 @@ fn canonicalize_fields<'a>(
                     });
                 }
 
-                output.references = output.references.union(field_out.references);
+                output.references.union_mut(&field_out.references);
             }
             Err(CanonicalizeFieldProblem::InvalidOptionalValue {
                 field_name,
