@@ -318,21 +318,6 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    /*
-    // Result ok err : [ Ok ok, Err err ]
-    add_alias(
-        Symbol::RESULT_RESULT,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![
-                Loc::at(Region::zero(), "ok".into()),
-                Loc::at(Region::zero(), "err".into()),
-            ],
-            typ: result_alias_content(flex(TVAR1), flex(TVAR2)),
-        },
-    );
-    */
-
     // Utf8ByteProblem : [ InvalidStartByte, UnexpectedEndOfSequence, ExpectedContinuation, OverlongEncoding, CodepointTooLarge, EncodesSurrogateHalf ]
     add_alias(
         Symbol::STR_UT8_BYTE_PROBLEM,
