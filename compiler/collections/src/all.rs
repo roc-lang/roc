@@ -241,6 +241,18 @@ impl<T: PartialEq> VecSet<T> {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.elements.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.elements.is_empty()
+    }
+
+    pub fn swap_remove(&mut self, index: usize) -> T {
+        self.elements.swap_remove(index)
+    }
+
     pub fn insert(&mut self, value: T) -> bool {
         if self.elements.contains(&value) {
             true
@@ -285,6 +297,7 @@ impl<A: Ord> Extend<A> for VecSet<A> {
                 self.insert(value);
             }
             _ => {
+                println!("extend {:?}", hint);
                 self.elements.extend(it);
 
                 self.elements.sort();

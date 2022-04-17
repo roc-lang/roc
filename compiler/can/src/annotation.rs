@@ -58,8 +58,8 @@ pub struct IntroducedVariables {
     pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,
     pub inferred: Vec<Loc<Variable>>,
-    pub named: Vec<NamedVariable>,
-    pub able: Vec<AbleVariable>,
+    pub named: VecSet<NamedVariable>,
+    pub able: VecSet<AbleVariable>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,
 }
 
@@ -84,7 +84,7 @@ impl IntroducedVariables {
             first_seen: var.region,
         };
 
-        self.named.push(named_variable);
+        self.named.insert(named_variable);
     }
 
     pub fn insert_able(&mut self, name: Lowercase, var: Loc<Variable>, ability: Symbol) {
@@ -97,7 +97,7 @@ impl IntroducedVariables {
             first_seen: var.region,
         };
 
-        self.able.push(able_variable);
+        self.able.insert(able_variable);
     }
 
     pub fn insert_wildcard(&mut self, var: Loc<Variable>) {
@@ -128,12 +128,7 @@ impl IntroducedVariables {
             .extend(other.host_exposed_aliases.clone());
 
         self.named.extend(other.named.iter().cloned());
-        self.named.sort();
-        self.named.dedup();
-
         self.able.extend(other.able.iter().cloned());
-        self.able.sort();
-        self.able.dedup();
     }
 
     pub fn union_owned(&mut self, other: Self) {
@@ -143,8 +138,7 @@ impl IntroducedVariables {
         self.host_exposed_aliases.extend(other.host_exposed_aliases);
 
         self.named.extend(other.named);
-        self.named.sort();
-        self.named.dedup();
+        self.able.extend(other.able.iter().cloned());
     }
 
     pub fn var_by_name(&self, name: &Lowercase) -> Option<Variable> {
