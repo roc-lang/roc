@@ -125,6 +125,7 @@ mod test_reporting {
             mut solved,
             exposed_to_host,
             mut declarations_by_id,
+            abilities_store,
             ..
         } = result?;
 
@@ -177,6 +178,7 @@ mod test_reporting {
                 target_info,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,
+                abilities_store: &abilities_store,
             };
             let _mono_expr = Stmt::new(
                 &mut mono_env,
@@ -334,6 +336,7 @@ mod test_reporting {
                 target_info,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,
+                abilities_store: &abilities_store,
             };
             let _mono_expr = Stmt::new(
                 &mut mono_env,
