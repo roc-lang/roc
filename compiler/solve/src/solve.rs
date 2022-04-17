@@ -6,7 +6,7 @@ use roc_can::constraint::{Constraints, LetConstraint};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
