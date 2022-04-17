@@ -1,5 +1,4 @@
 use core::ffi::c_void;
-use std::alloc::{alloc, Layout};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
