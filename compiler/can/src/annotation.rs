@@ -201,7 +201,7 @@ pub fn canonicalize_annotation(
     var_store: &mut VarStore,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
-    let mut references = Vec::new();
+    let mut references = MutSet::default();
     let mut aliases = SendMap::default();
 
     let typ = can_annotation_help(
@@ -214,8 +214,6 @@ pub fn canonicalize_annotation(
         &mut aliases,
         &mut references,
     );
-
-    let references = references.into_iter().collect();
 
     Annotation {
         typ,
@@ -234,7 +232,7 @@ pub fn canonicalize_annotation_with_possible_clauses(
     abilities_in_scope: &[Symbol],
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
-    let mut references = Vec::new();
+    let mut references = MutSet::default();
     let mut aliases = SendMap::default();
 
     let (annotation, region) = match annotation {
@@ -255,7 +253,7 @@ pub fn canonicalize_annotation_with_possible_clauses(
                     return Annotation {
                         typ: err_type,
                         introduced_variables,
-                        references: references.into_iter().collect(),
+                        references,
                         aliases,
                     };
                 }
@@ -279,7 +277,7 @@ pub fn canonicalize_annotation_with_possible_clauses(
     Annotation {
         typ,
         introduced_variables,
-        references: references.into_iter().collect(),
+        references,
         aliases,
     }
 }
@@ -435,7 +433,7 @@ fn can_annotation_help(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut Vec<Symbol>,
+    references: &mut MutSet<Symbol>,
 ) -> Type {
     use roc_parse::ast::TypeAnnotation::*;
 
@@ -483,7 +481,7 @@ fn can_annotation_help(
 
             let mut args = Vec::new();
 
-            references.push(symbol);
+            references.insert(symbol);
 
             for arg in *type_arguments {
                 let arg_ann = can_annotation_help(
@@ -619,7 +617,7 @@ fn can_annotation_help(
             let mut vars = Vec::with_capacity(loc_vars.len());
             let mut lowercase_vars = Vec::with_capacity(loc_vars.len());
 
-            references.push(symbol);
+            references.insert(symbol);
 
             for loc_var in *loc_vars {
                 let var = match loc_var.value {
@@ -863,7 +861,7 @@ fn canonicalize_has_clause(
     introduced_variables: &mut IntroducedVariables,
     clause: &Loc<roc_parse::ast::HasClause<'_>>,
     abilities_in_scope: &[Symbol],
-    references: &mut Vec<Symbol>,
+    references: &mut MutSet<Symbol>,
 ) -> Result<(), Type> {
     let Loc {
         region,
@@ -895,7 +893,7 @@ fn canonicalize_has_clause(
         }
     };
 
-    references.push(ability);
+    references.insert(ability);
 
     if let Some(shadowing) = introduced_variables.named_var_by_name(&var_name) {
         let var_name_ident = var_name.to_string().into();
@@ -925,7 +923,7 @@ fn can_extension_type<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut Vec<Symbol>,
+    references: &mut MutSet<Symbol>,
     opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
 ) -> Type {
@@ -1107,7 +1105,7 @@ fn can_assigned_fields<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut Vec<Symbol>,
+    references: &mut MutSet<Symbol>,
 ) -> SendMap<Lowercase, RecordField<Type>> {
     use roc_parse::ast::AssignedField::*;
     use roc_types::types::RecordField::*;
@@ -1220,7 +1218,7 @@ fn can_tags<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut Vec<Symbol>,
+    references: &mut MutSet<Symbol>,
 ) -> Vec<(TagName, Vec<Type>)> {
     let mut tag_types = Vec::with_capacity(tags.len());
 
