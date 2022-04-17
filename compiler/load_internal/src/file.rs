@@ -3610,20 +3610,6 @@ fn run_solve_solve(
             abilities_store,
         );
 
-        let solved_subs = if true {
-            solved_subs
-        } else {
-            let vars_by_symbol: Vec<(Symbol, Variable)> = solved_env.vars_by_symbol().collect();
-            let mut serialized = Vec::new();
-            solved_subs
-                .inner()
-                .serialize(&vars_by_symbol, &mut serialized)
-                .unwrap();
-            let (subs, _vbs) = Subs::deserialize(&serialized);
-
-            Solved(subs)
-        };
-
         let exposed_vars_by_symbol: Vec<_> = solved_env
             .vars_by_symbol()
             .filter(|(k, _)| exposed_symbols.contains(k))
