@@ -267,10 +267,24 @@ impl<T: PartialEq> VecSet<T> {
 
 impl<A: Ord> Extend<A> for VecSet<A> {
     fn extend<T: IntoIterator<Item = A>>(&mut self, iter: T) {
-        self.elements.extend(iter);
+        let mut it = iter.into_iter();
+        let hint = it.size_hint();
 
-        self.elements.sort();
-        self.elements.dedup();
+        match hint {
+            (0, Some(0)) => {
+                // done, do nothing
+            }
+            (1, Some(1)) => {
+                let value = it.next().unwrap();
+                self.insert(value);
+            }
+            _ => {
+                self.elements.extend(it);
+
+                self.elements.sort();
+                self.elements.dedup();
+            }
+        }
     }
 }
 
