@@ -241,6 +241,18 @@ impl<T: PartialEq> VecSet<T> {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.elements.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.elements.is_empty()
+    }
+
+    pub fn swap_remove(&mut self, index: usize) -> T {
+        self.elements.swap_remove(index)
+    }
+
     pub fn insert(&mut self, value: T) -> bool {
         if self.elements.contains(&value) {
             true
@@ -273,16 +285,17 @@ impl<T: PartialEq> VecSet<T> {
 
 impl<A: Ord> Extend<A> for VecSet<A> {
     fn extend<T: IntoIterator<Item = A>>(&mut self, iter: T) {
-        let mut it = iter.into_iter();
+        let it = iter.into_iter();
         let hint = it.size_hint();
 
         match hint {
             (0, Some(0)) => {
                 // done, do nothing
             }
-            (1, Some(1)) => {
-                let value = it.next().unwrap();
-                self.insert(value);
+            (1, Some(1)) | (2, Some(2)) => {
+                for value in it {
+                    self.insert(value);
+                }
             }
             _ => {
                 self.elements.extend(it);

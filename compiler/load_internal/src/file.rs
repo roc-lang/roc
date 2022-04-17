@@ -40,7 +40,7 @@ use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::{Alias, AliasCommon, TypeExtension};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
-use std::collections::{HashMap, };
+use std::collections::HashMap;
 use std::io;
 use std::iter;
 use std::ops::ControlFlow;

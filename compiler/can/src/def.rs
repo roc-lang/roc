@@ -344,7 +344,8 @@ pub fn canonicalize_defs<'a>(
 
                 let mut named = can_ann.introduced_variables.named;
                 for loc_lowercase in vars.iter() {
-                    match named.iter().position(|nv| nv.name == loc_lowercase.value) {
+                    let opt_index = named.iter().position(|nv| nv.name == loc_lowercase.value);
+                    match opt_index {
                         Some(index) => {
                             // This is a valid lowercase rigid var for the type def.
                             let named_variable = named.swap_remove(index);
