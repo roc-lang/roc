@@ -285,19 +285,19 @@ impl<T: PartialEq> VecSet<T> {
 
 impl<A: Ord> Extend<A> for VecSet<A> {
     fn extend<T: IntoIterator<Item = A>>(&mut self, iter: T) {
-        let mut it = iter.into_iter();
+        let it = iter.into_iter();
         let hint = it.size_hint();
 
         match hint {
             (0, Some(0)) => {
                 // done, do nothing
             }
-            (1, Some(1)) => {
-                let value = it.next().unwrap();
-                self.insert(value);
+            (1, Some(1)) | (2, Some(2)) => {
+                for value in it {
+                    self.insert(value);
+                }
             }
             _ => {
-                println!("extend {:?}", hint);
                 self.elements.extend(it);
 
                 self.elements.sort();
