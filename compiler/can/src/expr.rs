@@ -9,7 +9,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::all::{MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, MutSet, SendMap, VecSet};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -29,7 +29,7 @@ pub struct Output {
     pub tail_call: Option<Symbol>,
     pub introduced_variables: IntroducedVariables,
     pub aliases: SendMap<Symbol, Alias>,
-    pub non_closures: MutSet<Symbol>,
+    pub non_closures: VecSet<Symbol>,
 }
 
 impl Output {

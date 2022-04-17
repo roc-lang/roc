@@ -7,7 +7,7 @@ use crate::operator::desugar_def;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, SendMap, VecSet};
 use roc_module::ident::Lowercase;
 use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -23,9 +23,9 @@ use roc_types::types::{Alias, AliasKind, Type};
 pub struct Module {
     pub module_id: ModuleId,
     pub exposed_imports: MutMap<Symbol, Variable>,
-    pub exposed_symbols: MutSet<Symbol>,
-    pub referenced_values: MutSet<Symbol>,
-    pub referenced_types: MutSet<Symbol>,
+    pub exposed_symbols: VecSet<Symbol>,
+    pub referenced_values: VecSet<Symbol>,
+    pub referenced_types: VecSet<Symbol>,
     /// all aliases. `bool` indicates whether it is exposed
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
@@ -36,7 +36,7 @@ pub struct Module {
 pub struct RigidVariables {
     pub named: MutMap<Variable, Lowercase>,
     pub able: MutMap<Variable, (Lowercase, Symbol)>,
-    pub wildcards: MutSet<Variable>,
+    pub wildcards: VecSet<Variable>,
 }
 
 #[derive(Debug)]
@@ -48,8 +48,8 @@ pub struct ModuleOutput {
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub problems: Vec<Problem>,
     pub ident_ids: IdentIds,
-    pub referenced_values: MutSet<Symbol>,
-    pub referenced_types: MutSet<Symbol>,
+    pub referenced_values: VecSet<Symbol>,
+    pub referenced_types: VecSet<Symbol>,
     pub scope: Scope,
 }
 
@@ -178,7 +178,7 @@ pub fn canonicalize_module_defs<'a>(
     dep_idents: &'a MutMap<ModuleId, IdentIds>,
     aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    exposed_symbols: &MutSet<Symbol>,
+    exposed_symbols: &VecSet<Symbol>,
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
@@ -325,8 +325,8 @@ pub fn canonicalize_module_defs<'a>(
         rigid_variables.wildcards.insert(var.value);
     }
 
-    let mut referenced_values = MutSet::default();
-    let mut referenced_types = MutSet::default();
+    let mut referenced_values = VecSet::default();
+    let mut referenced_types = VecSet::default();
 
     // Gather up all the symbols that were referenced across all the defs' lookups.
     referenced_values.extend(output.references.value_lookups);
@@ -371,7 +371,7 @@ pub fn canonicalize_module_defs<'a>(
                 generated_functions,
             } = generated_info
             {
-                let mut exposed_symbols = MutSet::default();
+                let mut exposed_symbols = VecSet::default();
 
                 // NOTE this currently builds all functions, not just the ones that the user requested
                 crate::effect_module::build_effect_builtins(
@@ -540,9 +540,9 @@ pub fn canonicalize_module_defs<'a>(
 
             for declaration in declarations.iter_mut() {
                 match declaration {
-                    Declare(def) => fix_values_captured_in_closure_def(def, &mut MutSet::default()),
+                    Declare(def) => fix_values_captured_in_closure_def(def, &mut VecSet::default()),
                     DeclareRec(defs) => {
-                        fix_values_captured_in_closure_defs(defs, &mut MutSet::default())
+                        fix_values_captured_in_closure_defs(defs, &mut VecSet::default())
                     }
                     InvalidCycle(_) | Builtin(_) => {}
                 }
@@ -569,7 +569,7 @@ pub fn canonicalize_module_defs<'a>(
 
 fn fix_values_captured_in_closure_def(
     def: &mut crate::def::Def,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     // patterns can contain default expressions, so much go over them too!
     fix_values_captured_in_closure_pattern(&mut def.loc_pattern.value, no_capture_symbols);
@@ -579,7 +579,7 @@ fn fix_values_captured_in_closure_def(
 
 fn fix_values_captured_in_closure_defs(
     defs: &mut Vec<crate::def::Def>,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     // recursive defs cannot capture each other
     for def in defs.iter() {
@@ -595,7 +595,7 @@ fn fix_values_captured_in_closure_defs(
 
 fn fix_values_captured_in_closure_pattern(
     pattern: &mut crate::pattern::Pattern,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     use crate::pattern::Pattern::*;
 
@@ -644,7 +644,7 @@ fn fix_values_captured_in_closure_pattern(
 
 fn fix_values_captured_in_closure_expr(
     expr: &mut crate::expr::Expr,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     use crate::expr::Expr::*;
 
