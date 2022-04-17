@@ -68,6 +68,7 @@ pub fn build_file<'a>(
     // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
     //
     // and zig does not currently emit `.a` webassembly static libraries
+    // TODO: too specific to a particular example! (Though for some reason Rust examples still work despite this)
     let host_extension = if emit_wasm { "zig" } else { "o" };
     let app_extension = if emit_wasm { "bc" } else { "o" };
 
@@ -81,6 +82,9 @@ pub fn build_file<'a>(
     let mut host_input_path = PathBuf::from(cwd);
     let path_to_platform = loaded.platform_path.clone();
     host_input_path.push(&*path_to_platform);
+
+    let host_dir = host_input_path.clone();
+
     host_input_path.push("host");
     host_input_path.set_extension(host_extension);
 
@@ -244,10 +248,10 @@ pub fn build_file<'a>(
         std::fs::copy(app_o_file, &binary_path).unwrap();
         problems
     } else {
-        let mut inputs = vec![
-            host_input_path.as_path().to_str().unwrap(),
-            app_o_file.to_str().unwrap(),
-        ];
+        let mut inputs = vec![app_o_file.to_str().unwrap()];
+        if !matches!(target.architecture, Architecture::Wasm32) {
+            inputs.push(host_input_path.as_path().to_str().unwrap());
+        }
         if matches!(opt_level, OptLevel::Development) {
             inputs.push(bitcode::BUILTINS_HOST_OBJ_PATH);
         }
@@ -257,7 +261,8 @@ pub fn build_file<'a>(
                 target,
                 binary_path.clone(),
                 &inputs,
-                link_type
+                link_type,
+                host_dir
             )
             .map_err(|_| {
                 todo!("gracefully handle `ld` failing to spawn.");

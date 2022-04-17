@@ -31,12 +31,13 @@ pub fn link(
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
+    host_dir: PathBuf,
 ) -> io::Result<(Child, PathBuf)> {
     match target {
         Triple {
             architecture: Architecture::Wasm32,
             ..
-        } => link_wasm32(target, output_path, input_paths, link_type),
+        } => link_wasm32(target, output_path, input_paths, link_type, host_dir),
         Triple {
             operating_system: OperatingSystem::Linux,
             ..
@@ -504,71 +505,33 @@ pub fn rebuild_host(
         if shared_lib_path.is_some() {
             // For surgical linking, just copy the dynamically linked rust app.
             std::fs::copy(cargo_out_dir.join("host"), host_dest_native).unwrap();
-        } else {
-            // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
+        } else if !matches!(target.architecture, Architecture::Wasm32) {
+            let output = build_c_host_native(
+                &env_path,
+                &env_home,
+                c_host_dest.to_str().unwrap(),
+                &[c_host_src.to_str().unwrap()],
+                opt_level,
+                shared_lib_path,
+            );
+            validate_output("host.c", "clang", output);
 
-            if matches!(target.architecture, Architecture::Wasm32) {
-                let wasi_libc_path = find_wasi_libc_path();
-
-                // zig build-obj -target wasm32-wasi host.c -femit-bin=c_host.o
-                let output = Command::new(&zig_executable())
-                    .args(&[
-                        "build-obj",
-                        "-target",
-                        "wasm32-wasi",
-                        c_host_src.to_str().unwrap(),
-                        &format!("-femit-bin={}", c_host_dest.to_str().unwrap()),
-                    ])
-                    .output()
-                    .unwrap();
-                validate_output("c_host.o", "ld", output);
-
-                // let host_lib_wasm = cargo_out_dir.join("host.wasm");
-
-                let args = &[
-                    "wasm-ld",
-                    "--emit-relocs",
+            let output = Command::new("ld")
+                .env_clear()
+                .env("PATH", &env_path)
+                .args(&[
+                    "-r",
                     "-L",
                     cargo_out_dir.to_str().unwrap(),
-                    // host_lib_wasm.to_str().unwrap(),
-                    wasi_libc_path.to_str().unwrap(),
                     c_host_dest.to_str().unwrap(),
                     "-lhost",
                     "-o",
                     host_dest_native.to_str().unwrap(),
-                    "--no-entry",
-                ];
+                ])
+                .output()
+                .unwrap();
 
-                let output = Command::new(&zig_executable()).args(args).output().unwrap();
-                validate_output("c_host.o", "zig wasm-ld", output);
-            } else {
-                let output = build_c_host_native(
-                    &env_path,
-                    &env_home,
-                    c_host_dest.to_str().unwrap(),
-                    &[c_host_src.to_str().unwrap()],
-                    opt_level,
-                    shared_lib_path,
-                );
-                validate_output("host.c", "clang", output);
-
-                let output = Command::new("ld")
-                    .env_clear()
-                    .env("PATH", &env_path)
-                    .args(&[
-                        "-r",
-                        "-L",
-                        cargo_out_dir.to_str().unwrap(),
-                        c_host_dest.to_str().unwrap(),
-                        "-lhost",
-                        "-o",
-                        host_dest_native.to_str().unwrap(),
-                    ])
-                    .output()
-                    .unwrap();
-
-                validate_output("c_host.o", "ld", output);
-            };
+            validate_output("c_host.o", "ld", output);
 
             // Clean up c_host.o
             let output = Command::new("rm")
@@ -1066,15 +1029,27 @@ fn link_wasm32(
     output_path: PathBuf,
     input_paths: &[&str],
     _link_type: LinkType,
+    host_dir: PathBuf,
 ) -> io::Result<(Child, PathBuf)> {
     let wasi_libc_path = find_wasi_libc_path();
+
+    // TODO: Too specific to Rust hosts! Need to generalize!
+    // Wasm host is a lib for Rust but might be a .o for Zig or others
+    let host_dir = host_dir.join("target").join("wasm32-wasi").join("debug");
 
     let child = Command::new(&zig_executable())
         .args(&["wasm-ld"])
         .args(input_paths)
         .args([
+            "-L",
+            host_dir.to_str().unwrap(),
+            "-lhost",
             wasi_libc_path.to_str().unwrap(),
-            &format!("-o={}", output_path.to_str().unwrap()),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--no-entry",
+            "--export",
+            "rust_main",
         ])
         .spawn()?;
 
@@ -1120,6 +1095,7 @@ pub fn module_to_dylib(
         app_o_file.clone(),
         &[app_o_file.to_str().unwrap()],
         LinkType::Dylib,
+        PathBuf::new(),
     )
     .unwrap();
 

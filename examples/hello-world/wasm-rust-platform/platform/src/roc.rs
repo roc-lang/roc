@@ -1,7 +1,7 @@
 use core::ffi::c_void;
+use std::alloc::{alloc, realloc, Layout};
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::alloc::{alloc, realloc, Layout};
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, alignment: u32) -> *mut c_void {
@@ -25,10 +25,12 @@ pub unsafe extern "C" fn roc_realloc(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
-    // TODO free memory for wasm. 
-    #![cfg(not(target_arch="wasm32"))]
-    return libc::free(c_ptr);
+pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, alignment: u32) {
+    // Note: if we remove the function body for Wasm, the whole function seems to get eliminated,
+    // resulting in linking errors!
+    let size = 1; // TODO: pass in the real size
+    let layout = Layout::from_size_align(size, alignment as usize).unwrap();
+    std::alloc::dealloc(c_ptr as *mut u8, layout);
 }
 
 #[no_mangle]
