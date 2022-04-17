@@ -1037,20 +1037,27 @@ fn link_wasm32(
     // Wasm host is a lib for Rust but might be a .o for Zig or others
     let host_dir = host_dir.join("target").join("wasm32-wasi").join("debug");
 
+    let args = [
+        "-L",
+        host_dir.to_str().unwrap(),
+        "-lhost",
+        wasi_libc_path.to_str().unwrap(),
+        "-o",
+        output_path.to_str().unwrap(),
+        "--no-entry", // we normally don't want an entry point for wasm (at least on the web)
+        "--export-all", // TODO: doesn't give us rust_main
+        // "--export",
+        // "rust_main", // TODO: too specific to Rust, will break other stuff
+        // Note: If we do `--export-all --export rust_main`, we get *everything* from the lib
+        // But we can't predict all names of all generated bindings
+    ];
+
+    // dbg!(&input_paths, &args);
+
     let child = Command::new(&zig_executable())
         .args(&["wasm-ld"])
         .args(input_paths)
-        .args([
-            "-L",
-            host_dir.to_str().unwrap(),
-            "-lhost",
-            wasi_libc_path.to_str().unwrap(),
-            "-o",
-            output_path.to_str().unwrap(),
-            "--no-entry",
-            "--export",
-            "rust_main",
-        ])
+        .args(args)
         .spawn()?;
 
     Ok((child, output_path))
