@@ -465,7 +465,12 @@ pub fn rebuild_host(
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
-        let cargo_out_dir = cargo_dir.join("target").join(
+
+        let mut cargo_out_dir = cargo_dir.join("target");
+        if matches!(target.architecture, Architecture::Wasm32) {
+            cargo_out_dir = cargo_out_dir.join("wasm32-wasi");
+        }
+        cargo_out_dir = cargo_out_dir.join(
             if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
                 "release"
             } else {
@@ -479,6 +484,10 @@ pub fn rebuild_host(
         if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
             command.arg("--release");
         }
+        if matches!(target.architecture, Architecture::Wasm32) {
+            command.args(["--target", "wasm32-wasi"]);
+        }
+
         let source_file = if shared_lib_path.is_some() {
             command.env("RUSTFLAGS", "-C link-dead-code");
             command.args(&["--bin", "host"]);
@@ -487,6 +496,7 @@ pub fn rebuild_host(
             command.arg("--lib");
             "src/lib.rs"
         };
+
         let output = command.output().unwrap();
 
         validate_output(source_file, "cargo build", output);
@@ -497,31 +507,68 @@ pub fn rebuild_host(
         } else {
             // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
 
-            let output = build_c_host_native(
-                &env_path,
-                &env_home,
-                c_host_dest.to_str().unwrap(),
-                &[c_host_src.to_str().unwrap()],
-                opt_level,
-                shared_lib_path,
-            );
-            validate_output("host.c", "clang", output);
+            if matches!(target.architecture, Architecture::Wasm32) {
+                let wasi_libc_path = find_wasi_libc_path();
 
-            let output = Command::new("ld")
-                .env_clear()
-                .env("PATH", &env_path)
-                .args(&[
-                    "-r",
+                // zig build-obj -target wasm32-wasi host.c -femit-bin=c_host.o
+                let output = Command::new(&zig_executable())
+                    .args(&[
+                        "build-obj",
+                        "-target",
+                        "wasm32-wasi",
+                        c_host_src.to_str().unwrap(),
+                        &format!("-femit-bin={}", c_host_dest.to_str().unwrap()),
+                    ])
+                    .output()
+                    .unwrap();
+                validate_output("c_host.o", "ld", output);
+
+                // let host_lib_wasm = cargo_out_dir.join("host.wasm");
+
+                let args = &[
+                    "wasm-ld",
+                    "--emit-relocs",
                     "-L",
                     cargo_out_dir.to_str().unwrap(),
+                    // host_lib_wasm.to_str().unwrap(),
+                    wasi_libc_path.to_str().unwrap(),
                     c_host_dest.to_str().unwrap(),
                     "-lhost",
                     "-o",
                     host_dest_native.to_str().unwrap(),
-                ])
-                .output()
-                .unwrap();
-            validate_output("c_host.o", "ld", output);
+                    "--no-entry",
+                ];
+
+                let output = Command::new(&zig_executable()).args(args).output().unwrap();
+                validate_output("c_host.o", "zig wasm-ld", output);
+            } else {
+                let output = build_c_host_native(
+                    &env_path,
+                    &env_home,
+                    c_host_dest.to_str().unwrap(),
+                    &[c_host_src.to_str().unwrap()],
+                    opt_level,
+                    shared_lib_path,
+                );
+                validate_output("host.c", "clang", output);
+
+                let output = Command::new("ld")
+                    .env_clear()
+                    .env("PATH", &env_path)
+                    .args(&[
+                        "-r",
+                        "-L",
+                        cargo_out_dir.to_str().unwrap(),
+                        c_host_dest.to_str().unwrap(),
+                        "-lhost",
+                        "-o",
+                        host_dest_native.to_str().unwrap(),
+                    ])
+                    .output()
+                    .unwrap();
+
+                validate_output("c_host.o", "ld", output);
+            };
 
             // Clean up c_host.o
             let output = Command::new("rm")
@@ -1020,32 +1067,14 @@ fn link_wasm32(
     input_paths: &[&str],
     _link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let zig_str_path = find_zig_str_path();
     let wasi_libc_path = find_wasi_libc_path();
 
-    dbg!(input_paths);
-
     let child = Command::new(&zig_executable())
-        // .env_clear()
-        // .env("PATH", &env_path)
-        .args(&["build-exe"])
+        .args(&["wasm-ld"])
         .args(input_paths)
         .args([
-            // include wasi libc
-            // using `-lc` is broken in zig 8 (and early 9) in combination with ReleaseSmall
             wasi_libc_path.to_str().unwrap(),
-            &format!("-femit-bin={}", output_path.to_str().unwrap()),
-            "-target",
-            "wasm32-wasi-musl",
-            "--pkg-begin",
-            "str",
-            zig_str_path.to_str().unwrap(),
-            "--pkg-end",
-            "--strip",
-            "-O",
-            "ReleaseSmall",
-            // useful for debugging
-            // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
+            &format!("-o={}", output_path.to_str().unwrap()),
         ])
         .spawn()?;
 
