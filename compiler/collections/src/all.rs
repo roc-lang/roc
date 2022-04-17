@@ -235,6 +235,12 @@ impl<T> Default for VecSet<T> {
 }
 
 impl<T: PartialEq> VecSet<T> {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            elements: Vec::with_capacity(capacity),
+        }
+    }
+
     pub fn insert(&mut self, value: T) -> bool {
         if self.elements.contains(&value) {
             true

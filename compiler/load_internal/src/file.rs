@@ -9,7 +9,7 @@ use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet, VecSet};
 use roc_constrain::module::{
     constrain_builtin_imports, constrain_module, ExposedByModule, ExposedForModule,
     ExposedModuleTypes,
@@ -40,7 +40,7 @@ use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::{Alias, AliasCommon, TypeExtension};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, };
 use std::io;
 use std::iter;
 use std::ops::ControlFlow;
@@ -605,7 +605,7 @@ struct State<'a> {
 
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
 
-    pub exposed_symbols_by_module: MutMap<ModuleId, MutSet<Symbol>>,
+    pub exposed_symbols_by_module: MutMap<ModuleId, VecSet<Symbol>>,
 
     pub timings: MutMap<ModuleId, ModuleTiming>,
 
@@ -749,7 +749,7 @@ enum BuildTask<'a> {
         parsed: ParsedModule<'a>,
         module_ids: ModuleIds,
         dep_idents: MutMap<ModuleId, IdentIds>,
-        exposed_symbols: MutSet<Symbol>,
+        exposed_symbols: VecSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
     },
     Solve {
@@ -1680,8 +1680,7 @@ fn update<'a>(
             }
 
             // This was a dependency. Write it down and keep processing messages.
-            let mut exposed_symbols: MutSet<Symbol> =
-                HashSet::with_capacity_and_hasher(header.exposes.len(), default_hasher());
+            let mut exposed_symbols: VecSet<Symbol> = VecSet::with_capacity(header.exposes.len());
 
             // TODO can we avoid this loop by storing them as a Set in Header to begin with?
             for symbol in header.exposes.iter() {
@@ -3399,7 +3398,7 @@ fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
     dep_idents: MutMap<ModuleId, IdentIds>,
-    exposed_symbols: MutSet<Symbol>,
+    exposed_symbols: VecSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     parsed: ParsedModule<'a>,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {

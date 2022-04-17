@@ -23,7 +23,7 @@ use roc_types::types::{Alias, AliasKind, Type};
 pub struct Module {
     pub module_id: ModuleId,
     pub exposed_imports: MutMap<Symbol, Variable>,
-    pub exposed_symbols: MutSet<Symbol>,
+    pub exposed_symbols: VecSet<Symbol>,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
     /// all aliases. `bool` indicates whether it is exposed
@@ -89,7 +89,7 @@ pub fn canonicalize_module_defs<'a>(
     dep_idents: &'a MutMap<ModuleId, IdentIds>,
     aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    exposed_symbols: &MutSet<Symbol>,
+    exposed_symbols: &VecSet<Symbol>,
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
@@ -319,7 +319,7 @@ pub fn canonicalize_module_defs<'a>(
                 generated_functions,
             }) = hosted_info
             {
-                let mut exposed_symbols = MutSet::default();
+                let mut exposed_symbols = VecSet::default();
 
                 // NOTE this currently builds all functions, not just the ones that the user requested
                 crate::effect_module::build_effect_builtins(
