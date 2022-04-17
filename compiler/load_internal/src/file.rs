@@ -1758,8 +1758,6 @@ fn update<'a>(
 
             // add the prelude
             let mut header = header;
-            // let mut imports = header.package_qualified_imported_modules.clone();
-            //
 
             if ![ModuleId::RESULT, ModuleId::BOOL].contains(&header.module_id) {
                 header
