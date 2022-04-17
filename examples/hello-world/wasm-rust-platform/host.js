@@ -9,21 +9,23 @@ async function roc_web_platform_run(wasm_filename) {
         }
         exit_code = code;
       },
-        roc_panic: (_pointer, _tag_id) => {
-            throw 'Roc panicked!';
-        }
+      roc_panic: (_pointer, _tag_id) => {
+        throw "Roc panicked!";
+      },
     },
-    env: {
-    },
+    env: {},
   };
 
   // `instantiateStreaming` is faster than `instantiate`, especially if you don't `await` the response,
   // so it can start compiling from the first received packet. Available in all browsers, but not Node.
   const responsePromise = fetch(wasm_filename);
-  const wasm = await WebAssembly.instantiateStreaming(responsePromise, importObj);
+  const wasm = await WebAssembly.instantiateStreaming(
+    responsePromise,
+    importObj
+  );
 
   try {
-    wasm.instance.exports._start();
+    wasm.instance.exports.rust_main();
   } catch (e) {
     const is_ok = e.message === "unreachable" && exit_code === 0;
     if (!is_ok) {
@@ -32,7 +34,7 @@ async function roc_web_platform_run(wasm_filename) {
   }
 }
 
-if (typeof module !== 'undefined') {
+if (typeof module !== "undefined") {
   module.exports = {
     roc_web_platform_run,
   };
