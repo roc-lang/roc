@@ -1,36 +1,33 @@
 use core::ffi::c_void;
-use std::alloc::{alloc, realloc, Layout};
+use std::alloc::{alloc, Layout};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-#[no_mangle]
-pub unsafe extern "C" fn roc_alloc(size: usize, alignment: u32) -> *mut c_void {
-    let layout = Layout::from_size_align(size, alignment as usize).unwrap();
-    let ptr = alloc(layout);
+// Rust's libc crate doesn't support Wasm, but we can link another libc implementation
+extern "C" {
+    fn malloc(size: usize) -> *mut c_void;
+    fn free(p: *mut c_void);
+    fn realloc(p: *mut c_void, size: usize) -> *mut c_void;
+}
 
-    return ptr as *mut c_void;
+#[no_mangle]
+pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+    return malloc(size);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_realloc(
     c_ptr: *mut c_void,
     new_size: usize,
-    old_size: usize,
-    alignment: u32,
+    _old_size: usize,
+    _alignment: u32,
 ) -> *mut c_void {
-    let layout = Layout::from_size_align(old_size, alignment as usize).unwrap();
-    let ptr = realloc(c_ptr as *mut u8, layout, new_size);
-
-    return ptr as *mut c_void;
+    return realloc(c_ptr, new_size);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, alignment: u32) {
-    // Note: if we remove the function body for Wasm, the whole function seems to get eliminated,
-    // resulting in linking errors!
-    let size = 1; // TODO: pass in the real size
-    let layout = Layout::from_size_align(size, alignment as usize).unwrap();
-    std::alloc::dealloc(c_ptr as *mut u8, layout);
+pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+    free(c_ptr);
 }
 
 #[no_mangle]
