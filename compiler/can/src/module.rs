@@ -7,7 +7,7 @@ use crate::operator::desugar_def;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, MutSet, SendMap, VecSet};
 use roc_module::ident::Lowercase;
 use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -24,8 +24,8 @@ pub struct Module {
     pub module_id: ModuleId,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub exposed_symbols: MutSet<Symbol>,
-    pub referenced_values: MutSet<Symbol>,
-    pub referenced_types: MutSet<Symbol>,
+    pub referenced_values: VecSet<Symbol>,
+    pub referenced_types: VecSet<Symbol>,
     /// all aliases. `bool` indicates whether it is exposed
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
@@ -36,7 +36,7 @@ pub struct Module {
 pub struct RigidVariables {
     pub named: MutMap<Variable, Lowercase>,
     pub able: MutMap<Variable, (Lowercase, Symbol)>,
-    pub wildcards: MutSet<Variable>,
+    pub wildcards: VecSet<Variable>,
 }
 
 #[derive(Debug)]
@@ -48,8 +48,8 @@ pub struct ModuleOutput {
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub problems: Vec<Problem>,
     pub ident_ids: IdentIds,
-    pub referenced_values: MutSet<Symbol>,
-    pub referenced_types: MutSet<Symbol>,
+    pub referenced_values: VecSet<Symbol>,
+    pub referenced_types: VecSet<Symbol>,
     pub scope: Scope,
 }
 
@@ -273,8 +273,8 @@ pub fn canonicalize_module_defs<'a>(
         rigid_variables.wildcards.insert(var.value);
     }
 
-    let mut referenced_values = MutSet::default();
-    let mut referenced_types = MutSet::default();
+    let mut referenced_values = VecSet::default();
+    let mut referenced_types = VecSet::default();
 
     // Gather up all the symbols that were referenced across all the defs' lookups.
     referenced_values.extend(output.references.value_lookups);
