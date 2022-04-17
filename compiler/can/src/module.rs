@@ -7,7 +7,7 @@ use crate::operator::desugar_def;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet, SendMap, VecSet};
+use roc_collections::all::{MutMap, SendMap, VecSet};
 use roc_module::ident::Lowercase;
 use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -495,9 +495,9 @@ pub fn canonicalize_module_defs<'a>(
 
             for declaration in declarations.iter_mut() {
                 match declaration {
-                    Declare(def) => fix_values_captured_in_closure_def(def, &mut MutSet::default()),
+                    Declare(def) => fix_values_captured_in_closure_def(def, &mut VecSet::default()),
                     DeclareRec(defs) => {
-                        fix_values_captured_in_closure_defs(defs, &mut MutSet::default())
+                        fix_values_captured_in_closure_defs(defs, &mut VecSet::default())
                     }
                     InvalidCycle(_) | Builtin(_) => {}
                 }
@@ -535,7 +535,7 @@ pub fn canonicalize_module_defs<'a>(
 
 fn fix_values_captured_in_closure_def(
     def: &mut crate::def::Def,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     // patterns can contain default expressions, so much go over them too!
     fix_values_captured_in_closure_pattern(&mut def.loc_pattern.value, no_capture_symbols);
@@ -545,7 +545,7 @@ fn fix_values_captured_in_closure_def(
 
 fn fix_values_captured_in_closure_defs(
     defs: &mut Vec<crate::def::Def>,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     // recursive defs cannot capture each other
     for def in defs.iter() {
@@ -561,7 +561,7 @@ fn fix_values_captured_in_closure_defs(
 
 fn fix_values_captured_in_closure_pattern(
     pattern: &mut crate::pattern::Pattern,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     use crate::pattern::Pattern::*;
 
@@ -610,7 +610,7 @@ fn fix_values_captured_in_closure_pattern(
 
 fn fix_values_captured_in_closure_expr(
     expr: &mut crate::expr::Expr,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     use crate::expr::Expr::*;
 
