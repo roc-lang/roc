@@ -20,3 +20,8 @@ roc_std = { path = "../../../roc_std" }
 libc = "0.2"
 
 [workspace]
+
+# Optimizations based on https://deterministic.space/high-performance-rust.html
+[profile.release]
+lto = "fat"
+codegen-units = 1
