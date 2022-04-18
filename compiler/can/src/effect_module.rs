@@ -4,7 +4,7 @@ use crate::env::Env;
 use crate::expr::{ClosureData, Expr, Recursive};
 use crate::pattern::Pattern;
 use crate::scope::Scope;
-use roc_collections::all::{MutSet, SendMap};
+use roc_collections::all::{SendMap, VecSet};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
@@ -39,7 +39,7 @@ pub(crate) fn build_effect_builtins(
     scope: &mut Scope,
     effect_symbol: Symbol,
     var_store: &mut VarStore,
-    exposed_symbols: &mut MutSet<Symbol>,
+    exposed_symbols: &mut VecSet<Symbol>,
     declarations: &mut Vec<Declaration>,
     generated_functions: HostedGeneratedFunctions,
 ) {
