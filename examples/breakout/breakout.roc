@@ -5,10 +5,11 @@ app "breakout"
 
 paddleWidth = 0.2 # width of the paddle, as a % of screen width
 paddleHeight = 50 # height of the paddle, in pixels
-paddleSpeed = 65 # how many pixels the paddle moves per keypress
+paddleSpeed = 120 # how many pixels the paddle moves per keypress
 blockHeight = 80 # height of a block, in pixels
 blockBorder = 0.025 # border of a block, as a % of its width
 ballSize = 55
+ballSpeed = 0.008 # how far the ball moves per tick, as a % of screen width
 numRows = 4
 numCols = 8
 numBlocks = numRows * numCols
@@ -43,8 +44,8 @@ init = \{ width, height } ->
         ballY: height * 0.4,
 
         # Delta - how much ball moves in each tick
-        dBallX: 4,
-        dBallY: 4,
+        dBallX: ballSpeed * width,
+        dBallY: ballSpeed * width,
     }
 
 update : Model, Event -> Model
