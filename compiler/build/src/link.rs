@@ -335,6 +335,59 @@ pub fn build_c_host_native(
     command.output().unwrap()
 }
 
+pub fn build_cc_host_native(
+    env_path: &str,
+    env_home: &str,
+    dest: &str,
+    sources: &[&str],
+    opt_level: OptLevel,
+    shared_lib_path: Option<&Path>,
+) -> Output {
+    // Get SDL2 cflags flags.
+    let out = Command::new("sdl2-config")
+        .arg("--cflags")
+        .output()
+        .unwrap();
+    let cflags = std::str::from_utf8(&out.stdout).unwrap().split_whitespace();
+
+    let mut command = Command::new("clang++");
+    command
+        .env_clear()
+        .env("PATH", &env_path)
+        .env("HOME", &env_home)
+        .args(sources)
+        .args(&["-o", dest])
+        .arg("-std=c++17")
+        .args(cflags);
+    if let Some(shared_lib_path) = shared_lib_path {
+        // Get SDL2 link flags.
+        let out = Command::new("sdl2-config").arg("--libs").output().unwrap();
+        let lflags = std::str::from_utf8(&out.stdout).unwrap().split_whitespace();
+
+        command
+            .args(&[
+                shared_lib_path.to_str().unwrap(),
+                bitcode::BUILTINS_HOST_OBJ_PATH,
+                "-fPIE",
+                "-pie",
+                "-lm",
+                "-lpthread",
+                "-ldl",
+                "-lrt",
+                "-lutil",
+            ])
+            .args(lflags);
+    } else {
+        command.args(&["-fPIC", "-c"]);
+    }
+    if matches!(opt_level, OptLevel::Optimize) {
+        command.arg("-O3");
+    } else if matches!(opt_level, OptLevel::Size) {
+        command.arg("-Os");
+    }
+    command.output().unwrap()
+}
+
 pub fn build_swift_host_native(
     env_path: &str,
     env_home: &str,
@@ -380,6 +433,7 @@ pub fn rebuild_host(
 ) {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
+    let cc_host_src = host_input_path.with_file_name("host.cc");
     let zig_host_src = host_input_path.with_file_name("host.zig");
     let rust_host_src = host_input_path.with_file_name("host.rs");
     let rust_host_dest = host_input_path.with_file_name("rust_host.o");
@@ -620,6 +674,17 @@ pub fn rebuild_host(
             shared_lib_path,
         );
         validate_output("host.c", "clang", output);
+    } else if cc_host_src.exists() {
+        // Compile host.cc, if it exists
+        let output = build_cc_host_native(
+            &env_path,
+            &env_home,
+            host_dest_native.to_str().unwrap(),
+            &[cc_host_src.to_str().unwrap()],
+            opt_level,
+            shared_lib_path,
+        );
+        validate_output("host.cc", "clang++", output);
     } else if swift_host_src.exists() {
         // Compile host.swift, if it exists
         let output = build_swift_host_native(
@@ -953,12 +1018,17 @@ fn link_macos(
         ld_command.arg(roc_link_flag);
     }
 
+    let out = Command::new("sdl2-config").arg("--libs").output().unwrap();
+    let lflags = std::str::from_utf8(&out.stdout).unwrap().split_whitespace();
+    ld_command.args(lflags);
+
     ld_command.args(&[
         // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
         // for discussion and further references
         "-lSystem",
         "-lresolv",
         "-lpthread",
+        "-lc++",
         // This `-F PATH` flag is needed for `-framework` flags to work
         "-F",
         "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/",
