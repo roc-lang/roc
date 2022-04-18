@@ -1046,13 +1046,28 @@ fn link_wasm32(
         output_path.to_str().unwrap(),
         "--no-entry", // we normally don't want an entry point for wasm (at least on the web)
         "--export-all", // TODO: doesn't give us rust_main
-        // "--export",
-        // "rust_main", // TODO: too specific to Rust, will break other stuff
-        // Note: If we do `--export-all --export rust_main`, we get *everything* from the lib
-        // But we can't predict all names of all generated bindings
     ];
+    // "--export",
+    // "rust_main", // TODO: too specific to Rust, will break other stuff
+    // Note: If we do `--export-all --export rust_main`, we get *everything* from the lib
+    // But we can't predict all names of all generated bindings
 
-    // dbg!(&input_paths, &args);
+    if true {
+        // experiment with wasm-ld options on the command line, without having to rebuild roc!
+
+        // Copy the app out of /tmp
+        let mut app_copy_buf = output_path.clone();
+        app_copy_buf.set_extension("bc");
+        let app_copy = app_copy_buf.to_str().unwrap();
+        std::fs::copy(input_paths[0], app_copy)?;
+
+        println!(
+            "{} wasm-ld {} {}",
+            zig_executable(),
+            app_copy,
+            args.join(" ")
+        );
+    }
 
     let child = Command::new(&zig_executable())
         .args(&["wasm-ld"])
