@@ -9137,10 +9137,10 @@ I need all branches in an `if` to have the same type!
         new_report_problem_as(
             indoc!(
                 r#"
+                app "test" provides [] to "./platform"
+
                 Hash a b c has
                   hash : a -> U64 | a has Hash
-
-                1
                 "#
             ),
             indoc!(
@@ -9149,8 +9149,8 @@ I need all branches in an `if` to have the same type!
 
                 The definition of the `Hash` ability includes type variables:
 
-                4│      Hash a b c has
-                             ^^^^^
+                3│  Hash a b c has
+                         ^^^^^
 
                 Abilities cannot depend on type variables, but their member values
                 can!
@@ -9159,8 +9159,8 @@ I need all branches in an `if` to have the same type!
 
                 `Hash` is not used anywhere in your code.
 
-                4│      Hash a b c has
-                        ^^^^
+                3│  Hash a b c has
+                    ^^^^
 
                 If you didn't intend on using `Hash` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -9228,12 +9228,13 @@ I need all branches in an `if` to have the same type!
         new_report_problem_as(
             indoc!(
                 r#"
+                app "test" provides [ a ] to "./platform"
+
                 Ability has ab : a -> {} | a has Ability
 
                 Alias : Ability
 
                 a : Alias
-                a
                 "#
             ),
             indoc!(
@@ -9242,8 +9243,8 @@ I need all branches in an `if` to have the same type!
 
                 The definition of the `Alias` aliases references the ability `Ability`:
 
-                6│      Alias : Ability
-                        ^^^^^
+                5│  Alias : Ability
+                    ^^^^^
 
                 Abilities are not types, but you can add an ability constraint to a
                 type variable `a` by writing
@@ -9256,8 +9257,8 @@ I need all branches in an `if` to have the same type!
 
                 `ab` is not used anywhere in your code.
 
-                4│      Ability has ab : a -> {} | a has Ability
-                                    ^^
+                3│  Ability has ab : a -> {} | a has Ability
+                                ^^
 
                 If you didn't intend on using `ab` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -9271,11 +9272,11 @@ I need all branches in an `if` to have the same type!
         new_report_problem_as(
             indoc!(
                 r#"
+                app "test" provides [ ab ] to "./platform"
+
                 Ability has ab : a -> U64 | a has Ability
 
                 Ability has ab1 : a -> U64 | a has Ability
-
-                1
                 "#
             ),
             indoc!(
@@ -9284,26 +9285,16 @@ I need all branches in an `if` to have the same type!
 
                 The `Ability` name is first defined here:
 
-                4│      Ability has ab : a -> U64 | a has Ability
-                        ^^^^^^^
+                3│  Ability has ab : a -> U64 | a has Ability
+                    ^^^^^^^
 
                 But then it's defined a second time here:
 
-                6│      Ability has ab1 : a -> U64 | a has Ability
-                        ^^^^^^^
+                5│  Ability has ab1 : a -> U64 | a has Ability
+                    ^^^^^^^
 
                 Since these abilities have the same name, it's easy to use the wrong
                 one on accident. Give one of them a new name.
-
-                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
-
-                `ab` is not used anywhere in your code.
-
-                4│      Ability has ab : a -> U64 | a has Ability
-                                    ^^
-
-                If you didn't intend on using `ab` then remove it so future readers of
-                your code don't wonder why it is there.
                 "#
             ),
         )
@@ -9779,6 +9770,35 @@ I need all branches in an `if` to have the same type!
 
                 4│      hash : a -> U64 | a has Hash
                         ^^^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_not_on_toplevel() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                main =
+                    Hash has
+                        hash : a -> U64 | a has Hash
+
+                    123
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ABILITY NOT ON TOP-LEVEL ────────────────────────────────────────────────────
+
+                This ability definition is not on the top-level of a module:
+
+                4│>      Hash has
+                5│>          hash : a -> U64 | a has Hash
+
+                Abilities can only be defined on the top-level of a Roc module.
                 "#
             ),
         )

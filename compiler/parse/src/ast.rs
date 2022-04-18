@@ -278,6 +278,12 @@ pub struct AbilityMember<'a> {
     pub typ: Loc<TypeAnnotation<'a>>,
 }
 
+impl AbilityMember<'_> {
+    pub fn region(&self) -> Region {
+        Region::across_all([self.name.region, self.typ.region].iter())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TypeDef<'a> {
     /// A type alias. This is like a standalone annotation, except the pattern

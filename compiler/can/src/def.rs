@@ -241,10 +241,12 @@ pub fn canonicalize_defs<'a>(
     let pending_type_defs = type_defs
         .into_iter()
         .filter_map(|loc_def| {
-            to_pending_type_def(env, loc_def.value, &mut scope).map(|(new_output, pending_def)| {
-                output.union(new_output);
-                pending_def
-            })
+            to_pending_type_def(env, loc_def.value, &mut scope, pattern_type).map(
+                |(new_output, pending_def)| {
+                    output.union(new_output);
+                    pending_def
+                },
+            )
         })
         .collect::<Vec<_>>();
 
@@ -1679,6 +1681,7 @@ fn to_pending_type_def<'a>(
     env: &mut Env<'a>,
     def: &'a ast::TypeDef<'a>,
     scope: &mut Scope,
+    pattern_type: PatternType,
 ) -> Option<(Output, PendingTypeDef<'a>)> {
     use ast::TypeDef::*;
 
@@ -1760,6 +1763,19 @@ fn to_pending_type_def<'a>(
                     Some((Output::default(), PendingTypeDef::InvalidAlias { kind }))
                 }
             }
+        }
+
+        Ability {
+            header, members, ..
+        } if pattern_type != PatternType::TopLevelDef => {
+            let header_region = header.region();
+            let region = Region::span_across(
+                &header_region,
+                &members.last().map(|m| m.region()).unwrap_or(header_region),
+            );
+            env.problem(Problem::AbilityNotOnToplevel { region });
+
+            Some((Output::default(), PendingTypeDef::InvalidAbility))
         }
 
         Ability {
