@@ -152,7 +152,7 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
                     &cmd_queue,
                 );
 
-                update_and_rerender!(RocEvent::resize(Bounds {
+                update_and_rerender!(RocEvent::Resize(Bounds {
                     height: size.height as f32,
                     width: size.width as f32,
                 }));
@@ -172,8 +172,8 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
                 ..
             } => {
                 let roc_event = match input_state {
-                    ElementState::Pressed => RocEvent::key_down(keycode.into()),
-                    ElementState::Released => RocEvent::key_up(keycode.into()),
+                    ElementState::Pressed => RocEvent::KeyDown(keycode.into()),
+                    ElementState::Released => RocEvent::KeyUp(keycode.into()),
                 };
 
                 model = roc::update(model, roc_event);
@@ -252,7 +252,7 @@ pub fn run_event_loop(title: &str, window_bounds: Bounds) -> Result<(), Box<dyn 
 
                     let tick = now.saturating_duration_since(app_start_time);
 
-                    update_and_rerender!(RocEvent::tick(tick));
+                    update_and_rerender!(RocEvent::Tick(tick));
 
                     *control_flow = winit::event_loop::ControlFlow::WaitUntil(next_tick);
                 }

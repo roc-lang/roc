@@ -60,7 +60,7 @@ pub union RocEventEntry {
     pub key_down: RocKeyCode,
     pub key_up: RocKeyCode,
     pub resize: Bounds,
-    pub tick: u128,
+    pub tick: [u8; 16], // u128 is unsupported in repr(C)
 }
 
 #[repr(u8)]
@@ -103,32 +103,36 @@ impl RocEvent {
         &self.entry
     }
 
-    pub fn resize(size: Bounds) -> Self {
+    #[allow(non_snake_case)]
+    pub fn Resize(size: Bounds) -> Self {
         Self {
             tag: RocEventTag::Resize,
             entry: RocEventEntry { resize: size },
         }
     }
 
-    pub fn key_down(keycode: RocKeyCode) -> Self {
+    #[allow(non_snake_case)]
+    pub fn KeyDown(keycode: RocKeyCode) -> Self {
         Self {
             tag: RocEventTag::KeyDown,
             entry: RocEventEntry { key_down: keycode },
         }
     }
 
-    pub fn key_up(keycode: RocKeyCode) -> Self {
+    #[allow(non_snake_case)]
+    pub fn KeyUp(keycode: RocKeyCode) -> Self {
         Self {
             tag: RocEventTag::KeyUp,
             entry: RocEventEntry { key_up: keycode },
         }
     }
 
-    pub fn tick(duration: Duration) -> Self {
+    #[allow(non_snake_case)]
+    pub fn Tick(duration: Duration) -> Self {
         Self {
             tag: RocEventTag::Tick,
             entry: RocEventEntry {
-                tick: duration.as_nanos(),
+                tick: duration.as_nanos().to_ne_bytes(),
             },
         }
     }
