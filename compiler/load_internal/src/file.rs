@@ -143,6 +143,11 @@ impl Default for ModuleCache<'_> {
             PQModuleName::Unqualified(ModuleName::from(ModuleName::NUM)),
         );
 
+        module_names.insert(
+            ModuleId::BOX,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::BOX)),
+        );
+
         Self {
             module_names,
             headers: Default::default(),
@@ -1853,6 +1858,14 @@ fn update<'a>(
             }
 
             if !header.module_id.is_builtin() {
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::BOX));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::BOX, Region::zero());
+
                 header
                     .package_qualified_imported_modules
                     .insert(PackageQualified::Unqualified(ModuleId::STR));
