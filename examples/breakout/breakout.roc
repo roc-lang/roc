@@ -97,8 +97,8 @@ update = \model, event ->
 tick : Model -> Model
 tick = \model ->
     model
-        |> moveBall
-        |> updateBlocks
+        #|> moveBall
+        #|> updateBlocks
 
 moveBall : Model -> Model
 moveBall = \model ->
@@ -157,8 +157,15 @@ render : Model -> List Elem
 render = \model ->
     blockWidth = model.width / numCols
 
+    blocks =
+        # Drop the conditional to fix the malloc error
+        if True then
+            initBlocks model.width
+        else
+            model.blocks
+
     rects =
-        List.joinMap model.blocks \{ left, top, color, status } ->
+        List.joinMap blocks \{ left, top, color, status } ->
             border = blockBorder * blockWidth
             alpha =
                 when status is
