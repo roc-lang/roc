@@ -1,6 +1,6 @@
 app "breakout"
     packages { pf: "platform" }
-    imports [ pf.Game.{ Bounds, Elem, Event, Rgba } ]
+    imports [ pf.Game.{ Bounds, Elem, Event } ]
     provides [ program ] { Model } to pf
 
 paddleWidth = 0.2 # width of the paddle, as a % of screen width
@@ -11,11 +11,8 @@ blockBorder = 0.025 # border of a block, as a % of its width
 ballSize = 55
 numRows = 4
 numCols = 8
-numBlocks = numRows * numCols
 
 Model : {
-    blocks : List Block,
-
     # Screen height and width
     height : F32,
     width : F32,
@@ -30,20 +27,9 @@ Model : {
     dBallY : F32, # delta y - how much it moves per tick
 }
 
-Block : {
-    left : F32,
-    top : F32,
-    color : Rgba,
-    status : [ Active, Removed, Fading F32 ],
-}
-
 init : Bounds -> Model
 init = \{ width, height } ->
-    blocks = initBlocks width
-
     {
-        blocks,
-
         # Screen height and width
         width,
         height,
@@ -60,31 +46,6 @@ init = \{ width, height } ->
         dBallY: 4,
     }
 
-initBlocks : F32 -> List Block
-initBlocks = \width ->
-    blockWidth = width / numCols
-
-    List.map (List.range 0 numBlocks) \index ->
-        col =
-            Num.rem index numCols
-                |> Result.withDefault 0
-                |> Num.toF32
-
-        row =
-            index // numCols
-                |> Num.toF32
-
-        red = col / Num.toF32 numCols
-        green = row / Num.toF32 numRows
-        blue = Num.toF32 index / Num.toF32 numBlocks
-
-        color = { r: red * 0.8, g: 0.2 + green * 0.6, b: 0.2 + blue * 0.8, a: 1 }
-
-        left = Num.toF32 col * blockWidth
-        top = Num.toF32 row * blockHeight
-
-        { left, top, color, status: Active }
-
 update : Model, Event -> Model
 update = \model, event ->
     when event is
@@ -97,8 +58,7 @@ update = \model, event ->
 tick : Model -> Model
 tick = \model ->
     model
-        #|> moveBall
-        #|> updateBlocks
+        |> moveBall
 
 moveBall : Model -> Model
 moveBall = \model ->
@@ -125,71 +85,49 @@ moveBall = \model ->
 
     { model & ballX, ballY, dBallX, dBallY }
 
-updateBlocks : Model -> Model
-updateBlocks = \model ->
-    blockWidth = model.width / numCols
-    blocks = List.map model.blocks \block ->
-        when block.status is
-            Removed -> block
-            Active ->
-                ballRect = { left: model.ballX, top: model.ballY, width: ballSize, height: ballSize }
-                blockRect = { left: block.left, top: block.top, height: blockHeight, width: blockWidth }
-
-                if isOverlapping blockRect ballRect then
-                    { block & status: Removed }
-                else
-                    block
-            Fading amount ->
-                if amount <= 0 then
-                    { block & status: Removed }
-                else
-                    { block & status: Fading (amount - 0.1) }
-
-    { model & blocks }
-
-isOverlapping = \rect1, rect2 ->
-    (rect1.left + rect1.width >= rect2.left)
-        && (rect2.left + rect2.width >= rect1.left)
-        && (rect1.top + rect1.height >= rect2.top)
-        && (rect2.top + rect2.height >= rect1.top)
-
 render : Model -> List Elem
 render = \model ->
+
+    blocks = List.map (List.range 0 numBlocks) \index ->
+        col =
+            Num.rem index numCols
+                |> Result.withDefault 0
+                |> Num.toF32
+
+        row =
+            index // numCols
+                |> Num.toF32
+
+        red = col / Num.toF32 numCols
+        green = row / Num.toF32 numRows
+        blue = Num.toF32 index / Num.toF32 numBlocks
+
+        color = { r: red * 0.8, g: 0.2 + green * 0.6, b: 0.2 + blue * 0.8, a: 1 }
+
+        { row, col, color }
+
     blockWidth = model.width / numCols
 
-    blocks =
-        # Drop the conditional to fix the malloc error
-        if True then
-            initBlocks model.width
-        else
-            model.blocks
-
     rects =
-        List.joinMap blocks \{ left, top, color, status } ->
+        List.joinMap blocks \{ row, col, color } ->
+            left = Num.toF32 col * blockWidth
+            top = Num.toF32 (row * blockHeight)
             border = blockBorder * blockWidth
-            alpha =
-                when status is
-                    Fading amount -> amount
-                    Active -> 1
-                    Removed -> 1 # TODO this should be 0, but for some reason Active blocks have this memory.
 
-            # This outer rectangle gets drawn first, and will appear to be a border.
             outer = Rect {
                 left,
                 top,
                 width: blockWidth,
                 height: blockHeight,
-                color: { r: color.r * 0.8, g: color.g * 0.8, b: color.b * 0.8, a: color.a * alpha },
+                color: { r: color.r * 0.8, g: color.g * 0.8, b: color.b * 0.8, a: 1 },
             }
 
-            # The inner retangle is smaller than the outer one, but gets drawn on top of it,
-            # such that the outer one appears to be a border.
             inner = Rect {
                 left: left + border,
                 top: top + border,
                 width: blockWidth - (border * 2),
                 height: blockHeight - (border * 2),
-                color: { color & a: color.a * alpha },
+                color,
             }
 
             [ outer, inner ]
