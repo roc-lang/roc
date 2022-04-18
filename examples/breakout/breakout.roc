@@ -1,6 +1,6 @@
 app "breakout"
     packages { pf: "platform" }
-    imports [ pf.Game.{ Bounds, Elem, Event, Rgba, Rect } ]
+    imports [ pf.Game.{ Bounds, Elem, Event, Rgba } ]
     provides [ program ] { Model } to pf
 
 paddleWidth = 0.2 # width of the paddle, as a % of screen width
@@ -15,7 +15,7 @@ numBlocks = numRows * numCols
 
 Model : {
     blocks : List Block,
-    rects : List Rect,
+    foo : List _,
 
     # Screen height and width
     height : F32,
@@ -42,7 +42,7 @@ init : Bounds -> Model
 init = \{ width, height } ->
     {
         blocks: initBlocks width,
-        rects: [ Rect { left: 0, top: 0, width: 100, height: 100, color: { r: 1, g: 0.5, b: 1, a: 1 } } ],
+        foo: [ {} ]
 
         # Screen height and width
         width,
