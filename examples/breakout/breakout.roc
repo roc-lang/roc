@@ -15,7 +15,6 @@ numBlocks = numRows * numCols
 
 Model : {
     blocks : List Block,
-    foo : List _,
 
     # Screen height and width
     height : F32,
@@ -40,9 +39,10 @@ Block : {
 
 init : Bounds -> Model
 init = \{ width, height } ->
+    blocks = initBlocks width
+
     {
-        blocks: initBlocks width,
-        foo: [ {} ]
+        blocks,
 
         # Screen height and width
         width,
@@ -164,7 +164,7 @@ render = \model ->
                 when status is
                     Fading amount -> amount
                     Active -> 1
-                    Removed -> 0
+                    Removed -> 1 # TODO this should be 0, but for some reason Active blocks have this memory.
 
             # This outer rectangle gets drawn first, and will appear to be a border.
             outer = Rect {
