@@ -134,7 +134,7 @@ updateBlocks = \model ->
                 blockRect = { left: block.left, top: block.top, height: blockHeight, width: blockWidth }
 
                 if isOverlapping blockRect ball then
-                    { block & status: Fading 1 }
+                    { block & status: Removed }
                 else
                     block
             Fading amount ->
@@ -158,9 +158,9 @@ render = \model ->
     rects =
         List.joinMap model.blocks \{ left, top, color, status } ->
             border = blockBorder * blockWidth
-            a =
+            alpha =
                 when status is
-                    Fading alpha -> alpha
+                    Fading amount -> amount
                     Active -> 1
                     Removed -> 0
 
@@ -170,7 +170,7 @@ render = \model ->
                     top,
                     width: blockWidth,
                     height: blockHeight,
-                    color: { r: color.r * 0.8, g: color.g * 0.8, b: color.b * 0.8, a: 1 },
+                    color: { r: color.r * 0.8, g: color.g * 0.8, b: color.b * 0.8, a: alpha },
                 }
 
             inner = Rect
@@ -179,7 +179,7 @@ render = \model ->
                     top: top + border,
                     width: blockWidth - (border * 2),
                     height: blockHeight - (border * 2),
-                    color,
+                    color: { color & a: alpha },
                 }
 
             [ outer, inner ]
