@@ -1050,7 +1050,7 @@ fn gen_div_checked_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.divFloorChecked 1000 10 is
+                    when Num.divTruncChecked 1000 10 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -1066,7 +1066,7 @@ fn gen_div_checked_by_zero_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.divFloorChecked 1000 0 is
+                    when Num.divTruncChecked 1000 0 is
                         Err DivByZero -> 99
                         _ -> -24
                 "#

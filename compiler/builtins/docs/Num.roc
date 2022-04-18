@@ -47,7 +47,7 @@ interface Num
             compare,
             cos,
             div,
-            divFloor,
+            divTrunc,
             floor,
             intCast,
             isEven,
@@ -781,7 +781,7 @@ toU128 : Int * -> U128
 ## there will be a loss of precision.
 toDec : Num * -> Dec
 
-## Divide two integers and #Num.round  the resulut.
+## Divide two integers, truncating the result towards zero.
 ##
 ## Division by zero is undefined in mathematics. As such, you should make
 ## sure never to pass zero as the denomaintor to this function!
@@ -791,18 +791,18 @@ toDec : Num * -> Dec
 ## * In a development build, you'll get an assertion failure.
 ## * In an optimized build, the function will return 0.
 ##
-## `a // b` is shorthand for `Num.divRound a b`.
+## `a // b` is shorthand for `Num.divTrunc a b`.
 ##
 ## >>> 5 // 7
 ##
-## >>> Num.divRound 5 7
+## >>> Num.divTrunc 5 7
 ##
 ## >>> 8 // -3
 ##
-## >>> Num.divRound 8 -3
+## >>> Num.divTrunc 8 -3
 ##
 ## This is the same as the #// operator.
-divRound : Int a, Int a -> Int a
+divTrunc : Int a, Int a -> Int a
 
 ## Perform flooring modulo on two integers.
 ##

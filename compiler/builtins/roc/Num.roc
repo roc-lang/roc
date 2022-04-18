@@ -99,8 +99,8 @@ interface Num
             bytesToU32,
             divCeil,
             divCeilChecked,
-            divFloor,
-            divFloorChecked,
+            divTrunc,
+            divTruncChecked,
             toStr,
             isMultipleOf,
             minI8,
@@ -237,8 +237,8 @@ divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
 divCeil : Int a, Int a -> Int a
 divCeilChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
-divFloor : Int a, Int a -> Int a
-divFloorChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+divTrunc : Int a, Int a -> Int a
+divTruncChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
 # mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
 rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
