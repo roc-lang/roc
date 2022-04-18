@@ -2762,7 +2762,6 @@ where
         "&&" => good!(BinOp::And, 2),
         "||" => good!(BinOp::Or, 2),
         "//" => good!(BinOp::DoubleSlash, 2),
-        "%%" => good!(BinOp::DoublePercent, 2),
         "->" => {
             // makes no progress, so it does not interfere with `_ if isGood -> ...`
             Err((NoProgress, to_error("->", state.pos()), state))

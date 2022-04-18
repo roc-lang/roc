@@ -372,7 +372,6 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::Slash => buf.push('/'),
         called_via::BinOp::DoubleSlash => buf.push_str("//"),
         called_via::BinOp::Percent => buf.push('%'),
-        called_via::BinOp::DoublePercent => buf.push_str("%%"),
         called_via::BinOp::Plus => buf.push('+'),
         called_via::BinOp::Minus => buf.push('-'),
         called_via::BinOp::Equals => buf.push_str("=="),
@@ -1104,7 +1103,6 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::Slash
                     | BinOp::DoubleSlash
                     | BinOp::Percent
-                    | BinOp::DoublePercent
                     | BinOp::Plus
                     | BinOp::Minus
                     | BinOp::Equals

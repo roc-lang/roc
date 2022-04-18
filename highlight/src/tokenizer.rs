@@ -63,7 +63,6 @@ pub enum Token {
     OpAnd = 0b_0110_1101,
     OpOr = 0b_0110_1110,
     OpDoubleSlash = 0b_0110_1111,
-    OpDoublePercent = 0b_0111_0001,
     OpBackpassing = 0b_0111_1010,
 
     TodoNextThing = 0b_1000_0000,
@@ -395,7 +394,6 @@ fn lex_operator(bytes: &[u8]) -> (Token, usize) {
         b"&" => Token::Ampersand,
         b"||" => Token::OpOr,
         b"//" => Token::OpDoubleSlash,
-        b"%%" => Token::OpDoublePercent,
         b"->" => Token::Arrow,
         b"<-" => Token::OpBackpassing,
         op => {
