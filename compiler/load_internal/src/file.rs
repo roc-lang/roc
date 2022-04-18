@@ -2525,7 +2525,7 @@ fn load_pkg_config<'a>(
     }
 }
 
-fn foo<'a>(
+fn load_builtin_module_help<'a>(
     arena: &'a Bump,
     filename: &str,
     src_bytes: &'a str,
@@ -2576,7 +2576,7 @@ fn load_builtin_module<'a>(
 ) -> (ModuleId, Msg<'a>) {
     let src_bytes = module_source(module_id);
 
-    let (info, parse_state) = foo(arena, module_name, src_bytes);
+    let (info, parse_state) = load_builtin_module_help(arena, module_name, src_bytes);
 
     send_header(
         info,
