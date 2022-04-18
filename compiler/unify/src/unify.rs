@@ -349,7 +349,7 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
     };
 
     #[cfg(debug_assertions)]
-    debug_print_unified_types(subs, &ctx, true);
+    debug_print_unified_types(subs, &ctx, false);
 
     result
 }
