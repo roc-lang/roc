@@ -624,33 +624,67 @@ pub fn constrain_expr(
                     ),
                 };
 
-            let mut branch_cons = Vec::with_capacity(branches.len());
+            // Our goal is to constrain and introduce variables in all pattern when branch patterns before
+            // looking at their bodies.
+            //
+            //   pat1 -> body1
+            //   *^^^    +~~~~
+            //   pat2 -> body2
+            //   *^^^    +~~~~
+            //
+            //   * solve first
+            //   + solve second
+            //
+            // For a single pattern/body pair, we must introduce variables and symbols defined in the
+            // pattern before solving the body, since those definitions are effectively let-bound.
+            //
+            // But also, we'd like to solve all branch pattern constraints in one swoop before looking at
+            // the bodies, because the patterns may have presence constraints that expect to be built up
+            // together.
+            //
+            // For this reason, we distinguish the two - and introduce variables in the branch patterns
+            // as part of the pattern constraint, solving all of those at once, and then solving the body
+            // constraints.
+            let mut pattern_vars = Vec::with_capacity(branches.len());
+            let mut pattern_headers = SendMap::default();
             let mut pattern_cons = Vec::with_capacity(branches.len());
+            let mut branch_cons = Vec::with_capacity(branches.len());
 
             for (index, when_branch) in branches.iter().enumerate() {
                 let pattern_region =
                     Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
 
-                let (pattern_con, branch_con) = constrain_when_branch(
-                    constraints,
-                    env,
-                    region,
-                    when_branch,
-                    PExpected::ForReason(
-                        PReason::WhenMatch {
-                            index: HumanIndex::zero_based(index),
-                        },
-                        cond_type.clone(),
-                        pattern_region,
-                    ),
-                    branch_expr_reason(
-                        &expected,
-                        HumanIndex::zero_based(index),
-                        when_branch.value.region,
-                    ),
-                );
+                let (new_pattern_vars, new_pattern_headers, pattern_con, branch_con) =
+                    constrain_when_branch_help(
+                        constraints,
+                        env,
+                        region,
+                        when_branch,
+                        PExpected::ForReason(
+                            PReason::WhenMatch {
+                                index: HumanIndex::zero_based(index),
+                            },
+                            cond_type.clone(),
+                            pattern_region,
+                        ),
+                        branch_expr_reason(
+                            &expected,
+                            HumanIndex::zero_based(index),
+                            when_branch.value.region,
+                        ),
+                    );
 
+                pattern_vars.extend(new_pattern_vars);
+                debug_assert!(
+                    pattern_headers
+                        .clone()
+                        .intersection(new_pattern_headers.clone())
+                        .is_empty(),
+                    "Two patterns introduce the same symbols - that's a bug!"
+                );
+                pattern_headers.extend(new_pattern_headers);
                 pattern_cons.push(pattern_con);
+
                 branch_cons.push(branch_con);
             }
 
@@ -666,8 +700,20 @@ pub fn constrain_expr(
             // branch_constraints.push(constraints.and_constraint(pattern_cons));
             let mut total_cons = Vec::with_capacity(1 + 2 * branches.len() + 1);
             total_cons.push(expr_con);
-            total_cons.extend(pattern_cons);
-            total_cons.extend(branch_cons);
+
+            // Solve all the pattern constraints together, introducing variables in the pattern as
+            // need be before solving the bodies.
+            let pattern_constraints = constraints.and_constraint(pattern_cons);
+            let body_constraints = constraints.and_constraint(branch_cons);
+            let when_body_con = constraints.let_constraint(
+                [],
+                pattern_vars,
+                pattern_headers,
+                pattern_constraints,
+                body_constraints,
+            );
+            total_cons.push(when_body_con);
+
             total_cons.push(constraints.equal_types_var(
                 branch_var,
                 expected,
@@ -1068,17 +1114,22 @@ pub fn constrain_expr(
     }
 }
 
-/// Constrain a when branch, returning a pair of constraints (pattern constraint, body constraint).
+/// Constrain a when branch, returning (variables in pattern, symbols introduced in pattern, pattern constraint, body constraint).
 /// We want to constraint all pattern constraints in a "when" before body constraints.
 #[inline(always)]
-fn constrain_when_branch(
+fn constrain_when_branch_help(
     constraints: &mut Constraints,
     env: &Env,
     region: Region,
     when_branch: &WhenBranch,
     pattern_expected: PExpected<Type>,
     expr_expected: Expected<Type>,
-) -> (Constraint, Constraint) {
+) -> (
+    Vec<Variable>,
+    SendMap<Symbol, Loc<Type>>,
+    Constraint,
+    Constraint,
+) {
     let ret_constraint = constrain_expr(
         constraints,
         env,
@@ -1129,34 +1180,12 @@ fn constrain_when_branch(
         (state_constraints, ret_constraint)
     };
 
-    // Our goal is to constrain and introduce variables in all pattern when branch patterns before
-    // looking at their bodies.
-    //
-    //   pat1 -> body1
-    //   *^^^    +~~~~
-    //   pat2 -> body2
-    //   *^^^    +~~~~
-    //
-    //   * solve first
-    //   + solve second
-    //
-    // For a single pattern/body pair, we must introduce variables and symbols defined in the
-    // pattern before solving the body, since those definitions are effectively let-bound.
-    //
-    // But also, we'd like to solve all branch pattern constraints in one swoop before looking at
-    // the bodies, because the patterns may have presence constraints that expect to be built up
-    // together.
-    //
-    // For this reason, we distinguish the two - and introduce variables in the branch patterns
-    // as part of the pattern constraint, while only binding those variables during solving of the
-    // bodies.
-    let pattern_introduction_constraints =
-        constraints.let_constraint([], state.vars, [], pattern_constraints, Constraint::True);
-
-    let branch_body_constraints =
-        constraints.let_constraint([], [], state.headers, Constraint::True, body_constraints);
-
-    (pattern_introduction_constraints, branch_body_constraints)
+    (
+        state.vars,
+        state.headers,
+        pattern_constraints,
+        body_constraints,
+    )
 }
 
 fn constrain_field(
