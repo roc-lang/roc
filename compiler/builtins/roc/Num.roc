@@ -71,8 +71,6 @@ interface Num
             remChecked,
             div,
             divChecked,
-            mod,
-            modChecked,
             sqrt,
             sqrtChecked,
             log,
@@ -247,8 +245,6 @@ divFloorChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
 
 rem : Int a, Int a -> Int a
 remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
-mod : Int a, Int a -> Int a
-modChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
 
 isMultipleOf : Int a, Int a -> Bool
 

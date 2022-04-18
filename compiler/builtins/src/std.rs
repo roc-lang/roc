@@ -407,20 +407,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
 
-    // mod : Int a, Int a -> Int a
-    add_top_level_function_type!(
-        Symbol::NUM_MOD,
-        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
-        Box::new(int_type(flex(TVAR1))),
-    );
-
-    // modChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
-    add_top_level_function_type!(
-        Symbol::NUM_MOD_CHECKED,
-        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
-        Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
-    );
-
     // isMultipleOf : Int a, Int a -> Bool
     add_top_level_function_type!(
         Symbol::NUM_IS_MULTIPLE_OF,

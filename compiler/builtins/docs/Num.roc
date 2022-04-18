@@ -82,8 +82,6 @@ interface Num
             minI64,
             minU64,
             minI128,
-            mod,
-            modChecked,
             mul,
             mulChecked,
             mulWrap,
@@ -807,27 +805,18 @@ toDec : Num * -> Dec
 ## This is the same as the #// operator.
 divRound : Int a, Int a -> Int a
 
-## Perform flooring modulo on two integers.
+## Obtain the remainder (truncating modulo) from the division of two integers.
 ##
-## Modulo is the same as remainder when working with positive numbers,
-## but if either number is negative, then modulo works differently.
+## `a % b` is shorthand for `Num.rem a b`.
 ##
-## Additionally, flooring modulo uses [Float].floor on the result.
+## >>> 5 % 7
 ##
-## (Use [Float].mod for non-flooring modulo.)
+## >>> Num.rem 5 7
 ##
-## Return `Err DivByZero` if the second integer is zero, because division by zero is undefined in mathematics.
+## >>> -8 % -3
 ##
-## `a %% b` is shorthand for `Int.modFloor a b`.
-##
-## >>> 5 %% 7
-##
-## >>> Int.modFloor 5 7
-##
-## >>> -8 %% -3
-##
-## >>> Int.modFloor -8 -3
-#modFloor : Int a, Int a -> Result (Int a) [ DivByZero ]*
+## >>> Num.rem -8 -3
+rem : Int a, Int a -> Int a
 
 
 ## Bitwise
@@ -1098,31 +1087,6 @@ atan : Float a -> Float a
 ## >>> Num.pi
 ## >>>     |> Num.div 2.0
 div : Float a, Float a -> Float a
-
-## Perform modulo on two [Float]s.
-##
-## Modulo is the same as remainder when working with positive numbers,
-## but if either number is negative, then modulo works differently.
-##
-## `a % b` is shorthand for `Num.mod a b`.
-##
-## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero),
-## and as such, so is modulo by zero. Because of this, you should make sure never
-## to pass zero for the second argument to this function!
-##
-## Passing [mod] a [Dec] value of zero for its second argument will cause a panic.
-## Passing [mod] a [F32] and [F64] value for its second argument will cause it
-## to return [*NaN*](Num.isNaN).
-##
-## >>> 5.0 % 7.0
-##
-## >>> Num.mod 5 7
-##
-## `Num.mod` can be convenient in pipelines.
-##
-## >>> Num.pi
-## >>>     |> Num.mod 2.0
-mod : Float a, Float a -> Float a
 
 ## Raises a [Float] to the power of another [Float].
 ##

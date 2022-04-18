@@ -4,7 +4,7 @@ Builtins are the functions and modules that are implicitly imported into every m
 
 ### module/src/symbol.rs
 
-Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `mod` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones).
+Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `rem` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones).
 
 Some of these have `#` inside their name (`first#list`, `#lt` ..). This is a trick we are doing to hide implementation details from Roc programmers. To a Roc programmer, a name with `#` in it is invalid, because `#` means everything after it is parsed to a comment. We are constructing these functions manually, so we are circumventing the parsing step and dont have such restrictions. We get to make functions and values with `#` which as a consequence are not accessible to Roc programmers. Roc programmers simply cannot reference them.
 
