@@ -164,23 +164,24 @@ render = \model ->
                     Active -> 1
                     Removed -> 0
 
-            outer = Rect
-                {
-                    left,
-                    top,
-                    width: blockWidth,
-                    height: blockHeight,
-                    color: { r: color.r * 0.8, g: color.g * 0.8, b: color.b * 0.8, a: alpha },
-                }
+            # This outer rectangle gets drawn first, and will appear to be a border.
+            outer = Rect {
+                left,
+                top,
+                width: blockWidth,
+                height: blockHeight,
+                color: { r: color.r * 0.8, g: color.g * 0.8, b: color.b * 0.8, a: alpha },
+            }
 
-            inner = Rect
-                {
-                    left: left + border,
-                    top: top + border,
-                    width: blockWidth - (border * 2),
-                    height: blockHeight - (border * 2),
-                    color: { color & a: alpha },
-                }
+            # The inner retangle is smaller than the outer one, but gets drawn on top of it,
+            # such that the outer one appears to be a border.
+            inner = Rect {
+                left: left + border,
+                top: top + border,
+                width: blockWidth - (border * 2),
+                height: blockHeight - (border * 2),
+                color: { color & a: alpha },
+            }
 
             [ outer, inner ]
 
