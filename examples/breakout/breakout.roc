@@ -1,6 +1,6 @@
 app "breakout"
     packages { pf: "platform" }
-    imports [ pf.Game.{ Bounds, Elem, Event, Rgba } ]
+    imports [ pf.Game.{ Bounds, Elem, Event, Rgba, Rect } ]
     provides [ program ] { Model } to pf
 
 paddleWidth = 0.2 # width of the paddle, as a % of screen width
@@ -15,6 +15,7 @@ numBlocks = numRows * numCols
 
 Model : {
     blocks : List Block,
+    rects : List Rect,
 
     # Screen height and width
     height : F32,
@@ -41,6 +42,7 @@ init : Bounds -> Model
 init = \{ width, height } ->
     {
         blocks: initBlocks width,
+        rects: [ Rect { left: 0, top: 0, width: 100, height: 100, color: { r: 1, g: 0.5, b: 1, a: 1 } } ],
 
         # Screen height and width
         width,
@@ -170,7 +172,7 @@ render = \model ->
                 top,
                 width: blockWidth,
                 height: blockHeight,
-                color: { r: color.r * 0.8, g: color.g * 0.8, b: color.b * 0.8, a: alpha },
+                color: { r: color.r * 0.8, g: color.g * 0.8, b: color.b * 0.8, a: color.a * alpha },
             }
 
             # The inner retangle is smaller than the outer one, but gets drawn on top of it,
@@ -180,7 +182,7 @@ render = \model ->
                 top: top + border,
                 width: blockWidth - (border * 2),
                 height: blockHeight - (border * 2),
-                color: { color & a: alpha },
+                color: { color & a: color.a * alpha },
             }
 
             [ outer, inner ]
