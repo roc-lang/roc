@@ -5934,4 +5934,21 @@ mod solve_expr {
             "a -> U64 | a has Hash",
         )
     }
+
+    #[test]
+    fn when_branch_and_body_flipflop() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                func = \record ->
+                    when record.tag is
+                        A -> { record & tag: B }
+                        B -> { record & tag: A }
+
+                func
+                "#
+            ),
+            "{ tag : [ A, B ] }a -> { tag : [ A, B ] }a",
+        )
+    }
 }
