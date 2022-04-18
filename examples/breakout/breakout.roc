@@ -125,12 +125,15 @@ moveBall = \model ->
 
 updateBlocks : Model -> Model
 updateBlocks = \model ->
+    blockWidth = model.width / numCols
     ball = { left: model.ballX, top: model.ballY, width: ballSize, height: ballSize }
     blocks = List.map model.blocks \block ->
         when block.status is
             Removed -> block
             Active ->
-                if isOverlapping block ball then
+                blockRect = { left: block.left, top: block.top, height: blockHeight, width: blockWidth }
+
+                if isOverlapping blockRect ball then
                     { block & status: Fading 1 }
                 else
                     block
