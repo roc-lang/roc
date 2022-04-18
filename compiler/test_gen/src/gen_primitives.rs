@@ -3266,12 +3266,9 @@ fn box_and_unbox_string() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [ Box ] provides [ main ] to "./platform"
-
-            main =
-                Str.concat "Leverage " "agile frameworks to provide a robust synopsis for high level overviews"
-                    |> Box.box
-                    |> Box.unbox
+            Str.concat "Leverage " "agile frameworks to provide a robust synopsis for high level overviews"
+                |> Box.box
+                |> Box.unbox
             "#
         ),
         RocStr::from(
@@ -3287,10 +3284,7 @@ fn box_and_unbox_num() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [ Box ] provides [ main ] to "./platform"
-
-            main =
-                Box.unbox (Box.box (123u8))
+            Box.unbox (Box.box (123u8))
             "#
         ),
         123,
@@ -3304,10 +3298,7 @@ fn box_and_unbox_record() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [ Box ] provides [ main ] to "./platform"
-
-            main =
-                Box.unbox (Box.box { a: 15u8, b: 27u8 })
+            Box.unbox (Box.box { a: 15u8, b: 27u8 })
             "#
         ),
         (15, 27),
@@ -3321,13 +3312,10 @@ fn box_and_unbox_tag_union() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [ Box ] provides [ main ] to "./platform"
-
             v : [ A U8, B U8 ] # usually stack allocated
             v = B 27u8
 
-            main =
-                Box.unbox (Box.box v)
+            Box.unbox (Box.box v)
             "#
         ),
         (27, 1),
