@@ -67,17 +67,8 @@ impl ExposedForModule {
         let mut imported_values = Vec::new();
 
         for symbol in it {
-            // Today, builtins are not actually imported,
-            // but generated in each module that uses them
-            //
-            // This will change when we write builtins in roc
-            if symbol.is_builtin() {
-                continue;
-            }
-
-            if let Some(ExposedModuleTypes::Valid { .. }) =
-                exposed_by_module.exposed.get(&symbol.module_id())
-            {
+            let module = exposed_by_module.exposed.get(&symbol.module_id());
+            if let Some(ExposedModuleTypes::Valid { .. }) = module {
                 imported_values.push(*symbol);
             } else {
                 continue;
@@ -198,17 +189,6 @@ pub fn constrain_builtin_imports(
                 }
             }
             None => {
-                let is_valid_alias = stdlib.applies.contains(&symbol)
-                        // This wasn't a builtin value or Apply; maybe it was a builtin alias.
-                        || roc_types::builtin_aliases::aliases().contains_key(&symbol);
-
-                if !is_valid_alias {
-                    panic!(
-                        "Could not find {:?} in builtin types {:?} or builtin aliases",
-                        symbol, stdlib.types,
-                    );
-                }
-
                 continue;
             }
         };

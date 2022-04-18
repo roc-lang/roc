@@ -705,7 +705,7 @@ impl<'a, T> Collection<'a, T> {
         }
     }
 
-    pub fn with_items(items: &'a [T]) -> Collection<'a, T> {
+    pub const fn with_items(items: &'a [T]) -> Collection<'a, T> {
         Collection {
             items,
             final_comments: None,

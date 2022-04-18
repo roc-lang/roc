@@ -7,10 +7,11 @@ use roc_can::expr::{canonicalize_expr, Expr};
 use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
-use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::Type;
 use std::hash::Hash;
 
 pub fn test_home() -> ModuleId {
@@ -55,6 +56,14 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
     let mut scope = Scope::new(home, &mut var_store);
+    scope.add_alias(
+        Symbol::NUM_INT,
+        Region::zero(),
+        vec![Loc::at_zero(("a".into(), Variable::EMPTY_RECORD))],
+        Type::EmptyRec,
+        roc_types::types::AliasKind::Structural,
+    );
+
     let dep_idents = IdentIds::exposed_builtins(0);
     let mut env = Env::new(home, &dep_idents, &module_ids, IdentIds::default());
     let (loc_expr, output) = canonicalize_expr(

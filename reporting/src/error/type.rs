@@ -1176,6 +1176,7 @@ fn to_expr_report<'b>(
                     op
                 );
             }
+
             Reason::ForeignCallArg {
                 foreign_symbol,
                 arg_index,

@@ -44,8 +44,6 @@ interface Num
             Binary32,
             Binary64,
 
-            maxFloat,
-            minFloat,
             abs,
             neg,
             add,
@@ -70,8 +68,6 @@ interface Num
             rem,
             div,
             divChecked,
-            modInt,
-            modFloat,
             sqrt,
             log,
             round,
@@ -123,6 +119,10 @@ interface Num
             maxI128,
             minU128,
             maxU128,
+            minF32,
+            maxF32,
+            minF64,
+            maxF64,
             toI8,
             toI8Checked,
             toI16,
@@ -143,8 +143,17 @@ interface Num
             toU64Checked,
             toU128,
             toU128Checked,
+            toNat,
+            toNatChecked,
+            toF32,
+            toF32Checked,
+            toF64,
+            toF64Checked,
         ]
-    imports [ ]
+    imports
+        [
+            Bool.{ Bool }
+        ]
 
 Num range : [ @Num range ]
 Int range : Num (Integer range)
@@ -331,6 +340,18 @@ minU128 = 0
 maxU128 : U128
 maxU128 = 0340282366920938463463374607431768211455
 
+minF32 : F32
+minF32 = -3.40282347e38
+
+maxF32 : F32
+maxF32 = 3.40282347e38
+
+minF64 : F64
+minF64 = -1.7976931348623157e308
+
+maxF64 : F64
+maxF64 = 1.7976931348623157e308
+
 toI8 : Int * -> I8
 toI16 : Int * -> I16
 toI32 : Int * -> I32
@@ -341,6 +362,7 @@ toU16 : Int * -> U16
 toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
+toNat : Int * -> Nat
 
 toF32 : Num * -> F32
 toF64 : Num * -> F64
@@ -355,5 +377,6 @@ toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
 toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
 toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
 toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+toNatChecked : Int * -> Result Nat [ OutOfBounds ]*
 toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
 toF64Checked : Num * -> Result F64 [ OutOfBounds ]*

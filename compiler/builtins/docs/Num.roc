@@ -81,8 +81,6 @@ interface Num
             minI64,
             minU64,
             minI128,
-            modInt,
-            modFloat,
             mul,
             mulChecked,
             mulWrap,

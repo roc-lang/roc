@@ -1156,7 +1156,7 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
-        symbol.module_id() != self.home && !symbol.is_builtin()
+        symbol.module_id() != self.home
     }
 }
 
@@ -6766,7 +6766,19 @@ fn can_reuse_symbol<'a>(
     if let roc_can::expr::Expr::Var(symbol) = expr {
         let symbol = *symbol;
 
-        if env.is_imported_symbol(symbol) {
+        let arguments = [
+            Symbol::ARG_1,
+            Symbol::ARG_2,
+            Symbol::ARG_3,
+            Symbol::ARG_4,
+            Symbol::ARG_5,
+            Symbol::ARG_6,
+            Symbol::ARG_7,
+        ];
+
+        if arguments.contains(&symbol) {
+            Value(symbol)
+        } else if env.is_imported_symbol(symbol) {
             Imported(symbol)
         } else if procs.partial_procs.contains_key(symbol) {
             LocalFunction(symbol)
@@ -6920,9 +6932,10 @@ fn specialize_symbol<'a>(
         None => {
             match arg_var {
                 Some(arg_var) if env.is_imported_symbol(original) => {
-                    let raw = layout_cache
-                        .raw_from_var(env.arena, arg_var, env.subs)
-                        .expect("creating layout does not fail");
+                    let raw = match layout_cache.raw_from_var(env.arena, arg_var, env.subs) {
+                        Ok(v) => v,
+                        Err(e) => return_on_layout_error_help!(env, e),
+                    };
 
                     if procs.is_imported_module_thunk(original) {
                         let layout = match raw {
@@ -7398,6 +7411,7 @@ fn call_by_name_help<'a>(
         add_needed_external(procs, env, original_fn_var, proc_name);
 
         debug_assert_ne!(proc_name.module_id(), ModuleId::ATTR);
+
         if procs.is_imported_module_thunk(proc_name) {
             force_thunk(
                 env,
@@ -7406,13 +7420,23 @@ fn call_by_name_help<'a>(
                 assigned,
                 hole,
             )
-        } else {
-            debug_assert!(
-                !field_symbols.is_empty(),
-                "{} should be in the list of imported_module_thunks",
-                proc_name
-            );
+        } else if field_symbols.is_empty() {
+            // this is a case like `Str.concat`, an imported standard function, applied to zero arguments
 
+            // imported symbols cannot capture anything
+            let captured = &[];
+
+            construct_closure_data(
+                env,
+                procs,
+                layout_cache,
+                lambda_set,
+                proc_name,
+                captured,
+                assigned,
+                hole,
+            )
+        } else {
             debug_assert_eq!(
                 argument_layouts.len(),
                 field_symbols.len(),
@@ -7567,8 +7591,6 @@ fn call_by_name_module_thunk<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    debug_assert!(!env.is_imported_symbol(proc_name));
-
     let top_level_layout = ProcLayout::new(env.arena, &[], *ret_layout);
 
     let inner_layout = *ret_layout;
