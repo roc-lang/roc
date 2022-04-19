@@ -1,6 +1,6 @@
 use crate::expr::Expr;
 use crate::pattern::Pattern;
-use roc_collections::all::ImSet;
+use roc_collections::all::VecSet;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
@@ -44,12 +44,12 @@ impl Procedure {
 /// so it's important that building the same code gives the same order every time!
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct References {
-    pub bound_symbols: ImSet<Symbol>,
-    pub type_lookups: ImSet<Symbol>,
-    pub value_lookups: ImSet<Symbol>,
+    pub bound_symbols: VecSet<Symbol>,
+    pub type_lookups: VecSet<Symbol>,
+    pub value_lookups: VecSet<Symbol>,
     /// Aliases or opaque types referenced
-    pub referenced_type_defs: ImSet<Symbol>,
-    pub calls: ImSet<Symbol>,
+    pub referenced_type_defs: VecSet<Symbol>,
+    pub calls: VecSet<Symbol>,
 }
 
 impl References {
@@ -57,22 +57,15 @@ impl References {
         Self::default()
     }
 
-    pub fn union(mut self, other: References) -> Self {
-        self.value_lookups = self.value_lookups.union(other.value_lookups);
-        self.type_lookups = self.type_lookups.union(other.type_lookups);
-        self.calls = self.calls.union(other.calls);
-        self.bound_symbols = self.bound_symbols.union(other.bound_symbols);
-        self.referenced_type_defs = self.referenced_type_defs.union(other.referenced_type_defs);
-
-        self
-    }
-
-    pub fn union_mut(&mut self, other: References) {
-        self.value_lookups.extend(other.value_lookups);
-        self.type_lookups.extend(other.type_lookups);
-        self.calls.extend(other.calls);
-        self.bound_symbols.extend(other.bound_symbols);
-        self.referenced_type_defs.extend(other.referenced_type_defs);
+    pub fn union_mut(&mut self, other: &References) {
+        self.value_lookups
+            .extend(other.value_lookups.iter().copied());
+        self.type_lookups.extend(other.type_lookups.iter().copied());
+        self.calls.extend(other.calls.iter().copied());
+        self.bound_symbols
+            .extend(other.bound_symbols.iter().copied());
+        self.referenced_type_defs
+            .extend(other.referenced_type_defs.iter().copied());
     }
 
     pub fn has_value_lookup(&self, symbol: Symbol) -> bool {

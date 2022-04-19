@@ -66,6 +66,7 @@ pub enum LowLevel {
     DictDifference,
     DictWalk,
     SetFromList,
+    SetToDict,
     NumAdd,
     NumAddWrap,
     NumAddChecked,

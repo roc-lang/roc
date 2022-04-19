@@ -1294,6 +1294,25 @@ fn issue_2811() {
     )
 }
 
+#[mono_test]
+fn specialize_ability_call() {
+    indoc!(
+        r#"
+        app "test" provides [ main ] to "./platform"
+
+        Hash has
+            hash : a -> U64 | a has Hash
+
+        Id := U64
+
+        hash : Id -> U64
+        hash = \$Id n -> n
+
+        main = hash ($Id 1234)
+        "#
+    )
+}
+
 // #[ignore]
 // #[mono_test]
 // fn static_str_closure() {

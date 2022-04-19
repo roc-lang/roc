@@ -6070,6 +6070,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let key_layout = list_element_layout!(list_layout);
             set_from_list(env, layout_ids, list, key_layout)
         }
+        SetToDict => {
+            debug_assert_eq!(args.len(), 1);
+
+            let (set, _set_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            set
+        }
         ExpectTrue => {
             debug_assert_eq!(args.len(), 1);
 

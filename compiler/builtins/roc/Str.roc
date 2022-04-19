@@ -34,7 +34,7 @@ interface Str
             toU8,
             toI8,
         ]
-    imports [ ]
+    imports [ Bool.{ Bool }, Result.{ Result } ]
 
 
 

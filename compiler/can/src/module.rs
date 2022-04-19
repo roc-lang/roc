@@ -7,7 +7,7 @@ use crate::operator::desugar_def;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, SendMap, VecSet};
 use roc_module::ident::Lowercase;
 use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -23,9 +23,9 @@ use roc_types::types::{Alias, AliasKind, Type};
 pub struct Module {
     pub module_id: ModuleId,
     pub exposed_imports: MutMap<Symbol, Variable>,
-    pub exposed_symbols: MutSet<Symbol>,
-    pub referenced_values: MutSet<Symbol>,
-    pub referenced_types: MutSet<Symbol>,
+    pub exposed_symbols: VecSet<Symbol>,
+    pub referenced_values: VecSet<Symbol>,
+    pub referenced_types: VecSet<Symbol>,
     /// all aliases. `bool` indicates whether it is exposed
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
@@ -36,7 +36,7 @@ pub struct Module {
 pub struct RigidVariables {
     pub named: MutMap<Variable, Lowercase>,
     pub able: MutMap<Variable, (Lowercase, Symbol)>,
-    pub wildcards: MutSet<Variable>,
+    pub wildcards: VecSet<Variable>,
 }
 
 #[derive(Debug)]
@@ -48,8 +48,8 @@ pub struct ModuleOutput {
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub problems: Vec<Problem>,
     pub ident_ids: IdentIds,
-    pub referenced_values: MutSet<Symbol>,
-    pub referenced_types: MutSet<Symbol>,
+    pub referenced_values: VecSet<Symbol>,
+    pub referenced_types: VecSet<Symbol>,
     pub scope: Scope,
 }
 
@@ -77,6 +77,95 @@ fn validate_generate_with<'a>(
     (functions, unknown)
 }
 
+#[derive(Debug)]
+enum GeneratedInfo {
+    Hosted {
+        effect_symbol: Symbol,
+        generated_functions: HostedGeneratedFunctions,
+    },
+    Builtin,
+    NotSpecial,
+}
+
+impl GeneratedInfo {
+    fn from_header_for<'a>(
+        env: &mut Env,
+        scope: &mut Scope,
+        var_store: &mut VarStore,
+        header_for: &HeaderFor<'a>,
+    ) -> Self {
+        match header_for {
+            HeaderFor::Hosted {
+                generates,
+                generates_with,
+            } => {
+                let name: &str = generates.into();
+                let (generated_functions, unknown_generated) =
+                    validate_generate_with(generates_with);
+
+                for unknown in unknown_generated {
+                    env.problem(Problem::UnknownGeneratesWith(unknown));
+                }
+
+                let effect_symbol = scope
+                    .introduce(
+                        name.into(),
+                        &env.exposed_ident_ids,
+                        &mut env.ident_ids,
+                        Region::zero(),
+                    )
+                    .unwrap();
+
+                let effect_tag_name = TagName::Private(effect_symbol);
+
+                {
+                    let a_var = var_store.fresh();
+
+                    let actual = crate::effect_module::build_effect_actual(
+                        effect_tag_name,
+                        Type::Variable(a_var),
+                        var_store,
+                    );
+
+                    scope.add_alias(
+                        effect_symbol,
+                        Region::zero(),
+                        vec![Loc::at_zero(("a".into(), a_var))],
+                        actual,
+                        AliasKind::Structural,
+                    );
+                }
+
+                GeneratedInfo::Hosted {
+                    effect_symbol,
+                    generated_functions,
+                }
+            }
+            HeaderFor::Builtin { generates_with } => {
+                debug_assert!(generates_with.is_empty());
+                GeneratedInfo::Builtin
+            }
+            _ => GeneratedInfo::NotSpecial,
+        }
+    }
+}
+
+fn has_no_implementation(expr: &Expr) -> bool {
+    match expr {
+        Expr::RuntimeError(RuntimeError::NoImplementationNamed { .. }) => true,
+        Expr::Closure(closure_data)
+            if matches!(
+                closure_data.loc_body.value,
+                Expr::RuntimeError(RuntimeError::NoImplementationNamed { .. })
+            ) =>
+        {
+            true
+        }
+
+        _ => false,
+    }
+}
+
 // TODO trim these down
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
@@ -89,7 +178,7 @@ pub fn canonicalize_module_defs<'a>(
     dep_idents: &'a MutMap<ModuleId, IdentIds>,
     aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    exposed_symbols: &MutSet<Symbol>,
+    exposed_symbols: &VecSet<Symbol>,
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
@@ -107,59 +196,8 @@ pub fn canonicalize_module_defs<'a>(
         );
     }
 
-    struct Hosted {
-        effect_symbol: Symbol,
-        generated_functions: HostedGeneratedFunctions,
-    }
-
-    let hosted_info = if let HeaderFor::Hosted {
-        generates,
-        generates_with,
-    } = header_for
-    {
-        let name: &str = generates.into();
-        let (generated_functions, unknown_generated) = validate_generate_with(generates_with);
-
-        for unknown in unknown_generated {
-            env.problem(Problem::UnknownGeneratesWith(unknown));
-        }
-
-        let effect_symbol = scope
-            .introduce(
-                name.into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
-            .unwrap();
-
-        let effect_tag_name = TagName::Private(effect_symbol);
-
-        {
-            let a_var = var_store.fresh();
-
-            let actual = crate::effect_module::build_effect_actual(
-                effect_tag_name,
-                Type::Variable(a_var),
-                var_store,
-            );
-
-            scope.add_alias(
-                effect_symbol,
-                Region::zero(),
-                vec![Loc::at_zero(("a".into(), a_var))],
-                actual,
-                AliasKind::Structural,
-            );
-        }
-
-        Some(Hosted {
-            effect_symbol,
-            generated_functions,
-        })
-    } else {
-        None
-    };
+    let generated_info =
+        GeneratedInfo::from_header_for(&mut env, &mut scope, var_store, header_for);
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -215,14 +253,25 @@ pub fn canonicalize_module_defs<'a>(
                     panic!("TODO gracefully handle shadowing in imports.")
                 }
             }
+        } else if [
+            Symbol::LIST_LIST,
+            Symbol::STR_STR,
+            Symbol::DICT_DICT,
+            Symbol::SET_SET,
+            Symbol::BOX_BOX_TYPE,
+        ]
+        .contains(&symbol)
+        {
+            // These are not aliases but Apply's and we make sure they are always in scope
         } else {
             // This is a type alias
 
             // the symbol should already be added to the scope when this module is canonicalized
             debug_assert!(
                 scope.contains_alias(symbol),
-                "apparently, {:?} is not actually a type alias",
-                symbol
+                "The {:?} is not a type alias known in {:?}",
+                symbol,
+                home
             );
 
             // but now we know this symbol by a different identifier, so we still need to add it to
@@ -231,8 +280,11 @@ pub fn canonicalize_module_defs<'a>(
                 Ok(()) => {
                     // here we do nothing special
                 }
-                Err((_shadowed_symbol, _region)) => {
-                    panic!("TODO gracefully handle shadowing in imports.")
+                Err((shadowed_symbol, _region)) => {
+                    panic!(
+                        "TODO gracefully handle shadowing in imports, {:?} is shadowed.",
+                        shadowed_symbol
+                    )
                 }
             }
         }
@@ -273,8 +325,8 @@ pub fn canonicalize_module_defs<'a>(
         rigid_variables.wildcards.insert(var.value);
     }
 
-    let mut referenced_values = MutSet::default();
-    let mut referenced_types = MutSet::default();
+    let mut referenced_values = VecSet::default();
+    let mut referenced_types = VecSet::default();
 
     // Gather up all the symbols that were referenced across all the defs' lookups.
     referenced_values.extend(output.references.value_lookups);
@@ -314,12 +366,12 @@ pub fn canonicalize_module_defs<'a>(
         (Ok(mut declarations), output) => {
             use crate::def::Declaration::*;
 
-            if let Some(Hosted {
+            if let GeneratedInfo::Hosted {
                 effect_symbol,
                 generated_functions,
-            }) = hosted_info
+            } = generated_info
             {
-                let mut exposed_symbols = MutSet::default();
+                let mut exposed_symbols = VecSet::default();
 
                 // NOTE this currently builds all functions, not just the ones that the user requested
                 crate::effect_module::build_effect_builtins(
@@ -350,9 +402,21 @@ pub fn canonicalize_module_defs<'a>(
                         // Temporary hack: we don't know exactly what symbols are hosted symbols,
                         // and which are meant to be normal definitions without a body. So for now
                         // we just assume they are hosted functions (meant to be provided by the platform)
-                        if let Some(Hosted { effect_symbol, .. }) = hosted_info {
-                            macro_rules! make_hosted_def {
-                                () => {
+                        if has_no_implementation(&def.loc_expr.value) {
+                            match generated_info {
+                                GeneratedInfo::Builtin => {
+                                    let symbol = def.pattern_vars.iter().next().unwrap().0;
+                                    match crate::builtins::builtin_defs_map(*symbol, var_store) {
+                                        None => {
+                                            panic!("A builtin module contains a signature without implementation for {:?}", symbol)
+                                        }
+                                        Some(mut replacement_def) => {
+                                            replacement_def.annotation = def.annotation.take();
+                                            *def = replacement_def;
+                                        }
+                                    }
+                                }
+                                GeneratedInfo::Hosted { effect_symbol, .. } => {
                                     let symbol = def.pattern_vars.iter().next().unwrap().0;
                                     let ident_id = symbol.ident_id();
                                     let ident =
@@ -376,27 +440,8 @@ pub fn canonicalize_module_defs<'a>(
                                     );
 
                                     *def = hosted_def;
-                                };
-                            }
-
-                            match &def.loc_expr.value {
-                                Expr::RuntimeError(RuntimeError::NoImplementationNamed {
-                                    ..
-                                }) => {
-                                    make_hosted_def!();
                                 }
-                                Expr::Closure(closure_data)
-                                    if matches!(
-                                        closure_data.loc_body.value,
-                                        Expr::RuntimeError(
-                                            RuntimeError::NoImplementationNamed { .. }
-                                        )
-                                    ) =>
-                                {
-                                    make_hosted_def!();
-                                }
-
-                                _ => {}
+                                _ => (),
                             }
                         }
                     }
@@ -431,7 +476,7 @@ pub fn canonicalize_module_defs<'a>(
 
             let mut aliases = MutMap::default();
 
-            if let Some(Hosted { effect_symbol, .. }) = hosted_info {
+            if let GeneratedInfo::Hosted { effect_symbol, .. } = generated_info {
                 // Remove this from exposed_symbols,
                 // so that at the end of the process,
                 // we can see if there were any
@@ -495,22 +540,11 @@ pub fn canonicalize_module_defs<'a>(
 
             for declaration in declarations.iter_mut() {
                 match declaration {
-                    Declare(def) => fix_values_captured_in_closure_def(def, &mut MutSet::default()),
+                    Declare(def) => fix_values_captured_in_closure_def(def, &mut VecSet::default()),
                     DeclareRec(defs) => {
-                        fix_values_captured_in_closure_defs(defs, &mut MutSet::default())
+                        fix_values_captured_in_closure_defs(defs, &mut VecSet::default())
                     }
                     InvalidCycle(_) | Builtin(_) => {}
-                }
-            }
-
-            // TODO this loops over all symbols in the module, we can speed it up by having an
-            // iterator over all builtin symbols
-            for symbol in referenced_values.iter() {
-                if symbol.is_builtin() {
-                    // this can fail when the symbol is for builtin types, or has no implementation yet
-                    if let Some(def) = crate::builtins::builtin_defs_map(*symbol, var_store) {
-                        declarations.push(Declaration::Builtin(def));
-                    }
                 }
             }
 
@@ -535,7 +569,7 @@ pub fn canonicalize_module_defs<'a>(
 
 fn fix_values_captured_in_closure_def(
     def: &mut crate::def::Def,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     // patterns can contain default expressions, so much go over them too!
     fix_values_captured_in_closure_pattern(&mut def.loc_pattern.value, no_capture_symbols);
@@ -545,7 +579,7 @@ fn fix_values_captured_in_closure_def(
 
 fn fix_values_captured_in_closure_defs(
     defs: &mut Vec<crate::def::Def>,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     // recursive defs cannot capture each other
     for def in defs.iter() {
@@ -561,7 +595,7 @@ fn fix_values_captured_in_closure_defs(
 
 fn fix_values_captured_in_closure_pattern(
     pattern: &mut crate::pattern::Pattern,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     use crate::pattern::Pattern::*;
 
@@ -610,7 +644,7 @@ fn fix_values_captured_in_closure_pattern(
 
 fn fix_values_captured_in_closure_expr(
     expr: &mut crate::expr::Expr,
-    no_capture_symbols: &mut MutSet<Symbol>,
+    no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     use crate::expr::Expr::*;
 

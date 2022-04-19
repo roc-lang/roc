@@ -955,7 +955,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         );
     }
 
-    // fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem, OutOfBounds ]*
+    // fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [ BadUtf8 Utf8Problem, OutOfBounds ]*
     {
         let bad_utf8 = SolvedType::TagUnion(
             vec![

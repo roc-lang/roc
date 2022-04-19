@@ -17,8 +17,6 @@ mod solve_expr {
 
     fn run_load_and_infer(src: &str) -> Result<LoadedModule, std::io::Error> {
         use bumpalo::Bump;
-        use std::fs::File;
-        use std::io::Write;
         use std::path::PathBuf;
         use tempfile::tempdir;
 
@@ -40,13 +38,10 @@ mod solve_expr {
             let dir = tempdir()?;
             let filename = PathBuf::from("Test.roc");
             let file_path = dir.path().join(filename);
-            let full_file_path = file_path.clone();
-            let mut file = File::create(file_path)?;
-            writeln!(file, "{}", module_src)?;
-            drop(file);
-            let result = roc_load::load_and_typecheck(
+            let result = roc_load::load_and_typecheck_str(
                 arena,
-                full_file_path,
+                file_path,
+                module_src,
                 dir.path(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
@@ -125,8 +120,15 @@ mod solve_expr {
     }
 
     fn promote_expr_to_module(src: &str) -> String {
-        let mut buffer =
-            String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
+        let mut buffer = String::from(indoc!(
+            r#"
+            app "test" 
+                imports []
+                provides [ main ] to "./platform"
+
+            main =
+            "#
+        ));
 
         for line in src.lines() {
             // indent the body!
@@ -2397,7 +2399,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num a, y : F64 }",
+            "{ numIdentity : Num a -> Num a, x : Num a, y : Float * }",
         );
     }
 
@@ -3603,7 +3605,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" imports [ Result.{ Result } ] provides [ main ] to "./platform"
 
                 boom = \_ -> boom {}
 
@@ -3820,7 +3822,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : F64, z : Int * }",
+            "{ x : Num a, y : Float *, z : Int * }",
         );
     }
 
@@ -3837,7 +3839,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num a, y : F64, z : c }, b : { blah : Str, x : Num a, y : F64, z : c } }",
+            "{ a : { x : Num a, y : Float *, z : c }, b : { blah : Str, x : Num a, y : Float *, z : c } }",
         );
     }
 
@@ -4828,7 +4830,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                canIGo : _ -> Result _ _
+                canIGo : _ -> Result.Result _ _
                 canIGo = \color ->
                     when color is
                         "green" -> Ok "go!"
@@ -5911,6 +5913,42 @@ mod solve_expr {
                 "#
             ),
             "U64",
+        )
+    }
+
+    #[test]
+    fn alias_ability_member() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ thething ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                thething =
+                    itis = hash
+                    itis
+                "#
+            ),
+            "a -> U64 | a has Hash",
+        )
+    }
+
+    #[test]
+    fn when_branch_and_body_flipflop() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                func = \record ->
+                    when record.tag is
+                        A -> { record & tag: B }
+                        B -> { record & tag: A }
+
+                func
+                "#
+            ),
+            "{ tag : [ A, B ] }a -> { tag : [ A, B ] }a",
         )
     }
 }

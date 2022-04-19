@@ -283,7 +283,7 @@ impl<'a> LowLevelCall<'a> {
 
             DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
             | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference
-            | SetFromList => {
+            | SetFromList | SetToDict => {
                 todo!("{:?}", self.lowlevel);
             }
 
