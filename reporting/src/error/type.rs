@@ -827,111 +827,111 @@ fn to_expr_report<'b>(
                         You can achieve that with record literal syntax.",
                 )),
             ),
-            Reason::RecordUpdateKeys(symbol, expected_fields) => match found
-                .clone()
-                .unwrap_structural_alias()
-            {
-                ErrorType::Record(actual_fields, ext) => {
-                    let expected_set: MutSet<_> = expected_fields.keys().cloned().collect();
-                    let actual_set: MutSet<_> = actual_fields.keys().cloned().collect();
+            Reason::RecordUpdateKeys(symbol, expected_fields) => {
+                match found.clone().unwrap_structural_alias() {
+                    ErrorType::Record(actual_fields, ext) => {
+                        let expected_set: MutSet<_> = expected_fields.keys().cloned().collect();
+                        let actual_set: MutSet<_> = actual_fields.keys().cloned().collect();
 
-                    let mut diff = expected_set.difference(&actual_set);
+                        let mut diff = expected_set.difference(&actual_set);
 
-                    match diff.next().and_then(|k| Some((k, expected_fields.get(k)?))) {
-                        None => report_mismatch(
-                            alloc,
-                            lines,
-                            filename,
-                            &category,
-                            found,
-                            expected_type,
-                            region,
-                            Some(expr_region),
-                            alloc.reflow("Something is off with this record update:"),
-                            alloc.concat(vec![
-                                alloc.reflow("The"),
-                                alloc.symbol_unqualified(symbol),
-                                alloc.reflow(" record is"),
-                            ]),
-                            alloc.reflow("But this update needs it to be compatible with:"),
-                            None,
-                        ),
-                        Some((field, field_region)) => {
-                            let r_doc = alloc.symbol_unqualified(symbol);
-                            let f_doc = alloc.record_field(field.clone());
-
-                            let header = alloc.concat(vec![
-                                alloc.reflow("The "),
-                                r_doc.clone(),
-                                alloc.reflow(" record does not have a "),
-                                f_doc.clone(),
-                                alloc.reflow(" field:"),
-                            ]);
-
-                            let mut suggestions = suggest::sort(
-                                field.as_str(),
-                                actual_fields.into_iter().collect::<Vec<_>>(),
-                            );
-
-                            let doc = alloc.stack(vec![
-                                header,
-                                alloc.region(lines.convert_region(*field_region)),
-                                if suggestions.is_empty() {
-                                    alloc.concat(vec![
-                                        alloc.reflow("In fact, "),
-                                        r_doc,
-                                        alloc.reflow(" is a record with NO fields!"),
-                                    ])
-                                } else {
-                                    let f = suggestions.remove(0);
-                                    let fs = suggestions;
-
-                                    alloc.stack(vec![
-                                        alloc.concat(vec![
-                                            alloc.reflow("This is usually a typo. Here are the "),
-                                            r_doc,
-                                            alloc.reflow(" fields that are most similar:"),
-                                        ]),
-                                        report_text::to_suggestion_record(
-                                            alloc,
-                                            f.clone(),
-                                            fs,
-                                            ext,
-                                        ),
-                                        alloc.concat(vec![
-                                            alloc.reflow("So maybe "),
-                                            f_doc,
-                                            alloc.reflow(" should be "),
-                                            alloc.record_field(f.0),
-                                            alloc.reflow("?"),
-                                        ]),
-                                    ])
-                                },
-                            ]);
-
-                            Report {
+                        match diff.next().and_then(|k| Some((k, expected_fields.get(k)?))) {
+                            None => report_mismatch(
+                                alloc,
+                                lines,
                                 filename,
-                                title: "TYPE MISMATCH".to_string(),
-                                doc,
-                                severity: Severity::RuntimeError,
+                                &category,
+                                found,
+                                expected_type,
+                                region,
+                                Some(expr_region),
+                                alloc.reflow("Something is off with this record update:"),
+                                alloc.concat(vec![
+                                    alloc.reflow("The"),
+                                    alloc.symbol_unqualified(symbol),
+                                    alloc.reflow(" record is"),
+                                ]),
+                                alloc.reflow("But this update needs it to be compatible with:"),
+                                None,
+                            ),
+                            Some((field, field_region)) => {
+                                let r_doc = alloc.symbol_unqualified(symbol);
+                                let f_doc = alloc.type_variable(field.clone());
+
+                                let header = alloc.concat(vec![
+                                    alloc.reflow("The "),
+                                    r_doc.clone(),
+                                    alloc.reflow(" record does not have a "),
+                                    f_doc.clone(),
+                                    alloc.reflow(" field:"),
+                                ]);
+
+                                let mut suggestions = suggest::sort(
+                                    field.as_str(),
+                                    actual_fields.into_iter().collect::<Vec<_>>(),
+                                );
+
+                                let doc = alloc.stack(vec![
+                                    header,
+                                    alloc.region(lines.convert_region(*field_region)),
+                                    if suggestions.is_empty() {
+                                        alloc.concat(vec![
+                                            alloc.reflow("In fact, "),
+                                            r_doc,
+                                            alloc.reflow(" is a record with NO fields!"),
+                                        ])
+                                    } else {
+                                        let f = suggestions.remove(0);
+                                        let fs = suggestions;
+
+                                        alloc.stack(vec![
+                                            alloc.concat(vec![
+                                                alloc.reflow("There may be a typo. Here are the "),
+                                                r_doc,
+                                                alloc.reflow(" fields that are most similar:"),
+                                            ]),
+                                            report_text::to_suggestion_record(
+                                                alloc,
+                                                f.clone(),
+                                                fs,
+                                                ext,
+                                            ),
+                                            alloc.concat(vec![
+                                                alloc.reflow("So maybe "),
+                                                f_doc,
+                                                alloc.reflow(" should be "),
+                                                alloc.type_variable(f.0),
+                                                //alloc.record_field(f.0),
+                                                alloc.reflow("?"),
+                                            ]),
+                                        ])
+                                    },
+                                ]);
+
+                                Report {
+                                    filename,
+                                    title: "TYPE MISMATCH".to_string(),
+                                    doc,
+                                    severity: Severity::RuntimeError,
+                                }
                             }
                         }
                     }
+                    _ => report_bad_type(
+                        alloc,
+                        lines,
+                        filename,
+                        &category,
+                        found,
+                        expected_type,
+                        region,
+                        Some(expr_region),
+                        alloc.reflow("This is not a record, so it has no fields to update!"),
+                        alloc.reflow("It is"),
+                        alloc.reflow("But I need a record!"),
+                    ),
                 }
-                _ => report_bad_type(
-                    alloc,
-                    lines,
-                    filename,
-                    &category,
-                    found,
-                    expected_type,
-                    region,
-                    Some(expr_region),
-                    alloc.reflow("This is not a record, so it has no fields to update!"),
-                    alloc.reflow("It is"),
-                    alloc.reflow("But I need a record!"),
-                ),
-            },
+            }
             Reason::FnCall { name, arity } => match count_arguments(&found) {
                 0 => {
                     let this_value = match name {
@@ -2956,23 +2956,18 @@ mod report_text {
     ) -> RocDocBuilder<'b> {
         let entry_to_doc = |(field_name, field_type): (RocDocBuilder<'b>, RocDocBuilder<'b>)| {
             field_name
+                .indent(4)
                 .append(alloc.text(" : "))
-                .hang(4)
                 .append(field_type)
+                .append(alloc.text(","))
         };
 
-        let field = alloc.reflow("{ ").append(entry_to_doc(entry));
-        let fields = std::iter::repeat(alloc.reflow(", "))
-            .zip(
-                entries
-                    .into_iter()
-                    .map(entry_to_doc)
-                    .chain(std::iter::once(alloc.text("..."))),
-            )
-            .map(|(a, b)| a.append(b));
+        let fields = std::iter::once(entry_to_doc(entry))
+            .chain(entries.into_iter().map(entry_to_doc))
+            .chain(std::iter::once(alloc.text("…").indent(4)));
 
         alloc.vcat(
-            std::iter::once(field)
+            std::iter::once(alloc.reflow("{"))
                 .chain(fields)
                 .chain(std::iter::once(alloc.text("}"))),
         )
