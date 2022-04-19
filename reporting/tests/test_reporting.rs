@@ -9828,4 +9828,48 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn expression_generalization_to_ability_is_an_error() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ hash, hashable ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+                hash = \$Id n -> n
+
+                hashable : a | a has Hash
+                hashable = $Id 15
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `hashable` definition:
+
+                 9│  hashable : a | a has Hash
+                10│  hashable = $Id 15
+                                ^^^^^^
+
+                This Id opaque wrapping has the type:
+
+                    Id
+
+                But the type annotation on `hashable` says it should be:
+
+                    a | a has Hash
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
+                "#
+            ),
+        )
+    }
 }

@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use roc_error_macros::{internal_error, todo_abilities};
+use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
@@ -369,9 +369,12 @@ fn unify_ranged_number(
             // Ranged number wins
             merge(subs, ctx, RangedNumber(real_var, range_vars))
         }
-        RecursionVar { .. } | RigidVar(..) | Alias(..) | Structure(..) => {
-            unify_pool(subs, pool, real_var, ctx.second, ctx.mode)
-        }
+        RecursionVar { .. }
+        | RigidVar(..)
+        | Alias(..)
+        | Structure(..)
+        | RigidAbleVar(..)
+        | FlexAbleVar(..) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
         &RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, real_var, other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
@@ -382,9 +385,6 @@ fn unify_ranged_number(
             // TODO: We should probably check that "range_vars" and "other_range_vars" intersect
         }
         Error => merge(subs, ctx, Error),
-        FlexAbleVar(..) | RigidAbleVar(..) => {
-            todo_abilities!("I don't think this can be reached yet")
-        }
     };
 
     if !outcome.mismatches.is_empty() {
@@ -451,8 +451,8 @@ fn unify_alias(
         RecursionVar { structure, .. } if !either_is_opaque => {
             unify_pool(subs, pool, real_var, *structure, ctx.mode)
         }
-        RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
-        RigidAbleVar (_, ability) |  FlexAbleVar(_, ability) if kind == AliasKind::Opaque && args.is_empty() => {
+        RigidVar(_) | RigidAbleVar(..) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        FlexAbleVar(_, ability) if kind == AliasKind::Opaque && args.is_empty() => {
             // Opaque type wins
             let mut outcome = merge(subs, ctx, Alias(symbol, args, real_var, kind));
             outcome.must_implement_ability.push(MustImplementAbility { typ: symbol, ability: *ability });
