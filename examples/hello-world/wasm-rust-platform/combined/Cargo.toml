@@ -1,0 +1,9 @@
+[package]
+name = "combined"
+version = "0.1.0"
+edition = "2018"
+
+[lib]
+name = "combined"
+path = "src/lib.rs"
+crate-type = ["cdylib"]

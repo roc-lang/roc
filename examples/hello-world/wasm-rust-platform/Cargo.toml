@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "platform",
+  "roc-sys",
+  "combined",
+]

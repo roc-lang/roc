@@ -1,0 +1,17 @@
+[package]
+name = "roc-sys"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "roc_sys"
+path = "src/lib.rs"
+crate-type = ["lib"]
+
+[dependencies]
+roc_std = { path = "../../../../roc_std" }
+
+[build-dependencies]
+roc_cli = { path = "../../../../cli" }

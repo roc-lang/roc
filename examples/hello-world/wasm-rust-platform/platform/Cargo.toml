@@ -9,7 +9,7 @@ edition = "2018"
 [lib]
 name = "host"
 path = "src/lib.rs"
-crate-type = ["staticlib"]
+crate-type = ["lib"]
 
 [dependencies]
 roc_std = { path = "../../../../roc_std" }
@@ -22,5 +22,3 @@ web-sys = { version = "0.3.57", features = [
     'Node',
     'Window',
 ]}
-
-[workspace]
