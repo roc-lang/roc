@@ -886,9 +886,9 @@ fn to_expr_report<'b>(
 
                                         alloc.stack(vec![
                                             alloc.concat(vec![
-                                                alloc.reflow("There may be a typo. Here are the "),
+                                                alloc.reflow("There may be a typo. These "),
                                                 r_doc,
-                                                alloc.reflow(" fields that are most similar:"),
+                                                alloc.reflow(" fields are the most similar:"),
                                             ]),
                                             report_text::to_suggestion_record(
                                                 alloc,
@@ -897,7 +897,7 @@ fn to_expr_report<'b>(
                                                 ext,
                                             ),
                                             alloc.concat(vec![
-                                                alloc.reflow("So maybe "),
+                                                alloc.reflow("Maybe "),
                                                 f_doc,
                                                 alloc.reflow(" should be "),
                                                 alloc.type_variable(f.0),
@@ -2893,22 +2893,14 @@ mod report_text {
             )
         };
 
-        if fs.len() <= 3 {
-            let mut selection = vec![f];
-            selection.extend(fs);
+        let mut selection = vec![f];
+        selection.extend(fs);
 
-            let fields = selection.into_iter().map(entry_to_doc).collect();
+        let fields = selection.into_iter().map(entry_to_doc).collect();
 
-            vertical_record(alloc, fields, ext_to_doc(alloc, ext))
-                .annotate(Annotation::TypeBlock)
-                .indent(4)
-        } else {
-            let fields = fs.into_iter().take(3).map(entry_to_doc).collect();
-
-            vertical_record_snippet(alloc, entry_to_doc(f), fields)
-                .annotate(Annotation::TypeBlock)
-                .indent(4)
-        }
+        vertical_record(alloc, fields, ext_to_doc(alloc, ext))
+            .annotate(Annotation::TypeBlock)
+            .indent(4)
     }
 
     fn vertical_record<'b>(
@@ -2916,61 +2908,44 @@ mod report_text {
         entries: Vec<(RocDocBuilder<'b>, RocDocBuilder<'b>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
     ) -> RocDocBuilder<'b> {
-        let entry_to_doc = |(field_name, field_type): (RocDocBuilder<'b>, RocDocBuilder<'b>)| {
-            field_name
-                .append(alloc.text(" : "))
-                .hang(4)
-                .append(field_type)
+        let fields = if entries.is_empty() {
+            alloc.text("{}")
+        } else {
+            const MAX_ENTRIES_TO_DISPLAY: usize = 4;
+
+            let is_truncated = entries.len() > MAX_ENTRIES_TO_DISPLAY;
+            let entry_to_doc =
+                |(field_name, field_type): (RocDocBuilder<'b>, RocDocBuilder<'b>)| {
+                    field_name
+                        .indent(4)
+                        .append(alloc.text(" : "))
+                        .append(field_type)
+                        .append(alloc.text(","))
+                };
+
+            let closing = std::iter::once(alloc.text("}"));
+            let fields = std::iter::once(alloc.reflow("{")).chain(
+                entries
+                    .into_iter()
+                    .map(entry_to_doc)
+                    .take(MAX_ENTRIES_TO_DISPLAY),
+            );
+
+            if is_truncated {
+                alloc.vcat(
+                    fields
+                        .chain(std::iter::once(alloc.text("…").indent(4)))
+                        .chain(closing),
+                )
+            } else {
+                alloc.vcat(fields.chain(closing))
+            }
         };
 
         match opt_ext {
-            None => {
-                if entries.is_empty() {
-                    alloc.text("{}")
-                } else {
-                    let start = std::iter::once(alloc.reflow("{ "))
-                        .chain(std::iter::repeat(alloc.reflow(", ")));
-                    let entry_docs = start
-                        .zip(entries.into_iter().map(entry_to_doc))
-                        .map(|(a, b)| a.append(b));
-                    alloc.vcat(entry_docs.chain(std::iter::once(alloc.text("}"))))
-                }
-            }
-            Some(ext) => {
-                let start = std::iter::once(alloc.reflow("{ "))
-                    .chain(std::iter::repeat(alloc.reflow(", ")));
-                let entry_docs = start
-                    .zip(entries.into_iter().map(entry_to_doc))
-                    .map(|(a, b)| a.append(b));
-                alloc
-                    .vcat(entry_docs.chain(std::iter::once(alloc.text("}"))))
-                    .append(ext)
-            }
+            Some(ext) => fields.append(ext),
+            None => fields,
         }
-    }
-
-    fn vertical_record_snippet<'b>(
-        alloc: &'b RocDocAllocator<'b>,
-        entry: (RocDocBuilder<'b>, RocDocBuilder<'b>),
-        entries: Vec<(RocDocBuilder<'b>, RocDocBuilder<'b>)>,
-    ) -> RocDocBuilder<'b> {
-        let entry_to_doc = |(field_name, field_type): (RocDocBuilder<'b>, RocDocBuilder<'b>)| {
-            field_name
-                .indent(4)
-                .append(alloc.text(" : "))
-                .append(field_type)
-                .append(alloc.text(","))
-        };
-
-        let fields = std::iter::once(entry_to_doc(entry))
-            .chain(entries.into_iter().map(entry_to_doc))
-            .chain(std::iter::once(alloc.text("…").indent(4)));
-
-        alloc.vcat(
-            std::iter::once(alloc.reflow("{"))
-                .chain(fields)
-                .chain(std::iter::once(alloc.text("}"))),
-        )
     }
 
     pub fn tag_union<'b>(
