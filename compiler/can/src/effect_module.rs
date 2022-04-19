@@ -12,7 +12,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{AliasKind, Type, TypeExtension};
 
-#[derive(Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct HostedGeneratedFunctions {
     pub(crate) after: bool,
     pub(crate) map: bool,

@@ -30,7 +30,8 @@ impl IdentStr {
     // Reserve 1 byte for the discriminant
     const SMALL_STR_BYTES: usize = std::mem::size_of::<Self>() - 1;
 
-    pub fn len(&self) -> usize {
+    #[inline(always)]
+    pub const fn len(&self) -> usize {
         let bytes = self.length.to_ne_bytes();
         let last_byte = bytes[mem::size_of::<usize>() - 1];
 
@@ -55,11 +56,11 @@ impl IdentStr {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.length == 0
     }
 
-    pub fn is_small_str(&self) -> bool {
+    pub const fn is_small_str(&self) -> bool {
         let bytes = self.length.to_ne_bytes();
         let last_byte = bytes[mem::size_of::<usize>() - 1];
 

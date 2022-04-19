@@ -596,109 +596,136 @@ pub fn constrain_expr(
                 NoExpectation(cond_type.clone()),
             );
 
-            let mut branch_constraints = Vec::with_capacity(branches.len() + 1);
-            branch_constraints.push(expr_con);
+            let branch_var = *expr_var;
+            let branch_type = Variable(branch_var);
 
-            match &expected {
-                FromAnnotation(name, arity, ann_source, _typ) => {
-                    // NOTE deviation from elm.
-                    //
-                    // in elm, `_typ` is used, but because we have this `expr_var` too
-                    // and need to constrain it, this is what works and gives better error messages
-                    let typ = Type::Variable(*expr_var);
+            let branch_expr_reason =
+                |expected: &Expected<Type>, index, branch_region| match expected {
+                    FromAnnotation(name, arity, ann_source, _typ) => {
+                        // NOTE deviation from elm.
+                        //
+                        // in elm, `_typ` is used, but because we have this `expr_var` too
+                        // and need to constrain it, this is what works and gives better error messages
+                        FromAnnotation(
+                            name.clone(),
+                            *arity,
+                            AnnotationSource::TypedWhenBranch {
+                                index,
+                                region: ann_source.region(),
+                            },
+                            branch_type.clone(),
+                        )
+                    }
 
-                    for (index, when_branch) in branches.iter().enumerate() {
-                        let pattern_region =
-                            Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
+                    _ => ForReason(
+                        Reason::WhenBranch { index },
+                        branch_type.clone(),
+                        branch_region,
+                    ),
+                };
 
-                        let branch_con = constrain_when_branch(
-                            constraints,
-                            env,
+            // Our goal is to constrain and introduce variables in all pattern when branch patterns before
+            // looking at their bodies.
+            //
+            //   pat1 -> body1
+            //   *^^^    +~~~~
+            //   pat2 -> body2
+            //   *^^^    +~~~~
+            //
+            //   * solve first
+            //   + solve second
+            //
+            // For a single pattern/body pair, we must introduce variables and symbols defined in the
+            // pattern before solving the body, since those definitions are effectively let-bound.
+            //
+            // But also, we'd like to solve all branch pattern constraints in one swoop before looking at
+            // the bodies, because the patterns may have presence constraints that expect to be built up
+            // together.
+            //
+            // For this reason, we distinguish the two - and introduce variables in the branch patterns
+            // as part of the pattern constraint, solving all of those at once, and then solving the body
+            // constraints.
+            let mut pattern_vars = Vec::with_capacity(branches.len());
+            let mut pattern_headers = SendMap::default();
+            let mut pattern_cons = Vec::with_capacity(branches.len());
+            let mut branch_cons = Vec::with_capacity(branches.len());
+
+            for (index, when_branch) in branches.iter().enumerate() {
+                let pattern_region =
+                    Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
+
+                let (new_pattern_vars, new_pattern_headers, pattern_con, branch_con) =
+                    constrain_when_branch_help(
+                        constraints,
+                        env,
+                        region,
+                        when_branch,
+                        PExpected::ForReason(
+                            PReason::WhenMatch {
+                                index: HumanIndex::zero_based(index),
+                            },
+                            cond_type.clone(),
+                            pattern_region,
+                        ),
+                        branch_expr_reason(
+                            &expected,
+                            HumanIndex::zero_based(index),
                             when_branch.value.region,
-                            when_branch,
-                            PExpected::ForReason(
-                                PReason::WhenMatch {
-                                    index: HumanIndex::zero_based(index),
-                                },
-                                cond_type.clone(),
-                                pattern_region,
-                            ),
-                            FromAnnotation(
-                                name.clone(),
-                                *arity,
-                                AnnotationSource::TypedWhenBranch {
-                                    index: HumanIndex::zero_based(index),
-                                    region: ann_source.region(),
-                                },
-                                typ.clone(),
-                            ),
-                        );
+                        ),
+                    );
 
-                        branch_constraints.push(branch_con);
-                    }
+                pattern_vars.extend(new_pattern_vars);
+                debug_assert!(
+                    pattern_headers
+                        .clone()
+                        .intersection(new_pattern_headers.clone())
+                        .is_empty(),
+                    "Two patterns introduce the same symbols - that's a bug!"
+                );
+                pattern_headers.extend(new_pattern_headers);
+                pattern_cons.push(pattern_con);
 
-                    branch_constraints.push(constraints.equal_types_var(
-                        *expr_var,
-                        expected,
-                        Category::When,
-                        region,
-                    ));
-
-                    return constraints.exists_many([cond_var, *expr_var], branch_constraints);
-                }
-
-                _ => {
-                    let branch_var = *expr_var;
-                    let branch_type = Variable(branch_var);
-                    let mut branch_cons = Vec::with_capacity(branches.len());
-
-                    for (index, when_branch) in branches.iter().enumerate() {
-                        let pattern_region =
-                            Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
-                        let branch_con = constrain_when_branch(
-                            constraints,
-                            env,
-                            region,
-                            when_branch,
-                            PExpected::ForReason(
-                                PReason::WhenMatch {
-                                    index: HumanIndex::zero_based(index),
-                                },
-                                cond_type.clone(),
-                                pattern_region,
-                            ),
-                            ForReason(
-                                Reason::WhenBranch {
-                                    index: HumanIndex::zero_based(index),
-                                },
-                                branch_type.clone(),
-                                when_branch.value.region,
-                            ),
-                        );
-
-                        branch_cons.push(branch_con);
-                    }
-
-                    // Deviation: elm adds another layer of And nesting
-                    //
-                    // Record the original conditional expression's constraint.
-                    // Each branch's pattern must have the same type
-                    // as the condition expression did.
-                    //
-                    // The return type of each branch must equal the return type of
-                    // the entire when-expression.
-                    branch_cons.push(constraints.equal_types_var(
-                        branch_var,
-                        expected,
-                        Category::When,
-                        region,
-                    ));
-                    branch_constraints.push(constraints.and_constraint(branch_cons));
-                }
+                branch_cons.push(branch_con);
             }
 
+            // Deviation: elm adds another layer of And nesting
+            //
+            // Record the original conditional expression's constraint.
+            // Each branch's pattern must have the same type
+            // as the condition expression did.
+            //
+            // The return type of each branch must equal the return type of
+            // the entire when-expression.
+            // branch_cons.extend(pattern_cons);
+            // branch_constraints.push(constraints.and_constraint(pattern_cons));
+            let mut total_cons = Vec::with_capacity(1 + 2 * branches.len() + 1);
+            total_cons.push(expr_con);
+
+            // Solve all the pattern constraints together, introducing variables in the pattern as
+            // need be before solving the bodies.
+            let pattern_constraints = constraints.and_constraint(pattern_cons);
+            let body_constraints = constraints.and_constraint(branch_cons);
+            let when_body_con = constraints.let_constraint(
+                [],
+                pattern_vars,
+                pattern_headers,
+                pattern_constraints,
+                body_constraints,
+            );
+            total_cons.push(when_body_con);
+
+            total_cons.push(constraints.equal_types_var(
+                branch_var,
+                expected,
+                Category::When,
+                region,
+            ));
+
+            let branch_constraints = constraints.and_constraint(total_cons);
+
             // exhautiveness checking happens when converting to mono::Expr
-            constraints.exists_many([cond_var, *expr_var], branch_constraints)
+            // ...for now
+            constraints.exists([cond_var, *expr_var], branch_constraints)
         }
         Access {
             record_var,
@@ -1087,15 +1114,22 @@ pub fn constrain_expr(
     }
 }
 
+/// Constrain a when branch, returning (variables in pattern, symbols introduced in pattern, pattern constraint, body constraint).
+/// We want to constraint all pattern constraints in a "when" before body constraints.
 #[inline(always)]
-fn constrain_when_branch(
+fn constrain_when_branch_help(
     constraints: &mut Constraints,
     env: &Env,
     region: Region,
     when_branch: &WhenBranch,
     pattern_expected: PExpected<Type>,
     expr_expected: Expected<Type>,
-) -> Constraint {
+) -> (
+    Vec<Variable>,
+    SendMap<Symbol, Loc<Type>>,
+    Constraint,
+    Constraint,
+) {
     let ret_constraint = constrain_expr(
         constraints,
         env,
@@ -1123,7 +1157,7 @@ fn constrain_when_branch(
         );
     }
 
-    if let Some(loc_guard) = &when_branch.guard {
+    let (pattern_constraints, body_constraints) = if let Some(loc_guard) = &when_branch.guard {
         let guard_constraint = constrain_expr(
             constraints,
             env,
@@ -1140,17 +1174,18 @@ fn constrain_when_branch(
         let state_constraints = constraints.and_constraint(state.constraints);
         let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
 
-        constraints.let_constraint([], state.vars, state.headers, state_constraints, inner)
+        (state_constraints, inner)
     } else {
         let state_constraints = constraints.and_constraint(state.constraints);
-        constraints.let_constraint(
-            [],
-            state.vars,
-            state.headers,
-            state_constraints,
-            ret_constraint,
-        )
-    }
+        (state_constraints, ret_constraint)
+    };
+
+    (
+        state.vars,
+        state.headers,
+        pattern_constraints,
+        body_constraints,
+    )
 }
 
 fn constrain_field(

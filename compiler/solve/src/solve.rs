@@ -1187,6 +1187,7 @@ fn solve(
                 match new_desc.content {
                     Content::Structure(FlatType::TagUnion(tags, _)) => {
                         let new_ext = subs.fresh_unnamed_flex_var();
+                        subs.set_rank(new_ext, new_desc.rank);
                         let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
                         new_desc.content = new_union;
                         subs.set(actual, new_desc);

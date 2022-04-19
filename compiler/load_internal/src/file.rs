@@ -4,6 +4,7 @@ use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
+use roc_builtins::roc::module_source;
 use roc_builtins::std::borrow_stdlib;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
@@ -79,7 +80,7 @@ macro_rules! log {
 }
 
 /// Struct storing various intermediate stages by their ModuleId
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ModuleCache<'a> {
     module_names: MutMap<ModuleId, PQModuleName<'a>>,
 
@@ -101,6 +102,70 @@ struct ModuleCache<'a> {
     mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
+}
+
+impl Default for ModuleCache<'_> {
+    fn default() -> Self {
+        let mut module_names = MutMap::default();
+
+        module_names.insert(
+            ModuleId::RESULT,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::RESULT)),
+        );
+
+        module_names.insert(
+            ModuleId::LIST,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::LIST)),
+        );
+
+        module_names.insert(
+            ModuleId::STR,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::STR)),
+        );
+
+        module_names.insert(
+            ModuleId::DICT,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::DICT)),
+        );
+
+        module_names.insert(
+            ModuleId::SET,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::SET)),
+        );
+
+        module_names.insert(
+            ModuleId::BOOL,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::BOOL)),
+        );
+
+        module_names.insert(
+            ModuleId::NUM,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::NUM)),
+        );
+
+        module_names.insert(
+            ModuleId::BOX,
+            PQModuleName::Unqualified(ModuleName::from(ModuleName::BOX)),
+        );
+
+        Self {
+            module_names,
+            headers: Default::default(),
+            parsed: Default::default(),
+            aliases: Default::default(),
+            constrained: Default::default(),
+            typechecked: Default::default(),
+            found_specializations: Default::default(),
+            external_specializations_requested: Default::default(),
+            imports: Default::default(),
+            top_level_thunks: Default::default(),
+            documentation: Default::default(),
+            can_problems: Default::default(),
+            type_problems: Default::default(),
+            mono_problems: Default::default(),
+            sources: Default::default(),
+        }
+    }
 }
 
 fn start_phase<'a>(
@@ -131,20 +196,24 @@ fn start_phase<'a>(
     let task = {
         match phase {
             Phase::LoadHeader => {
-                let dep_name = state
-                    .module_cache
-                    .module_names
-                    .get(&module_id)
-                    .expect("module id is present")
-                    .clone();
+                let opt_dep_name = state.module_cache.module_names.get(&module_id);
 
-                BuildTask::LoadModule {
-                    module_name: dep_name,
-                    // Provide mutexes of ModuleIds and IdentIds by module,
-                    // so other modules can populate them as they load.
-                    module_ids: Arc::clone(&state.arc_modules),
-                    shorthands: Arc::clone(&state.arc_shorthands),
-                    ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                match opt_dep_name {
+                    None => {
+                        panic!("Module {:?} is not in module_cache.module_names", module_id)
+                    }
+                    Some(dep_name) => {
+                        let module_name = dep_name.clone();
+
+                        BuildTask::LoadModule {
+                            module_name,
+                            // Provide mutexes of ModuleIds and IdentIds by module,
+                            // so other modules can populate them as they load.
+                            module_ids: Arc::clone(&state.arc_modules),
+                            shorthands: Arc::clone(&state.arc_shorthands),
+                            ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                        }
+                    }
                 }
             }
             Phase::Parse => {
@@ -222,12 +291,15 @@ fn start_phase<'a>(
                     }
                 }
 
+                let skip_constraint_gen = state.cached_subs.lock().contains_key(&module_id);
+
                 BuildTask::CanonicalizeAndConstrain {
                     parsed,
                     dep_idents,
                     exposed_symbols,
                     module_ids,
                     aliases,
+                    skip_constraint_gen,
                 }
             }
 
@@ -581,6 +653,7 @@ struct PlatformData {
 #[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
+    pub root_subs: Option<Subs>,
     pub platform_data: Option<PlatformData>,
     pub goal_phase: Phase,
     pub exposed_types: ExposedByModule,
@@ -640,6 +713,7 @@ impl<'a> State<'a> {
 
         Self {
             root_id,
+            root_subs: None,
             target_info,
             platform_data: None,
             goal_phase,
@@ -751,6 +825,7 @@ enum BuildTask<'a> {
         dep_idents: MutMap<ModuleId, IdentIds>,
         exposed_symbols: VecSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
+        skip_constraint_gen: bool,
     },
     Solve {
         module: Module,
@@ -1062,7 +1137,7 @@ pub fn load<'a>(
 
 /// Load using only a single thread; used when compiling to webassembly
 #[allow(clippy::too_many_arguments)]
-fn load_single_threaded<'a>(
+pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     src_dir: &Path,
@@ -1209,7 +1284,6 @@ fn state_thread_step<'a>(
                     // This is where most of the main thread's work gets done.
                     // Everything up to this point has been setting up the threading
                     // system which lets this logic work efficiently.
-                    let constrained_ident_ids = state.constrained_ident_ids.clone();
                     let arc_modules = state.arc_modules.clone();
 
                     let render = state.render;
@@ -1235,10 +1309,12 @@ fn state_thread_step<'a>(
                                 .into_inner()
                                 .into_module_ids();
 
+                            // if parsing failed, this module did not add anything to IdentIds
+                            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
                             let buf = to_parse_problem_report(
                                 problem,
                                 module_ids,
-                                constrained_ident_ids,
+                                root_exposed_ident_ids,
                                 render,
                             );
                             Err(LoadingProblem::FormattedReport(buf))
@@ -1594,7 +1670,9 @@ fn report_unused_imported_modules<'a>(
     };
 
     for (unused, region) in unused_imported_modules.drain() {
-        existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+        if !unused.is_builtin() {
+            existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+        }
     }
 }
 
@@ -1660,7 +1738,7 @@ fn update<'a>(
                         state.platform_path = PlatformPath::RootIsPkgConfig;
                     }
                 }
-                Interface => {
+                Builtin { .. } | Interface => {
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::RootIsInterface;
@@ -1694,6 +1772,132 @@ fn update<'a>(
             state
                 .exposed_symbols_by_module
                 .insert(home, exposed_symbols);
+
+            // add the prelude
+            let mut header = header;
+
+            if ![ModuleId::RESULT, ModuleId::BOOL].contains(&header.module_id) {
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::RESULT));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::RESULT, Region::zero());
+
+                header.exposed_imports.insert(
+                    Ident::from("Result"),
+                    (Symbol::RESULT_RESULT, Region::zero()),
+                );
+            }
+
+            if ![ModuleId::NUM, ModuleId::BOOL, ModuleId::RESULT].contains(&header.module_id) {
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::NUM));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::NUM, Region::zero());
+
+                let prelude_types = [
+                    (Ident::from("Num"), Symbol::NUM_NUM),
+                    (Ident::from("Int"), Symbol::NUM_INT),
+                    (Ident::from("Float"), Symbol::NUM_FLOAT),
+                    (Ident::from("Integer"), Symbol::NUM_INTEGER),
+                    (Ident::from("FloatingPoint"), Symbol::NUM_FLOATINGPOINT),
+                    (Ident::from("Binary32"), Symbol::NUM_BINARY32),
+                    (Ident::from("Binary64"), Symbol::NUM_BINARY64),
+                    (Ident::from("Signed128"), Symbol::NUM_SIGNED128),
+                    (Ident::from("Signed64"), Symbol::NUM_SIGNED64),
+                    (Ident::from("Signed32"), Symbol::NUM_SIGNED32),
+                    (Ident::from("Signed16"), Symbol::NUM_SIGNED16),
+                    (Ident::from("Signed8"), Symbol::NUM_SIGNED8),
+                    (Ident::from("Unsigned128"), Symbol::NUM_UNSIGNED128),
+                    (Ident::from("Unsigned64"), Symbol::NUM_UNSIGNED64),
+                    (Ident::from("Unsigned32"), Symbol::NUM_UNSIGNED32),
+                    (Ident::from("Unsigned16"), Symbol::NUM_UNSIGNED16),
+                    (Ident::from("Unsigned8"), Symbol::NUM_UNSIGNED8),
+                    (Ident::from("Natural"), Symbol::NUM_NATURAL),
+                    (Ident::from("Decimal"), Symbol::NUM_DECIMAL),
+                    (Ident::from("Nat"), Symbol::NUM_NAT),
+                    (Ident::from("I8"), Symbol::NUM_I8),
+                    (Ident::from("I16"), Symbol::NUM_I16),
+                    (Ident::from("I32"), Symbol::NUM_I32),
+                    (Ident::from("I64"), Symbol::NUM_I64),
+                    (Ident::from("I128"), Symbol::NUM_I128),
+                    (Ident::from("U8"), Symbol::NUM_U8),
+                    (Ident::from("U16"), Symbol::NUM_U16),
+                    (Ident::from("U32"), Symbol::NUM_U32),
+                    (Ident::from("U64"), Symbol::NUM_U64),
+                    (Ident::from("U128"), Symbol::NUM_U128),
+                    (Ident::from("F32"), Symbol::NUM_F32),
+                    (Ident::from("F64"), Symbol::NUM_F64),
+                    (Ident::from("Dec"), Symbol::NUM_DEC),
+                ];
+
+                for (ident, symbol) in prelude_types {
+                    header
+                        .exposed_imports
+                        .insert(ident, (symbol, Region::zero()));
+                }
+            }
+
+            if header.module_id != ModuleId::BOOL {
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::BOOL));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::BOOL, Region::zero());
+
+                header
+                    .exposed_imports
+                    .insert(Ident::from("Bool"), (Symbol::BOOL_BOOL, Region::zero()));
+            }
+
+            if !header.module_id.is_builtin() {
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::BOX));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::BOX, Region::zero());
+
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::STR));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::STR, Region::zero());
+
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::DICT));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::DICT, Region::zero());
+
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::SET));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::SET, Region::zero());
+
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::LIST));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::LIST, Region::zero());
+            }
 
             state
                 .module_cache
@@ -2024,6 +2228,14 @@ fn update<'a>(
                     existing.push(requested);
                 }
 
+                // use the subs of the root module;
+                // this is used in the repl to find the type of `main`
+                let subs = if module_id == state.root_id {
+                    subs
+                } else {
+                    state.root_subs.clone().unwrap()
+                };
+
                 msg_tx
                     .send(Msg::FinishedAllSpecialization {
                         subs,
@@ -2036,6 +2248,12 @@ fn update<'a>(
                 // the originally requested module, we're all done!
                 return Ok(state);
             } else {
+                // record the subs of the root module;
+                // this is used in the repl to find the type of `main`
+                if module_id == state.root_id {
+                    state.root_subs = Some(subs);
+                }
+
                 state.constrained_ident_ids.insert(module_id, ident_ids);
 
                 for (module_id, requested) in external_specializations_requested {
@@ -2264,6 +2482,12 @@ fn load_pkg_config<'a>(
                         header
                     )))
                 }
+                Ok((ast::Module::Hosted { header }, _parse_state)) => {
+                    Err(LoadingProblem::UnexpectedHeader(format!(
+                        "expected platform/package module, got Hosted module with header\n{:?}",
+                        header
+                    )))
+                }
                 Ok((ast::Module::App { header }, _parse_state)) => {
                     Err(LoadingProblem::UnexpectedHeader(format!(
                         "expected platform/package module, got App with header\n{:?}",
@@ -2287,12 +2511,6 @@ fn load_pkg_config<'a>(
 
                     Ok(pkg_config_module_msg)
                 }
-                Ok((ast::Module::Hosted { header }, _parse_state)) => {
-                    Err(LoadingProblem::UnexpectedHeader(format!(
-                        "expected platform/package module, got Hosted module with header\n{:?}",
-                        header
-                    )))
-                }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
                         .into_file_error(filename),
@@ -2307,6 +2525,68 @@ fn load_pkg_config<'a>(
     }
 }
 
+fn load_builtin_module_help<'a>(
+    arena: &'a Bump,
+    filename: &str,
+    src_bytes: &'a str,
+) -> (HeaderInfo<'a>, roc_parse::state::State<'a>) {
+    let is_root_module = false;
+    let opt_shorthand = None;
+
+    let filename = PathBuf::from(filename);
+
+    let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
+    let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+
+    match parsed {
+        Ok((ast::Module::Interface { header }, parse_state)) => {
+            let info = HeaderInfo {
+                loc_name: Loc {
+                    region: header.name.region,
+                    value: ModuleNameEnum::Interface(header.name.value),
+                },
+                filename,
+                is_root_module,
+                opt_shorthand,
+                packages: &[],
+                exposes: unspace(arena, header.exposes.items),
+                imports: unspace(arena, header.imports.items),
+                extra: HeaderFor::Builtin {
+                    generates_with: &[],
+                },
+            };
+
+            (info, parse_state)
+        }
+        Ok(_) => panic!("invalid header format for builtin module"),
+        Err(e) => panic!(
+            "Hit a parse error in the header of {:?}:\n{:?}",
+            filename, e
+        ),
+    }
+}
+
+fn load_builtin_module<'a>(
+    arena: &'a Bump,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    module_timing: ModuleTiming,
+    module_id: ModuleId,
+    module_name: &str,
+) -> (ModuleId, Msg<'a>) {
+    let src_bytes = module_source(module_id);
+
+    let (info, parse_state) = load_builtin_module_help(arena, module_name, src_bytes);
+
+    send_header(
+        info,
+        parse_state,
+        module_ids,
+        ident_ids_by_module,
+        module_timing,
+    )
+}
+
 /// Load a module by its module name, rather than by its filename
 fn load_module<'a>(
     arena: &'a Bump,
@@ -2317,6 +2597,119 @@ fn load_module<'a>(
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
+
+    let parse_start = SystemTime::now();
+    let parse_header_duration = parse_start.elapsed().unwrap();
+
+    // Insert the first entries for this module's timings
+    let mut module_timing = ModuleTiming::new(module_start_time);
+
+    module_timing.read_roc_file = Default::default();
+    module_timing.parse_header = parse_header_duration;
+    match module_name.as_inner().as_str() {
+        "Result" => {
+            return Ok(load_builtin_module(
+                arena,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+                ModuleId::RESULT,
+                "Result.roc",
+            ));
+        }
+        "List" => {
+            return Ok(load_builtin_module(
+                arena,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+                ModuleId::LIST,
+                "List.roc",
+            ));
+        }
+        "Str" => {
+            return Ok(load_builtin_module(
+                arena,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+                ModuleId::STR,
+                "Str.roc",
+            ));
+        }
+        "Dict" => {
+            return Ok(load_builtin_module(
+                arena,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+                ModuleId::DICT,
+                "Dict.roc",
+            ));
+        }
+        "Set" => {
+            return Ok(load_builtin_module(
+                arena,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+                ModuleId::SET,
+                "Set.roc",
+            ));
+        }
+        "Num" => {
+            return Ok(load_builtin_module(
+                arena,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+                ModuleId::NUM,
+                "Num.roc",
+            ));
+        }
+        "Bool" => {
+            return Ok(load_builtin_module(
+                arena,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+                ModuleId::BOOL,
+                "Bool.roc",
+            ));
+        }
+        "Box" => {
+            return Ok(load_builtin_module(
+                arena,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+                ModuleId::BOX,
+                "Box.roc",
+            ));
+        }
+        _ => {
+            // fall through
+        }
+    }
+
+    let (filename, opt_shorthand) = module_name_to_path(src_dir, module_name, arc_shorthands);
+
+    load_filename(
+        arena,
+        filename,
+        false,
+        opt_shorthand,
+        module_ids,
+        ident_ids_by_module,
+        module_start_time,
+    )
+}
+
+fn module_name_to_path<'a>(
+    src_dir: &Path,
+    module_name: PQModuleName<'a>,
+    arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
+) -> (PathBuf, Option<&'a str>) {
     let mut filename = PathBuf::new();
 
     filename.push(src_dir);
@@ -2351,15 +2744,7 @@ fn load_module<'a>(
     // End with .roc
     filename.set_extension(ROC_FILE_EXTENSION);
 
-    load_filename(
-        arena,
-        filename,
-        false,
-        opt_shorthand,
-        module_ids,
-        ident_ids_by_module,
-        module_start_time,
-    )
+    (filename, opt_shorthand)
 }
 
 /// Find a task according to the following algorithm:
@@ -2818,6 +3203,18 @@ fn send_header<'a>(
         }
     }
 
+    // make sure when we run the bulitin modules in /compiler/builtins/roc that we
+    // mark these modules as Builtin. Otherwise the builtin functions are not instantiated
+    // and we just have a bunch of definitions with runtime errors in their bodies
+    let extra = {
+        match extra {
+            HeaderFor::Interface if home.is_builtin() => HeaderFor::Builtin {
+                generates_with: &[],
+            },
+            _ => extra,
+        }
+    };
+
     (
         home,
         Msg::Header(ModuleHeader {
@@ -3229,30 +3626,28 @@ fn run_solve_solve(
         solve_aliases.insert(*name, alias.clone());
     }
 
-    let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
-        &constraints,
-        actual_constraint,
-        rigid_variables,
-        subs,
-        solve_aliases,
-        abilities_store,
-    );
+    let (solved_subs, exposed_vars_by_symbol, problems, abilities_store) = {
+        let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
+            &constraints,
+            actual_constraint,
+            rigid_variables,
+            subs,
+            solve_aliases,
+            abilities_store,
+        );
 
-    let solved_subs = if true {
-        solved_subs
-    } else {
-        panic!();
-        //        let mut serialized = Vec::new();
-        //        solved_subs.inner().serialize(&mut serialized).unwrap();
-        //        let subs = Subs::deserialize(&serialized);
-        //
-        //        Solved(subs)
+        let exposed_vars_by_symbol: Vec<_> = solved_env
+            .vars_by_symbol()
+            .filter(|(k, _)| exposed_symbols.contains(k))
+            .collect();
+
+        (
+            solved_subs,
+            exposed_vars_by_symbol,
+            problems,
+            abilities_store,
+        )
     };
-
-    let exposed_vars_by_symbol: Vec<_> = solved_env
-        .vars_by_symbol()
-        .filter(|(k, _)| exposed_symbols.contains(k))
-        .collect();
 
     (
         solved_subs,
@@ -3286,24 +3681,23 @@ fn run_solve<'a>(
     let (solved_subs, exposed_vars_by_symbol, problems, abilities_store) = {
         if module_id.is_builtin() {
             match cached_subs.lock().remove(&module_id) {
-                None => {
-                    // this should never happen
-                    run_solve_solve(
-                        imported_builtins,
-                        exposed_for_module,
-                        constraints,
-                        constraint,
-                        var_store,
-                        module,
+                None => run_solve_solve(
+                    imported_builtins,
+                    exposed_for_module,
+                    constraints,
+                    constraint,
+                    var_store,
+                    module,
+                ),
+                Some((subs, exposed_vars_by_symbol)) => {
+                    (
+                        Solved(subs),
+                        exposed_vars_by_symbol.to_vec(),
+                        vec![],
+                        // TODO(abilities) replace when we have abilities for builtins
+                        AbilitiesStore::default(),
                     )
                 }
-                Some((subs, exposed_vars_by_symbol)) => (
-                    Solved(subs),
-                    exposed_vars_by_symbol.to_vec(),
-                    vec![],
-                    // TODO(abilities) replace when we have abilities for builtins
-                    AbilitiesStore::default(),
-                ),
             }
         } else {
             run_solve_solve(
@@ -3401,6 +3795,7 @@ fn canonicalize_and_constrain<'a>(
     exposed_symbols: VecSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     parsed: ParsedModule<'a>,
+    skip_constraint_gen: bool,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let canonicalize_start = SystemTime::now();
 
@@ -3470,12 +3865,16 @@ fn canonicalize_and_constrain<'a>(
 
             let mut constraints = Constraints::new();
 
-            let constraint = constrain_module(
-                &mut constraints,
-                &module_output.scope.abilities_store,
-                &module_output.declarations,
-                module_id,
-            );
+            let constraint = if skip_constraint_gen {
+                roc_can::constraint::Constraint::True
+            } else {
+                constrain_module(
+                    &mut constraints,
+                    &module_output.scope.abilities_store,
+                    &module_output.declarations,
+                    module_id,
+                )
+            };
 
             let after = roc_types::types::get_type_clone_count();
 
@@ -3853,10 +4252,15 @@ fn add_def_to_module<'a>(
                     arguments: loc_args,
                     loc_body,
                     captured_symbols,
+                    name,
                     ..
                 }) => {
                     // this is a top-level definition, it should not capture anything
-                    debug_assert!(captured_symbols.is_empty());
+                    debug_assert!(
+                        captured_symbols.is_empty(),
+                        "{:?}",
+                        (symbol, name, symbol.module_id(), &captured_symbols)
+                    );
 
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it
@@ -4004,6 +4408,7 @@ fn run_task<'a>(
             dep_idents,
             exposed_symbols,
             aliases,
+            skip_constraint_gen,
         } => canonicalize_and_constrain(
             arena,
             &module_ids,
@@ -4011,6 +4416,7 @@ fn run_task<'a>(
             exposed_symbols,
             aliases,
             parsed,
+            skip_constraint_gen,
         ),
         Solve {
             module,

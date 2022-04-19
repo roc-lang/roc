@@ -1,6 +1,6 @@
 interface Result
     exposes [ Result, isOk, isErr, map, mapErr, after, withDefault ]
-    imports [ ]
+    imports [ Bool.{ Bool } ]
 
 Result ok err : [ Ok ok, Err err ]
 
