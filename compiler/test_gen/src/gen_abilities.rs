@@ -188,3 +188,31 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
         u64
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn ability_used_as_type_still_compiles() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ result ] to "./platform"
+
+            Hash has
+                hash : a -> U64 | a has Hash
+
+            mulHashes : Hash, Hash -> U64
+            mulHashes = \x, y -> hash x * hash y
+
+            Id := U64
+            hash = \$Id n -> n
+
+            Three := {}
+            hash = \$Three _ -> 3
+
+            result = mulHashes ($Id 100) ($Three {})
+            "#
+        ),
+        300,
+        u64
+    )
+}

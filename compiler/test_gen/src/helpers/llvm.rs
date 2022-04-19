@@ -106,8 +106,9 @@ fn create_llvm_module<'a>(
 
         use roc_problem::can::Problem::*;
         for problem in can_problems.into_iter() {
-            // Ignore "unused" problems
+            dbg!(&problem);
             match problem {
+                // Ignore "unused" problems
                 UnusedDef(_, _)
                 | UnusedArgument(_, _, _)
                 | UnusedImport(_, _)
@@ -122,6 +123,8 @@ fn create_llvm_module<'a>(
                     delayed_errors.push(buf.clone());
                     lines.push(buf);
                 }
+                // We should be able to compile even when abilities are used as types
+                AbilityUsedAsType(..) => {}
                 _ => {
                     let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
                     let mut buf = String::new();

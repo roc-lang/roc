@@ -8,7 +8,8 @@ use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
-    Alias, AliasCommon, AliasKind, LambdaSet, Problem, RecordField, Type, TypeExtension,
+    name_type_var, Alias, AliasCommon, AliasKind, LambdaSet, Problem, RecordField, Type,
+    TypeExtension,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -397,6 +398,16 @@ pub fn find_type_def_symbols(
     result
 }
 
+/// Generates a fresh type variable name. PERF: not super performant, don't prefer using this in
+/// non-degenerate compilation paths!
+fn find_fresh_var_name(introduced_variables: &IntroducedVariables) -> Lowercase {
+    let mut taken = introduced_variables
+        .iter_named()
+        .map(|v| v.name().clone())
+        .collect();
+    name_type_var(0, &mut taken).0
+}
+
 #[allow(clippy::too_many_arguments)]
 fn can_annotation_help(
     env: &mut Env,
@@ -418,7 +429,7 @@ fn can_annotation_help(
                 let arg_ann = can_annotation_help(
                     env,
                     &arg.value,
-                    region,
+                    arg.region,
                     scope,
                     var_store,
                     introduced_variables,
@@ -455,6 +466,21 @@ fn can_annotation_help(
             let mut args = Vec::new();
 
             references.insert(symbol);
+
+            if scope.abilities_store.is_ability(symbol) {
+                let fresh_ty_var = find_fresh_var_name(introduced_variables);
+
+                env.problem(roc_problem::can::Problem::AbilityUsedAsType(
+                    fresh_ty_var.clone(),
+                    symbol,
+                    region,
+                ));
+
+                // Generate an variable bound to the ability so we can keep compiling.
+                let var = var_store.fresh();
+                introduced_variables.insert_able(fresh_ty_var, Loc::at(region, var), symbol);
+                return Type::Variable(var);
+            }
 
             for arg in *type_arguments {
                 let arg_ann = can_annotation_help(

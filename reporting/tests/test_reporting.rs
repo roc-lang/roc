@@ -8877,7 +8877,7 @@ I need all branches in an `if` to have the same type!
                 I cannot find a `UnknownType` value
                 
                 3│  insertHelper : UnknownType, Type -> Type
-                                                        ^^^^
+                                   ^^^^^^^^^^^
                 
                 Did you mean one of these?
                 
@@ -9869,6 +9869,62 @@ I need all branches in an `if` to have the same type!
                 the body I see that it will only produce a `Id` value of a single
                 specific type. Maybe change the type annotation to be more specific?
                 Maybe change the code to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_value_annotations_are_an_error() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ result ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                mulHashes : Hash, Hash -> U64
+                mulHashes = \x, y -> hash x * hash y
+
+                Id := U64
+                hash = \$Id n -> n
+
+                Three := {}
+                hash = \$Three _ -> 3
+
+                result = mulHashes ($Id 100) ($Three {})
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ABILITY USED AS TYPE ────────────────────────────────────────────────────────
+
+                You are attempting to use the ability `Hash` as a type directly:
+
+                6│  mulHashes : Hash, Hash -> U64
+                                ^^^^
+
+                Abilities can only be used in type annotations to constrain type
+                variables.
+
+                Hint: Perhaps you meant to include a `has` annotation, like
+
+                    a has Hash
+
+                ── ABILITY USED AS TYPE ────────────────────────────────────────────────────────
+
+                You are attempting to use the ability `Hash` as a type directly:
+
+                6│  mulHashes : Hash, Hash -> U64
+                                      ^^^^
+
+                Abilities can only be used in type annotations to constrain type
+                variables.
+
+                Hint: Perhaps you meant to include a `has` annotation, like
+
+                    b has Hash
                 "#
             ),
         )
