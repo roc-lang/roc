@@ -187,37 +187,8 @@ fn malformed(env: &mut Env, region: Region, name: &str) {
     env.problem(roc_problem::can::Problem::RuntimeError(problem));
 }
 
+/// Canonicalizes a top-level type annotation.
 pub fn canonicalize_annotation(
-    env: &mut Env,
-    scope: &mut Scope,
-    annotation: &roc_parse::ast::TypeAnnotation,
-    region: Region,
-    var_store: &mut VarStore,
-) -> Annotation {
-    let mut introduced_variables = IntroducedVariables::default();
-    let mut references = VecSet::default();
-    let mut aliases = SendMap::default();
-
-    let typ = can_annotation_help(
-        env,
-        annotation,
-        region,
-        scope,
-        var_store,
-        &mut introduced_variables,
-        &mut aliases,
-        &mut references,
-    );
-
-    Annotation {
-        typ,
-        introduced_variables,
-        references,
-        aliases,
-    }
-}
-
-pub fn canonicalize_annotation_with_possible_clauses(
     env: &mut Env,
     scope: &mut Scope,
     annotation: &TypeAnnotation,
@@ -828,8 +799,7 @@ fn can_annotation_help(
         Where(_annotation, clauses) => {
             debug_assert!(!clauses.is_empty());
 
-            // Has clauses are allowed only on the top level of an ability member signature (for
-            // now), which we handle elsewhere.
+            // Has clauses are allowed only on the top level of a signature, which we handle elsewhere.
             env.problem(roc_problem::can::Problem::IllegalHasClause {
                 region: Region::across_all(clauses.iter().map(|clause| &clause.region)),
             });

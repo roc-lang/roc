@@ -307,6 +307,8 @@ pub fn content_to_string(
 
     write_content(&env, &mut ctx, content, subs, &mut buf, Parens::Unnecessary);
 
+    ctx.able_variables.sort();
+    ctx.able_variables.dedup();
     for (i, (var, ability)) in ctx.able_variables.into_iter().enumerate() {
         buf.push_str(if i == 0 { " | " } else { ", " });
         buf.push_str(var);

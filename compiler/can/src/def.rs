@@ -1,6 +1,5 @@
 use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
-use crate::annotation::canonicalize_annotation_with_possible_clauses;
 use crate::annotation::IntroducedVariables;
 use crate::env::Env;
 use crate::expr::ClosureData;
@@ -318,8 +317,14 @@ pub fn canonicalize_defs<'a>(
         match type_defs.remove(&type_name).unwrap() {
             TypeDef::AliasLike(name, vars, ann, kind) => {
                 let symbol = name.value;
-                let can_ann =
-                    canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
+                let can_ann = canonicalize_annotation(
+                    env,
+                    &mut scope,
+                    &ann.value,
+                    ann.region,
+                    var_store,
+                    &abilities_in_scope,
+                );
 
                 // Does this alias reference any abilities? For now, we don't permit that.
                 let ability_references = can_ann
@@ -437,7 +442,7 @@ pub fn canonicalize_defs<'a>(
         let mut can_members = Vec::with_capacity(members.len());
 
         for member in members {
-            let member_annot = canonicalize_annotation_with_possible_clauses(
+            let member_annot = canonicalize_annotation(
                 env,
                 &mut scope,
                 &member.typ.value,
@@ -605,6 +610,7 @@ pub fn canonicalize_defs<'a>(
             var_store,
             &mut refs_by_symbol,
             &mut aliases,
+            &abilities_in_scope,
         );
 
         // TODO we should do something with these references; they include
@@ -1148,6 +1154,7 @@ fn canonicalize_pending_value_def<'a>(
     var_store: &mut VarStore,
     refs_by_symbol: &mut MutMap<Symbol, (Region, References)>,
     aliases: &mut ImMap<Symbol, Alias>,
+    abilities_in_scope: &[Symbol],
 ) -> Output {
     use PendingValueDef::*;
 
@@ -1159,8 +1166,14 @@ fn canonicalize_pending_value_def<'a>(
         AnnotationOnly(_, loc_can_pattern, loc_ann) => {
             // annotation sans body cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
-            let type_annotation =
-                canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
+            let type_annotation = canonicalize_annotation(
+                env,
+                scope,
+                &loc_ann.value,
+                loc_ann.region,
+                var_store,
+                abilities_in_scope,
+            );
 
             // Record all the annotation's references in output.references.lookups
 
@@ -1280,8 +1293,14 @@ fn canonicalize_pending_value_def<'a>(
         }
 
         TypedBody(_loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
-            let type_annotation =
-                canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
+            let type_annotation = canonicalize_annotation(
+                env,
+                scope,
+                &loc_ann.value,
+                loc_ann.region,
+                var_store,
+                &abilities_in_scope,
+            );
 
             // Record all the annotation's references in output.references.lookups
             for symbol in type_annotation.references.iter() {

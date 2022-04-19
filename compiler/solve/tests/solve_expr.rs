@@ -5951,4 +5951,61 @@ mod solve_expr {
             "{ tag : [ A, B ] }a -> { tag : [ A, B ] }a",
         )
     }
+
+    #[test]
+    fn ability_constrained_in_non_member_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ hashEq ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                hashEq : a, a -> Bool | a has Hash
+                hashEq = \x, y -> hash x == hash y
+                "#
+            ),
+            "a, a -> Bool | a has Hash",
+        )
+    }
+
+    #[test]
+    fn ability_constrained_in_non_member_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ hashEq ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                hashEq = \x, y -> hash x == hash y
+                "#
+            ),
+            "a, a -> Bool | a has Hash",
+        )
+    }
+
+    #[test]
+    fn ability_constrained_in_non_member_infer_usage() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ result ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                hashEq = \x, y -> hash x == hash y
+
+                Id := U64
+                hash = \$Id n -> n
+
+                result = hashEq ($Id 100) ($Id 101)
+                "#
+            ),
+            "Bool",
+        )
+    }
 }
