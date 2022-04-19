@@ -6008,4 +6008,29 @@ mod solve_expr {
             "Bool",
         )
     }
+
+    #[test]
+    fn ability_constrained_in_non_member_multiple_specializations() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ result ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                mulHashes = \x, y -> hash x * hash y
+
+                Id := U64
+                hash = \$Id n -> n
+
+                Three := {}
+                hash = \$Three _ -> 3
+
+                result = mulHashes ($Id 100) ($Three {})
+                "#
+            ),
+            "U64",
+        )
+    }
 }
