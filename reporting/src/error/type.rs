@@ -856,7 +856,9 @@ fn to_expr_report<'b>(
                             ),
                             Some((field, field_region)) => {
                                 let r_doc = alloc.symbol_unqualified(symbol);
-                                let f_doc = alloc.type_variable(field.clone());
+                                let f_doc = alloc
+                                    .text(field.as_str().to_string())
+                                    .annotate(Annotation::Typo);
 
                                 let header = alloc.concat(vec![
                                     alloc.reflow("The "),
@@ -900,8 +902,9 @@ fn to_expr_report<'b>(
                                                 alloc.reflow("Maybe "),
                                                 f_doc,
                                                 alloc.reflow(" should be "),
-                                                alloc.type_variable(f.0),
-                                                //alloc.record_field(f.0),
+                                                alloc
+                                                    .text(f.0.as_str().to_string())
+                                                    .annotate(Annotation::TypoSuggestion),
                                                 alloc.reflow("?"),
                                             ]),
                                         ])
