@@ -1,6 +1,6 @@
 use crate::expr::Expr;
 use crate::pattern::Pattern;
-use roc_collections::all::VecSet;
+use roc_collections::VecSet;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;

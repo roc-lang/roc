@@ -10,7 +10,7 @@ use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet, VecSet};
+use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecSet};
 use roc_constrain::module::{
     constrain_builtin_imports, constrain_module, ExposedByModule, ExposedForModule,
     ExposedModuleTypes,
@@ -1110,7 +1110,7 @@ pub fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     // When compiling to wasm, we cannot spawn extra threads
     // so we have a single-threaded implementation
-    if cfg!(target_family = "wasm") {
+    if true || cfg!(target_family = "wasm") {
         load_single_threaded(
             arena,
             load_start,

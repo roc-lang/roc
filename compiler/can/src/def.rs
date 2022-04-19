@@ -10,8 +10,7 @@ use crate::pattern::{bindings_from_patterns, canonicalize_def_header_pattern, Pa
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::Scope;
-use roc_collections::all::ImSet;
-use roc_collections::all::{default_hasher, ImEntry, ImMap, MutMap, MutSet, SendMap};
+use roc_collections::{default_hasher, ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
