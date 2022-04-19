@@ -1,5 +1,5 @@
 [package]
-name = "host"
+name = "platform"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
@@ -7,7 +7,6 @@ edition = "2018"
 #links = "app"
 
 [lib]
-name = "host"
 path = "src/lib.rs"
 crate-type = ["lib"]
 
@@ -22,3 +21,4 @@ web-sys = { version = "0.3.57", features = [
     'Node',
     'Window',
 ]}
+app_sys = { path = "../app_sys" }

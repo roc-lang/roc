@@ -1,15 +1,9 @@
 mod roc;
 
-use roc_std::RocStr;
-
-extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed"]
-    fn roc_main() -> RocStr;
-}
+use app_sys::roc_main;
 
 use wasm_bindgen::prelude::{
     wasm_bindgen,
-    web_sys::{document, window},
 };
 
 #[wasm_bindgen(start)]

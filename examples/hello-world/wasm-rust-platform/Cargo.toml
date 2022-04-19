@@ -1,6 +1,6 @@
 [workspace]
 members = [
   "platform",
-  "roc-sys",
+  "app_sys",
   "combined",
 ]
