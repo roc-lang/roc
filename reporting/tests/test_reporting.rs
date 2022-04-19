@@ -9864,10 +9864,11 @@ I need all branches in an `if` to have the same type!
 
                     a | a has Hash
 
-                Tip: Type comparisons between an opaque type are only ever equal if
-                both types are the same opaque type. Did you mean to create an opaque
-                type by wrapping it? If I have an opaque type Age := U32 I can create
-                an instance of this opaque type by doing @Age 23.
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any value implementing the `Hash` ability. But in
+                the body I see that it will only produce a `Id` value of a single
+                specific type. Maybe change the type annotation to be more specific?
+                Maybe change the code to be more general?
                 "#
             ),
         )
