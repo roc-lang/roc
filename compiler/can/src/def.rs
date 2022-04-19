@@ -478,6 +478,10 @@ pub fn canonicalize_defs<'a>(
                 }
             };
 
+            if pattern_type == PatternType::TopLevelDef {
+                env.top_level_symbols.insert(member_sym);
+            }
+
             // What variables in the annotation are bound to the parent ability, and what variables
             // are bound to some other ability?
             let (variables_bound_to_ability, variables_bound_to_other_abilities): (Vec<_>, Vec<_>) =

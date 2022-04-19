@@ -84,3 +84,26 @@ fn alias_member_specialization() {
         u64
     );
 }
+
+#[test]
+fn ability_constrained_in_non_member_usage() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ result ] to "./platform"
+
+            Hash has
+                hash : a -> U64 | a has Hash
+
+            mulHashes = \x, y -> hash x * hash y
+
+            Id := U64
+            hash = \$Id n -> n
+
+            result = mulHashes ($Id 5) ($Id 7)
+            "#
+        ),
+        35,
+        u64
+    )
+}
