@@ -1303,7 +1303,7 @@ fn canonicalize_pending_value_def<'a>(
                 &loc_ann.value,
                 loc_ann.region,
                 var_store,
-                &abilities_in_scope,
+                abilities_in_scope,
             );
 
             // Record all the annotation's references in output.references.lookups
