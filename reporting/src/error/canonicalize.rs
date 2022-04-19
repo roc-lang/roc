@@ -643,7 +643,9 @@ pub fn can_problem<'b>(
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
                     alloc.keyword("has"),
-                    alloc.reflow(" clauses can only be specified on the top-level type annotation of an ability member."),
+                    alloc.reflow(
+                        " clauses can only be specified on the top-level type annotations.",
+                    ),
                 ]),
             ]);
             title = ILLEGAL_HAS_CLAUSE.to_string();

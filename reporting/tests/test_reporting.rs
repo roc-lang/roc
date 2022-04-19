@@ -9433,13 +9433,13 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn has_clause_outside_of_ability() {
+    fn has_clause_not_on_toplevel() {
         new_report_problem_as(
             indoc!(
                 r#"
-                app "test" provides [ hash, f ] to "./platform"
+                app "test" provides [ f ] to "./platform"
 
-                Hash has hash : a -> Num.U64 | a has Hash
+                Hash has hash : (a | a has Hash) -> Num.U64
 
                 f : a -> Num.U64 | a has Hash
                 "#
@@ -9450,11 +9450,35 @@ I need all branches in an `if` to have the same type!
 
                 A `has` clause is not allowed here:
 
-                5│  f : a -> Num.U64 | a has Hash
-                                       ^^^^^^^^^^
+                3│  Hash has hash : (a | a has Hash) -> Num.U64
+                                         ^^^^^^^^^^
 
-                `has` clauses can only be specified on the top-level type annotation of
-                an ability member.
+                `has` clauses can only be specified on the top-level type annotations.
+
+                ── ABILITY MEMBER MISSING HAS CLAUSE ───────────────────────────────────────────
+
+                The definition of the ability member `hash` does not include a `has`
+                clause binding a type variable to the ability `Hash`:
+
+                3│  Hash has hash : (a | a has Hash) -> Num.U64
+                             ^^^^
+
+                Ability members must include a `has` clause binding a type variable to
+                an ability, like
+
+                    a has Hash
+
+                Otherwise, the function does not need to be part of the ability!
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `hash` is not used anywhere in your code.
+
+                3│  Hash has hash : (a | a has Hash) -> Num.U64
+                             ^^^^
+
+                If you didn't intend on using `hash` then remove it so future readers of
+                your code don't wonder why it is there.
                 "#
             ),
         )
