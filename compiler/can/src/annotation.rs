@@ -32,6 +32,20 @@ impl<'a> NamedOrAbleVariable<'a> {
             NamedOrAbleVariable::Able(av) => av.first_seen,
         }
     }
+
+    pub fn name(&self) -> &Lowercase {
+        match self {
+            NamedOrAbleVariable::Named(nv) => &nv.name,
+            NamedOrAbleVariable::Able(av) => &av.name,
+        }
+    }
+
+    pub fn variable(&self) -> Variable {
+        match self {
+            NamedOrAbleVariable::Named(nv) => nv.variable,
+            NamedOrAbleVariable::Able(av) => av.variable,
+        }
+    }
 }
 
 /// A named type variable, not bound to an ability.
@@ -148,19 +162,13 @@ impl IntroducedVariables {
             .map(|(_, var)| var)
     }
 
+    pub fn iter_named(&self) -> impl Iterator<Item = NamedOrAbleVariable> {
+        (self.named.iter().map(NamedOrAbleVariable::Named))
+            .chain(self.able.iter().map(NamedOrAbleVariable::Able))
+    }
+
     pub fn named_var_by_name(&self, name: &Lowercase) -> Option<NamedOrAbleVariable> {
-        if let Some(nav) = self
-            .named
-            .iter()
-            .find(|nv| &nv.name == name)
-            .map(NamedOrAbleVariable::Named)
-        {
-            return Some(nav);
-        }
-        self.able
-            .iter()
-            .find(|av| &av.name == name)
-            .map(NamedOrAbleVariable::Able)
+        self.iter_named().find(|v| v.name() == name)
     }
 
     pub fn collect_able(&self) -> Vec<Variable> {
