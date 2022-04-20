@@ -172,7 +172,7 @@ pub fn canonicalize_def_header_pattern<'a>(
             region,
         ) {
             Ok((symbol, shadowing_ability_member)) => {
-                output.references.bound_symbols.insert(symbol);
+                output.references.insert_bound(symbol);
                 let can_pattern = match shadowing_ability_member {
                     // A fresh identifier.
                     None => Pattern::Identifier(symbol),
@@ -190,7 +190,7 @@ pub fn canonicalize_def_header_pattern<'a>(
                     shadow: shadow.clone(),
                     kind: ShadowKind::Variable,
                 }));
-                output.references.bound_symbols.insert(new_symbol);
+                output.references.insert_bound(new_symbol);
 
                 let can_pattern = Pattern::Shadowed(original_region, shadow, new_symbol);
                 (output, Loc::at(region, can_pattern))
@@ -220,7 +220,7 @@ pub fn canonicalize_pattern<'a>(
             region,
         ) {
             Ok(symbol) => {
-                output.references.bound_symbols.insert(symbol);
+                output.references.insert_bound(symbol);
 
                 Pattern::Identifier(symbol)
             }
@@ -230,7 +230,7 @@ pub fn canonicalize_pattern<'a>(
                     shadow: shadow.clone(),
                     kind: ShadowKind::Variable,
                 }));
-                output.references.bound_symbols.insert(new_symbol);
+                output.references.insert_bound(new_symbol);
 
                 Pattern::Shadowed(original_region, shadow, new_symbol)
             }
@@ -460,7 +460,7 @@ pub fn canonicalize_pattern<'a>(
                             region,
                         ) {
                             Ok(symbol) => {
-                                output.references.bound_symbols.insert(symbol);
+                                output.references.insert_bound(symbol);
 
                                 destructs.push(Loc {
                                     region: loc_pattern.region,
@@ -531,7 +531,7 @@ pub fn canonicalize_pattern<'a>(
                                 );
 
                                 // an optional field binds the symbol!
-                                output.references.bound_symbols.insert(symbol);
+                                output.references.insert_bound(symbol);
 
                                 output.union(expr_output);
 

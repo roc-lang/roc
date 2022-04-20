@@ -639,8 +639,7 @@ pub fn canonicalize_expr<'a>(
                     loc_pattern.region,
                 );
 
-                bound_by_argument_patterns
-                    .extend(new_output.references.bound_symbols.iter().copied());
+                bound_by_argument_patterns.extend(new_output.references.bound_symbols().copied());
 
                 output.union(new_output);
 
@@ -662,7 +661,7 @@ pub fn canonicalize_expr<'a>(
             captured_symbols.remove(&symbol);
 
             // symbols bound either in this pattern or deeper down are not captured!
-            captured_symbols.retain(|s| !new_output.references.bound_symbols.contains(s));
+            captured_symbols.retain(|s| !new_output.references.bound_symbols().any(|x| x == s));
             captured_symbols.retain(|s| !bound_by_argument_patterns.contains(s));
 
             // filter out top-level symbols

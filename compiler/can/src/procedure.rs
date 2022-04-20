@@ -44,7 +44,7 @@ impl Procedure {
 /// so it's important that building the same code gives the same order every time!
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct References {
-    pub bound_symbols: VecSet<Symbol>,
+    bound_symbols: VecSet<Symbol>,
     type_lookups: VecSet<Symbol>,
     value_lookups: VecSet<Symbol>,
     /// Aliases or opaque types referenced
@@ -84,6 +84,10 @@ impl References {
         self.value_lookups.insert(symbol);
     }
 
+    pub fn insert_bound(&mut self, symbol: Symbol) {
+        self.bound_symbols.insert(symbol);
+    }
+
     pub fn remove_value_lookup(&mut self, symbol: &Symbol) {
         self.value_lookups.remove(symbol);
     }
@@ -99,5 +103,9 @@ impl References {
 
     pub fn type_lookups(&self) -> impl Iterator<Item = &Symbol> {
         self.type_lookups.iter()
+    }
+
+    pub fn bound_symbols(&self) -> impl Iterator<Item = &Symbol> {
+        self.bound_symbols.iter()
     }
 }
