@@ -1183,26 +1183,39 @@ fn solve(
                 let actual =
                     either_type_index_to_var(constraints, subs, rank, pools, aliases, *type_index);
 
-                let mut new_desc = subs.get(actual);
-                match new_desc.content {
-                    Content::Structure(FlatType::TagUnion(tags, _)) => {
-                        let new_ext = subs.fresh_unnamed_flex_var();
-                        subs.set_rank(new_ext, new_desc.rank);
-                        let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
-                        new_desc.content = new_union;
-                        subs.set(actual, new_desc);
-                        state
-                    }
-                    _ => {
-                        // Today, an "open" constraint doesn't affect any types
-                        // other than tag unions. Recursive tag unions are constructed
-                        // at a later time (during occurs checks after tag unions are
-                        // resolved), so that's not handled here either.
-                        // NB: Handle record types here if we add presence constraints
-                        // to their type inference as well.
-                        state
+                let mut stack = vec![actual];
+                while let Some(var) = stack.pop() {
+                    let mut desc = subs.get(var);
+                    match desc.content {
+                        Content::Structure(FlatType::TagUnion(tags, ext))
+                            if matches!(
+                                subs.get_content_without_compacting(ext),
+                                Content::Structure(FlatType::EmptyTagUnion)
+                            ) =>
+                        {
+                            let new_ext = subs.fresh_unnamed_flex_var();
+                            subs.set_rank(new_ext, desc.rank);
+                            let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
+                            desc.content = new_union;
+                            subs.set(var, desc);
+
+                            let all_vars = tags.variables().into_iter();
+                            stack.extend(
+                                all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]),
+                            );
+                        }
+                        _ => {
+                            // Today, an "open" constraint doesn't affect any types
+                            // other than tag unions. Recursive tag unions are constructed
+                            // at a later time (during occurs checks after tag unions are
+                            // resolved), so that's not handled here either.
+                            // NB: Handle record types here if we add presence constraints
+                            // to their type inference as well.
+                        }
                     }
                 }
+
+                state
             }
             IncludesTag(index) => {
                 let includes_tag = &constraints.includes_tags[index.index()];
