@@ -45,6 +45,7 @@ const ILLEGAL_HAS_CLAUSE: &str = "ILLEGAL HAS CLAUSE";
 const ABILITY_MEMBER_MISSING_HAS_CLAUSE: &str = "ABILITY MEMBER MISSING HAS CLAUSE";
 const ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE: &str = "ABILITY MEMBER HAS EXTRANEOUS HAS CLAUSE";
 const ABILITY_MEMBER_BINDS_MULTIPLE_VARIABLES: &str = "ABILITY MEMBER BINDS MULTIPLE VARIABLES";
+const ABILITY_NOT_ON_TOPLEVEL: &str = "ABILITY NOT ON TOP-LEVEL";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -733,6 +734,18 @@ pub fn can_problem<'b>(
                 ]),
             ]);
             title = ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AbilityNotOnToplevel { region } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This ability definition is not on the top-level of a module:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Abilities can only be defined on the top-level of a Roc module."),
+            ]);
+            title = ABILITY_NOT_ON_TOPLEVEL.to_string();
             severity = Severity::RuntimeError;
         }
     };
