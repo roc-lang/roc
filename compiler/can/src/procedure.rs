@@ -166,14 +166,6 @@ impl References {
     }
 
     pub fn has_type_or_value_lookup(&self, symbol: Symbol) -> bool {
-        //        if self.symbols.len() > 100 {
-        //            panic!()
-        //        }
-        //        println!(
-        //            "has a type or value lookup? {} {:?}",
-        //            self.symbols.len(),
-        //            symbol
-        //        );
         let mask = ReferencesBitflags::VALUE_LOOKUP.0 | ReferencesBitflags::TYPE_LOOKUP.0;
         let it = self.symbols.iter().zip(self.bitflags.iter());
 
