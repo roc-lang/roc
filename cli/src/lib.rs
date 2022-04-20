@@ -231,16 +231,8 @@ pub fn build_app<'a>() -> App<'a> {
         .arg(
             Arg::new(FLAG_PRECOMPILED)
                 .long(FLAG_PRECOMPILED)
-                .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using a --target other than `--target host`)")
+                .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using `roc build` with a --target other than `--target host`)")
                 .possible_values(["true", "false"])
-                .required(false),
-        )
-        .arg(
-            Arg::new(FLAG_TARGET)
-                .long(FLAG_TARGET)
-                .about("Choose a different target")
-                .default_value(Target::default().as_str())
-                .possible_values(Target::OPTIONS)
                 .required(false),
         )
         .arg(
