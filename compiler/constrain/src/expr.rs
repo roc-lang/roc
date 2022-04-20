@@ -705,14 +705,18 @@ pub fn constrain_expr(
             // TODO: when we have exhaustiveness checking during the typechecking phase, perform
             // exhaustiveness checking when this expectation fails. That will produce better error
             // messages.
-            let cond_constraint = constrain_expr(
+            let expr_con = constrain_expr(
                 constraints,
                 env,
                 loc_cond.region,
                 &loc_cond.value,
                 Expected::ForReason(Reason::WhenBranches, cond_type, branches_region),
             );
-            pattern_cons.push(cond_constraint);
+            // branch_cons.extend(pattern_cons);
+            // branch_constraints.push(constraints.and_constraint(pattern_cons));
+            let mut total_cons = Vec::with_capacity(1 + 2 * branches.len() + 1);
+            // total_cons.push(expr_con);
+            pattern_cons.push(expr_con);
 
             // Solve all the pattern constraints together, introducing variables in the pattern as
             // need be before solving the bodies.

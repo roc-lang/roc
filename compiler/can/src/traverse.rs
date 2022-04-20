@@ -52,7 +52,11 @@ fn walk_def<V: Visitor>(visitor: &mut V, def: &Def) {
     );
     visitor.visit_expr(&loc_expr.value, loc_expr.region, *expr_var);
     if let Some(annot) = &annotation {
+<<<<<<< HEAD
         visitor.visit_annotation(annot);
+=======
+        visitor.visit_annotation(&annot);
+>>>>>>> 1c2489622 (Add a way to view solved types of arbitrary expressions/patterns in a program)
     }
 }
 
@@ -117,8 +121,15 @@ fn walk_when_branch<V: Visitor>(visitor: &mut V, branch: &WhenBranch, expr_var: 
     }
 }
 
+<<<<<<< HEAD
 fn walk_pattern<V: Visitor>(_visitor: &mut V, _pat: &Pattern) {
     todo!()
+=======
+fn walk_pattern<V: Visitor>(_visitor: &mut V, pat: &Pattern) {
+    match pat {
+        _ => todo!(),
+    }
+>>>>>>> 1c2489622 (Add a way to view solved types of arbitrary expressions/patterns in a program)
 }
 
 trait Visitor: Sized {
