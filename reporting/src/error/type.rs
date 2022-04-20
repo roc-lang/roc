@@ -81,7 +81,7 @@ pub fn type_problem<'b>(
                     let found_arguments = alloc.text(type_got.to_string());
 
                     let doc = alloc.stack(vec![
-                        alloc.concat(vec![
+                        alloc.concat([
                             alloc.reflow("The "),
                             alloc.symbol_unqualified(symbol),
                             alloc.reflow(" alias expects "),
@@ -210,7 +210,7 @@ fn report_incomplete_ability<'a>(
 
     debug_assert!(!missing_members.is_empty());
 
-    let mut stack = vec![alloc.concat(vec![
+    let mut stack = vec![alloc.concat([
         alloc.reflow("The type "),
         alloc.symbol_unqualified(typ),
         alloc.reflow(" does not fully implement the ability "),
@@ -219,7 +219,7 @@ fn report_incomplete_ability<'a>(
     ])];
 
     for member in missing_members.into_iter() {
-        stack.push(alloc.concat(vec![
+        stack.push(alloc.concat([
             alloc.reflow("A specialization for "),
             alloc.symbol_unqualified(member.value),
             alloc.reflow(", which is defined here:"),
@@ -228,7 +228,7 @@ fn report_incomplete_ability<'a>(
     }
 
     if !specialized_members.is_empty() {
-        stack.push(alloc.concat(vec![
+        stack.push(alloc.concat([
             alloc.note(""),
             alloc.symbol_unqualified(typ),
             alloc.reflow(" specializes the following members of "),
@@ -237,7 +237,7 @@ fn report_incomplete_ability<'a>(
         ]));
 
         for spec in specialized_members {
-            stack.push(alloc.concat(vec![
+            stack.push(alloc.concat([
                 alloc.symbol_unqualified(spec.value),
                 alloc.reflow(", specialized here:"),
             ]));
@@ -461,8 +461,8 @@ fn to_expr_report<'b>(
 
             let (the_name_text, on_name_text) = match pattern_to_doc(alloc, &name.value) {
                 Some(doc) => (
-                    alloc.concat(vec![alloc.reflow("the "), doc.clone()]),
-                    alloc.concat(vec![alloc.reflow(" on "), doc]),
+                    alloc.concat([alloc.reflow("the "), doc.clone()]),
+                    alloc.concat([alloc.reflow(" on "), doc]),
                 ),
                 None => (alloc.text("this"), alloc.nil()),
             };
@@ -474,7 +474,7 @@ fn to_expr_report<'b>(
                     index,
                     num_branches,
                     ..
-                } if num_branches == 2 => alloc.concat(vec![
+                } if num_branches == 2 => alloc.concat([
                     alloc.keyword(if index == HumanIndex::FIRST {
                         "then"
                     } else {
@@ -484,19 +484,19 @@ fn to_expr_report<'b>(
                     alloc.keyword("if"),
                     alloc.text(" expression:"),
                 ]),
-                TypedIfBranch { index, .. } => alloc.concat(vec![
+                TypedIfBranch { index, .. } => alloc.concat([
                     alloc.string(index.ordinal()),
                     alloc.reflow(" branch of this "),
                     alloc.keyword("if"),
                     alloc.text(" expression:"),
                 ]),
-                TypedWhenBranch { index, .. } => alloc.concat(vec![
+                TypedWhenBranch { index, .. } => alloc.concat([
                     alloc.string(index.ordinal()),
                     alloc.reflow(" branch of this "),
                     alloc.keyword("when"),
                     alloc.text(" expression:"),
                 ]),
-                TypedBody { .. } => alloc.concat(vec![
+                TypedBody { .. } => alloc.concat([
                     alloc.text("body of "),
                     the_name_text,
                     alloc.text(" definition:"),
@@ -525,14 +525,14 @@ fn to_expr_report<'b>(
                         found,
                         expected_type,
                         expectation_context,
-                        alloc.concat(vec![
+                        alloc.concat([
                             alloc.reflow("The type annotation"),
                             on_name_text,
                             alloc.reflow(" says "),
                             it.clone(),
                             alloc.reflow(" should have the type:"),
                         ]),
-                        alloc.concat(vec![
+                        alloc.concat([
                             alloc.reflow("However, the type of "),
                             it,
                             alloc.reflow(" is connected to another type in a way that isn't reflected in this annotation.")
@@ -545,7 +545,7 @@ fn to_expr_report<'b>(
                     expected_type,
                     expectation_context,
                     add_category(alloc, alloc.text(it_is), &category),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.text("But the type annotation"),
                         on_name_text,
                         alloc.text(" says it should be:"),
@@ -575,7 +575,7 @@ fn to_expr_report<'b>(
         }
         Expected::ForReason(reason, expected_type, region) => match reason {
             Reason::ExpectCondition => {
-                let problem = alloc.concat(vec![
+                let problem = alloc.concat([
                     alloc.text("This "),
                     alloc.keyword("expect"),
                     alloc.text(" condition needs to be a "),
@@ -594,7 +594,7 @@ fn to_expr_report<'b>(
                     Some(expr_region),
                     problem,
                     alloc.text("Right now it’s"),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.reflow("But I need every "),
                         alloc.keyword("expect"),
                         alloc.reflow(" condition to evaluate to a "),
@@ -614,7 +614,7 @@ fn to_expr_report<'b>(
                 )
             }
             Reason::IfCondition => {
-                let problem = alloc.concat(vec![
+                let problem = alloc.concat([
                     alloc.text("This "),
                     alloc.keyword("if"),
                     alloc.text(" condition needs to be a "),
@@ -633,7 +633,7 @@ fn to_expr_report<'b>(
                     Some(expr_region),
                     problem,
                     alloc.text("Right now it’s"),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.reflow("But I need every "),
                         alloc.keyword("if"),
                         alloc.reflow(" condition to evaluate to a "),
@@ -653,7 +653,7 @@ fn to_expr_report<'b>(
                 )
             }
             Reason::WhenGuard => {
-                let problem = alloc.concat(vec![
+                let problem = alloc.concat([
                     alloc.text("This "),
                     alloc.keyword("if"),
                     alloc.text(" guard condition needs to be a "),
@@ -671,7 +671,7 @@ fn to_expr_report<'b>(
                     Some(expr_region),
                     problem,
                     alloc.text("Right now it’s"),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.reflow("But I need every "),
                         alloc.keyword("if"),
                         alloc.reflow(" guard condition to evaluate to a "),
@@ -697,7 +697,7 @@ fn to_expr_report<'b>(
                     expected_type,
                     region,
                     Some(expr_region),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.text("This "),
                         alloc.keyword("if"),
                         alloc.text(" has an "),
@@ -706,17 +706,17 @@ fn to_expr_report<'b>(
                         alloc.keyword("then"),
                         alloc.text(" branch:"),
                     ]),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.text("The "),
                         alloc.keyword("else"),
                         alloc.text(" branch is"),
                     ]),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.text("but the "),
                         alloc.keyword("then"),
                         alloc.text(" branch has the type:"),
                     ]),
-                    Some(alloc.concat(vec![
+                    Some(alloc.concat([
                         alloc.text("I need all branches in an "),
                         alloc.keyword("if"),
                         alloc.text(" to have the same type!"),
@@ -731,7 +731,7 @@ fn to_expr_report<'b>(
                     expected_type,
                     region,
                     Some(expr_region),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.reflow("The "),
                         alloc.string(index.ordinal()),
                         alloc.reflow(" branch of this "),
@@ -740,7 +740,7 @@ fn to_expr_report<'b>(
                     ]),
                     alloc.string(format!("The {} branch is", index.ordinal())),
                     alloc.reflow("But all the previous branches have type:"),
-                    Some(alloc.concat(vec![
+                    Some(alloc.concat([
                         alloc.reflow("I need all branches in an "),
                         alloc.keyword("if"),
                         alloc.reflow(" to have the same type!"),
@@ -756,20 +756,20 @@ fn to_expr_report<'b>(
                 expected_type,
                 region,
                 Some(expr_region),
-                alloc.concat(vec![
+                alloc.concat([
                     alloc.reflow("The "),
                     alloc.string(index.ordinal()),
                     alloc.reflow(" branch of this "),
                     alloc.keyword("when"),
                     alloc.reflow(" does not match all the previous branches:"),
                 ]),
-                alloc.concat(vec![
+                alloc.concat([
                     alloc.reflow("The "),
                     alloc.string(index.ordinal()),
                     alloc.reflow(" branch is"),
                 ]),
                 alloc.reflow("But all the previous branches have type:"),
-                Some(alloc.concat(vec![
+                Some(alloc.concat([
                     alloc.reflow("I need all branches of a "),
                     alloc.keyword("when"),
                     alloc.reflow(" to have the same type!"),
@@ -810,12 +810,12 @@ fn to_expr_report<'b>(
                 expected_type,
                 region,
                 Some(expr_region),
-                alloc.concat(vec![
+                alloc.concat([
                     alloc.text("I cannot update the "),
                     alloc.record_field(field.to_owned()),
                     alloc.text(" field like this:"),
                 ]),
-                alloc.concat(vec![
+                alloc.concat([
                     alloc.text("You are trying to update "),
                     alloc.record_field(field),
                     alloc.text(" to be"),
@@ -846,7 +846,7 @@ fn to_expr_report<'b>(
                                 region,
                                 Some(expr_region),
                                 alloc.reflow("Something is off with this record update:"),
-                                alloc.concat(vec![
+                                alloc.concat([
                                     alloc.reflow("The"),
                                     alloc.symbol_unqualified(symbol),
                                     alloc.reflow(" record is"),
@@ -939,7 +939,7 @@ fn to_expr_report<'b>(
                 0 => {
                     let this_value = match name {
                         None => alloc.text("This value"),
-                        Some(symbol) => alloc.concat(vec![
+                        Some(symbol) => alloc.concat([
                             alloc.text("The "),
                             alloc.symbol_unqualified(symbol),
                             alloc.text(" value"),
@@ -947,7 +947,7 @@ fn to_expr_report<'b>(
                     };
 
                     let lines = vec![
-                        alloc.concat(vec![
+                        alloc.concat([
                             this_value,
                             alloc.string(format!(
                                 " is not a function, but it was given {}:",
@@ -972,7 +972,7 @@ fn to_expr_report<'b>(
                 n => {
                     let this_function = match name {
                         None => alloc.text("This function"),
-                        Some(symbol) => alloc.concat(vec![
+                        Some(symbol) => alloc.concat([
                             alloc.text("The "),
                             alloc.symbol_unqualified(symbol),
                             alloc.text(" function"),
@@ -981,7 +981,7 @@ fn to_expr_report<'b>(
 
                     if n < arity as usize {
                         let lines = vec![
-                            alloc.concat(vec![
+                            alloc.concat([
                                 this_function,
                                 alloc.string(format!(
                                     " expects {}, but it got {} instead:",
@@ -1005,7 +1005,7 @@ fn to_expr_report<'b>(
                         }
                     } else {
                         let lines = vec![
-                            alloc.concat(vec![
+                            alloc.concat([
                                 this_function,
                                 alloc.string(format!(
                                     " expects {}, but it got only {}:",
@@ -1050,13 +1050,13 @@ fn to_expr_report<'b>(
                     expected_type,
                     region,
                     Some(expr_region),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.string(format!("The {} argument to ", ith)),
                         this_function.clone(),
                         alloc.text(" is not what I expect:"),
                     ]),
                     alloc.text("This argument is"),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.text("But "),
                         this_function,
                         alloc.string(format!(" needs the {} argument to be:", ith)),
@@ -1085,13 +1085,13 @@ fn to_expr_report<'b>(
                 def_region: _,
                 unimplemented_abilities,
             } => {
-                let problem = alloc.concat(vec![
+                let problem = alloc.concat([
                     alloc.reflow("Something is off with this specialization of "),
                     alloc.symbol_unqualified(member_name),
                     alloc.reflow(":"),
                 ]);
                 let this_is = alloc.reflow("This value is");
-                let instead_of = alloc.concat(vec![
+                let instead_of = alloc.concat([
                     alloc.reflow("But the type annotation on "),
                     alloc.symbol_unqualified(member_name),
                     alloc.reflow(" says it must match:"),
@@ -1106,7 +1106,7 @@ fn to_expr_report<'b>(
                     }
 
                     let hint = alloc.stack(vec![
-                        alloc.concat(vec![
+                        alloc.concat([
                             alloc.note(""),
                             alloc.reflow("Some types in this specialization don't implement the abilities they are expected to. I found the following missing implementations:"),
                         ]),
@@ -1136,20 +1136,20 @@ fn to_expr_report<'b>(
                 member_name,
                 def_region: _,
             } => {
-                let problem = alloc.concat(vec![
+                let problem = alloc.concat([
                     alloc.reflow("This specialization of "),
                     alloc.symbol_unqualified(member_name),
                     alloc.reflow(" is overly general:"),
                 ]);
                 let this_is = alloc.reflow("This value is");
-                let instead_of = alloc.concat(vec![
+                let instead_of = alloc.concat([
                     alloc.reflow("But the type annotation on "),
                     alloc.symbol_unqualified(member_name),
                     alloc.reflow(" says it must match:"),
                 ]);
 
                 let note = alloc.stack(vec![
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.note(""),
                         alloc.reflow("The specialized type is too general, and does not provide a concrete type where a type variable is bound to an ability."),
                     ]),
@@ -1211,7 +1211,7 @@ fn does_not_implement<'a>(
     err_type: ErrorType,
     ability: Symbol,
 ) -> RocDocBuilder<'a> {
-    alloc.concat(vec![
+    alloc.concat([
         to_doc(alloc, Parens::Unnecessary, err_type).0,
         alloc.reflow(" does not implement "),
         alloc.symbol_unqualified(ability),
@@ -1223,7 +1223,7 @@ fn symbol_does_not_implement<'a>(
     symbol: Symbol,
     ability: Symbol,
 ) -> RocDocBuilder<'a> {
-    alloc.concat(vec![
+    alloc.concat([
         alloc.symbol_unqualified(symbol),
         alloc.reflow(" does not implement "),
         alloc.symbol_unqualified(ability),
@@ -1325,7 +1325,7 @@ fn format_category<'b>(
 
     match category {
         Lookup(name) => (
-            alloc.concat(vec![
+            alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 alloc.symbol_foreign_qualified(*name),
                 alloc.text(" value"),
@@ -1334,7 +1334,7 @@ fn format_category<'b>(
         ),
 
         If => (
-            alloc.concat(vec![
+            alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 alloc.keyword("if"),
                 alloc.text(" expression"),
@@ -1342,7 +1342,7 @@ fn format_category<'b>(
             alloc.text(" produces:"),
         ),
         When => (
-            alloc.concat(vec![
+            alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 alloc.keyword("when"),
                 alloc.text(" expression"),
@@ -1350,47 +1350,44 @@ fn format_category<'b>(
             alloc.text(" produces:"),
         ),
         List => (
-            alloc.concat(vec![this_is, alloc.text(" a list")]),
+            alloc.concat([this_is, alloc.text(" a list")]),
             alloc.text(" of type:"),
         ),
         Num => (
-            alloc.concat(vec![this_is, alloc.text(" a number")]),
+            alloc.concat([this_is, alloc.text(" a number")]),
             alloc.text(" of type:"),
         ),
         Int => (
-            alloc.concat(vec![this_is, alloc.text(" an integer")]),
+            alloc.concat([this_is, alloc.text(" an integer")]),
             alloc.text(" of type:"),
         ),
         Float => (
-            alloc.concat(vec![this_is, alloc.text(" a float")]),
+            alloc.concat([this_is, alloc.text(" a float")]),
             alloc.text(" of type:"),
         ),
         Str => (
-            alloc.concat(vec![this_is, alloc.text(" a string")]),
+            alloc.concat([this_is, alloc.text(" a string")]),
             alloc.text(" of type:"),
         ),
         StrInterpolation => (
-            alloc.concat(vec![
-                this_is,
-                alloc.text(" a value in a string interpolation,"),
-            ]),
+            alloc.concat([this_is, alloc.text(" a value in a string interpolation,")]),
             alloc.text(" which was of type:"),
         ),
         Character => (
-            alloc.concat(vec![this_is, alloc.text(" a character")]),
+            alloc.concat([this_is, alloc.text(" a character")]),
             alloc.text(" of type:"),
         ),
         Lambda => (
-            alloc.concat(vec![this_is, alloc.text(" an anonymous function")]),
+            alloc.concat([this_is, alloc.text(" an anonymous function")]),
             alloc.text(" of type:"),
         ),
         ClosureSize => (
-            alloc.concat(vec![this_is, alloc.text(" the closure size of a function")]),
+            alloc.concat([this_is, alloc.text(" the closure size of a function")]),
             alloc.text(" of type:"),
         ),
 
         OpaqueWrap(opaque) => (
-            alloc.concat(vec![
+            alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 alloc.opaque_name(*opaque),
                 alloc.text(" opaque wrapping"),
@@ -1399,9 +1396,7 @@ fn format_category<'b>(
         ),
 
         OpaqueArg => (
-            alloc.concat(vec![
-                alloc.text(format!("{}his argument to an opaque type", t))
-            ]),
+            alloc.concat([alloc.text(format!("{}his argument to an opaque type", t))]),
             alloc.text(" has type:"),
         ),
 
@@ -1409,7 +1404,7 @@ fn format_category<'b>(
             tag_name: TagName::Global(name),
             args_count: 0,
         } => (
-            alloc.concat(vec![
+            alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 alloc.global_tag_name(name.to_owned()),
                 if name.as_str() == "True" || name.as_str() == "False" {
@@ -1424,7 +1419,7 @@ fn format_category<'b>(
             tag_name: TagName::Private(name),
             args_count: 0,
         } => (
-            alloc.concat(vec![
+            alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 alloc.private_tag_name(*name),
                 alloc.text(" private tag"),
@@ -1436,7 +1431,7 @@ fn format_category<'b>(
             tag_name: TagName::Global(name),
             args_count: _,
         } => (
-            alloc.concat(vec![
+            alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 alloc.global_tag_name(name.to_owned()),
                 alloc.text(" global tag application"),
@@ -1447,7 +1442,7 @@ fn format_category<'b>(
             tag_name: TagName::Private(name),
             args_count: _,
         } => (
-            alloc.concat(vec![
+            alloc.concat([
                 alloc.text("This "),
                 alloc.private_tag_name(*name),
                 alloc.text(" private tag application"),
@@ -1460,12 +1455,12 @@ fn format_category<'b>(
         } => unreachable!("closure tags are for internal use only"),
 
         Record => (
-            alloc.concat(vec![this_is, alloc.text(" a record")]),
+            alloc.concat([this_is, alloc.text(" a record")]),
             alloc.text(" of type:"),
         ),
 
         Accessor(field) => (
-            alloc.concat(vec![
+            alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 alloc.record_field(field.to_owned()),
                 alloc.text(" value"),
@@ -1473,7 +1468,7 @@ fn format_category<'b>(
             alloc.text(" is a:"),
         ),
         Access(field) => (
-            alloc.concat(vec![
+            alloc.concat([
                 alloc.text(format!("{}he value at ", t)),
                 alloc.record_field(field.to_owned()),
             ]),
@@ -1494,11 +1489,11 @@ fn format_category<'b>(
             alloc.text(" produces:"),
         ),
         CallResult(Some(_), CalledVia::StringInterpolation) => (
-            alloc.concat(vec![this_is, alloc.text(" a string")]),
+            alloc.concat([this_is, alloc.text(" a string")]),
             alloc.text(" of type:"),
         ),
         CallResult(Some(symbol), _) => (
-            alloc.concat(vec![
+            alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 alloc.symbol_foreign_qualified(*symbol),
                 alloc.text(" call"),
@@ -1517,19 +1512,19 @@ fn format_category<'b>(
         }
 
         Uniqueness => (
-            alloc.concat(vec![this_is, alloc.text(" an uniqueness attribute")]),
+            alloc.concat([this_is, alloc.text(" an uniqueness attribute")]),
             alloc.text(" of type:"),
         ),
         Storage(_file, _line) => (
-            alloc.concat(vec![this_is, alloc.text(" a value")]),
+            alloc.concat([this_is, alloc.text(" a value")]),
             alloc.text(" of type:"),
         ),
         DefaultValue(_) => (
-            alloc.concat(vec![this_is, alloc.text(" a default field")]),
+            alloc.concat([this_is, alloc.text(" a default field")]),
             alloc.text(" of type:"),
         ),
         AbilityMemberSpecialization(_ability_member) => (
-            alloc.concat(vec![this_is, alloc.text(" a declared specialization")]),
+            alloc.concat([this_is, alloc.text(" a declared specialization")]),
             alloc.text(" of type:"),
         ),
     }
@@ -1541,7 +1536,7 @@ fn add_category<'b>(
     category: &Category,
 ) -> RocDocBuilder<'b> {
     let (summary, suffix) = format_category(alloc, this_is, category, true);
-    alloc.concat(vec![summary, suffix])
+    alloc.concat([summary, suffix])
 }
 
 fn to_pattern_report<'b>(
@@ -1602,7 +1597,7 @@ fn to_pattern_report<'b>(
                             alloc.text("The argument is a pattern that matches"),
                             &category,
                         ),
-                        alloc.concat(vec![
+                        alloc.concat([
                             alloc.text("But the annotation on "),
                             name,
                             alloc.text(" says the "),
@@ -1637,7 +1632,7 @@ fn to_pattern_report<'b>(
                                 alloc.text("The first pattern is trying to match"),
                                 &category,
                             ),
-                            alloc.concat(vec![
+                            alloc.concat([
                                 alloc.text("But the expression between "),
                                 alloc.keyword("when"),
                                 alloc.text(" and "),
@@ -1734,12 +1729,12 @@ fn add_pattern_category<'b>(
         PatternDefault => alloc.reflow(" an optional field of type:"),
         Set => alloc.reflow(" sets of type:"),
         Map => alloc.reflow(" maps of type:"),
-        Ctor(tag_name) => alloc.concat(vec![
+        Ctor(tag_name) => alloc.concat([
             alloc.reflow(" a "),
             alloc.tag_name(tag_name.clone()),
             alloc.reflow(" tag of type:"),
         ]),
-        Opaque(opaque) => alloc.concat(vec![
+        Opaque(opaque) => alloc.concat([
             alloc.opaque_name(*opaque),
             alloc.reflow(" unwrappings of type:"),
         ]),
@@ -1750,7 +1745,7 @@ fn add_pattern_category<'b>(
         Character => alloc.reflow(" characters:"),
     };
 
-    alloc.concat(vec![i_am_trying_to_match, rest])
+    alloc.concat([i_am_trying_to_match, rest])
 }
 
 fn to_circular_report<'b>(
@@ -2804,7 +2799,7 @@ mod report_text {
         args: Vec<RocDocBuilder<'b>>,
         ret: RocDocBuilder<'b>,
     ) -> RocDocBuilder<'b> {
-        let function_doc = alloc.concat(vec![
+        let function_doc = alloc.concat([
             alloc.intersperse(args, alloc.reflow(", ")),
             alloc.reflow(" -> "),
             ret,
@@ -2825,11 +2820,8 @@ mod report_text {
         if args.is_empty() {
             name
         } else {
-            let apply_doc = alloc.concat(vec![
-                name,
-                alloc.space(),
-                alloc.intersperse(args, alloc.space()),
-            ]);
+            let apply_doc =
+                alloc.concat([name, alloc.space(), alloc.intersperse(args, alloc.space())]);
 
             match parens {
                 Parens::Unnecessary | Parens::InFn => apply_doc,
@@ -3209,7 +3201,7 @@ fn type_problem_to_pretty<'b>(
                 Infinite | Error | FlexVar(_) => alloc.nil(),
                 FlexAbleVar(_, ability) => bad_rigid_var(
                     x,
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.reflow("an instance of the ability "),
                         alloc.symbol_unqualified(ability),
                     ]),
@@ -3222,7 +3214,7 @@ fn type_problem_to_pretty<'b>(
                 }
                 Alias(symbol, _, _, _) | Type(symbol, _) => bad_rigid_var(
                     x,
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.reflow("a "),
                         alloc.symbol_unqualified(symbol),
                         alloc.reflow(" value"),
@@ -3232,7 +3224,7 @@ fn type_problem_to_pretty<'b>(
             }
         }
 
-        (IntFloat, _) => alloc.tip().append(alloc.concat(vec![
+        (IntFloat, _) => alloc.tip().append(alloc.concat([
             alloc.reflow("You can convert between "),
             alloc.type_str("Int"),
             alloc.reflow(" and "),
@@ -3285,7 +3277,7 @@ fn type_problem_to_pretty<'b>(
                 alloc.stack(vec![tip1, tip2])
             }
         },
-        (OptionalRequiredMismatch(field), _) => alloc.tip().append(alloc.concat(vec![
+        (OptionalRequiredMismatch(field), _) => alloc.tip().append(alloc.concat([
             alloc.reflow("To extract the "),
             alloc.record_field(field),
             alloc.reflow(
@@ -3294,7 +3286,7 @@ fn type_problem_to_pretty<'b>(
             alloc.reflow("Learn more about optional fields at TODO."),
         ])),
 
-        (OpaqueComparedToNonOpaque, _) => alloc.tip().append(alloc.concat(vec![
+        (OpaqueComparedToNonOpaque, _) => alloc.tip().append(alloc.concat([
             alloc.reflow(
                 "Type comparisons between an opaque type are only ever \
                 equal if both types are the same opaque type. Did you mean \

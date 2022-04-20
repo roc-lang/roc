@@ -4518,7 +4518,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
                 alloc
                     .parser_suggestion(filename.to_str().unwrap())
                     .indent(4),
-                alloc.concat(vec![
+                alloc.concat([
                     alloc.reflow(r"Is the file supposed to be there? "),
                     alloc.reflow("Maybe there is a typo in the file name?"),
                 ]),
@@ -4537,9 +4537,8 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
                 alloc
                     .parser_suggestion(filename.to_str().unwrap())
                     .indent(4),
-                alloc.concat(vec![
-                    alloc.reflow(r"Is it the right file? Maybe change its permissions?")
-                ]),
+                alloc
+                    .concat([alloc.reflow(r"Is it the right file? Maybe change its permissions?")]),
             ]);
 
             Report {
@@ -4552,7 +4551,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
         _ => {
             let error = std::io::Error::from(error);
             let formatted = format!("{}", error);
-            let doc = alloc.concat(vec![
+            let doc = alloc.concat([
                 alloc.reflow(r"I tried to read this file, but ran into a "),
                 alloc.text(formatted),
                 alloc.reflow(r" problem."),
@@ -4650,7 +4649,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             RootIsInterface => {
                 let doc = alloc.stack(vec![
                                 alloc.reflow(r"The input file is an interface module, but only app modules can be ran."),
-                                alloc.concat(vec![
+                                alloc.concat([
                                     alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
                                     alloc.reflow(r"but won't output any executable."),
                                 ])
@@ -4666,7 +4665,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             RootIsHosted => {
                 let doc = alloc.stack(vec![
                                 alloc.reflow(r"The input file is a hosted module, but only app modules can be ran."),
-                                alloc.concat(vec![
+                                alloc.concat([
                                     alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
                                     alloc.reflow(r"but won't output any executable."),
                                 ])
@@ -4682,7 +4681,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             RootIsPkgConfig => {
                 let doc = alloc.stack(vec![
                                 alloc.reflow(r"The input file is a package config file, but only app modules can be ran."),
-                                alloc.concat(vec![
+                                alloc.concat([
                                     alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
                                     alloc.reflow(r"but won't output any executable."),
                                 ])

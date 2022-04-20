@@ -22,7 +22,7 @@ pub fn mono_problem<'b>(
                     alloc.region(lines.convert_region(region)),
                     alloc.reflow("Other possibilities include:"),
                     unhandled_patterns_to_doc_block(alloc, missing),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.reflow(
                             "I would have to crash if I saw one of those! \
                         So rather than pattern matching in function arguments, put a ",
@@ -45,7 +45,7 @@ pub fn mono_problem<'b>(
                     alloc.region(lines.convert_region(region)),
                     alloc.reflow("Other possibilities include:"),
                     unhandled_patterns_to_doc_block(alloc, missing),
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.reflow(
                             "I would have to crash if I saw one of those! \
                        You can use a binding to deconstruct a value if there is only ONE possibility. \
@@ -65,7 +65,7 @@ pub fn mono_problem<'b>(
             }
             BadCase => {
                 let doc = alloc.stack(vec![
-                    alloc.concat(vec![
+                    alloc.concat([
                         alloc.reflow("This "),
                         alloc.keyword("when"),
                         alloc.reflow(" does not cover all the possibilities:"),
@@ -94,7 +94,7 @@ pub fn mono_problem<'b>(
             index,
         }) => {
             let doc = alloc.stack(vec![
-                alloc.concat(vec![
+                alloc.concat([
                     alloc.reflow("The "),
                     alloc.string(index.ordinal()),
                     alloc.reflow(" pattern is redundant:"),
@@ -169,7 +169,7 @@ fn pattern_to_doc_help<'b>(
                     );
                     debug_assert!(args.len() == 2);
                     let tag = pattern_to_doc_help(alloc, args[1].clone(), in_type_param);
-                    alloc.concat(vec![
+                    alloc.concat([
                         tag,
                         alloc.text(AFTER_TAG_INDENT),
                         alloc.text("(note the lack of an "),
