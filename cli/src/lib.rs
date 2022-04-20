@@ -467,7 +467,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                     }
 
                     roc_run(
-                        &arena,
+                        arena,
                         &original_cwd,
                         triple,
                         roc_file_arg_index,
@@ -491,7 +491,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                         }
 
                         roc_run(
-                            &arena,
+                            arena,
                             &original_cwd,
                             triple,
                             roc_file_arg_index,
@@ -544,7 +544,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
 
 #[cfg(target_family = "unix")]
 fn roc_run(
-    arena: &Bump,
+    arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     cwd: &Path,
     triple: Triple,
     roc_file_arg_index: usize,
