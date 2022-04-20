@@ -9954,4 +9954,21 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    fn issue_2899() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                foo : Bool -> Str
+                foo = \bool ->
+                    when bool is
+                        True -> "true"
+                        False -> "false"
+                        Wat -> "surprise!"
+                foo
+                "#
+            ),
+            indoc!(""),
+        )
+    }
 }
