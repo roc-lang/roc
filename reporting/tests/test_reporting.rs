@@ -2379,12 +2379,12 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `x` record does not have a `.foo` field:
+                This `x` record doesn’t have a `foo` field:
 
                 3│  { x & foo: 3 }
                           ^^^^^^
 
-                In fact, `x` is a record with NO fields!
+                In fact, `x` is a record with no fields at all!
                 "#
             ),
         )
@@ -2405,18 +2405,19 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `x` record does not have a `.foo` field:
+                This `x` record doesn’t have a `foo` field:
 
                 3│  { x & foo: 3 }
                           ^^^^^^
 
-                This is usually a typo. Here are the `x` fields that are most similar:
+                There may be a typo. These `x` fields are the most similar:
 
-                    { fo : Num b
-                    , bar : Num a
+                    {
+                        fo : Num b,
+                        bar : Num a,
                     }
 
-                So maybe `.foo` should be `.fo`?
+                Maybe `foo:` should be `fo:` instead?
                 "#
             ),
         )
@@ -2441,17 +2442,18 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `r` record does not have a `.foo` field:
+                This `r` record doesn’t have a `foo` field:
 
                 3│      r2 = { r & foo: r.fo }
                                    ^^^^^^^^^
 
-                This is usually a typo. Here are the `r` fields that are most similar:
+                There may be a typo. These `r` fields are the most similar:
 
-                    { fo : I64
+                    {
+                        fo : I64,
                     }ext
 
-                So maybe `.foo` should be `.fo`?
+                Maybe `foo:` should be `fo:` instead?
                 "#
             ),
         )
@@ -2472,21 +2474,22 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `x` record does not have a `.foo` field:
+                This `x` record doesn’t have a `foo` field:
 
                 3│  { x & foo: 3 }
                           ^^^^^^
 
-                This is usually a typo. Here are the `x` fields that are most similar:
+                There may be a typo. These `x` fields are the most similar:
 
-                    { fo : Num c
-                    , foobar : Num d
-                    , bar : Num a
-                    , baz : Num b
-                    , ...
+                    {
+                        fo : Num c,
+                        foobar : Num d,
+                        bar : Num a,
+                        baz : Num b,
+                        …
                     }
 
-                So maybe `.foo` should be `.fo`?
+                Maybe `foo:` should be `fo:` instead?
                 "#
             ),
         )
@@ -5922,20 +5925,12 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This expression is used in an unexpected way:
+                This `foo` record doesn’t have a `if` field:
 
                 3│  foo.if
                     ^^^^^^
 
-                This `foo` value is a:
-
-                    {}
-
-                But you are trying to use it as:
-
-                    { if : a }b
-
-
+                In fact, `foo` is a record with no fields at all!
             "#
             ),
         )
