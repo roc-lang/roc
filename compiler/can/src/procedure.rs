@@ -77,7 +77,7 @@ impl References {
     }
 
     pub fn references_type_def(&self, symbol: Symbol) -> bool {
-        self.referenced_type_defs.contains(&symbol)
+        self.type_lookups.contains(&symbol)
     }
 
     pub fn insert_value_lookup(&mut self, symbol: Symbol) {
