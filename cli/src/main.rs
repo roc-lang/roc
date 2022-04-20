@@ -1,7 +1,8 @@
 use roc_cli::build::check_file;
 use roc_cli::{
     build_app, docs, format, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
-    CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_TIME, ROC_FILE,
+    CMD_FORMAT, CMD_REPL, CMD_RUN, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_TIME,
+    ROC_FILE,
 };
 use roc_load::LoadingProblem;
 use std::fs::{self, FileType};
@@ -27,13 +28,31 @@ fn main() -> io::Result<()> {
                 Some(arg_index) => {
                     let roc_file_arg_index = arg_index + 1; // Not sure why this +1 is necessary, but it is!
 
-                    build(&matches, BuildConfig::BuildAndRun { roc_file_arg_index })
+                    build(
+                        &matches,
+                        BuildConfig::BuildAndRunIfNoErrors { roc_file_arg_index },
+                    )
                 }
 
                 None => {
                     launch_editor(None)?;
 
                     Ok(0)
+                }
+            }
+        }
+        Some((CMD_RUN, matches)) => {
+            match matches.index_of(ROC_FILE) {
+                Some(arg_index) => {
+                    let roc_file_arg_index = arg_index + 1; // Not sure why this +1 is necessary, but it is!
+
+                    build(&matches, BuildConfig::BuildAndRun { roc_file_arg_index })
+                }
+
+                None => {
+                    eprintln!("What .roc file do you want to run? Specify it at the end of the `roc run` command.");
+
+                    Ok(1)
                 }
             }
         }
@@ -47,10 +66,7 @@ fn main() -> io::Result<()> {
             let src_dir = roc_file_path.parent().unwrap().to_owned();
 
             match check_file(&arena, src_dir, roc_file_path, emit_timings) {
-                Ok(number_of_errors) => {
-                    let exit_code = if number_of_errors != 0 { 1 } else { 0 };
-                    Ok(exit_code)
-                }
+                Ok(problems) => Ok(problems.exit_code()),
 
                 Err(LoadingProblem::FormattedReport(report)) => {
                     print!("{}", report);

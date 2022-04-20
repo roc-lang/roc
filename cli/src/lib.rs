@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate const_format;
 
-use build::{BuildOutcome, BuiltFile};
+use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{App, AppSettings, Arg, ArgMatches};
 use roc_build::link::LinkType;
@@ -24,6 +24,7 @@ mod format;
 pub use format::format;
 
 pub const CMD_BUILD: &str = "build";
+pub const CMD_RUN: &str = "run";
 pub const CMD_REPL: &str = "repl";
 pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
@@ -142,6 +143,14 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
+        .subcommand(App::new(CMD_RUN)
+            .about("Run a .roc file even if it has build errors")
+            .arg(
+                Arg::new(ROC_FILE)
+                    .about("The .roc file of an app to run")
+                    .required(true),
+            )
+        )
         .subcommand(App::new(CMD_FORMAT)
             .about("Format a .roc file using standard Roc formatting")
             .arg(
@@ -168,7 +177,7 @@ pub fn build_app<'a>() -> App<'a> {
             )
             .arg(
                 Arg::new(ROC_FILE)
-                    .about("The .roc file of an app to run")
+                    .about("The .roc file of an app to check")
                     .required(true),
             )
             )
@@ -273,6 +282,7 @@ pub fn docs(files: Vec<PathBuf>) {
 pub enum BuildConfig {
     BuildOnly,
     BuildAndRun { roc_file_arg_index: usize },
+    BuildAndRunIfNoErrors { roc_file_arg_index: usize },
 }
 
 pub enum FormatMode {
@@ -380,7 +390,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     match res_binary_path {
         Ok(BuiltFile {
             binary_path,
-            outcome,
+            problems,
             total_time,
         }) => {
             match config {
@@ -401,50 +411,26 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                     );
 
                     // Return a nonzero exit code if there were problems
-                    Ok(outcome.status_code())
+                    Ok(problems.exit_code())
                 }
-                BuildAndRun { roc_file_arg_index } => {
-                    let mut cmd = match triple.architecture {
-                        Architecture::Wasm32 => {
-                            // If possible, report the generated executable name relative to the current dir.
-                            let generated_filename = binary_path
-                                .strip_prefix(env::current_dir().unwrap())
-                                .unwrap_or(&binary_path);
-
-                            // No need to waste time freeing this memory,
-                            // since the process is about to exit anyway.
-                            std::mem::forget(arena);
-
-                            let args = std::env::args()
-                                .skip(roc_file_arg_index)
-                                .collect::<Vec<_>>();
-
-                            run_with_wasmer(generated_filename, &args);
-                            return Ok(0);
-                        }
-                        _ => Command::new(&binary_path),
-                    };
-
-                    if let Architecture::Wasm32 = triple.architecture {
-                        cmd.arg(binary_path);
-                    }
-
-                    // Forward all the arguments after the .roc file argument
-                    // to the new process. This way, you can do things like:
-                    //
-                    // roc app.roc foo bar baz
-                    //
-                    // ...and have it so that app.roc will receive only `foo`,
-                    // `bar`, and `baz` as its arguments.
-                    for (index, arg) in std::env::args().enumerate() {
-                        if index > roc_file_arg_index {
-                            cmd.arg(arg);
-                        }
-                    }
-
-                    match outcome {
-                        BuildOutcome::Errors => Ok(outcome.status_code()),
-                        _ => roc_run(cmd.current_dir(original_cwd)),
+                BuildAndRun { roc_file_arg_index } => roc_run(
+                    &arena,
+                    &original_cwd,
+                    triple,
+                    roc_file_arg_index,
+                    &binary_path,
+                ),
+                BuildAndRunIfNoErrors { roc_file_arg_index } => {
+                    if problems.errors == 0 {
+                        roc_run(
+                            &arena,
+                            &original_cwd,
+                            triple,
+                            roc_file_arg_index,
+                            &binary_path,
+                        )
+                    } else {
+                        Ok(problems.exit_code())
                     }
                 }
             }
@@ -461,11 +447,55 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
 }
 
 #[cfg(target_family = "unix")]
-fn roc_run(cmd: &mut Command) -> io::Result<i32> {
+fn roc_run(
+    arena: &Bump,
+    cwd: &Path,
+    triple: Triple,
+    roc_file_arg_index: usize,
+    binary_path: &Path,
+) -> io::Result<i32> {
     use std::os::unix::process::CommandExt;
 
+    let mut cmd = match triple.architecture {
+        Architecture::Wasm32 => {
+            // If possible, report the generated executable name relative to the current dir.
+            let generated_filename = binary_path
+                .strip_prefix(env::current_dir().unwrap())
+                .unwrap_or(&binary_path);
+
+            // No need to waste time freeing this memory,
+            // since the process is about to exit anyway.
+            std::mem::forget(arena);
+
+            let args = std::env::args()
+                .skip(roc_file_arg_index)
+                .collect::<Vec<_>>();
+
+            run_with_wasmer(generated_filename, &args);
+            return Ok(0);
+        }
+        _ => Command::new(&binary_path),
+    };
+
+    if let Architecture::Wasm32 = triple.architecture {
+        cmd.arg(binary_path);
+    }
+
+    // Forward all the arguments after the .roc file argument
+    // to the new process. This way, you can do things like:
+    //
+    // roc app.roc foo bar baz
+    //
+    // ...and have it so that app.roc will receive only `foo`,
+    // `bar`, and `baz` as its arguments.
+    for (index, arg) in std::env::args().enumerate() {
+        if index > roc_file_arg_index {
+            cmd.arg(arg);
+        }
+    }
+
     // This is much faster than spawning a subprocess if we're on a UNIX system!
-    let err = cmd.exec();
+    let err = cmd.current_dir(cwd).exec();
 
     // If exec actually returned, it was definitely an error! (Otherwise,
     // this process would have been replaced by the other one, and we'd
