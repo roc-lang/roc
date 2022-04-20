@@ -1178,7 +1178,7 @@ fn constrain_when_branch_help(
         // must introduce the headers from the pattern before constraining the guard
         state
             .constraints
-            .extend(state.delayed_is_open_constriants.drain(..));
+            .append(&mut state.delayed_is_open_constriants);
         let state_constraints = constraints.and_constraint(state.constraints);
         let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
 
@@ -1186,7 +1186,7 @@ fn constrain_when_branch_help(
     } else {
         state
             .constraints
-            .extend(state.delayed_is_open_constriants.drain(..));
+            .append(&mut state.delayed_is_open_constriants);
         let state_constraints = constraints.and_constraint(state.constraints);
         (state_constraints, ret_constraint)
     };

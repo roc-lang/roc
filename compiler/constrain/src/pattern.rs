@@ -497,7 +497,7 @@ pub fn constrain_pattern(
             state.constraints.push(tag_con);
             state
                 .constraints
-                .extend(state.delayed_is_open_constriants.drain(..));
+                .append(&mut state.delayed_is_open_constriants);
         }
 
         UnwrappedOpaque {
