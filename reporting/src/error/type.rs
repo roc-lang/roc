@@ -3279,6 +3279,7 @@ fn type_problem_to_pretty<'b>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn report_record_field_typo<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
