@@ -423,7 +423,7 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         Caret => (ModuleName::NUM, "pow"),
         Star => (ModuleName::NUM, "mul"),
         Slash => (ModuleName::NUM, "div"),
-        DoubleSlash => (ModuleName::NUM, "divFloor"),
+        DoubleSlash => (ModuleName::NUM, "divTrunc"),
         Percent => (ModuleName::NUM, "rem"),
         Plus => (ModuleName::NUM, "add"),
         Minus => (ModuleName::NUM, "sub"),
