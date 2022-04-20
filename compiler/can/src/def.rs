@@ -97,6 +97,7 @@ enum PendingTypeDef<'a> {
     /// An invalid alias, that is ignored in the rest of the pipeline
     /// e.g. a shadowed alias, or a definition like `MyAlias 1 : Int`
     /// with an incorrect pattern
+    #[allow(dead_code)]
     InvalidAlias { kind: AliasKind },
 
     /// An invalid ability, that is ignored in the rest of the pipeline.
