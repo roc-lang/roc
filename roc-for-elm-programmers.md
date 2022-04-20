@@ -1294,7 +1294,7 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `a - b`           | `Num.sub a b`      |
 | `a * b`           | `Num.mul a b`      |
 | `a / b`           | `Num.div a b`    |
-| `a // b`          | `Num.divFloor a b`      |
+| `a // b`          | `Num.divTrunc a b`      |
 | `a ^ b`           | `Num.pow a b`      |
 | `a % b`           | `Num.rem a b`    |
 | `a %% b`          | `Num.mod a b`    |

@@ -316,16 +316,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(SolvedType::Wildcard),
     );
 
-    // divFloor : Int a, Int a -> Int a
+    // divTrunc : Int a, Int a -> Int a
     add_top_level_function_type!(
-        Symbol::NUM_DIV_FLOOR,
+        Symbol::NUM_DIV_TRUNC,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(int_type(flex(TVAR1)))
     );
 
-    // divFloorChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // divTruncChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_top_level_function_type!(
-        Symbol::NUM_DIV_FLOOR_CHECKED,
+        Symbol::NUM_DIV_TRUNC_CHECKED,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );

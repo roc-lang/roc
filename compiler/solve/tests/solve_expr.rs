@@ -3404,11 +3404,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn div_floor() {
+    fn div_trunc() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Num.divFloor
+                Num.divTrunc
                 "#
             ),
             "Int a, Int a -> Int a",
@@ -3416,11 +3416,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn div_floor_checked() {
+    fn div_trunc_checked() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Num.divFloorChecked
+                Num.divTruncChecked
                 "#
             ),
             "Int a, Int a -> Result (Int a) [ DivByZero ]*",
