@@ -1594,8 +1594,7 @@ pub fn can_defs_with_return<'a>(
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
     for (symbol, region) in symbols_introduced {
-        if !output.references.has_value_lookup(symbol)
-            && !output.references.has_type_lookup(symbol)
+        if !output.references.has_type_or_value_lookup(symbol)
             && !scope.abilities_store.is_specialization_name(symbol)
         {
             env.problem(Problem::UnusedDef(symbol, region));

@@ -302,8 +302,7 @@ pub fn canonicalize_module_defs<'a>(
     // See if any of the new idents we defined went unused.
     // If any were unused and also not exposed, report it.
     for (symbol, region) in symbols_introduced {
-        if !output.references.has_value_lookup(symbol)
-            && !output.references.has_type_lookup(symbol)
+        if !output.references.has_type_or_value_lookup(symbol)
             && !exposed_symbols.contains(&symbol)
             && !scope.abilities_store.is_specialization_name(symbol)
         {

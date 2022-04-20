@@ -153,7 +153,7 @@ impl References {
         false
     }
 
-    pub fn has_type_lookup(&self, symbol: Symbol) -> bool {
+    fn has_type_lookup(&self, symbol: Symbol) -> bool {
         let it = self.symbols.iter().zip(self.bitflags.iter());
 
         for (a, b) in it {

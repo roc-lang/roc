@@ -1072,10 +1072,8 @@ fn canonicalize_when_branch<'a>(
     for (symbol, region) in scope.symbols() {
         let symbol = *symbol;
 
-        if !output.references.has_value_lookup(symbol)
-            && !output.references.has_type_lookup(symbol)
-            && !branch_output.references.has_value_lookup(symbol)
-            && !branch_output.references.has_type_lookup(symbol)
+        if !output.references.has_type_or_value_lookup(symbol)
+            && !branch_output.references.has_type_or_value_lookup(symbol)
             && !original_scope.contains_symbol(symbol)
             && !scope.abilities_store.is_specialization_name(symbol)
         {
