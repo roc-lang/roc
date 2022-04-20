@@ -156,13 +156,13 @@ pub fn canonicalize_def_header_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
+    output: &mut Output,
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
     region: Region,
-) -> (Output, Loc<Pattern>) {
+) -> Loc<Pattern> {
     use roc_parse::ast::Pattern::*;
 
-    let mut output = Output::default();
     match pattern {
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
         Identifier(name) => match scope.introduce_or_shadow_ability_member(
@@ -182,7 +182,7 @@ pub fn canonicalize_def_header_pattern<'a>(
                         specializes: ability_member_name,
                     },
                 };
-                (output, Loc::at(region, can_pattern))
+                Loc::at(region, can_pattern)
             }
             Err((original_region, shadow, new_symbol)) => {
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
@@ -193,10 +193,10 @@ pub fn canonicalize_def_header_pattern<'a>(
                 output.references.insert_bound(new_symbol);
 
                 let can_pattern = Pattern::Shadowed(original_region, shadow, new_symbol);
-                (output, Loc::at(region, can_pattern))
+                Loc::at(region, can_pattern)
             }
         },
-        _ => canonicalize_pattern(env, var_store, scope, pattern_type, pattern, region),
+        _ => canonicalize_pattern(env, var_store, scope, output, pattern_type, pattern, region),
     }
 }
 
@@ -204,14 +204,14 @@ pub fn canonicalize_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
+    output: &mut Output,
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
     region: Region,
-) -> (Output, Loc<Pattern>) {
+) -> Loc<Pattern> {
     use roc_parse::ast::Pattern::*;
     use PatternType::*;
 
-    let mut output = Output::default();
     let can_pattern = match pattern {
         Identifier(name) => match scope.introduce(
             (*name).into(),
@@ -266,16 +266,15 @@ pub fn canonicalize_pattern<'a>(
         Apply(tag, patterns) => {
             let mut can_patterns = Vec::with_capacity(patterns.len());
             for loc_pattern in *patterns {
-                let (new_output, can_pattern) = canonicalize_pattern(
+                let can_pattern = canonicalize_pattern(
                     env,
                     var_store,
                     scope,
+                    output,
                     pattern_type,
                     &loc_pattern.value,
                     loc_pattern.region,
                 );
-
-                output.union(new_output);
 
                 can_patterns.push((var_store.fresh(), can_pattern));
             }
@@ -442,7 +441,15 @@ pub fn canonicalize_pattern<'a>(
         }
 
         SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
-            return canonicalize_pattern(env, var_store, scope, pattern_type, sub_pattern, region)
+            return canonicalize_pattern(
+                env,
+                var_store,
+                scope,
+                output,
+                pattern_type,
+                sub_pattern,
+                region,
+            )
         }
         RecordDestructure(patterns) => {
             let ext_var = var_store.fresh();
@@ -492,16 +499,15 @@ pub fn canonicalize_pattern<'a>(
                     RequiredField(label, loc_guard) => {
                         // a guard does not introduce the label into scope!
                         let symbol = scope.ignore(label.into(), &mut env.ident_ids);
-                        let (new_output, can_guard) = canonicalize_pattern(
+                        let can_guard = canonicalize_pattern(
                             env,
                             var_store,
                             scope,
+                            output,
                             pattern_type,
                             &loc_guard.value,
                             loc_guard.region,
                         );
-
-                        output.union(new_output);
 
                         destructs.push(Loc {
                             region: loc_pattern.region,
@@ -597,13 +603,10 @@ pub fn canonicalize_pattern<'a>(
         }
     };
 
-    (
-        output,
-        Loc {
-            region,
-            value: can_pattern,
-        },
-    )
+    Loc {
+        region,
+        value: can_pattern,
+    }
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't

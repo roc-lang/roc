@@ -564,9 +564,17 @@ pub fn canonicalize_defs<'a>(
     // once we've finished assembling the entire scope.
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
     for loc_def in value_defs.into_iter() {
-        match to_pending_value_def(env, var_store, loc_def.value, &mut scope, pattern_type) {
+        let mut new_output = Output::default();
+        match to_pending_value_def(
+            env,
+            var_store,
+            loc_def.value,
+            &mut scope,
+            &mut new_output,
+            pattern_type,
+        ) {
             None => { /* skip */ }
-            Some((new_output, pending_def)) => {
+            Some(pending_def) => {
                 // store the top-level defs, used to ensure that closures won't capture them
                 if let PatternType::TopLevelDef = pattern_type {
                     match &pending_def {
@@ -1806,41 +1814,46 @@ fn to_pending_value_def<'a>(
     var_store: &mut VarStore,
     def: &'a ast::ValueDef<'a>,
     scope: &mut Scope,
+    output: &mut Output,
     pattern_type: PatternType,
-) -> Option<(Output, PendingValueDef<'a>)> {
+) -> Option<PendingValueDef<'a>> {
     use ast::ValueDef::*;
 
     match def {
         Annotation(loc_pattern, loc_ann) => {
             // This takes care of checking for shadowing and adding idents to scope.
-            let (output, loc_can_pattern) = canonicalize_def_header_pattern(
+            let loc_can_pattern = canonicalize_def_header_pattern(
                 env,
                 var_store,
                 scope,
+                output,
                 pattern_type,
                 &loc_pattern.value,
                 loc_pattern.region,
             );
 
-            Some((
-                output,
-                PendingValueDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_ann),
+            Some(PendingValueDef::AnnotationOnly(
+                loc_pattern,
+                loc_can_pattern,
+                loc_ann,
             ))
         }
         Body(loc_pattern, loc_expr) => {
             // This takes care of checking for shadowing and adding idents to scope.
-            let (output, loc_can_pattern) = canonicalize_def_header_pattern(
+            let loc_can_pattern = canonicalize_def_header_pattern(
                 env,
                 var_store,
                 scope,
+                output,
                 pattern_type,
                 &loc_pattern.value,
                 loc_pattern.region,
             );
 
-            Some((
-                output,
-                PendingValueDef::Body(loc_pattern, loc_can_pattern, loc_expr),
+            Some(PendingValueDef::Body(
+                loc_pattern,
+                loc_can_pattern,
+                loc_expr,
             ))
         }
 
@@ -1859,18 +1872,21 @@ fn to_pending_value_def<'a>(
                 // { x, y ? False } = rec
                 //
                 // This takes care of checking for shadowing and adding idents to scope.
-                let (output, loc_can_pattern) = canonicalize_def_header_pattern(
+                let loc_can_pattern = canonicalize_def_header_pattern(
                     env,
                     var_store,
                     scope,
+                    output,
                     pattern_type,
                     &body_pattern.value,
                     body_pattern.region,
                 );
 
-                Some((
-                    output,
-                    PendingValueDef::TypedBody(body_pattern, loc_can_pattern, ann_type, body_expr),
+                Some(PendingValueDef::TypedBody(
+                    body_pattern,
+                    loc_can_pattern,
+                    ann_type,
+                    body_expr,
                 ))
             } else {
                 // the pattern of the annotation does not match the pattern of the body direc
