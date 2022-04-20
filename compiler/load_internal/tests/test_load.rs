@@ -112,13 +112,11 @@ mod test_load {
                     ));
                 }
 
-                assert_eq!(
-                    loaded_module
-                        .type_problems
-                        .remove(&home)
-                        .unwrap_or_default(),
-                    Vec::new()
-                );
+                assert!(loaded_module
+                    .type_problems
+                    .remove(&home)
+                    .unwrap_or_default()
+                    .is_empty(),);
 
                 Ok(loaded_module)
             }
@@ -208,13 +206,11 @@ mod test_load {
             loaded_module.can_problems.remove(&home).unwrap_or_default(),
             Vec::new()
         );
-        assert_eq!(
-            loaded_module
-                .type_problems
-                .remove(&home)
-                .unwrap_or_default(),
-            Vec::new()
-        );
+        assert!(loaded_module
+            .type_problems
+            .remove(&home)
+            .unwrap_or_default()
+            .is_empty());
 
         let expected_name = loaded_module
             .interns
@@ -261,13 +257,11 @@ mod test_load {
             loaded_module.can_problems.remove(&home).unwrap_or_default(),
             Vec::new()
         );
-        assert_eq!(
-            loaded_module
-                .type_problems
-                .remove(&home)
-                .unwrap_or_default(),
-            Vec::new()
-        );
+        assert!(loaded_module
+            .type_problems
+            .remove(&home)
+            .unwrap_or_default()
+            .is_empty());
 
         for decl in loaded_module.declarations_by_id.remove(&home).unwrap() {
             match decl {
@@ -365,13 +359,11 @@ mod test_load {
             loaded_module.can_problems.remove(&home).unwrap_or_default(),
             Vec::new()
         );
-        assert_eq!(
-            loaded_module
-                .type_problems
-                .remove(&home)
-                .unwrap_or_default(),
-            Vec::new()
-        );
+        assert!(loaded_module
+            .type_problems
+            .remove(&home)
+            .unwrap_or_default()
+            .is_empty(),);
 
         let def_count: usize = loaded_module
             .declarations_by_id

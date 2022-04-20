@@ -17,7 +17,7 @@ use roc_types::types::{LambdaSet, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Pattern {
     Identifier(Symbol),
     AppliedTag {
@@ -82,7 +82,7 @@ pub enum Pattern {
     MalformedPattern(MalformedPatternProblem, Region),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct RecordDestruct {
     pub var: Variable,
     pub label: Lowercase,
@@ -90,7 +90,7 @@ pub struct RecordDestruct {
     pub typ: DestructType,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum DestructType {
     Required,
     Optional(Variable, Loc<Expr>),

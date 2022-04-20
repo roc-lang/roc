@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_collections::{ImMap, MutMap, MutSet, SendMap, VecSet};
+use roc_collections::{ImMap, MutMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
@@ -11,7 +11,7 @@ use roc_types::types::{
     Alias, AliasCommon, AliasKind, LambdaSet, Problem, RecordField, Type, TypeExtension,
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Annotation {
     pub typ: Type,
     pub introduced_variables: IntroducedVariables,
@@ -53,14 +53,14 @@ pub struct AbleVariable {
     pub first_seen: Region,
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct IntroducedVariables {
     pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,
     pub inferred: Vec<Loc<Variable>>,
     pub named: VecSet<NamedVariable>,
     pub able: VecSet<AbleVariable>,
-    pub host_exposed_aliases: MutMap<Symbol, Variable>,
+    pub host_exposed_aliases: VecMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {

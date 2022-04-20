@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use ven_graph::{strongly_connected_components, topological_sort};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Def {
     pub loc_pattern: Loc<Pattern>,
     pub loc_expr: Loc<Expr>,
@@ -38,7 +38,7 @@ pub struct Def {
     pub annotation: Option<Annotation>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Annotation {
     pub signature: Type,
     pub introduced_variables: IntroducedVariables,
@@ -56,7 +56,7 @@ pub struct CanDefs {
 /// A Def that has had patterns and type annnotations canonicalized,
 /// but no Expr canonicalization has happened yet. Also, it has had spaces
 /// and nesting resolved, and knows whether annotations are standalone or not.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 enum PendingValueDef<'a> {
     /// A standalone annotation with no body
     AnnotationOnly(
@@ -79,7 +79,7 @@ enum PendingValueDef<'a> {
     ),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 enum PendingTypeDef<'a> {
     /// A structural or opaque type alias, e.g. `Ints : List Int` or `Age := U32` respectively.
     Alias {
@@ -105,7 +105,7 @@ enum PendingTypeDef<'a> {
 }
 
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Declaration {
     Declare(Def),

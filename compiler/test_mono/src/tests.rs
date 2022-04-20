@@ -129,7 +129,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         println!("Ignoring {} canonicalization problems", can_problems.len());
     }
 
-    assert_eq!(type_problems, Vec::new());
+    assert!(type_problems.is_empty());
     assert_eq!(mono_problems, Vec::new());
 
     debug_assert_eq!(exposed_to_host.values.len(), 1);

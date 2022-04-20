@@ -9,7 +9,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::{MutMap, MutSet, SendMap, VecSet};
+use roc_collections::{MutMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -23,12 +23,12 @@ use roc_types::types::{Alias, LambdaSet, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
 
-#[derive(Clone, Default, Debug, PartialEq)]
+#[derive(Clone, Default, Debug)]
 pub struct Output {
     pub references: References,
     pub tail_call: Option<Symbol>,
     pub introduced_variables: IntroducedVariables,
-    pub aliases: SendMap<Symbol, Alias>,
+    pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
 }
 
@@ -62,7 +62,7 @@ impl Display for IntValue {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Expr {
     // Literals
 
@@ -194,7 +194,7 @@ pub enum Expr {
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ClosureData {
     pub function_type: Variable,
     pub closure_type: Variable,
@@ -271,7 +271,7 @@ impl AccessorData {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Field {
     pub var: Variable,
     // The region of the full `foo: f bar`, rather than just `f bar`
@@ -286,7 +286,7 @@ pub enum Recursive {
     TailRecursive = 2,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct WhenBranch {
     pub patterns: Vec<Loc<Pattern>>,
     pub value: Loc<Expr>,
