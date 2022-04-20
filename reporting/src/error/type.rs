@@ -455,7 +455,9 @@ fn to_expr_report<'b>(
                             lines,
                             filename,
                             opt_sym,
+                            ".",
                             field,
+                            "",
                             expr_region,
                             found_fields,
                             found_ext,
@@ -888,7 +890,9 @@ fn to_expr_report<'b>(
                                 lines,
                                 filename,
                                 Some(symbol),
+                                "",
                                 field,
+                                ":",
                                 *field_region,
                                 actual_fields,
                                 ext,
@@ -3280,16 +3284,18 @@ fn report_record_field_typo<'b>(
     lines: &LineInfo,
     filename: PathBuf,
     opt_sym: Option<Symbol>,
+    field_prefix: &str,
     field: &Lowercase,
+    field_suffix: &str,
     field_region: Region,
     actual_fields: SendMap<Lowercase, RecordField<ErrorType>>,
     ext: TypeExt,
 ) -> Report<'b> {
-    let f_doc = alloc
-        .text(field.as_str().to_string())
-        .annotate(Annotation::Typo);
-
     let header = {
+        let f_doc = alloc
+            .text(field.as_str().to_string())
+            .annotate(Annotation::Typo);
+
         let r_doc = match opt_sym {
             Some(symbol) => alloc.symbol_unqualified(symbol).append(" "),
             None => alloc.text(""),
@@ -3299,7 +3305,7 @@ fn report_record_field_typo<'b>(
             alloc.reflow("This "),
             r_doc,
             alloc.reflow("record doesn’t have a "),
-            f_doc.clone(),
+            f_doc,
             alloc.reflow(" field:"),
         ])
     };
@@ -3325,6 +3331,10 @@ fn report_record_field_typo<'b>(
         } else {
             let f = suggestions.remove(0);
             let fs = suggestions;
+            let f_doc = alloc
+                .text(format!("{}{}{}", field_prefix, field, field_suffix))
+                .annotate(Annotation::Typo);
+
             let r_doc = match opt_sym {
                 Some(symbol) => alloc.symbol_unqualified(symbol).append(" fields"),
                 None => alloc.text("fields on the record"),
@@ -3342,9 +3352,9 @@ fn report_record_field_typo<'b>(
                     f_doc,
                     alloc.reflow(" should be "),
                     alloc
-                        .text(f.0.as_str().to_string())
+                        .text(format!("{}{}{}", field_prefix, f.0, field_suffix))
                         .annotate(Annotation::TypoSuggestion),
-                    alloc.reflow("?"),
+                    alloc.reflow(" instead?"),
                 ]),
             ])
         },
