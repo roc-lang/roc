@@ -49,10 +49,12 @@ pub const ROC_DIR: &str = "ROC_DIR";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
+const VERSION: &str = include_str!("../../version.txt");
+
 pub fn build_app<'a>() -> App<'a> {
     let app = App::new("roc")
-        .version(concatcp!(include_str!("../../version.txt"), "\n"))
-        .about("Runs the given .roc file. Use one of the SUBCOMMANDS below to do something else!")
+        .version(concatcp!(VERSION, "\n"))
+        .about("Runs the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
         .subcommand(App::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(
@@ -141,7 +143,7 @@ pub fn build_app<'a>() -> App<'a> {
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
         .subcommand(App::new(CMD_FORMAT)
-            .about("Format Roc code")
+            .about("Format a .roc file using standard Roc formatting")
             .arg(
                 Arg::new(DIRECTORY_OR_FILES)
                     .index(1)
@@ -155,10 +157,9 @@ pub fn build_app<'a>() -> App<'a> {
             )
         )
         .subcommand(App::new(CMD_VERSION)
-            .about("Print version information")
-        )
+            .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
         .subcommand(App::new(CMD_CHECK)
-            .about("When developing, it's recommended to run `check` before `build`. It may provide a useful error message in cases where `build` panics")
+            .about("Check the code for problems, but doesn’t build or run it")
             .arg(
                 Arg::new(FLAG_TIME)
                     .long(FLAG_TIME)
@@ -193,19 +194,19 @@ pub fn build_app<'a>() -> App<'a> {
         .arg(
             Arg::new(FLAG_OPT_SIZE)
                 .long(FLAG_OPT_SIZE)
-                .about("Optimize your compiled Roc program to have a small binary size. (Optimization takes time to complete.)")
+                .about("Optimize the compiled program to have a small binary size. (Optimization takes time to complete.)")
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_DEV)
                 .long(FLAG_DEV)
-                .about("Make compilation as fast as possible. (Runtime performance may suffer)")
+                .about("Make compilation finish as soon as possible, at the expense of runtime performance.")
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_DEBUG)
                 .long(FLAG_DEBUG)
-                .about("Store LLVM debug information in the generated program")
+                .about("Store LLVM debug information in the generated program.")
                 .requires(ROC_FILE)
                 .required(false),
         )
