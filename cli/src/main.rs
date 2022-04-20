@@ -46,7 +46,7 @@ fn main() -> io::Result<()> {
                 Some(arg_index) => {
                     let roc_file_arg_index = arg_index + 1; // Not sure why this +1 is necessary, but it is!
 
-                    build(&matches, BuildConfig::BuildAndRun { roc_file_arg_index })
+                    build(matches, BuildConfig::BuildAndRun { roc_file_arg_index })
                 }
 
                 None => {

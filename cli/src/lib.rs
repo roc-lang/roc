@@ -557,7 +557,7 @@ fn roc_run(
             // If possible, report the generated executable name relative to the current dir.
             let generated_filename = binary_path
                 .strip_prefix(env::current_dir().unwrap())
-                .unwrap_or(&binary_path);
+                .unwrap_or(binary_path);
 
             // No need to waste time freeing this memory,
             // since the process is about to exit anyway.
