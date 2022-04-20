@@ -6393,7 +6393,7 @@ I need all branches in an `if` to have the same type!
                 2│      exposes [ main, Foo ]
                                              ^
 
-                I am expecting the `imports` keyword next, like 
+                I am expecting the `imports` keyword next, like
 
                     imports [ Animal, default, tame ]
                 "#

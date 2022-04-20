@@ -3207,7 +3207,7 @@ fn to_generates_with_report<'a>(
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("with"),
-                    alloc.reflow(" keyword next, like "),
+                    alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
                     .parser_suggestion("with [ after, map ]")
@@ -3273,7 +3273,7 @@ fn to_provides_report<'a>(
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("provides"),
-                    alloc.reflow(" keyword next, like "),
+                    alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
                     .parser_suggestion("provides [ Animal, default, tame ]")
@@ -3338,7 +3338,7 @@ fn to_exposes_report<'a>(
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("exposes"),
-                    alloc.reflow(" keyword next, like "),
+                    alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
                     .parser_suggestion("exposes [ Animal, default, tame ]")
@@ -3402,7 +3402,7 @@ fn to_imports_report<'a>(
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("imports"),
-                    alloc.reflow(" keyword next, like "),
+                    alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
                     .parser_suggestion("imports [ Animal, default, tame ]")
@@ -3467,7 +3467,7 @@ fn to_requires_report<'a>(
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("requires"),
-                    alloc.reflow(" keyword next, like "),
+                    alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
                     .parser_suggestion("requires { main : Task I64 Str }")
@@ -3494,7 +3494,7 @@ fn to_requires_report<'a>(
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("requires"),
-                    alloc.reflow(" keyword next, like "),
+                    alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
                     .parser_suggestion("requires { main : Task I64 Str }")
@@ -3591,7 +3591,7 @@ fn to_packages_report<'a>(
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("packages"),
-                    alloc.reflow(" keyword next, like "),
+                    alloc.reflow(" keyword next, like"),
                 ]),
                 alloc.parser_suggestion("packages {}").indent(4),
             ]);
