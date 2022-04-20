@@ -1146,7 +1146,7 @@ fn constrain_when_branch_help(
         headers: SendMap::default(),
         vars: Vec::with_capacity(1),
         constraints: Vec::with_capacity(1),
-        delayed_is_open_constriants: Vec::new(),
+        delayed_is_open_constraints: Vec::new(),
     };
 
     // TODO investigate for error messages, is it better to unify all branches with a variable,
@@ -1178,7 +1178,7 @@ fn constrain_when_branch_help(
         // must introduce the headers from the pattern before constraining the guard
         state
             .constraints
-            .append(&mut state.delayed_is_open_constriants);
+            .append(&mut state.delayed_is_open_constraints);
         let state_constraints = constraints.and_constraint(state.constraints);
         let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
 
@@ -1186,7 +1186,7 @@ fn constrain_when_branch_help(
     } else {
         state
             .constraints
-            .append(&mut state.delayed_is_open_constriants);
+            .append(&mut state.delayed_is_open_constraints);
         let state_constraints = constraints.and_constraint(state.constraints);
         (state_constraints, ret_constraint)
     };
@@ -1278,7 +1278,7 @@ fn constrain_def_pattern(
         headers: SendMap::default(),
         vars: Vec::with_capacity(1),
         constraints: Vec::with_capacity(1),
-        delayed_is_open_constriants: vec![],
+        delayed_is_open_constraints: vec![],
     };
 
     constrain_pattern(
@@ -1376,7 +1376,7 @@ fn constrain_typed_def(
                 headers: SendMap::default(),
                 vars: Vec::with_capacity(arguments.len()),
                 constraints: Vec::with_capacity(1),
-                delayed_is_open_constriants: vec![],
+                delayed_is_open_constraints: vec![],
             };
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = *ret_var;
@@ -1856,7 +1856,7 @@ pub fn rec_defs_help(
                             headers: SendMap::default(),
                             vars: Vec::with_capacity(arguments.len()),
                             constraints: Vec::with_capacity(1),
-                            delayed_is_open_constriants: vec![],
+                            delayed_is_open_constraints: vec![],
                         };
                         let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
                         let mut pattern_types = Vec::with_capacity(state.vars.capacity());

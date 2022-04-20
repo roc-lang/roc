@@ -18,7 +18,7 @@ pub struct PatternState {
     pub headers: SendMap<Symbol, Loc<Type>>,
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
-    pub delayed_is_open_constriants: Vec<Constraint>,
+    pub delayed_is_open_constraints: Vec<Constraint>,
 }
 
 /// If there is a type annotation, the pattern state headers can be optimized by putting the
@@ -181,7 +181,7 @@ pub fn constrain_pattern(
             // so, we know that "x" (in this case, a tag union) must be open.
             if could_be_a_tag_union(expected.get_type_ref()) {
                 state
-                    .delayed_is_open_constriants
+                    .delayed_is_open_constraints
                     .push(constraints.is_open_type(expected.get_type()));
             }
         }
@@ -192,7 +192,7 @@ pub fn constrain_pattern(
         Identifier(symbol) | Shadowed(_, _, symbol) => {
             if could_be_a_tag_union(expected.get_type_ref()) {
                 state
-                    .delayed_is_open_constriants
+                    .delayed_is_open_constraints
                     .push(constraints.is_open_type(expected.get_type_ref().clone()));
             }
 
@@ -497,7 +497,7 @@ pub fn constrain_pattern(
             state.constraints.push(tag_con);
             state
                 .constraints
-                .append(&mut state.delayed_is_open_constriants);
+                .append(&mut state.delayed_is_open_constraints);
         }
 
         UnwrappedOpaque {
