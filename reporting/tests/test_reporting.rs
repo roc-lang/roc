@@ -6,7 +6,7 @@ extern crate roc_reporting;
 
 mod helpers;
 
-#[cfg(test)]
+#[cfg(never)]
 mod test_reporting {
     use crate::helpers::{can_expr, infer_expr, test_home, CanExprOut, ParseErrOut};
     use bumpalo::Bump;
