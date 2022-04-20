@@ -2379,12 +2379,12 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `x` record does not have a `.foo` field:
+                This `x` record doesn’t have a `foo` field:
 
                 3│  { x & foo: 3 }
                           ^^^^^^
 
-                In fact, `x` is a record with NO fields!
+                In fact, `x` is a record with no fields at all!
                 "#
             ),
         )
@@ -2405,18 +2405,19 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `x` record does not have a `.foo` field:
+                This `x` record doesn’t have a `foo` field:
 
                 3│  { x & foo: 3 }
                           ^^^^^^
 
-                This is usually a typo. Here are the `x` fields that are most similar:
+                There may be a typo. These `x` fields are the most similar:
 
-                    { fo : Num b
-                    , bar : Num a
+                    {
+                        fo : Num b,
+                        bar : Num a,
                     }
 
-                So maybe `.foo` should be `.fo`?
+                Maybe `foo:` should be `fo:` instead?
                 "#
             ),
         )
@@ -2441,17 +2442,18 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `r` record does not have a `.foo` field:
+                This `r` record doesn’t have a `foo` field:
 
                 3│      r2 = { r & foo: r.fo }
                                    ^^^^^^^^^
 
-                This is usually a typo. Here are the `r` fields that are most similar:
+                There may be a typo. These `r` fields are the most similar:
 
-                    { fo : I64
+                    {
+                        fo : I64,
                     }ext
 
-                So maybe `.foo` should be `.fo`?
+                Maybe `foo:` should be `fo:` instead?
                 "#
             ),
         )
@@ -2472,21 +2474,22 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `x` record does not have a `.foo` field:
+                This `x` record doesn’t have a `foo` field:
 
                 3│  { x & foo: 3 }
                           ^^^^^^
 
-                This is usually a typo. Here are the `x` fields that are most similar:
+                There may be a typo. These `x` fields are the most similar:
 
-                    { fo : Num c
-                    , foobar : Num d
-                    , bar : Num a
-                    , baz : Num b
-                    , ...
+                    {
+                        fo : Num c,
+                        foobar : Num d,
+                        bar : Num a,
+                        baz : Num b,
+                        …
                     }
 
-                So maybe `.foo` should be `.fo`?
+                Maybe `foo:` should be `fo:` instead?
                 "#
             ),
         )
@@ -5922,20 +5925,12 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This expression is used in an unexpected way:
+                This `foo` record doesn’t have a `if` field:
 
                 3│  foo.if
                     ^^^^^^
 
-                This `foo` value is a:
-
-                    {}
-
-                But you are trying to use it as:
-
-                    { if : a }b
-
-
+                In fact, `foo` is a record with no fields at all!
             "#
             ),
         )
@@ -6393,7 +6388,7 @@ I need all branches in an `if` to have the same type!
                 2│      exposes [ main, Foo ]
                                              ^
 
-                I am expecting the `imports` keyword next, like 
+                I am expecting the `imports` keyword next, like
 
                     imports [ Animal, default, tame ]
                 "#
@@ -8261,21 +8256,21 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
-                
+
                 The `Foo` alias is recursive in an invalid way:
-                
+
                 1│  Foo a : [ Thing (Bar a) ]
                     ^^^
-                
+
                 The `Foo` alias depends on itself through the following chain of
                 definitions:
-                
+
                     ┌─────┐
                     │     Foo
                     │     ↓
                     │     Bar
                     └─────┘
-                
+
                 Recursion in aliases is only allowed if recursion happens behind a
                 tagged union, at least one variant of which is not recursive.
                 "#
@@ -8852,11 +8847,11 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 Type : [ Constructor UnknownType ]
-                
+
                 insertHelper : UnknownType, Type -> Type
                 insertHelper = \h, m ->
                     when m is
-                        Constructor _ -> Constructor h 
+                        Constructor _ -> Constructor h
 
                 insertHelper
                 "#
