@@ -61,7 +61,7 @@ pub fn can_problem<'b>(
             let line =
                 r#" then remove it so future readers of your code don't wonder why it is there."#;
 
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc
                     .symbol_unqualified(symbol)
                     .append(alloc.reflow(" is not used anywhere in your code.")),
@@ -76,7 +76,7 @@ pub fn can_problem<'b>(
             severity = Severity::Warning;
         }
         Problem::UnusedImport(module_id, region) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("Nothing from "),
                     alloc.module(module_id),
@@ -94,7 +94,7 @@ pub fn can_problem<'b>(
             severity = Severity::Warning;
         }
         Problem::ExposedButNotDefined(symbol) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.symbol_unqualified(symbol).append(
                     alloc.reflow(" is listed as exposed, but it isn't defined in this module."),
                 ),
@@ -110,7 +110,7 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
         Problem::UnknownGeneratesWith(loc_ident) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc
                     .reflow("I don't know how to generate the ")
                     .append(alloc.ident(loc_ident.value))
@@ -127,7 +127,7 @@ pub fn can_problem<'b>(
         Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
             let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
 
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.symbol_unqualified(closure_symbol),
                     alloc.reflow(" doesn't use "),
@@ -152,7 +152,7 @@ pub fn can_problem<'b>(
             severity = Severity::Warning;
         }
         Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 if left_bin_op.value == right_bin_op.value {
                     alloc.concat([
                         alloc.reflow("Using more than one "),
@@ -181,7 +181,7 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
         Problem::UnsupportedPattern(BadPattern::UnderscoreInDef, region) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.reflow("Underscore patterns are not allowed in definitions"),
                 alloc.region(lines.convert_region(region)),
             ]);
@@ -209,7 +209,7 @@ pub fn can_problem<'b>(
                 alloc.reflow(" instead."),
             ];
 
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc
                     .reflow("This pattern is not allowed in ")
                     .append(alloc.reflow(this_thing)),
@@ -242,7 +242,7 @@ pub fn can_problem<'b>(
             variable_region,
             variable_name,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("The "),
                     alloc.type_variable(variable_name),
@@ -310,7 +310,7 @@ pub fn can_problem<'b>(
             record_region,
             replaced_region,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This record defines the "),
                     alloc.record_field(field_name.clone()),
@@ -359,7 +359,7 @@ pub fn can_problem<'b>(
             record_region,
             replaced_region,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This record type defines the "),
                     alloc.record_field(field_name.clone()),
@@ -394,7 +394,7 @@ pub fn can_problem<'b>(
             tag_region,
             replaced_region,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This tag union type defines the "),
                     alloc.tag_name(tag_name.clone()),
@@ -427,7 +427,7 @@ pub fn can_problem<'b>(
             ref annotation_pattern,
             ref def_pattern,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.reflow(
                     "This annotation does not match the definition immediately following it:",
                 ),
@@ -444,7 +444,7 @@ pub fn can_problem<'b>(
             alias_name: type_name,
             region,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This pattern in the definition of "),
                     alloc.symbol_unqualified(type_name),
@@ -464,7 +464,7 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
         Problem::InvalidHexadecimal(region) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.reflow("This unicode code point is invalid:"),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
@@ -481,7 +481,7 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
         Problem::InvalidUnicodeCodePt(region) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.reflow("This unicode code point is invalid:"),
                 alloc.region(lines.convert_region(region)),
                 alloc.reflow("Learn more about working with unicode in roc at TODO"),
@@ -491,7 +491,7 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
         Problem::InvalidInterpolation(region) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.reflow("This string interpolation is invalid:"),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
@@ -519,7 +519,7 @@ pub fn can_problem<'b>(
             def_region,
             differing_recursion_region,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.symbol_unqualified(alias),
                     alloc.reflow(" is a nested datatype. Here is one recursive usage of it:"),
@@ -551,7 +551,7 @@ pub fn can_problem<'b>(
                 }
             };
 
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This "),
                     alloc.text(kind_str),
@@ -575,7 +575,7 @@ pub fn can_problem<'b>(
             name,
             variables_region,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("The definition of the "),
                     alloc.symbol_unqualified(name),
@@ -593,7 +593,7 @@ pub fn can_problem<'b>(
         Problem::HasClauseIsNotAbility {
             region: clause_region,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.reflow(r#"The type referenced in this "has" clause is not an ability:"#),
                 alloc.region(lines.convert_region(clause_region)),
             ]);
@@ -608,7 +608,7 @@ pub fn can_problem<'b>(
             },
             ability,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("The definition of the "),
                     alloc.symbol_unqualified(name),
@@ -633,7 +633,7 @@ pub fn can_problem<'b>(
         }
 
         Problem::IllegalHasClause { region } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("A "),
                     alloc.keyword("has"),
@@ -654,7 +654,7 @@ pub fn can_problem<'b>(
             ability,
             region,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("The definition of the ability member "),
                     alloc.symbol_unqualified(member),
@@ -690,7 +690,7 @@ pub fn can_problem<'b>(
             span_has_clauses,
             mut bound_var_names,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("The definition of the ability member "),
                     alloc.symbol_unqualified(member),
@@ -717,7 +717,7 @@ pub fn can_problem<'b>(
             ability,
             region,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("The definition of the ability member "),
                     alloc.symbol_unqualified(member),
@@ -776,7 +776,7 @@ fn to_invalid_optional_value_report_help<'b>(
     field_region: Region,
     record_region: Region,
 ) -> RocDocBuilder<'b> {
-    alloc.stack(vec![
+    alloc.stack([
         alloc.concat([
             alloc.reflow("This record uses an optional value for the "),
             alloc.record_field(field_name),
@@ -808,7 +808,7 @@ fn to_bad_ident_expr_report<'b>(
         WeirdDotAccess(pos) | StrayDot(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
-            alloc.stack(vec![
+            alloc.stack([
                 alloc.reflow(r"I trying to parse a record field access here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
@@ -821,7 +821,7 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
 
-        WeirdAccessor(_pos) => alloc.stack(vec![
+        WeirdAccessor(_pos) => alloc.stack([
             alloc.reflow("I am very confused by this field access"),
             alloc.region(lines.convert_region(surroundings)),
             alloc.concat([
@@ -839,7 +839,7 @@ fn to_bad_ident_expr_report<'b>(
         WeirdDotQualified(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
-            alloc.stack(vec![
+            alloc.stack([
                 alloc.reflow("I am trying to parse a qualified name here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
@@ -854,7 +854,7 @@ fn to_bad_ident_expr_report<'b>(
         QualifiedTag(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
-            alloc.stack(vec![
+            alloc.stack([
                 alloc.reflow("I am trying to parse a qualified name here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
@@ -869,7 +869,7 @@ fn to_bad_ident_expr_report<'b>(
 
         Underscore(pos) => {
             let region = Region::new(surroundings.start(), pos);
-            alloc.stack(vec![
+            alloc.stack([
                 alloc.reflow("Underscores are not allowed in identifier names:"),
                 alloc.region_with_subregion(
                     lines.convert_region(surroundings),
@@ -891,7 +891,7 @@ fn to_bad_ident_expr_report<'b>(
             match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
                 LowercaseAccess(width) => {
                     let region = Region::new(pos, pos.bump_column(width));
-                    alloc.stack(vec![
+                    alloc.stack([
                         alloc.reflow("I am very confused by this field access:"),
                         alloc.region_with_subregion(
                             lines.convert_region(surroundings),
@@ -906,7 +906,7 @@ fn to_bad_ident_expr_report<'b>(
                 }
                 UppercaseAccess(width) => {
                     let region = Region::new(pos, pos.bump_column(width));
-                    alloc.stack(vec![
+                    alloc.stack([
                         alloc.reflow("I am very confused by this expression:"),
                         alloc.region_with_subregion(
                             lines.convert_region(surroundings),
@@ -925,7 +925,7 @@ fn to_bad_ident_expr_report<'b>(
                 Other(Some(c)) if c.is_lowercase() => {
                     let region =
                         Region::new(surroundings.start().bump_column(1), pos.bump_column(1));
-                    alloc.stack(vec![
+                    alloc.stack([
                         alloc.concat([
                             alloc.reflow("I am trying to parse "),
                             alloc.reflow(kind),
@@ -967,7 +967,7 @@ fn to_bad_ident_pattern_report<'b>(
         WeirdDotAccess(pos) | StrayDot(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
-            alloc.stack(vec![
+            alloc.stack([
                 alloc.reflow(r"I trying to parse a record field accessor here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
@@ -980,7 +980,7 @@ fn to_bad_ident_pattern_report<'b>(
             ])
         }
 
-        WeirdAccessor(_pos) => alloc.stack(vec![
+        WeirdAccessor(_pos) => alloc.stack([
             alloc.reflow("I am very confused by this field access"),
             alloc.region(lines.convert_region(surroundings)),
             alloc.concat([
@@ -998,7 +998,7 @@ fn to_bad_ident_pattern_report<'b>(
         WeirdDotQualified(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
-            alloc.stack(vec![
+            alloc.stack([
                 alloc.reflow("I am trying to parse a qualified name here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
@@ -1013,7 +1013,7 @@ fn to_bad_ident_pattern_report<'b>(
         QualifiedTag(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
-            alloc.stack(vec![
+            alloc.stack([
                 alloc.reflow("I am trying to parse a qualified name here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
@@ -1029,7 +1029,7 @@ fn to_bad_ident_pattern_report<'b>(
         Underscore(pos) => {
             let region = Region::from_pos(pos.sub(1));
 
-            alloc.stack(vec![
+            alloc.stack([
                 alloc.reflow("I am trying to parse an identifier here:"),
                 alloc.region_with_subregion(
                     lines.convert_region(surroundings),
@@ -1122,7 +1122,7 @@ fn report_shadowing<'b>(
         ShadowKind::Ability => "abilities",
     };
 
-    alloc.stack(vec![
+    alloc.stack([
         alloc
             .text("The ")
             .append(alloc.ident(shadow.value))
@@ -1217,7 +1217,7 @@ fn pretty_runtime_error<'b>(
                 ),
             };
 
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This"),
                     alloc.text(name),
@@ -1251,12 +1251,12 @@ fn pretty_runtime_error<'b>(
                 let qualified_suggestions = suggestions
                     .into_iter()
                     .map(|v| alloc.string(module_name.to_string() + "." + v.as_str()));
-                alloc.stack(vec![
+                alloc.stack([
                     alloc.reflow("Did you mean one of these?"),
                     alloc.vcat(qualified_suggestions).indent(4),
                 ])
             };
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("The "),
                     alloc.module_name(module_name),
@@ -1298,7 +1298,7 @@ fn pretty_runtime_error<'b>(
             title = SYNTAX_PROBLEM;
         }
         RuntimeError::MalformedTypeName(_box_str, surroundings) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.reflow(r"I am confused by this type name:"),
                 alloc.region(lines.convert_region(surroundings)),
                 alloc.concat([
@@ -1328,7 +1328,7 @@ fn pretty_runtime_error<'b>(
                 "small"
             };
 
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This float literal is too "),
                     alloc.text(big_or_small),
@@ -1352,7 +1352,7 @@ fn pretty_runtime_error<'b>(
                 .tip()
                 .append(alloc.reflow("Learn more about number literals at TODO"));
 
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This float literal contains an invalid digit:"),
                 ]),
@@ -1366,7 +1366,7 @@ fn pretty_runtime_error<'b>(
             title = SYNTAX_PROBLEM;
         }
         RuntimeError::InvalidFloat(FloatErrorKind::IntSuffix, region, _raw_str) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc
                     .concat([alloc
                         .reflow("This number literal is a float, but it has an integer suffix:")]),
@@ -1416,7 +1416,7 @@ fn pretty_runtime_error<'b>(
                 .tip()
                 .append(alloc.reflow("Learn more about number literals at TODO"));
 
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This "),
                     alloc.text(name),
@@ -1466,7 +1466,7 @@ fn pretty_runtime_error<'b>(
                 .tip()
                 .append(alloc.reflow("Learn more about number literals at TODO"));
 
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This integer literal is too "),
                     alloc.text(big_or_small),
@@ -1480,7 +1480,7 @@ fn pretty_runtime_error<'b>(
             title = SYNTAX_PROBLEM;
         }
         RuntimeError::InvalidInt(IntErrorKind::FloatSuffix, _base, region, _raw_str) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc
                     .concat([alloc
                         .reflow("This number literal is an integer, but it has a float suffix:")]),
@@ -1498,7 +1498,7 @@ fn pretty_runtime_error<'b>(
             region,
             _raw_str,
         ) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([alloc
                     .reflow("This integer literal overflows the type indicated by its suffix:")]),
                 alloc.region(lines.convert_region(region)),
@@ -1522,7 +1522,7 @@ fn pretty_runtime_error<'b>(
             region,
             _raw_str,
         ) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([alloc
                     .reflow("This integer literal underflows the type indicated by its suffix:")]),
                 alloc.region(lines.convert_region(region)),
@@ -1553,7 +1553,7 @@ fn pretty_runtime_error<'b>(
             title = SYNTAX_PROBLEM;
         }
         RuntimeError::InvalidRecordUpdate { region } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This expression cannot be updated"),
                     alloc.reflow(":"),
@@ -1589,13 +1589,11 @@ fn pretty_runtime_error<'b>(
             unreachable!("not currently reported (but can blow up at runtime)")
         }
         RuntimeError::ExposedButNotDefined(symbol) => {
-            doc = alloc.stack(vec![alloc
+            doc = alloc.stack([alloc
                 .symbol_unqualified(symbol)
                 .append(alloc.reflow(" was listed as exposed in "))
                 .append(alloc.module(symbol.module_id()))
-                .append(
-                    alloc.reflow(", but it was not defined anywhere in that module."),
-                )]);
+                .append(alloc.reflow(", but it was not defined anywhere in that module."))]);
 
             title = MISSING_DEFINITION;
         }
@@ -1604,7 +1602,7 @@ fn pretty_runtime_error<'b>(
                 .tip()
                 .append(alloc.reflow("Learn more about character literals at TODO"));
 
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([alloc.reflow("This character literal is empty.")]),
                 alloc.region(lines.convert_region(region)),
                 tip,
@@ -1617,7 +1615,7 @@ fn pretty_runtime_error<'b>(
                 .tip()
                 .append(alloc.reflow("Learn more about character literals at TODO"));
 
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("This character literal contains more than one code point.")
                 ]),
@@ -1648,7 +1646,7 @@ fn pretty_runtime_error<'b>(
             } else {
                 let qualified_suggestions =
                     suggestions.into_iter().map(|v| alloc.string(v.to_string()));
-                alloc.stack(vec![
+                alloc.stack([
                     alloc
                         .tip()
                         .append(alloc.reflow("Did you mean one of these opaque types?")),
@@ -1666,7 +1664,7 @@ fn pretty_runtime_error<'b>(
             ];
 
             if let Some(defined_alias_region) = opt_defined_alias {
-                stack.push(alloc.stack(vec![
+                stack.push(alloc.stack([
                     alloc.note("There is an alias of the same name:"),
                     alloc.region(lines.convert_region(defined_alias_region)),
                 ]));
@@ -1683,7 +1681,7 @@ fn pretty_runtime_error<'b>(
             referenced_region,
             imported_region,
         } => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("The unwrapped opaque type "),
                     alloc.type_str(opaque.as_inline_str().as_str()),
@@ -1700,7 +1698,7 @@ fn pretty_runtime_error<'b>(
             title = OPAQUE_DECLARED_OUTSIDE_SCOPE;
         }
         RuntimeError::OpaqueNotApplied(loc_ident) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.reflow("This opaque type is not applied to an argument:"),
                 alloc.region(lines.convert_region(loc_ident.region)),
                 alloc.note("Opaque types always wrap exactly one argument!"),
@@ -1709,7 +1707,7 @@ fn pretty_runtime_error<'b>(
             title = OPAQUE_NOT_APPLIED;
         }
         RuntimeError::OpaqueAppliedToMultipleArgs(region) => {
-            doc = alloc.stack(vec![
+            doc = alloc.stack([
                 alloc.reflow("This opaque type is applied to multiple arguments:"),
                 alloc.region(lines.convert_region(region)),
                 alloc.note("Opaque types always wrap exactly one argument!"),
@@ -1738,7 +1736,7 @@ fn to_circular_def_doc<'b>(
                 " value is defined directly in terms of itself, causing an infinite loop.",
             )),
         [first, others @ ..] => {
-            alloc.stack(vec![
+            alloc.stack([
                 alloc
                     .reflow("The ")
                     .append(alloc.symbol_unqualified(first.symbol))
@@ -1793,7 +1791,7 @@ fn not_found<'b>(
         if suggestions.is_empty() {
             no_suggestion_details
         } else {
-            alloc.stack(vec![
+            alloc.stack([
                 yes_suggestion_details,
                 alloc
                     .vcat(suggestions.into_iter().map(|v| alloc.string(v.to_string())))
@@ -1802,7 +1800,7 @@ fn not_found<'b>(
         }
     };
 
-    alloc.stack(vec![
+    alloc.stack([
         alloc.concat([
             alloc.reflow("I cannot find a `"),
             alloc.string(name.to_string()),
@@ -1845,7 +1843,7 @@ fn module_not_found<'b>(
                 alloc.reflow(" missing up-top"),
             ])
         } else {
-            alloc.stack(vec![
+            alloc.stack([
                 alloc.reflow("Is there an import missing? Perhaps there is a typo. Did you mean one of these?"),
                 alloc
                     .vcat(suggestions.into_iter().map(|v| alloc.string(v.to_string())))
@@ -1854,7 +1852,7 @@ fn module_not_found<'b>(
         }
     };
 
-    alloc.stack(vec![
+    alloc.stack([
         alloc.concat([
             alloc.reflow("The `"),
             alloc.string(name.to_string()),

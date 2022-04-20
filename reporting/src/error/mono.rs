@@ -17,7 +17,7 @@ pub fn mono_problem<'b>(
     match problem {
         PatternProblem(Incomplete(region, context, missing)) => match context {
             BadArg => {
-                let doc = alloc.stack(vec![
+                let doc = alloc.stack([
                     alloc.reflow("This pattern does not cover all the possibilities:"),
                     alloc.region(lines.convert_region(region)),
                     alloc.reflow("Other possibilities include:"),
@@ -40,7 +40,7 @@ pub fn mono_problem<'b>(
                 }
             }
             BadDestruct => {
-                let doc = alloc.stack(vec![
+                let doc = alloc.stack([
                     alloc.reflow("This pattern does not cover all the possibilities:"),
                     alloc.region(lines.convert_region(region)),
                     alloc.reflow("Other possibilities include:"),
@@ -64,7 +64,7 @@ pub fn mono_problem<'b>(
                 }
             }
             BadCase => {
-                let doc = alloc.stack(vec![
+                let doc = alloc.stack([
                     alloc.concat([
                         alloc.reflow("This "),
                         alloc.keyword("when"),
@@ -93,7 +93,7 @@ pub fn mono_problem<'b>(
             branch_region,
             index,
         }) => {
-            let doc = alloc.stack(vec![
+            let doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("The "),
                     alloc.string(index.ordinal()),

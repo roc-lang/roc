@@ -135,10 +135,7 @@ impl<'b> Report<'b> {
                 "─".repeat(80 - (self.title.len() + 4))
             );
 
-            alloc.stack(vec![
-                alloc.text(header).annotate(Annotation::Header),
-                self.doc,
-            ])
+            alloc.stack([alloc.text(header).annotate(Annotation::Header), self.doc])
         }
     }
 

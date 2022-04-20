@@ -79,7 +79,7 @@ pub fn type_problem<'b>(
 
                     let found_arguments = alloc.text(type_got.to_string());
 
-                    let doc = alloc.stack(vec![
+                    let doc = alloc.stack([
                         alloc.concat([
                             alloc.reflow("The "),
                             alloc.symbol_unqualified(symbol),
@@ -125,7 +125,7 @@ pub fn type_problem<'b>(
             report(title, doc, filename)
         }
         BadExprMissingAbility(region, category, found, incomplete) => {
-            let note = alloc.stack(vec![
+            let note = alloc.stack([
                 alloc.reflow("The ways this expression is used requires that the following types implement the following abilities, which they do not:"),
                 alloc.type_block(alloc.stack(incomplete.iter().map(|incomplete| {
                     symbol_does_not_implement(alloc, incomplete.typ, incomplete.ability)
@@ -159,7 +159,7 @@ pub fn type_problem<'b>(
             Some(report)
         }
         BadPatternMissingAbility(region, category, found, incomplete) => {
-            let note = alloc.stack(vec![
+            let note = alloc.stack([
                 alloc.reflow("The ways this expression is used requires that the following types implement the following abilities, which they do not:"),
                 alloc.type_block(alloc.stack(incomplete.iter().map(|incomplete| {
                     symbol_does_not_implement(alloc, incomplete.typ, incomplete.ability)
@@ -255,7 +255,7 @@ fn report_shadowing<'b>(
 ) -> RocDocBuilder<'b> {
     let line = r#"Since these types have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
 
-    alloc.stack(vec![
+    alloc.stack([
         alloc
             .text("The ")
             .append(alloc.ident(shadow.value))
@@ -278,7 +278,7 @@ pub fn cyclic_alias<'b>(
         alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive.");
 
     let doc = if others.is_empty() {
-        alloc.stack(vec![
+        alloc.stack([
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
@@ -287,7 +287,7 @@ pub fn cyclic_alias<'b>(
             when_is_recursion_legal,
         ])
     } else {
-        alloc.stack(vec![
+        alloc.stack([
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
@@ -477,7 +477,7 @@ fn to_expr_report<'b>(
             Report {
                 filename,
                 title: "TYPE MISMATCH".to_string(),
-                doc: alloc.stack(vec![
+                doc: alloc.stack([
                     alloc.text("This expression is used in an unexpected way:"),
                     alloc.region(lines.convert_region(expr_region)),
                     comparison,
@@ -586,7 +586,7 @@ fn to_expr_report<'b>(
             Report {
                 title: "TYPE MISMATCH".to_string(),
                 filename,
-                doc: alloc.stack(vec![
+                doc: alloc.stack([
                     alloc.text("Something is off with the ").append(thing),
                     {
                         // for typed bodies, include the line(s) with the signature
@@ -1080,7 +1080,7 @@ fn to_expr_report<'b>(
                         stack.push(does_not_implement(alloc, err_type, ability));
                     }
 
-                    let hint = alloc.stack(vec![
+                    let hint = alloc.stack([
                         alloc.concat([
                             alloc.note(""),
                             alloc.reflow("Some types in this specialization don't implement the abilities they are expected to. I found the following missing implementations:"),
@@ -1123,7 +1123,7 @@ fn to_expr_report<'b>(
                     alloc.reflow(" says it must match:"),
                 ]);
 
-                let note = alloc.stack(vec![
+                let note = alloc.stack([
                     alloc.concat([
                         alloc.note(""),
                         alloc.reflow("The specialized type is too general, and does not provide a concrete type where a type variable is bound to an ability."),
@@ -1527,7 +1527,7 @@ fn to_pattern_report<'b>(
 
     match expected {
         PExpected::NoExpectation(expected_type) => {
-            let doc = alloc.stack(vec![
+            let doc = alloc.stack([
                 alloc.text("This pattern is being used in an unexpected way:"),
                 alloc.region(lines.convert_region(expr_region)),
                 pattern_type_comparison(
@@ -1555,7 +1555,7 @@ fn to_pattern_report<'b>(
                     Some(n) => alloc.symbol_unqualified(n),
                     None => alloc.text(" this definition "),
                 };
-                let doc = alloc.stack(vec![
+                let doc = alloc.stack([
                     alloc
                         .text("The ")
                         .append(alloc.text(index.ordinal()))
@@ -1592,7 +1592,7 @@ fn to_pattern_report<'b>(
             }
             PReason::WhenMatch { index } => {
                 if index == HumanIndex::FIRST {
-                    let doc = alloc.stack(vec![
+                    let doc = alloc.stack([
                         alloc
                             .text("The 1st pattern in this ")
                             .append(alloc.keyword("when"))
@@ -1625,7 +1625,7 @@ fn to_pattern_report<'b>(
                         severity: Severity::RuntimeError,
                     }
                 } else {
-                    let doc = alloc.stack(vec![
+                    let doc = alloc.stack([
                         alloc
                             .string(format!("The {} pattern in this ", index.ordinal()))
                             .append(alloc.keyword("when"))
@@ -1735,13 +1735,13 @@ fn to_circular_report<'b>(
         title: "CIRCULAR TYPE".to_string(),
         filename,
         doc: {
-            alloc.stack(vec![
+            alloc.stack([
                 alloc
                     .reflow("I'm inferring a weird self-referential type for ")
                     .append(alloc.symbol_unqualified(symbol))
                     .append(alloc.text(":")),
                 alloc.region(lines.convert_region(region)),
-                alloc.stack(vec![
+                alloc.stack([
                     alloc.reflow(
                         "Here is my best effort at writing down the type. \
                         You will see ∞ for parts of the type that repeat \
@@ -3226,7 +3226,7 @@ fn type_problem_to_pretty<'b>(
                     Can you use an open tag union?",
                 ));
 
-                alloc.stack(vec![tip1, tip2])
+                alloc.stack([tip1, tip2])
             }
 
             Some((last, init)) => {
@@ -3249,7 +3249,7 @@ fn type_problem_to_pretty<'b>(
                     Can you use an open tag union?",
                 ));
 
-                alloc.stack(vec![tip1, tip2])
+                alloc.stack([tip1, tip2])
             }
         },
         (OptionalRequiredMismatch(field), _) => alloc.tip().append(alloc.concat([
@@ -3309,7 +3309,7 @@ fn report_record_field_typo<'b>(
         actual_fields.into_iter().collect::<Vec<_>>(),
     );
 
-    let doc = alloc.stack(vec![
+    let doc = alloc.stack([
         header,
         alloc.region(lines.convert_region(field_region)),
         if suggestions.is_empty() {
@@ -3330,7 +3330,7 @@ fn report_record_field_typo<'b>(
                 None => alloc.text("fields on the record"),
             };
 
-            alloc.stack(vec![
+            alloc.stack([
                 alloc.concat([
                     alloc.reflow("There may be a typo. These "),
                     r_doc,
