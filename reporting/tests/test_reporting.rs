@@ -8256,21 +8256,21 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
-                
+
                 The `Foo` alias is recursive in an invalid way:
-                
+
                 1│  Foo a : [ Thing (Bar a) ]
                     ^^^
-                
+
                 The `Foo` alias depends on itself through the following chain of
                 definitions:
-                
+
                     ┌─────┐
                     │     Foo
                     │     ↓
                     │     Bar
                     └─────┘
-                
+
                 Recursion in aliases is only allowed if recursion happens behind a
                 tagged union, at least one variant of which is not recursive.
                 "#
@@ -8847,11 +8847,11 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 Type : [ Constructor UnknownType ]
-                
+
                 insertHelper : UnknownType, Type -> Type
                 insertHelper = \h, m ->
                     when m is
-                        Constructor _ -> Constructor h 
+                        Constructor _ -> Constructor h
 
                 insertHelper
                 "#
