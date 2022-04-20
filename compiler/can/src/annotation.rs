@@ -125,7 +125,7 @@ impl IntroducedVariables {
         self.lambda_sets.extend(other.lambda_sets.iter().copied());
         self.inferred.extend(other.inferred.iter().copied());
         self.host_exposed_aliases
-            .extend(other.host_exposed_aliases.clone());
+            .extend(other.host_exposed_aliases.iter().map(|(k, v)| (*k, *v)));
 
         self.named.extend(other.named.iter().cloned());
         self.able.extend(other.able.iter().cloned());

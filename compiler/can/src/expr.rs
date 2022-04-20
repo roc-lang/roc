@@ -487,8 +487,7 @@ pub fn canonicalize_expr<'a>(
                         }
                         Ok((name, opaque_def)) => {
                             let argument = Box::new(args.pop().unwrap());
-                            output.references.referenced_type_defs.insert(name);
-                            output.references.type_lookups.insert(name);
+                            output.references.insert_type_lookup(name);
 
                             let (type_arguments, lambda_set_variables, specialized_def_type) =
                                 freshen_opaque_def(var_store, opaque_def);
@@ -685,7 +684,7 @@ pub fn canonicalize_expr<'a>(
             // filter out aliases
             debug_assert!(captured_symbols
                 .iter()
-                .all(|s| !output.references.referenced_type_defs.contains(s)));
+                .all(|s| !output.references.references_type_def(*s)));
             // captured_symbols.retain(|s| !output.references.referenced_type_defs.contains(s));
 
             // filter out functions that don't close over anything

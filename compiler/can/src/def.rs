@@ -334,8 +334,7 @@ pub fn canonicalize_defs<'a>(
 
                 // Record all the annotation's references in output.references.lookups
                 for symbol in can_ann.references {
-                    output.references.type_lookups.insert(symbol);
-                    output.references.referenced_type_defs.insert(symbol);
+                    output.references.insert_type_lookup(symbol);
                 }
 
                 let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
@@ -445,8 +444,7 @@ pub fn canonicalize_defs<'a>(
 
             // Record all the annotation's references in output.references.lookups
             for symbol in member_annot.references {
-                output.references.type_lookups.insert(symbol);
-                output.references.referenced_type_defs.insert(symbol);
+                output.references.insert_type_lookup(symbol);
             }
 
             let name_region = member.name.region;
@@ -1162,8 +1160,7 @@ fn canonicalize_pending_value_def<'a>(
             // Record all the annotation's references in output.references.lookups
 
             for symbol in type_annotation.references.iter() {
-                output.references.type_lookups.insert(*symbol);
-                output.references.referenced_type_defs.insert(*symbol);
+                output.references.insert_type_lookup(*symbol);
             }
 
             add_annotation_aliases(&type_annotation, aliases);
@@ -1282,8 +1279,7 @@ fn canonicalize_pending_value_def<'a>(
 
             // Record all the annotation's references in output.references.lookups
             for symbol in type_annotation.references.iter() {
-                output.references.type_lookups.insert(*symbol);
-                output.references.referenced_type_defs.insert(*symbol);
+                output.references.insert_type_lookup(*symbol);
             }
 
             add_annotation_aliases(&type_annotation, aliases);

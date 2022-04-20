@@ -45,10 +45,10 @@ impl Procedure {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct References {
     pub bound_symbols: VecSet<Symbol>,
-    pub type_lookups: VecSet<Symbol>,
+    type_lookups: VecSet<Symbol>,
     pub value_lookups: VecSet<Symbol>,
     /// Aliases or opaque types referenced
-    pub referenced_type_defs: VecSet<Symbol>,
+    referenced_type_defs: VecSet<Symbol>,
     pub calls: VecSet<Symbol>,
 }
 
@@ -74,5 +74,18 @@ impl References {
 
     pub fn has_type_lookup(&self, symbol: Symbol) -> bool {
         self.type_lookups.contains(&symbol)
+    }
+
+    pub fn references_type_def(&self, symbol: Symbol) -> bool {
+        self.referenced_type_defs.contains(&symbol)
+    }
+
+    pub fn insert_type_lookup(&mut self, symbol: Symbol) {
+        self.type_lookups.insert(symbol);
+        self.referenced_type_defs.insert(symbol);
+    }
+
+    pub fn type_lookups(&self) -> impl Iterator<Item = &Symbol> {
+        self.type_lookups.iter()
     }
 }

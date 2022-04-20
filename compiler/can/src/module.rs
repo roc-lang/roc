@@ -329,8 +329,8 @@ pub fn canonicalize_module_defs<'a>(
     let mut referenced_types = VecSet::default();
 
     // Gather up all the symbols that were referenced across all the defs' lookups.
-    referenced_values.extend(output.references.value_lookups);
-    referenced_types.extend(output.references.type_lookups);
+    referenced_values.extend(output.references.value_lookups.iter().copied());
+    referenced_types.extend(output.references.type_lookups().copied());
 
     // Gather up all the symbols that were referenced across all the defs' calls.
     referenced_values.extend(output.references.calls);
@@ -528,8 +528,8 @@ pub fn canonicalize_module_defs<'a>(
             }
 
             // Incorporate any remaining output.lookups entries into references.
-            referenced_values.extend(output.references.value_lookups);
-            referenced_types.extend(output.references.type_lookups);
+            referenced_values.extend(output.references.value_lookups.iter().copied());
+            referenced_types.extend(output.references.type_lookups().copied());
 
             // Incorporate any remaining output.calls entries into references.
             referenced_values.extend(output.references.calls);
