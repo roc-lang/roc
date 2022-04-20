@@ -588,7 +588,7 @@ pub fn constrain_expr(
             // Infer the condition expression's type.
             let cond_var = *cond_var;
             let cond_type = Variable(cond_var);
-            let expr_con = constrain_expr(
+            let cond_constraint = constrain_expr(
                 constraints,
                 env,
                 region,
@@ -647,7 +647,7 @@ pub fn constrain_expr(
             // constraints.
             let mut pattern_vars = Vec::with_capacity(branches.len());
             let mut pattern_headers = SendMap::default();
-            let mut pattern_cons = Vec::with_capacity(branches.len());
+            let mut pattern_cons = Vec::with_capacity(branches.len() + 1);
             let mut branch_cons = Vec::with_capacity(branches.len());
 
             for (index, when_branch) in branches.iter().enumerate() {
@@ -698,9 +698,12 @@ pub fn constrain_expr(
             // the entire when-expression.
             // branch_cons.extend(pattern_cons);
             // branch_constraints.push(constraints.and_constraint(pattern_cons));
-            let mut total_cons = Vec::with_capacity(1 + 2 * branches.len() + 1);
-            // total_cons.push(expr_con);
-            pattern_cons.push(expr_con);
+            let mut total_cons = Vec::with_capacity(2 * branches.len() + 1);
+
+            // After solving the condition variable with what's expected from the branch patterns,
+            // check it against the condition expression.
+            // This is basically exhaustiveness checking, but doesn't check for redundancy.
+            pattern_cons.push(cond_constraint);
 
             // Solve all the pattern constraints together, introducing variables in the pattern as
             // need be before solving the bodies.
@@ -1143,6 +1146,7 @@ fn constrain_when_branch_help(
         headers: SendMap::default(),
         vars: Vec::with_capacity(1),
         constraints: Vec::with_capacity(1),
+        delayed_is_open_constriants: Vec::new(),
     };
 
     // TODO investigate for error messages, is it better to unify all branches with a variable,
@@ -1172,11 +1176,17 @@ fn constrain_when_branch_help(
         );
 
         // must introduce the headers from the pattern before constraining the guard
+        state
+            .constraints
+            .extend(state.delayed_is_open_constriants.drain(..));
         let state_constraints = constraints.and_constraint(state.constraints);
         let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
 
         (state_constraints, inner)
     } else {
+        state
+            .constraints
+            .extend(state.delayed_is_open_constriants.drain(..));
         let state_constraints = constraints.and_constraint(state.constraints);
         (state_constraints, ret_constraint)
     };
@@ -1268,6 +1278,7 @@ fn constrain_def_pattern(
         headers: SendMap::default(),
         vars: Vec::with_capacity(1),
         constraints: Vec::with_capacity(1),
+        delayed_is_open_constriants: vec![],
     };
 
     constrain_pattern(
@@ -1365,6 +1376,7 @@ fn constrain_typed_def(
                 headers: SendMap::default(),
                 vars: Vec::with_capacity(arguments.len()),
                 constraints: Vec::with_capacity(1),
+                delayed_is_open_constriants: vec![],
             };
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = *ret_var;
@@ -1844,6 +1856,7 @@ pub fn rec_defs_help(
                             headers: SendMap::default(),
                             vars: Vec::with_capacity(arguments.len()),
                             constraints: Vec::with_capacity(1),
+                            delayed_is_open_constriants: vec![],
                         };
                         let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
                         let mut pattern_types = Vec::with_capacity(state.vars.capacity());

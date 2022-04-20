@@ -1183,6 +1183,8 @@ fn solve(
                 let actual =
                     either_type_index_to_var(constraints, subs, rank, pools, aliases, *type_index);
 
+                // let content = subs.get_content_without_compacting(actual);
+                // let fmt = roc_types::subs::SubsFmtContent(&content, subs);
                 let mut stack = vec![actual];
                 while let Some(var) = stack.pop() {
                     let mut desc = subs.get(var);
@@ -1190,7 +1192,7 @@ fn solve(
                         Content::Structure(FlatType::TagUnion(tags, ext))
                             if matches!(
                                 subs.get_content_without_compacting(ext),
-                                Content::Structure(FlatType::EmptyTagUnion)
+                                _ // Content::Structure(FlatType::EmptyTagUnion)
                             ) =>
                         {
                             let new_ext = subs.fresh_unnamed_flex_var();

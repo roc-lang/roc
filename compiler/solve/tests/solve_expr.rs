@@ -6177,4 +6177,31 @@ mod solve_expr {
             ],
         )
     }
+
+    #[test]
+    fn nested_open_tag_union() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ go ] to "./platform"
+
+                Expr : [
+                    Wrap Expr,
+                    Val I64,
+                ]
+
+                go : Expr -> Expr
+                go = \e ->
+                        when P e is
+                            P (Wrap (Val _)) -> Wrap e
+
+                            # This branch should force the first argument to `P` and
+                            # the first argument to `Wrap` to be an open tag union.
+                            # This tests checks that we don't regress on that.
+                            P y1 -> Wrap y1
+                "#
+            ),
+            indoc!(r#"Expr -> Expr"#),
+        )
+    }
 }
