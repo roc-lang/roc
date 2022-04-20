@@ -61,6 +61,7 @@ mod cli_run {
             .replace(ANSI_STYLE_CODES.bold, "")
             .replace(ANSI_STYLE_CODES.underline, "")
             .replace(ANSI_STYLE_CODES.reset, "")
+            .replace(ANSI_STYLE_CODES.color_reset, "")
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
