@@ -333,7 +333,7 @@ pub fn canonicalize_module_defs<'a>(
     referenced_types.extend(output.references.type_lookups().copied());
 
     // Gather up all the symbols that were referenced across all the defs' calls.
-    referenced_values.extend(output.references.calls);
+    referenced_values.extend(output.references.calls().copied());
 
     // Gather up all the symbols that were referenced from other modules.
     referenced_values.extend(env.qualified_value_lookups.iter().copied());
@@ -532,7 +532,7 @@ pub fn canonicalize_module_defs<'a>(
             referenced_types.extend(output.references.type_lookups().copied());
 
             // Incorporate any remaining output.calls entries into references.
-            referenced_values.extend(output.references.calls);
+            referenced_values.extend(output.references.calls().copied());
 
             // Gather up all the symbols that were referenced from other modules.
             referenced_values.extend(env.qualified_value_lookups.iter().copied());

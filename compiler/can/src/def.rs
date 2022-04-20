@@ -1642,7 +1642,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
     let mut stack = Vec::new();
 
     if let Some(references) = closures.get(&symbol) {
-        for v in references.calls.iter() {
+        for v in references.calls() {
             stack.push(*v);
         }
 
@@ -1658,7 +1658,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
                 // if it calls any functions
                 if let Some(nested_references) = closures.get(&nested_symbol) {
                     // add its called to the stack
-                    for v in nested_references.calls.iter() {
+                    for v in nested_references.calls() {
                         stack.push(*v);
                     }
                 }

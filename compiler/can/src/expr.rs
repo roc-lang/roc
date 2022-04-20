@@ -517,7 +517,7 @@ pub fn canonicalize_expr<'a>(
 
                 let expr = match fn_expr.value {
                     Var(symbol) => {
-                        output.references.calls.insert(symbol);
+                        output.references.insert_call(symbol);
 
                         // we're tail-calling a symbol by name, check if it's the tail-callable symbol
                         output.tail_call = match &env.tailcallable_symbol {
@@ -1102,7 +1102,7 @@ pub fn local_successors_with_duplicates<'a>(
 ) -> Vec<Symbol> {
     let mut answer: Vec<_> = references.value_lookups().copied().collect();
 
-    let mut stack: Vec<_> = references.calls.iter().copied().collect();
+    let mut stack: Vec<_> = references.calls().copied().collect();
     let mut seen = Vec::new();
 
     while let Some(symbol) = stack.pop() {
@@ -1112,7 +1112,7 @@ pub fn local_successors_with_duplicates<'a>(
 
         if let Some(references) = closures.get(&symbol) {
             answer.extend(references.value_lookups().copied());
-            stack.extend(references.calls.iter().copied());
+            stack.extend(references.calls().copied());
 
             seen.push(symbol);
         }
@@ -1720,7 +1720,7 @@ fn flatten_str_lines<'a>(
                 Interpolated(loc_expr) => {
                     if is_valid_interpolation(loc_expr.value) {
                         // Interpolations desugar to Str.concat calls
-                        output.references.calls.insert(Symbol::STR_CONCAT);
+                        output.references.insert_call(Symbol::STR_CONCAT);
 
                         if !buf.is_empty() {
                             segments.push(StrSegment::Plaintext(buf.into()));

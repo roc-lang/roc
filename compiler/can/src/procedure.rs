@@ -49,7 +49,7 @@ pub struct References {
     value_lookups: VecSet<Symbol>,
     /// Aliases or opaque types referenced
     referenced_type_defs: VecSet<Symbol>,
-    pub calls: VecSet<Symbol>,
+    calls: VecSet<Symbol>,
 }
 
 impl References {
@@ -88,6 +88,10 @@ impl References {
         self.bound_symbols.insert(symbol);
     }
 
+    pub fn insert_call(&mut self, symbol: Symbol) {
+        self.calls.insert(symbol);
+    }
+
     pub fn remove_value_lookup(&mut self, symbol: &Symbol) {
         self.value_lookups.remove(symbol);
     }
@@ -107,5 +111,9 @@ impl References {
 
     pub fn bound_symbols(&self) -> impl Iterator<Item = &Symbol> {
         self.bound_symbols.iter()
+    }
+
+    pub fn calls(&self) -> impl Iterator<Item = &Symbol> {
+        self.calls.iter()
     }
 }
