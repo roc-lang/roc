@@ -1,3 +1,4 @@
+use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_module::called_via::{BinOp, CalledVia};
@@ -10,8 +11,6 @@ use roc_types::types::{
     AliasKind, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
 };
 use std::path::PathBuf;
-
-use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use ven_pretty::DocAllocator;
 
 const DUPLICATE_NAME: &str = "DUPLICATE NAME";
@@ -435,6 +434,36 @@ fn to_expr_report<'b>(
 ) -> Report<'b> {
     match expected {
         Expected::NoExpectation(expected_type) => {
+            // If it looks like a record field typo, early return with a special report for that.
+            if let ErrorType::Record(expected_fields, _) =
+                expected_type.clone().unwrap_structural_alias()
+            {
+                if let ErrorType::Record(found_fields, found_ext) =
+                    found.clone().unwrap_structural_alias()
+                {
+                    let expected_set: MutSet<_> = expected_fields.keys().cloned().collect();
+                    let found_set: MutSet<_> = found_fields.keys().cloned().collect();
+                    let mut diff = expected_set.difference(&found_set);
+
+                    if let Some(field) = diff.next() {
+                        let opt_sym = match category {
+                            Category::Lookup(name) => Some(name),
+                            _ => None,
+                        };
+                        return report_record_field_typo(
+                            alloc,
+                            lines,
+                            filename,
+                            opt_sym,
+                            field,
+                            expr_region,
+                            found_fields,
+                            found_ext,
+                        );
+                    }
+                }
+            };
+
             let comparison = type_comparison(
                 alloc,
                 found,
@@ -854,70 +883,16 @@ fn to_expr_report<'b>(
                                 alloc.reflow("But this update needs it to be compatible with:"),
                                 None,
                             ),
-                            Some((field, field_region)) => {
-                                let r_doc = alloc.symbol_unqualified(symbol);
-                                let f_doc = alloc
-                                    .text(field.as_str().to_string())
-                                    .annotate(Annotation::Typo);
-
-                                let header = alloc.concat(vec![
-                                    alloc.reflow("The "),
-                                    r_doc.clone(),
-                                    alloc.reflow(" record does not have a "),
-                                    f_doc.clone(),
-                                    alloc.reflow(" field:"),
-                                ]);
-
-                                let mut suggestions = suggest::sort(
-                                    field.as_str(),
-                                    actual_fields.into_iter().collect::<Vec<_>>(),
-                                );
-
-                                let doc = alloc.stack(vec![
-                                    header,
-                                    alloc.region(lines.convert_region(*field_region)),
-                                    if suggestions.is_empty() {
-                                        alloc.concat(vec![
-                                            alloc.reflow("In fact, "),
-                                            r_doc,
-                                            alloc.reflow(" is a record with NO fields!"),
-                                        ])
-                                    } else {
-                                        let f = suggestions.remove(0);
-                                        let fs = suggestions;
-
-                                        alloc.stack(vec![
-                                            alloc.concat(vec![
-                                                alloc.reflow("There may be a typo. These "),
-                                                r_doc,
-                                                alloc.reflow(" fields are the most similar:"),
-                                            ]),
-                                            report_text::to_suggestion_record(
-                                                alloc,
-                                                f.clone(),
-                                                fs,
-                                                ext,
-                                            ),
-                                            alloc.concat(vec![
-                                                alloc.reflow("Maybe "),
-                                                f_doc,
-                                                alloc.reflow(" should be "),
-                                                alloc
-                                                    .text(f.0.as_str().to_string())
-                                                    .annotate(Annotation::TypoSuggestion),
-                                                alloc.reflow("?"),
-                                            ]),
-                                        ])
-                                    },
-                                ]);
-
-                                Report {
-                                    filename,
-                                    title: "TYPE MISMATCH".to_string(),
-                                    doc,
-                                    severity: Severity::RuntimeError,
-                                }
-                            }
+                            Some((field, field_region)) => report_record_field_typo(
+                                alloc,
+                                lines,
+                                filename,
+                                Some(symbol),
+                                field,
+                                *field_region,
+                                actual_fields,
+                                ext,
+                            ),
                         }
                     }
                     _ => report_bad_type(
@@ -3297,5 +3272,88 @@ fn type_problem_to_pretty<'b>(
             alloc.type_str("@Age 23"),
             alloc.reflow("."),
         ])),
+    }
+}
+
+fn report_record_field_typo<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    opt_sym: Option<Symbol>,
+    field: &Lowercase,
+    field_region: Region,
+    actual_fields: SendMap<Lowercase, RecordField<ErrorType>>,
+    ext: TypeExt,
+) -> Report<'b> {
+    let f_doc = alloc
+        .text(field.as_str().to_string())
+        .annotate(Annotation::Typo);
+
+    let header = {
+        let r_doc = match opt_sym {
+            Some(symbol) => alloc.symbol_unqualified(symbol).append(" "),
+            None => alloc.text(""),
+        };
+
+        alloc.concat([
+            alloc.reflow("This "),
+            r_doc,
+            alloc.reflow("record doesn’t have a "),
+            f_doc.clone(),
+            alloc.reflow(" field:"),
+        ])
+    };
+
+    let mut suggestions = suggest::sort(
+        field.as_str(),
+        actual_fields.into_iter().collect::<Vec<_>>(),
+    );
+
+    let doc = alloc.stack(vec![
+        header,
+        alloc.region(lines.convert_region(field_region)),
+        if suggestions.is_empty() {
+            let r_doc = match opt_sym {
+                Some(symbol) => alloc.symbol_unqualified(symbol).append(" is"),
+                None => alloc.text("it’s"),
+            };
+            alloc.concat([
+                alloc.reflow("In fact, "),
+                r_doc,
+                alloc.reflow(" a record with no fields at all!"),
+            ])
+        } else {
+            let f = suggestions.remove(0);
+            let fs = suggestions;
+            let r_doc = match opt_sym {
+                Some(symbol) => alloc.symbol_unqualified(symbol).append(" fields"),
+                None => alloc.text("fields on the record"),
+            };
+
+            alloc.stack(vec![
+                alloc.concat([
+                    alloc.reflow("There may be a typo. These "),
+                    r_doc,
+                    alloc.reflow(" are the most similar:"),
+                ]),
+                report_text::to_suggestion_record(alloc, f.clone(), fs, ext),
+                alloc.concat([
+                    alloc.reflow("Maybe "),
+                    f_doc,
+                    alloc.reflow(" should be "),
+                    alloc
+                        .text(f.0.as_str().to_string())
+                        .annotate(Annotation::TypoSuggestion),
+                    alloc.reflow("?"),
+                ]),
+            ])
+        },
+    ]);
+
+    Report {
+        filename,
+        title: "TYPE MISMATCH".to_string(),
+        doc,
+        severity: Severity::RuntimeError,
     }
 }
