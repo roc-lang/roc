@@ -405,7 +405,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                     std::mem::forget(arena);
 
                     println!(
-                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms while sucessfully building:\n\n    {}",
+                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms while successfully building:\n\n    {}",
                         if problems.errors == 0 {
                             32 // green
                         } else {
