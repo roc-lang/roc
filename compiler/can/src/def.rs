@@ -691,10 +691,10 @@ pub fn sort_can_defs(
                 let mut loc_succ = local_successors_with_duplicates(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
-                if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
+                if let Some(references) = env.closures.get(symbol) {
                     let home = env.home;
 
-                    for lookup in value_lookups.iter() {
+                    for lookup in references.value_lookups() {
                         if lookup != symbol && lookup.module_id() == home {
                             // DO NOT register a self-call behind a lambda!
                             //
@@ -744,8 +744,8 @@ pub fn sort_can_defs(
                 let mut loc_succ = local_successors_with_duplicates(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
-                if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
-                    for lookup in value_lookups.iter() {
+                if let Some(references) = env.closures.get(symbol) {
+                    for lookup in references.value_lookups() {
                         loc_succ.push(*lookup);
                     }
                 }
@@ -1358,7 +1358,7 @@ fn canonicalize_pending_value_def<'a>(
                     // Recursion doesn't count as referencing. (If it did, all recursive functions
                     // would result in circular def errors!)
                     refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
-                        refs.value_lookups.remove(&symbol);
+                        refs.remove_value_lookup(&symbol);
                     });
 
                     // renamed_closure_def = Some(&symbol);
@@ -1498,7 +1498,7 @@ fn canonicalize_pending_value_def<'a>(
                     // Recursion doesn't count as referencing. (If it did, all recursive functions
                     // would result in circular def errors!)
                     refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
-                        refs.value_lookups.remove(&symbol);
+                        refs.remove_value_lookup(&symbol);
                     });
 
                     loc_can_expr.value = Closure(ClosureData {

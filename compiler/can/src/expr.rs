@@ -655,12 +655,8 @@ pub fn canonicalize_expr<'a>(
                 &loc_body_expr.value,
             );
 
-            let mut captured_symbols: MutSet<Symbol> = new_output
-                .references
-                .value_lookups
-                .iter()
-                .copied()
-                .collect();
+            let mut captured_symbols: MutSet<Symbol> =
+                new_output.references.value_lookups().copied().collect();
 
             // filter out the closure's name itself
             captured_symbols.remove(&symbol);
@@ -702,7 +698,7 @@ pub fn canonicalize_expr<'a>(
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
                     // references the (nonexistent) local variable x!
-                    output.references.value_lookups.remove(sub_symbol);
+                    output.references.remove_value_lookup(sub_symbol);
                 }
             }
 
@@ -1105,7 +1101,7 @@ pub fn local_successors_with_duplicates<'a>(
     references: &'a References,
     closures: &'a MutMap<Symbol, References>,
 ) -> Vec<Symbol> {
-    let mut answer: Vec<_> = references.value_lookups.iter().copied().collect();
+    let mut answer: Vec<_> = references.value_lookups().copied().collect();
 
     let mut stack: Vec<_> = references.calls.iter().copied().collect();
     let mut seen = Vec::new();
@@ -1116,7 +1112,7 @@ pub fn local_successors_with_duplicates<'a>(
         }
 
         if let Some(references) = closures.get(&symbol) {
-            answer.extend(references.value_lookups.iter().copied());
+            answer.extend(references.value_lookups().copied());
             stack.extend(references.calls.iter().copied());
 
             seen.push(symbol);
@@ -1254,7 +1250,7 @@ fn canonicalize_var_lookup(
         // Look it up in scope!
         match scope.lookup(&(*ident).into(), region) {
             Ok(symbol) => {
-                output.references.value_lookups.insert(symbol);
+                output.references.insert_value_lookup(symbol);
 
                 Var(symbol)
             }
@@ -1269,7 +1265,7 @@ fn canonicalize_var_lookup(
         // Look it up in the env!
         match env.qualified_lookup(module_name, ident, region) {
             Ok(symbol) => {
-                output.references.value_lookups.insert(symbol);
+                output.references.insert_value_lookup(symbol);
 
                 Var(symbol)
             }
