@@ -10,14 +10,54 @@ mod helpers;
 #[cfg(test)]
 mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
+    use lazy_static::lazy_static;
+    use regex::Regex;
+    use roc_can::traverse::find_type_at;
     use roc_load::LoadedModule;
+    use roc_module::symbol::{Interns, ModuleId};
+    use roc_problem::can::Problem;
+    use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
+    use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
+    use roc_solve::solve::TypeError;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
+    use std::path::PathBuf;
 
     // HELPERS
 
-    fn run_load_and_infer(src: &str) -> Result<LoadedModule, std::io::Error> {
+    lazy_static! {
+        static ref RE_TYPE_QUERY: Regex = Regex::new(r#"^\s*#\s*(?P<where>\^+)\s*$"#).unwrap();
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct TypeQuery(Region);
+
+    fn parse_queries(src: &str) -> Vec<TypeQuery> {
+        let line_info = LineInfo::new(src);
+        let mut queries = vec![];
+        for (i, line) in src.lines().enumerate() {
+            if let Some(capture) = RE_TYPE_QUERY.captures(line) {
+                let wher = capture.name("where").unwrap();
+                let (start, end) = (wher.start() as u32, wher.end() as u32);
+                let last_line = i as u32 - 1;
+                let start_lc = LineColumn {
+                    line: last_line,
+                    column: start,
+                };
+                let end_lc = LineColumn {
+                    line: last_line,
+                    column: end,
+                };
+                let lc_region = LineColumnRegion::new(start_lc, end_lc);
+                let region = line_info.convert_line_column_region(lc_region);
+
+                queries.push(TypeQuery(region));
+            }
+        }
+        queries
+    }
+
+    fn run_load_and_infer(src: &str) -> Result<(LoadedModule, String), std::io::Error> {
         use bumpalo::Bump;
-        use std::path::PathBuf;
         use tempfile::tempdir;
 
         let arena = &Bump::new();
@@ -54,50 +94,77 @@ mod solve_expr {
         };
 
         let loaded = loaded.expect("failed to load module");
-        Ok(loaded)
+        Ok((loaded, module_src.to_string()))
     }
 
-    fn infer_eq_help(
+    fn format_problems(
         src: &str,
-    ) -> Result<
-        (
-            Vec<roc_solve::solve::TypeError>,
-            Vec<roc_problem::can::Problem>,
-            String,
-        ),
-        std::io::Error,
-    > {
-        let LoadedModule {
-            module_id: home,
-            mut can_problems,
-            mut type_problems,
-            interns,
-            mut solved,
-            exposed_to_host,
-            ..
-        } = run_load_and_infer(src)?;
+        home: ModuleId,
+        interns: &Interns,
+        can_problems: Vec<Problem>,
+        type_problems: Vec<TypeError>,
+    ) -> (String, String) {
+        let filename = PathBuf::from("test.roc");
+        let src_lines: Vec<&str> = src.split('\n').collect();
+        let lines = LineInfo::new(src);
+        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+        let mut can_reports = vec![];
+        let mut type_reports = vec![];
+
+        for problem in can_problems {
+            let report = can_problem(&alloc, &lines, filename.clone(), problem.clone());
+            can_reports.push(report.pretty(&alloc));
+        }
+
+        for problem in type_problems {
+            if let Some(report) = type_problem(&alloc, &lines, filename.clone(), problem.clone()) {
+                type_reports.push(report.pretty(&alloc));
+            }
+        }
+
+        let mut can_reports_buf = String::new();
+        let mut type_reports_buf = String::new();
+        use roc_reporting::report::CiWrite;
+        alloc
+            .stack(can_reports)
+            .1
+            .render_raw(70, &mut CiWrite::new(&mut can_reports_buf))
+            .unwrap();
+        alloc
+            .stack(type_reports)
+            .1
+            .render_raw(70, &mut CiWrite::new(&mut type_reports_buf))
+            .unwrap();
+
+        (can_reports_buf, type_reports_buf)
+    }
+
+    fn infer_eq_help(src: &str) -> Result<(String, String, String), std::io::Error> {
+        let (
+            LoadedModule {
+                module_id: home,
+                mut can_problems,
+                mut type_problems,
+                interns,
+                mut solved,
+                exposed_to_host,
+                ..
+            },
+            src,
+        ) = run_load_and_infer(src)?;
 
         let mut can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
 
+        // Disregard UnusedDef problems, because those are unavoidable when
+        // returning a function from the test expression.
+        can_problems.retain(|prob| !matches!(prob, roc_problem::can::Problem::UnusedDef(_, _)));
+
+        let (can_problems, type_problems) =
+            format_problems(&src, home, &interns, can_problems, type_problems);
+
         let subs = solved.inner_mut();
-
-        //        assert!(can_problems.is_empty());
-        //        assert!(type_problems.is_empty());
-        //        let CanExprOut {
-        //            output,
-        //            var_store,
-        //            var,
-        //            constraint,
-        //            home,
-        //            interns,
-        //            problems: mut can_problems,
-        //            ..
-        //        } = can_expr(src);
-        //        let mut subs = Subs::new(var_store.into());
-
-        // TODO fix this
-        // assert_correct_variable_usage(&constraint);
 
         // name type vars
         for var in exposed_to_host.values() {
@@ -111,10 +178,6 @@ mod solve_expr {
         };
 
         let actual_str = content_to_string(content, subs, home, &interns);
-
-        // Disregard UnusedDef problems, because those are unavoidable when
-        // returning a function from the test expression.
-        can_problems.retain(|prob| !matches!(prob, roc_problem::can::Problem::UnusedDef(_, _)));
 
         Ok((type_problems, can_problems, actual_str))
     }
@@ -143,7 +206,11 @@ mod solve_expr {
     fn infer_eq(src: &str, expected: &str) {
         let (_, can_problems, actual) = infer_eq_help(src).unwrap();
 
-        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
+        assert!(
+            can_problems.is_empty(),
+            "Canonicalization problems: {}",
+            can_problems
+        );
 
         assert_eq!(actual, expected.to_string());
     }
@@ -151,14 +218,64 @@ mod solve_expr {
     fn infer_eq_without_problem(src: &str, expected: &str) {
         let (type_problems, can_problems, actual) = infer_eq_help(src).unwrap();
 
-        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
+        assert!(
+            can_problems.is_empty(),
+            "Canonicalization problems: {}",
+            can_problems
+        );
 
         if !type_problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
+            panic!(
+                "expected:\n{:?}\ninferred:\n{:?}\nproblems:\n{}",
+                expected, actual, type_problems,
+            );
         }
         assert_eq!(actual, expected.to_string());
+    }
+
+    fn infer_queries(src: &str, expected: &[&'static str]) {
+        let (
+            LoadedModule {
+                module_id: home,
+                mut can_problems,
+                mut type_problems,
+                mut declarations_by_id,
+                mut solved,
+                interns,
+                ..
+            },
+            src,
+        ) = run_load_and_infer(src).unwrap();
+
+        let decls = declarations_by_id.remove(&home).unwrap();
+        let subs = solved.inner_mut();
+
+        let can_problems = can_problems.remove(&home).unwrap_or_default();
+        let type_problems = type_problems.remove(&home).unwrap_or_default();
+
+        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
+        assert_eq!(type_problems, Vec::new(), "Type problems: ");
+
+        let queries = parse_queries(&src);
+        assert!(!queries.is_empty(), "No queries provided!");
+
+        let mut solved_queries = Vec::with_capacity(queries.len());
+        for TypeQuery(region) in queries.into_iter() {
+            let start = region.start().offset;
+            let end = region.end().offset;
+            let text = &src[start as usize..end as usize];
+            let var = find_type_at(region, &decls).expect(&format!("No type for {}!", &text));
+
+            name_all_type_vars(var, subs);
+            let content = subs.get_content_without_compacting(var);
+            let actual_str = content_to_string(content, subs, home, &interns);
+
+            solved_queries.push(format!("{} : {}", text, actual_str));
+        }
+
+        assert_eq!(solved_queries, expected)
     }
 
     fn check_inferred_abilities<'a, I>(src: &'a str, expected_specializations: I)
@@ -172,7 +289,7 @@ mod solve_expr {
             interns,
             abilities_store,
             ..
-        } = run_load_and_infer(src).unwrap();
+        } = run_load_and_infer(src).unwrap().0;
 
         let can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
@@ -6031,6 +6148,33 @@ mod solve_expr {
                 "#
             ),
             "U64",
+        )
+    }
+
+    #[test]
+    fn intermediate_branch_types() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test" provides [ foo ] to "./platform"
+
+                foo : Bool -> Str
+                foo = \ob ->
+                #      ^^
+                    when ob is
+                #        ^^
+                        True -> "A"
+                #       ^^^^
+                        False -> "B"
+                #       ^^^^^
+                "#
+            ),
+            &[
+                "ob : Bool",
+                "ob : [ False, True ]",
+                "True : [ False, True ]",
+                "False : [ False, True ]",
+            ],
         )
     }
 }
