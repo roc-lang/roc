@@ -66,7 +66,36 @@ fn main() -> io::Result<()> {
             let src_dir = roc_file_path.parent().unwrap().to_owned();
 
             match check_file(&arena, src_dir, roc_file_path, emit_timings) {
-                Ok(problems) => Ok(problems.exit_code()),
+                Ok((problems, total_time)) => {
+                    println!(
+                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",
+                        if problems.errors == 0 {
+                            32 // green
+                        } else {
+                            33 // yellow
+                        },
+                        problems.errors,
+                        if problems.errors == 1 {
+                            "error"
+                        } else {
+                            "errors"
+                        },
+                        if problems.warnings == 0 {
+                            32 // green
+                        } else {
+                            33 // yellow
+                        },
+                        problems.warnings,
+                        if problems.warnings == 1 {
+                            "warning"
+                        } else {
+                            "warnings"
+                        },
+                        total_time.as_millis(),
+                    );
+
+                    Ok(problems.exit_code())
+                }
 
                 Err(LoadingProblem::FormattedReport(report)) => {
                     print!("{}", report);

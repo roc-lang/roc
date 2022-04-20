@@ -405,23 +405,91 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                     std::mem::forget(arena);
 
                     println!(
-                        "🎉 Built {} in {} ms",
-                        generated_filename.to_str().unwrap(),
-                        total_time.as_millis()
+                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms while sucessfully building:\n\n    {}",
+                        if problems.errors == 0 {
+                            32 // green
+                        } else {
+                            33 // yellow
+                        },
+                        problems.errors,
+                        if problems.errors == 1 {
+                            "error"
+                        } else {
+                            "errors"
+                        },
+                        if problems.warnings == 0 {
+                            32 // green
+                        } else {
+                            33 // yellow
+                        },
+                        problems.warnings,
+                        if problems.warnings == 1 {
+                            "warning"
+                        } else {
+                            "warnings"
+                        },
+                        total_time.as_millis(),
+                        generated_filename.to_str().unwrap()
                     );
 
                     // Return a nonzero exit code if there were problems
                     Ok(problems.exit_code())
                 }
-                BuildAndRun { roc_file_arg_index } => roc_run(
-                    &arena,
-                    &original_cwd,
-                    triple,
-                    roc_file_arg_index,
-                    &binary_path,
-                ),
+                BuildAndRun { roc_file_arg_index } => {
+                    if problems.errors > 0 || problems.warnings > 0 {
+                        println!(
+                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
+                            if problems.errors == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.errors,
+                            if problems.errors == 1 {
+                                "error"
+                            } else {
+                                "errors"
+                            },
+                            if problems.warnings == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.warnings,
+                            if problems.warnings == 1 {
+                                "warning"
+                            } else {
+                                "warnings"
+                            },
+                            total_time.as_millis(),
+                            "─".repeat(80)
+                        );
+                    }
+
+                    roc_run(
+                        &arena,
+                        &original_cwd,
+                        triple,
+                        roc_file_arg_index,
+                        &binary_path,
+                    )
+                }
                 BuildAndRunIfNoErrors { roc_file_arg_index } => {
                     if problems.errors == 0 {
+                        if problems.warnings > 0 {
+                            println!(
+                                "\x1B[32m0\x1B[39m errors and \x1B[33m{}\x1B[39m {} found in {} ms.\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
+                                problems.warnings,
+                                if problems.warnings == 1 {
+                                    "warning"
+                                } else {
+                                    "warnings"
+                                },
+                                total_time.as_millis(),
+                                "─".repeat(80)
+                            );
+                        }
+
                         roc_run(
                             &arena,
                             &original_cwd,
@@ -430,6 +498,34 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                             &binary_path,
                         )
                     } else {
+                        println!(
+                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with: \x1B[32mroc run {}\x1B[39m",
+                            if problems.errors == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.errors,
+                            if problems.errors == 1 {
+                                "error"
+                            } else {
+                                "errors"
+                            },
+                            if problems.warnings == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.warnings,
+                            if problems.warnings == 1 {
+                                "warning"
+                            } else {
+                                "warnings"
+                            },
+                            total_time.as_millis(),
+                            filename
+                        );
+
                         Ok(problems.exit_code())
                     }
                 }

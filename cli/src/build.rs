@@ -306,7 +306,7 @@ fn spawn_rebuild_thread(
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
         if !precompiled {
-            print!("🔨 Rebuilding host... ");
+            println!("🔨 Rebuilding host...");
         }
 
         let rebuild_host_start = SystemTime::now();
@@ -348,7 +348,7 @@ pub fn check_file(
     src_dir: PathBuf,
     roc_file_path: PathBuf,
     emit_timings: bool,
-) -> Result<program::Problems, LoadingProblem> {
+) -> Result<(program::Problems, Duration), LoadingProblem> {
     let compilation_start = SystemTime::now();
 
     // only used for generating errors. We don't do code generation, so hardcoding should be fine
@@ -421,5 +421,8 @@ pub fn check_file(
         println!("Finished checking in {} ms\n", compilation_end.as_millis(),);
     }
 
-    Ok(program::report_problems_typechecked(&mut loaded))
+    Ok((
+        program::report_problems_typechecked(&mut loaded),
+        compilation_end,
+    ))
 }
