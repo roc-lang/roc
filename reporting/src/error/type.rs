@@ -1151,34 +1151,50 @@ fn to_expr_report<'b>(
                 )
             }
 
-            Reason::WhenBranches => report_mismatch(
-                alloc,
-                lines,
-                filename,
-                &category,
-                found,
-                expected_type,
-                // TODO: these should be flipped but `report_mismatch` takes the wrong arguments to
-                // `region_with_subregion`
-                expr_region,
-                Some(region),
-                alloc.concat([
-                    alloc.reflow("The branches of this "),
-                    alloc.keyword("when"),
-                    alloc.reflow(" expression don't match the condition:"),
-                ]),
-                alloc.concat([
+            Reason::WhenBranches => {
+                let snippet = alloc.region_with_subregion(
+                    lines.convert_region(region),
+                    lines.convert_region(expr_region),
+                );
+
+                let this_is = alloc.concat([
                     alloc.reflow("The "),
                     alloc.keyword("when"),
                     alloc.reflow(" condition is"),
-                ]),
-                alloc.reflow("But the branch patterns have type:"),
-                Some(alloc.concat([
+                ]);
+
+                let wanted = alloc.reflow("But the branch patterns have type:");
+                let details = Some(alloc.concat([
                     alloc.reflow("The branches must be cases of the "),
                     alloc.keyword("when"),
                     alloc.reflow(" condition's type!"),
-                ])),
-            ),
+                ]));
+
+                let lines = [
+                    alloc.concat([
+                        alloc.reflow("The branches of this "),
+                        alloc.keyword("when"),
+                        alloc.reflow(" expression don't match the condition:"),
+                    ]),
+                    snippet,
+                    type_comparison(
+                        alloc,
+                        found,
+                        expected_type,
+                        ExpectationContext::WhenCondition,
+                        add_category(alloc, this_is, &category),
+                        wanted,
+                        details,
+                    ),
+                ];
+
+                Report {
+                    title: "TYPE MISMATCH".to_string(),
+                    filename,
+                    doc: alloc.stack(lines),
+                    severity: Severity::RuntimeError,
+                }
+            }
 
             Reason::LowLevelOpArg { op, arg_index } => {
                 panic!(
@@ -1253,7 +1269,10 @@ fn count_arguments(tipe: &ErrorType) -> usize {
 enum ExpectationContext<'a> {
     /// An expected type was discovered from a type annotation. Corresponds to
     /// [`Expected::FromAnnotation`](Expected::FromAnnotation).
-    Annotation { on: RocDocBuilder<'a> },
+    Annotation {
+        on: RocDocBuilder<'a>,
+    },
+    WhenCondition,
     /// When we don't know the context, or it's not relevant.
     Arbitrary,
 }
@@ -1262,6 +1281,7 @@ impl<'a> std::fmt::Debug for ExpectationContext<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExpectationContext::Annotation { .. } => f.write_str("Annotation"),
+            ExpectationContext::WhenCondition => f.write_str("WhenCondition"),
             ExpectationContext::Arbitrary => f.write_str("Arbitrary"),
         }
     }
@@ -2679,22 +2699,24 @@ fn diff_tag_union<'b>(
     let all_fields_shared = left.peek().is_none() && right.peek().is_none();
 
     let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
-        (true, true) => match left.peek() {
-            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
+        (true, true) => match (left.peek(), right.peek()) {
+            (Some((f, _, _, _)), Some(_)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
                 fields2.keys().cloned().collect(),
             )]),
-            None => {
-                if right.peek().is_none() {
-                    Status::Similar
-                } else {
-                    let result =
-                        Status::Different(vec![Problem::TagsMissing(right.map(|v| v.0).collect())]);
-                    // we just used the values in `right`.  in
-                    right = right_keys.iter().map(to_unknown_docs).peekable();
-                    result
-                }
+            (Some(_), None) => {
+                let status =
+                    Status::Different(vec![Problem::TagsMissing(left.map(|v| v.0).collect())]);
+                left = left_keys.iter().map(to_unknown_docs).peekable();
+                status
             }
+            (None, Some(_)) => {
+                let status =
+                    Status::Different(vec![Problem::TagsMissing(right.map(|v| v.0).collect())]);
+                right = right_keys.iter().map(to_unknown_docs).peekable();
+                status
+            }
+            (None, None) => Status::Similar,
         },
         (false, true) => match left.peek() {
             Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
@@ -3293,6 +3315,33 @@ fn type_problem_to_pretty<'b>(
             alloc.symbol_qualified(Symbol::NUM_ROUND),
             alloc.reflow("."),
         ])),
+
+        (TagsMissing(missing), ExpectationContext::WhenCondition) => match missing.split_last() {
+            None => alloc.nil(),
+            Some(split) => {
+                let missing_tags = match split {
+                    (f1, []) => alloc.tag_name(f1.clone()).append(alloc.reflow(" tag.")),
+                    (last, init) => alloc
+                        .intersperse(init.iter().map(|v| alloc.tag_name(v.clone())), ", ")
+                        .append(alloc.reflow(" and "))
+                        .append(alloc.tag_name(last.clone()))
+                        .append(alloc.reflow(" tags.")),
+                };
+
+                let tip1 = alloc
+                    .tip()
+                    .append(alloc.reflow("Looks like the branches are missing coverage of the "))
+                    .append(missing_tags);
+
+                let tip2 = alloc
+                    .tip()
+                    .append(alloc.reflow("Maybe you need to add a catch-all branch, like "))
+                    .append(alloc.keyword("_"))
+                    .append(alloc.reflow("?"));
+
+                alloc.stack([tip1, tip2])
+            }
+        },
 
         (TagsMissing(missing), _) => match missing.split_last() {
             None => alloc.nil(),

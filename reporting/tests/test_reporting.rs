@@ -2740,11 +2740,10 @@ mod test_reporting {
 
                     [ Left a ]
 
-                Tip: Seems like a tag typo. Maybe `Right` should be `Left`?
+                Tip: Looks like a closed tag union does not have the `Right` tag.
 
-                Tip: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
+                Tip: Closed tag unions can't grow, because that might change the size
+                in memory. Can you use an open tag union?
                 "#
             ),
         )
@@ -2790,7 +2789,6 @@ mod test_reporting {
                     Red -> 3
                 "#
             ),
-            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -2810,11 +2808,9 @@ mod test_reporting {
 
                 The branches must be cases of the `when` condition's type!
 
-                Tip: Seems like a tag typo. Maybe `Green` should be `Red`?
+                Tip: Looks like the branches are missing coverage of the `Green` tag.
 
-                Tip: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
+                Tip: Maybe you need to add a catch-all branch, like `_`?
                 "#
             ),
         )
@@ -2833,7 +2829,6 @@ mod test_reporting {
                     Green -> 1
                 "#
             ),
-            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -2854,11 +2849,9 @@ mod test_reporting {
 
                 The branches must be cases of the `when` condition's type!
 
-                Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
+                Tip: Looks like the branches are missing coverage of the `Blue` tag.
 
-                Tip: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
+                Tip: Maybe you need to add a catch-all branch, like `_`?
                 "#
             ),
         )
@@ -2877,7 +2870,6 @@ mod test_reporting {
                     NotAsked -> 3
                 "#
             ),
-            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -2897,11 +2889,10 @@ mod test_reporting {
 
                 The branches must be cases of the `when` condition's type!
 
-                Tip: Seems like a tag typo. Maybe `Success` should be `NotAsked`?
+                Tip: Looks like the branches are missing coverage of the
+                `Success`, `Failure` and `Loading` tags.
 
-                Tip: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
+                Tip: Maybe you need to add a catch-all branch, like `_`?
                 "#
             ),
         )
@@ -8714,7 +8705,6 @@ I need all branches in an `if` to have the same type!
                     $F B -> ""
                 "#
             ),
-            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -8735,11 +8725,9 @@ I need all branches in an `if` to have the same type!
 
                 The branches must be cases of the `when` condition's type!
 
-                Tip: Seems like a tag typo. Maybe `C` should be `A`?
+                Tip: Looks like the branches are missing coverage of the `C` tag.
 
-                Tip: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
+                Tip: Maybe you need to add a catch-all branch, like `_`?
                 "#
             ),
         )

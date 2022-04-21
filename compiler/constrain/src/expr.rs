@@ -708,7 +708,9 @@ pub fn constrain_expr(
 
             // After solving the condition variable with what's expected from the branch patterns,
             // check it against the condition expression.
-            // This is basically exhaustiveness checking, but doesn't check for redundancy.
+            // TODO: when we have exhaustiveness checking during the typechecking phase, perform
+            // exhaustiveness checking when this expectation fails. That will produce better error
+            // messages.
             let cond_constraint = constrain_expr(
                 constraints,
                 env,
