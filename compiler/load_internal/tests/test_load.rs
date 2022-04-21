@@ -862,7 +862,7 @@ mod test_load {
                     report,
                     indoc!(
                         "
-                        ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                        ── UNRECOGNIZED NAME ────────── tmp/issue_2863_module_type_does_not_exist/Main ─
 
                         I cannot find a `DoesNotExist` value
 

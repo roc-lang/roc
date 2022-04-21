@@ -9855,6 +9855,7 @@ I need all branches in an `if` to have the same type!
     #[test]
     fn expression_generalization_to_ability_is_an_error() {
         new_report_problem_as(
+            "expression_generalization_to_ability_is_an_error",
             indoc!(
                 r#"
                 app "test" provides [ hash, hashable ] to "./platform"
@@ -9900,6 +9901,7 @@ I need all branches in an `if` to have the same type!
     #[test]
     fn ability_value_annotations_are_an_error() {
         new_report_problem_as(
+            "ability_value_annotations_are_an_error",
             indoc!(
                 r#"
                 app "test" provides [ result ] to "./platform"
