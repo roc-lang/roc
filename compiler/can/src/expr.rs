@@ -293,6 +293,17 @@ pub struct WhenBranch {
     pub guard: Option<Loc<Expr>>,
 }
 
+impl WhenBranch {
+    pub fn region(&self) -> Region {
+        Region::across_all(
+            self.patterns
+                .iter()
+                .map(|p| &p.region)
+                .chain([self.value.region].iter()),
+        )
+    }
+}
+
 pub fn canonicalize_expr<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,

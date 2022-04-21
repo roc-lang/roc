@@ -1151,6 +1151,35 @@ fn to_expr_report<'b>(
                 )
             }
 
+            Reason::WhenBranches => report_mismatch(
+                alloc,
+                lines,
+                filename,
+                &category,
+                found,
+                expected_type,
+                // TODO: these should be flipped but `report_mismatch` takes the wrong arguments to
+                // `region_with_subregion`
+                expr_region,
+                Some(region),
+                alloc.concat([
+                    alloc.reflow("The branches of this "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" expression don't match the condition:"),
+                ]),
+                alloc.concat([
+                    alloc.reflow("The "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" condition is"),
+                ]),
+                alloc.reflow("But the branch patterns have type:"),
+                Some(alloc.concat([
+                    alloc.reflow("The branches must be cases of the "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" condition's type!"),
+                ])),
+            ),
+
             Reason::LowLevelOpArg { op, arg_index } => {
                 panic!(
                     "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
@@ -1594,14 +1623,17 @@ fn to_pattern_report<'b>(
                     severity: Severity::RuntimeError,
                 }
             }
-            PReason::WhenMatch { index } => {
-                if index == HumanIndex::FIRST {
-                    let doc = alloc.stack([
+            PReason::WhenMatch { index, sub_pattern } => {
+                let doc = match (index, sub_pattern) {
+                    (HumanIndex::FIRST, HumanIndex::FIRST) => alloc.stack([
                         alloc
                             .text("The 1st pattern in this ")
                             .append(alloc.keyword("when"))
                             .append(alloc.text(" is causing a mismatch:")),
-                        alloc.region(lines.convert_region(region)),
+                        alloc.region_with_subregion(
+                            lines.convert_region(region),
+                            lines.convert_region(expr_region),
+                        ),
                         pattern_type_comparison(
                             alloc,
                             found,
@@ -1620,44 +1652,55 @@ fn to_pattern_report<'b>(
                             ]),
                             vec![],
                         ),
-                    ]);
+                    ]),
+                    (index, sub_pattern) => {
+                        let (first, index) = match sub_pattern {
+                            HumanIndex::FIRST => {
+                                let doc = alloc
+                                    .string(format!("The {} pattern in this ", index.ordinal()))
+                                    .append(alloc.keyword("when"))
+                                    .append(alloc.text(" does not match the previous ones:"));
+                                (doc, index)
+                            }
 
-                    Report {
-                        filename,
-                        title: "TYPE MISMATCH".to_string(),
-                        doc,
-                        severity: Severity::RuntimeError,
-                    }
-                } else {
-                    let doc = alloc.stack([
-                        alloc
-                            .string(format!("The {} pattern in this ", index.ordinal()))
-                            .append(alloc.keyword("when"))
-                            .append(alloc.text(" does not match the previous ones:")),
-                        alloc.region(lines.convert_region(region)),
-                        pattern_type_comparison(
-                            alloc,
-                            found,
-                            expected_type,
-                            add_pattern_category(
-                                alloc,
-                                alloc.string(format!(
-                                    "The {} pattern is trying to match",
-                                    index.ordinal()
-                                )),
-                                &category,
+                            _ => {
+                                let doc = alloc.string(format!(
+                                    "The {} pattern in this branch does not match the previous ones:",
+                                    sub_pattern.ordinal()
+                                ));
+                                (doc, sub_pattern)
+                            }
+                        };
+
+                        alloc.stack([
+                            first,
+                            alloc.region_with_subregion(
+                                lines.convert_region(region),
+                                lines.convert_region(expr_region),
                             ),
-                            alloc.text("But all the previous branches match:"),
-                            vec![],
-                        ),
-                    ]);
-
-                    Report {
-                        filename,
-                        title: "TYPE MISMATCH".to_string(),
-                        doc,
-                        severity: Severity::RuntimeError,
+                            pattern_type_comparison(
+                                alloc,
+                                found,
+                                expected_type,
+                                add_pattern_category(
+                                    alloc,
+                                    alloc.string(format!(
+                                        "The {} pattern is trying to match",
+                                        index.ordinal()
+                                    )),
+                                    &category,
+                                ),
+                                alloc.text("But all the previous branches match:"),
+                                vec![],
+                            ),
+                        ])
                     }
+                };
+                Report {
+                    filename,
+                    title: "TYPE MISMATCH".to_string(),
+                    doc,
+                    severity: Severity::RuntimeError,
                 }
             }
             PReason::TagArg { .. } | PReason::PatternGuard => {

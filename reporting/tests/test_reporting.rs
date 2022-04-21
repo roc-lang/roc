@@ -6,7 +6,7 @@ extern crate roc_reporting;
 
 mod helpers;
 
-#[cfg(never)]
+#[cfg(test)]
 mod test_reporting {
     use crate::helpers::{can_expr, infer_expr, test_home, CanExprOut, ParseErrOut};
     use bumpalo::Bump;
@@ -1667,18 +1667,20 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                2│      {} -> 42
-                        ^^
+                1│>  when 1 is
+                2│       {} -> 42
 
-                The first pattern is trying to match record values of type:
+                The `when` condition is a number of type:
+
+                    Num a
+
+                But the branch patterns have type:
 
                     {}a
 
-                But the expression between `when` and `is` has the type:
-
-                    Num a
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -1728,18 +1730,20 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                2│      { foo: True } -> 42
-                        ^^^^^^^^^^^^^
+                1│>  when { foo: 1 } is
+                2│       { foo: True } -> 42
 
-                The first pattern is trying to match record values of type:
+                The `when` condition is a record of type:
+
+                    { foo : Num a }
+
+                But the branch patterns have type:
 
                     { foo : [ True ] }
 
-                But the expression between `when` and `is` has the type:
-
-                    { foo : Num a }
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -1758,18 +1762,20 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                2│      { foo: True } -> 42
-                        ^^^^^^^^^^^^^
+                1│>  when { foo: "" } is
+                2│       { foo: True } -> 42
 
-                The first pattern is trying to match record values of type:
+                The `when` condition is a record of type:
+
+                    { foo : Str }
+
+                But the branch patterns have type:
 
                     { foo : [ True ] }
 
-                But the expression between `when` and `is` has the type:
-
-                    { foo : Str }
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -1854,18 +1860,18 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The 2nd pattern in this branch does not match the previous ones:
 
                 2│      {} | 1 -> 3
-                        ^^^^^^
+                             ^
 
-                The first pattern is trying to match numbers:
+                The 2nd pattern is trying to match numbers:
 
                     Num a
 
-                But the expression between `when` and `is` has the type:
+                But all the previous branches match:
 
-                    { foo : Num a }
+                    {}a
                 "#
             ),
         )
@@ -2784,20 +2790,31 @@ mod test_reporting {
                     Red -> 3
                 "#
             ),
+            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+                The branches of this `when` expression don't match the condition:
 
                 4│>  when x is
-                5│>      Red -> 3
+                5│       Red -> 3
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Green
+                    [ Green, Red ]
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the branch patterns have type:
+
+                    [ Red ]
+
+                The branches must be cases of the `when` condition's type!
+
+                Tip: Seems like a tag typo. Maybe `Green` should be `Red`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -2816,21 +2833,32 @@ mod test_reporting {
                     Green -> 1
                 "#
             ),
+            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+                The branches of this `when` expression don't match the condition:
 
                 4│>  when x is
-                5│>      Red -> 0
-                6│>      Green -> 1
+                5│       Red -> 0
+                6│       Green -> 1
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Blue
+                    [ Blue, Green, Red ]
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the branch patterns have type:
+
+                    [ Green, Red ]
+
+                The branches must be cases of the `when` condition's type!
+
+                Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -2849,22 +2877,31 @@ mod test_reporting {
                     NotAsked -> 3
                 "#
             ),
+            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+                The branches of this `when` expression don't match the condition:
 
                 5│>  when x is
-                6│>      NotAsked -> 3
+                6│       NotAsked -> 3
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Failure _
-                    Loading
-                    Success _
+                    [ Failure I64, Loading, NotAsked, Success Str ]
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the branch patterns have type:
+
+                    [ NotAsked ]
+
+                The branches must be cases of the `when` condition's type!
+
+                Tip: Seems like a tag typo. Maybe `Success` should be `NotAsked`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -4140,18 +4177,20 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                4│              { x, y } -> x + y
-                                ^^^^^^^^
+                3│>          when r is
+                4│               { x, y } -> x + y
 
-                The first pattern is trying to match record values of type:
+                This `r` value is a:
+
+                    { x : I64, y ? I64 }
+
+                But the branch patterns have type:
 
                     { x : I64, y : I64 }
 
-                But the expression between `when` and `is` has the type:
-
-                    { x : I64, y ? I64 }
+                The branches must be cases of the `when` condition's type!
 
                 Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
@@ -4248,18 +4287,21 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                4│              { x, y : "foo" } -> x + 0
-                                ^^^^^^^^^^^^^^^^
+                3│>          when r is
+                4│               { x, y : "foo" } -> x + 0
+                5│               _ -> 0
 
-                The first pattern is trying to match record values of type:
+                This `r` value is a:
+
+                    { x : I64, y : I64 }
+
+                But the branch patterns have type:
 
                     { x : I64, y : Str }
 
-                But the expression between `when` and `is` has the type:
-
-                    { x : I64, y : I64 }
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -4283,18 +4325,21 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                4│              { x, y ? "foo" } -> (\g, _ -> g) x y
-                                ^^^^^^^^^^^^^^^^
+                3│>          when r is
+                4│               { x, y ? "foo" } -> (\g, _ -> g) x y
+                5│               _ -> 0
 
-                The first pattern is trying to match record values of type:
+                This `r` value is a:
+
+                    { x : I64, y ? I64 }
+
+                But the branch patterns have type:
 
                     { x : I64, y ? Str }
 
-                But the expression between `when` and `is` has the type:
-
-                    { x : I64, y ? I64 }
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -7558,11 +7603,6 @@ I need all branches in an `if` to have the same type!
                 typ.get_mut(0..1).unwrap().make_ascii_uppercase();
                 let bad_suffix = if $suffix == "u8" { "i8" } else { "u8" };
                 let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
-                let carets = "^".repeat(number.len() + $suffix.len());
-                let kind = match $suffix {
-                    "dec"|"f32"|"f64" => "floats",
-                    _ => "integers",
-                };
 
                 report_problem_as(
                     &format!(indoc!(
@@ -7576,20 +7616,23 @@ I need all branches in an `if` to have the same type!
                         r#"
                         ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                        The 1st pattern in this `when` is causing a mismatch:
+                        The branches of this `when` expression don't match the condition:
 
-                        2│      {}{} -> 1
-                                {}
+                        1│>  when {}{} is
+                        2│       {}{} -> 1
+                        3│       _ -> 1
 
-                        The first pattern is trying to match {}:
+                        The `when` condition is an integer of type:
+
+                            {}
+
+                        But the branch patterns have type:
 
                             {}
 
-                        But the expression between `when` and `is` has the type:
-
-                            {}
+                        The branches must be cases of the `when` condition's type!
                         "#
-                    ), number, $suffix, carets, kind, typ, bad_type),
+                    ), number, bad_suffix, number, $suffix, bad_type, typ),
                 )
             }
         )*}
@@ -8174,18 +8217,21 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                2│     1u8 -> 1
-                       ^^^
+                1│>  when -1 is
+                2│      1u8 -> 1
+                3│      _ -> 1
 
-                The first pattern is trying to match integers:
+                The `when` condition is a number of type:
+
+                    I8, I16, I32, I64, I128, F32, F64, or Dec
+
+                But the branch patterns have type:
 
                     U8
 
-                But the expression between `when` and `is` has the type:
-
-                    I8, I16, I32, I64, I128, F32, F64, or Dec
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -8668,21 +8714,32 @@ I need all branches in an `if` to have the same type!
                     $F B -> ""
                 "#
             ),
+            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+                The branches of this `when` expression don't match the condition:
 
                 5│>  when v is
-                6│>      $F A -> ""
-                7│>      $F B -> ""
+                6│       $F A -> ""
+                7│       $F B -> ""
 
-                Other possibilities include:
+                This `v` value is a:
 
-                    $F C
+                    F [ A, B, C ]
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the branch patterns have type:
+
+                    F [ A, B ]
+
+                The branches must be cases of the `when` condition's type!
+
+                Tip: Seems like a tag typo. Maybe `C` should be `A`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -9955,7 +10012,7 @@ I need all branches in an `if` to have the same type!
         )
     }
 
-    fn issue_2899() {
+    fn branches_have_more_cases_than_condition() {
         new_report_problem_as(
             indoc!(
                 r#"
@@ -9968,7 +10025,28 @@ I need all branches in an `if` to have the same type!
                 foo
                 "#
             ),
-            indoc!(""),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The branches of this `when` expression don't match the condition:
+
+                6│>          when bool is
+                7│               True -> "true"
+                8│               False -> "false"
+                9│               Wat -> "surprise!"
+
+                This `bool` value is a:
+
+                    Bool
+
+                But the branch patterns have type:
+
+                    [ False, True, Wat ]
+
+                The branches must be cases of the `when` condition's type!
+                "#
+            ),
         )
     }
 }
