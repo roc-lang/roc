@@ -10003,6 +10003,7 @@ I need all branches in an `if` to have the same type!
     #[test]
     fn branches_have_more_cases_than_condition() {
         new_report_problem_as(
+            "branches_have_more_cases_than_condition",
             indoc!(
                 r#"
                 foo : Bool -> Str
@@ -10016,7 +10017,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
                 The branches of this `when` expression don't match the condition:
 
