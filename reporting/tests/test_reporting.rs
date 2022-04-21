@@ -2658,20 +2658,31 @@ mod test_reporting {
                     Red -> 3
                 "#
             ),
+            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
                 ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+                The branches of this `when` expression don't match the condition:
 
                 4│>  when x is
-                5│>      Red -> 3
+                5│       Red -> 3
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Green
+                    [ Green, Red ]
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the branch patterns have type:
+
+                    [ Red ]
+
+                The branches must be cases of the `when` condition's type!
+
+                Tip: Seems like a tag typo. Maybe `Green` should be `Red`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -2690,21 +2701,32 @@ mod test_reporting {
                     Green -> 1
                 "#
             ),
+            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
                 ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+                The branches of this `when` expression don't match the condition:
 
                 4│>  when x is
-                5│>      Red -> 0
-                6│>      Green -> 1
+                5│       Red -> 0
+                6│       Green -> 1
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Blue
+                    [ Blue, Green, Red ]
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the branch patterns have type:
+
+                    [ Green, Red ]
+
+                The branches must be cases of the `when` condition's type!
+
+                Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -2723,22 +2745,31 @@ mod test_reporting {
                     NotAsked -> 3
                 "#
             ),
+            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
                 ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+                The branches of this `when` expression don't match the condition:
 
                 5│>  when x is
-                6│>      NotAsked -> 3
+                6│       NotAsked -> 3
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Failure _
-                    Loading
-                    Success _
+                    [ Failure I64, Loading, NotAsked, Success Str ]
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the branch patterns have type:
+
+                    [ NotAsked ]
+
+                The branches must be cases of the `when` condition's type!
+
+                Tip: Seems like a tag typo. Maybe `Success` should be `NotAsked`?
+
+                Tip: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -8446,6 +8477,7 @@ I need all branches in an `if` to have the same type!
                     @F B -> ""
                 "#
             ),
+            // TODO(2903): improve tag typo quality
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
