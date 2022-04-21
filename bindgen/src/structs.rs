@@ -1,7 +1,7 @@
 use crate::types::RocRecord;
 use std::collections::HashMap;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 struct StructId(u64);
 
 impl StructId {
@@ -10,10 +10,11 @@ impl StructId {
     }
 }
 
-/// Whenever we register a new record type,
+/// Whenever we register a new Roc record type,
 /// give it a unique and short name (e.g. R1, R2, R3...)
 /// and then from then on, whenever we ask for that
 /// same record type, return the same name.
+#[derive(Default)]
 pub struct Structs {
     by_record: HashMap<RocRecord, StructId>,
     next_id: StructId,

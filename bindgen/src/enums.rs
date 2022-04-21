@@ -1,7 +1,7 @@
 use crate::types::RocTagUnion;
 use std::collections::HashMap;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 struct EnumId(u64);
 
 impl EnumId {
@@ -14,6 +14,7 @@ impl EnumId {
 /// give it a unique and short name (e.g. U1, U2, U3...)
 /// and then from then on, whenever we ask for that
 /// same record type, return the same name.
+#[derive(Default)]
 pub struct Enums {
     by_tag_union: HashMap<RocTagUnion, EnumId>,
     by_id: HashMap<EnumId, RocTagUnion>,
