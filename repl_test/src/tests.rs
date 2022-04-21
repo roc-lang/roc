@@ -901,7 +901,7 @@ fn parse_problem() {
 
 #[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
-fn exhautiveness_problem() {
+fn exhaustiveness_problem() {
     expect_failure(
         r#"
             t : [A, B, C]
@@ -914,24 +914,24 @@ fn exhautiveness_problem() {
             r#"
             ── TYPE MISMATCH ──────────────────────────────────────────────────── REPL.roc ─
 
-            This expression is used in an unexpected way:
+            The branches of this when expression don't match the condition:
 
             7│>                  when t is
-            8│>                      A -> "a"
+            8│                       A -> "a"
 
             This t value is a:
 
                 [ A, B, C ]
             
-            But you are trying to use it as:
+            But the branch patterns have type:
             
                 [ A ]
+
+            The branches must be cases of the when condition's type!
             
-            Tip: Seems like a tag typo. Maybe C should be A?
+            Tip: Looks like the branches are missing coverage of the C and B tags.
             
-            Tip: Can more type annotations be added? Type annotations always help
-            me give more specific messages, and I think they could help a lot in
-            this case
+            Tip: Maybe you need to add a catch-all branch, like _?
             
             
             Enter an expression, or :help, or :exit/:q."#
