@@ -8,7 +8,8 @@ use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
-    Alias, AliasCommon, AliasKind, LambdaSet, Problem, RecordField, Type, TypeExtension,
+    name_type_var, Alias, AliasCommon, AliasKind, LambdaSet, Problem, RecordField, Type,
+    TypeExtension,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +31,20 @@ impl<'a> NamedOrAbleVariable<'a> {
         match self {
             NamedOrAbleVariable::Named(nv) => nv.first_seen,
             NamedOrAbleVariable::Able(av) => av.first_seen,
+        }
+    }
+
+    pub fn name(&self) -> &Lowercase {
+        match self {
+            NamedOrAbleVariable::Named(nv) => &nv.name,
+            NamedOrAbleVariable::Able(av) => &av.name,
+        }
+    }
+
+    pub fn variable(&self) -> Variable {
+        match self {
+            NamedOrAbleVariable::Named(nv) => nv.variable,
+            NamedOrAbleVariable::Able(av) => av.variable,
         }
     }
 }
@@ -148,19 +163,13 @@ impl IntroducedVariables {
             .map(|(_, var)| var)
     }
 
+    pub fn iter_named(&self) -> impl Iterator<Item = NamedOrAbleVariable> {
+        (self.named.iter().map(NamedOrAbleVariable::Named))
+            .chain(self.able.iter().map(NamedOrAbleVariable::Able))
+    }
+
     pub fn named_var_by_name(&self, name: &Lowercase) -> Option<NamedOrAbleVariable> {
-        if let Some(nav) = self
-            .named
-            .iter()
-            .find(|nv| &nv.name == name)
-            .map(NamedOrAbleVariable::Named)
-        {
-            return Some(nav);
-        }
-        self.able
-            .iter()
-            .find(|av| &av.name == name)
-            .map(NamedOrAbleVariable::Able)
+        self.iter_named().find(|v| v.name() == name)
     }
 
     pub fn collect_able(&self) -> Vec<Variable> {
@@ -187,37 +196,8 @@ fn malformed(env: &mut Env, region: Region, name: &str) {
     env.problem(roc_problem::can::Problem::RuntimeError(problem));
 }
 
+/// Canonicalizes a top-level type annotation.
 pub fn canonicalize_annotation(
-    env: &mut Env,
-    scope: &mut Scope,
-    annotation: &roc_parse::ast::TypeAnnotation,
-    region: Region,
-    var_store: &mut VarStore,
-) -> Annotation {
-    let mut introduced_variables = IntroducedVariables::default();
-    let mut references = VecSet::default();
-    let mut aliases = SendMap::default();
-
-    let typ = can_annotation_help(
-        env,
-        annotation,
-        region,
-        scope,
-        var_store,
-        &mut introduced_variables,
-        &mut aliases,
-        &mut references,
-    );
-
-    Annotation {
-        typ,
-        introduced_variables,
-        references,
-        aliases,
-    }
-}
-
-pub fn canonicalize_annotation_with_possible_clauses(
     env: &mut Env,
     scope: &mut Scope,
     annotation: &TypeAnnotation,
@@ -418,6 +398,13 @@ pub fn find_type_def_symbols(
     result
 }
 
+fn find_fresh_var_name(introduced_variables: &IntroducedVariables) -> Lowercase {
+    name_type_var(0, &mut introduced_variables.iter_named(), |var, str| {
+        var.name().as_str() == str
+    })
+    .0
+}
+
 #[allow(clippy::too_many_arguments)]
 fn can_annotation_help(
     env: &mut Env,
@@ -439,7 +426,7 @@ fn can_annotation_help(
                 let arg_ann = can_annotation_help(
                     env,
                     &arg.value,
-                    region,
+                    arg.region,
                     scope,
                     var_store,
                     introduced_variables,
@@ -476,6 +463,21 @@ fn can_annotation_help(
             let mut args = Vec::new();
 
             references.insert(symbol);
+
+            if scope.abilities_store.is_ability(symbol) {
+                let fresh_ty_var = find_fresh_var_name(introduced_variables);
+
+                env.problem(roc_problem::can::Problem::AbilityUsedAsType(
+                    fresh_ty_var.clone(),
+                    symbol,
+                    region,
+                ));
+
+                // Generate an variable bound to the ability so we can keep compiling.
+                let var = var_store.fresh();
+                introduced_variables.insert_able(fresh_ty_var, Loc::at(region, var), symbol);
+                return Type::Variable(var);
+            }
 
             for arg in *type_arguments {
                 let arg_ann = can_annotation_help(
@@ -828,8 +830,7 @@ fn can_annotation_help(
         Where(_annotation, clauses) => {
             debug_assert!(!clauses.is_empty());
 
-            // Has clauses are allowed only on the top level of an ability member signature (for
-            // now), which we handle elsewhere.
+            // Has clauses are allowed only on the top level of a signature, which we handle elsewhere.
             env.problem(roc_problem::can::Problem::IllegalHasClause {
                 region: Region::across_all(clauses.iter().map(|clause| &clause.region)),
             });

@@ -1767,7 +1767,7 @@ pub enum Problem {
     FieldsMissing(Vec<Lowercase>),
     TagTypo(TagName, Vec<TagName>),
     TagsMissing(Vec<TagName>),
-    BadRigidVar(Lowercase, ErrorType),
+    BadRigidVar(Lowercase, ErrorType, Option<Symbol>),
     OptionalRequiredMismatch(Lowercase),
     OpaqueComparedToNonOpaque,
 }
@@ -1872,7 +1872,7 @@ fn diff_is_wildcard_comparison<'b>(
 ) -> bool {
     let Comparison { problems, .. } = to_comparison(alloc, actual, expected);
     match problems.last() {
-        Some(Problem::BadRigidVar(v1, ErrorType::RigidVar(v2))) => {
+        Some(Problem::BadRigidVar(v1, ErrorType::RigidVar(v2), None)) => {
             v1.as_str() == WILDCARD && v2.as_str() == WILDCARD
         }
         _ => false,
@@ -2143,6 +2143,32 @@ fn to_diff<'b>(
             same(alloc, parens, type1)
         }
 
+        (RigidVar(x), other) | (other, RigidVar(x)) => {
+            let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
+            let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
+
+            Diff {
+                left,
+                right,
+                status: Status::Different(vec![Problem::BadRigidVar(x, other, None)]),
+                left_able,
+                right_able,
+            }
+        }
+
+        (RigidAbleVar(x, ab), other) | (other, RigidAbleVar(x, ab)) => {
+            let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
+            let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
+
+            Diff {
+                left,
+                right,
+                status: Status::Different(vec![Problem::BadRigidVar(x, other, Some(ab))]),
+                left_able,
+                right_able,
+            }
+        }
+
         (Function(args1, _, ret1), Function(args2, _, ret2)) => {
             if args1.len() == args2.len() {
                 let mut status = Status::Similar;
@@ -2325,7 +2351,6 @@ fn to_diff<'b>(
             };
 
             let problems = match pair {
-                (RigidVar(x), other) | (other, RigidVar(x)) => vec![Problem::BadRigidVar(x, other)],
                 (a, b) if (is_int(&a) && is_float(&b)) || (is_float(&a) && is_int(&b)) => {
                     vec![Problem::IntFloat]
                 }
@@ -2751,6 +2776,7 @@ fn ext_to_status(ext1: &TypeExt, ext2: &TypeExt) -> Status {
                     Status::Different(vec![Problem::BadRigidVar(
                         x.clone(),
                         ErrorType::RigidVar(y.clone()),
+                        None,
                     )])
                 }
             }
@@ -3128,15 +3154,25 @@ fn type_problem_to_pretty<'b>(
             alloc.tip().append(line)
         }
 
-        (BadRigidVar(x, tipe), expectation) => {
+        (BadRigidVar(x, tipe, opt_ability), expectation) => {
             use ErrorType::*;
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
+                let kind_of_value = match opt_ability {
+                    Some(ability) => alloc.concat([
+                        alloc.reflow("any value implementing the "),
+                        alloc.symbol_unqualified(ability),
+                        alloc.reflow(" ability"),
+                    ]),
+                    None => alloc.reflow("any type of value"),
+                };
                 alloc
                     .tip()
                     .append(alloc.reflow("The type annotation uses the type variable "))
                     .append(alloc.type_variable(name))
-                    .append(alloc.reflow(" to say that this definition can produce any type of value. But in the body I see that it will only produce "))
+                    .append(alloc.reflow(" to say that this definition can produce ")
+                    .append(kind_of_value)
+                    .append(alloc.reflow(". But in the body I see that it will only produce ")))
                     .append(a_thing)
                     .append(alloc.reflow(" of a single specific type. Maybe change the type annotation to be more specific? Maybe change the code to be more general?"))
             };

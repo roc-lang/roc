@@ -4750,6 +4750,7 @@ fn get_specialization<'a>(
     symbol: Symbol,
 ) -> Option<Symbol> {
     use roc_solve::ability::type_implementing_member;
+    use roc_solve::solve::instantiate_rigids;
     use roc_unify::unify::unify;
 
     match env.abilities_store.member_def(symbol) {
@@ -4759,6 +4760,7 @@ fn get_specialization<'a>(
         }
         Some(member) => {
             let snapshot = env.subs.snapshot();
+            instantiate_rigids(env.subs, member.signature_var);
             let (_, must_implement_ability) = unify(
                 env.subs,
                 symbol_var,

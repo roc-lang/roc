@@ -8877,7 +8877,7 @@ I need all branches in an `if` to have the same type!
                 I cannot find a `UnknownType` value
                 
                 3│  insertHelper : UnknownType, Type -> Type
-                                                        ^^^^
+                                   ^^^^^^^^^^^
                 
                 Did you mean one of these?
                 
@@ -9433,13 +9433,13 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn has_clause_outside_of_ability() {
+    fn has_clause_not_on_toplevel() {
         new_report_problem_as(
             indoc!(
                 r#"
-                app "test" provides [ hash, f ] to "./platform"
+                app "test" provides [ f ] to "./platform"
 
-                Hash has hash : a -> Num.U64 | a has Hash
+                Hash has hash : (a | a has Hash) -> Num.U64
 
                 f : a -> Num.U64 | a has Hash
                 "#
@@ -9450,11 +9450,35 @@ I need all branches in an `if` to have the same type!
 
                 A `has` clause is not allowed here:
 
-                5│  f : a -> Num.U64 | a has Hash
-                                       ^^^^^^^^^^
+                3│  Hash has hash : (a | a has Hash) -> Num.U64
+                                         ^^^^^^^^^^
 
-                `has` clauses can only be specified on the top-level type annotation of
-                an ability member.
+                `has` clauses can only be specified on the top-level type annotations.
+
+                ── ABILITY MEMBER MISSING HAS CLAUSE ───────────────────────────────────────────
+
+                The definition of the ability member `hash` does not include a `has`
+                clause binding a type variable to the ability `Hash`:
+
+                3│  Hash has hash : (a | a has Hash) -> Num.U64
+                             ^^^^
+
+                Ability members must include a `has` clause binding a type variable to
+                an ability, like
+
+                    a has Hash
+
+                Otherwise, the function does not need to be part of the ability!
+
+                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+
+                `hash` is not used anywhere in your code.
+
+                3│  Hash has hash : (a | a has Hash) -> Num.U64
+                             ^^^^
+
+                If you didn't intend on using `hash` then remove it so future readers of
+                your code don't wonder why it is there.
                 "#
             ),
         )
@@ -9800,6 +9824,107 @@ I need all branches in an `if` to have the same type!
                 5│>          hash : a -> U64 | a has Hash
 
                 Abilities can only be defined on the top-level of a Roc module.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn expression_generalization_to_ability_is_an_error() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ hash, hashable ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+                hash = \$Id n -> n
+
+                hashable : a | a has Hash
+                hashable = $Id 15
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `hashable` definition:
+
+                 9│  hashable : a | a has Hash
+                10│  hashable = $Id 15
+                                ^^^^^^
+
+                This Id opaque wrapping has the type:
+
+                    Id
+
+                But the type annotation on `hashable` says it should be:
+
+                    a | a has Hash
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any value implementing the `Hash` ability. But in
+                the body I see that it will only produce a `Id` value of a single
+                specific type. Maybe change the type annotation to be more specific?
+                Maybe change the code to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_value_annotations_are_an_error() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ result ] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                mulHashes : Hash, Hash -> U64
+                mulHashes = \x, y -> hash x * hash y
+
+                Id := U64
+                hash = \$Id n -> n
+
+                Three := {}
+                hash = \$Three _ -> 3
+
+                result = mulHashes ($Id 100) ($Three {})
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ABILITY USED AS TYPE ────────────────────────────────────────────────────────
+
+                You are attempting to use the ability `Hash` as a type directly:
+
+                6│  mulHashes : Hash, Hash -> U64
+                                ^^^^
+
+                Abilities can only be used in type annotations to constrain type
+                variables.
+
+                Hint: Perhaps you meant to include a `has` annotation, like
+
+                    a has Hash
+
+                ── ABILITY USED AS TYPE ────────────────────────────────────────────────────────
+
+                You are attempting to use the ability `Hash` as a type directly:
+
+                6│  mulHashes : Hash, Hash -> U64
+                                      ^^^^
+
+                Abilities can only be used in type annotations to constrain type
+                variables.
+
+                Hint: Perhaps you meant to include a `has` annotation, like
+
+                    b has Hash
                 "#
             ),
         )

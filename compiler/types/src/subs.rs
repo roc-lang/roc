@@ -3660,9 +3660,13 @@ fn flat_type_to_err_type(
 }
 
 fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
-    let (name, new_index) = name_type_var(state.normals, &mut state.taken);
+    let (name, new_index) = name_type_var(state.normals, &mut state.taken.iter(), |var, str| {
+        var.as_str() == str
+    });
 
     state.normals = new_index;
+
+    state.taken.insert(name.clone());
 
     name
 }

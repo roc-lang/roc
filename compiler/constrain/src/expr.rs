@@ -1684,18 +1684,18 @@ fn instantiate_rigids(
     let mut new_rigid_variables: Vec<Variable> = Vec::new();
 
     let mut rigid_substitution: MutMap<Variable, Variable> = MutMap::default();
-    for named in introduced_vars.named.iter() {
+    for named in introduced_vars.iter_named() {
         use std::collections::hash_map::Entry::*;
 
-        match ftv.entry(named.name.clone()) {
+        match ftv.entry(named.name().clone()) {
             Occupied(occupied) => {
                 let existing_rigid = occupied.get();
-                rigid_substitution.insert(named.variable, *existing_rigid);
+                rigid_substitution.insert(named.variable(), *existing_rigid);
             }
             Vacant(vacant) => {
                 // It's possible to use this rigid in nested defs
-                vacant.insert(named.variable);
-                new_rigid_variables.push(named.variable);
+                vacant.insert(named.variable());
+                new_rigid_variables.push(named.variable());
             }
         }
     }
