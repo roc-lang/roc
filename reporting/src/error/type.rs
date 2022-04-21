@@ -3159,7 +3159,7 @@ fn type_problem_to_pretty<'b>(
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
                 let kind_of_value = match opt_ability {
-                    Some(ability) => alloc.concat(vec![
+                    Some(ability) => alloc.concat([
                         alloc.reflow("any value implementing the "),
                         alloc.symbol_unqualified(ability),
                         alloc.reflow(" ability"),
