@@ -135,10 +135,7 @@ impl<'b> Report<'b> {
                 "─".repeat(80 - (self.title.len() + 4))
             );
 
-            alloc.stack(vec![
-                alloc.text(header).annotate(Annotation::Header),
-                self.doc,
-            ])
+            alloc.stack([alloc.text(header).annotate(Annotation::Header), self.doc])
         }
     }
 
@@ -194,7 +191,7 @@ const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
         module_name: codes.green,
         binop: codes.green,
         typo: codes.yellow,
-        typo_suggestion: codes.green,
+        typo_suggestion: codes.yellow,
         parser_suggestion: codes.yellow,
         bold: codes.bold,
         underline: codes.underline,

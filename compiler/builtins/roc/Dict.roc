@@ -1,6 +1,6 @@
 interface Dict
-    exposes 
-        [ 
+    exposes
+        [
             empty,
             single,
             get,
@@ -15,7 +15,10 @@ interface Dict
             intersection,
             difference,
         ]
-    imports [ ]
+    imports
+        [
+            Bool.{ Bool }
+        ]
 
 empty : Dict k v
 single : k, v -> Dict k v

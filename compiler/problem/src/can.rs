@@ -135,6 +135,9 @@ pub enum Problem {
         loc_name: Loc<Symbol>,
         ability: Symbol,
     },
+    AbilityNotOnToplevel {
+        region: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

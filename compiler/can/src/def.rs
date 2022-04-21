@@ -241,10 +241,12 @@ pub fn canonicalize_defs<'a>(
     let pending_type_defs = type_defs
         .into_iter()
         .filter_map(|loc_def| {
-            to_pending_type_def(env, loc_def.value, &mut scope).map(|(new_output, pending_def)| {
-                output.union(new_output);
-                pending_def
-            })
+            to_pending_type_def(env, loc_def.value, &mut scope, pattern_type).map(
+                |(new_output, pending_def)| {
+                    output.union(new_output);
+                    pending_def
+                },
+            )
         })
         .collect::<Vec<_>>();
 
@@ -344,7 +346,8 @@ pub fn canonicalize_defs<'a>(
 
                 let mut named = can_ann.introduced_variables.named;
                 for loc_lowercase in vars.iter() {
-                    match named.iter().position(|nv| nv.name == loc_lowercase.value) {
+                    let opt_index = named.iter().position(|nv| nv.name == loc_lowercase.value);
+                    match opt_index {
                         Some(index) => {
                             // This is a valid lowercase rigid var for the type def.
                             let named_variable = named.swap_remove(index);
@@ -542,7 +545,13 @@ pub fn canonicalize_defs<'a>(
                 flex_vars: iv.collect_flex(),
             };
 
-            can_members.push((member_sym, name_region, member_annot.typ, variables));
+            can_members.push((
+                member_sym,
+                name_region,
+                var_store.fresh(),
+                member_annot.typ,
+                variables,
+            ));
         }
 
         // Store what symbols a type must define implementations for to have this ability.
@@ -690,7 +699,7 @@ pub fn sort_can_defs(
                 if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
                     let home = env.home;
 
-                    for lookup in value_lookups {
+                    for lookup in value_lookups.iter() {
                         if lookup != symbol && lookup.module_id() == home {
                             // DO NOT register a self-call behind a lambda!
                             //
@@ -741,7 +750,7 @@ pub fn sort_can_defs(
 
                 // if the current symbol is a closure, peek into its body
                 if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
-                    for lookup in value_lookups {
+                    for lookup in value_lookups.iter() {
                         loc_succ.push(*lookup);
                     }
                 }
@@ -1306,7 +1315,7 @@ fn canonicalize_pending_value_def<'a>(
             let (mut loc_can_expr, can_output) =
                 canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
 
-            output.references = output.references.union(can_output.references.clone());
+            output.references.union_mut(&can_output.references);
 
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
@@ -1356,7 +1365,7 @@ fn canonicalize_pending_value_def<'a>(
                     // Recursion doesn't count as referencing. (If it did, all recursive functions
                     // would result in circular def errors!)
                     refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
-                        refs.value_lookups = refs.value_lookups.without(&symbol);
+                        refs.value_lookups.remove(&symbol);
                     });
 
                     // renamed_closure_def = Some(&symbol);
@@ -1496,7 +1505,7 @@ fn canonicalize_pending_value_def<'a>(
                     // Recursion doesn't count as referencing. (If it did, all recursive functions
                     // would result in circular def errors!)
                     refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
-                        refs.value_lookups = refs.value_lookups.without(&symbol);
+                        refs.value_lookups.remove(&symbol);
                     });
 
                     loc_can_expr.value = Closure(ClosureData {
@@ -1586,7 +1595,7 @@ pub fn can_defs_with_return<'a>(
     output
         .introduced_variables
         .union(&defs_output.introduced_variables);
-    output.references = output.references.union(defs_output.references);
+    output.references.union_mut(&defs_output.references);
 
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
@@ -1640,7 +1649,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
     let mut stack = Vec::new();
 
     if let Some(references) = closures.get(&symbol) {
-        for v in &references.calls {
+        for v in references.calls.iter() {
             stack.push(*v);
         }
 
@@ -1656,7 +1665,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
                 // if it calls any functions
                 if let Some(nested_references) = closures.get(&nested_symbol) {
                     // add its called to the stack
-                    for v in &nested_references.calls {
+                    for v in nested_references.calls.iter() {
                         stack.push(*v);
                     }
                 }
@@ -1672,6 +1681,7 @@ fn to_pending_type_def<'a>(
     env: &mut Env<'a>,
     def: &'a ast::TypeDef<'a>,
     scope: &mut Scope,
+    pattern_type: PatternType,
 ) -> Option<(Output, PendingTypeDef<'a>)> {
     use ast::TypeDef::*;
 
@@ -1753,6 +1763,19 @@ fn to_pending_type_def<'a>(
                     Some((Output::default(), PendingTypeDef::InvalidAlias { kind }))
                 }
             }
+        }
+
+        Ability {
+            header, members, ..
+        } if pattern_type != PatternType::TopLevelDef => {
+            let header_region = header.region();
+            let region = Region::span_across(
+                &header_region,
+                &members.last().map(|m| m.region()).unwrap_or(header_region),
+            );
+            env.problem(Problem::AbilityNotOnToplevel { region });
+
+            Some((Output::default(), PendingTypeDef::InvalidAbility))
         }
 
         Ability {

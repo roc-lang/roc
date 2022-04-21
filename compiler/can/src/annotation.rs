@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
+use roc_collections::all::{ImMap, MutMap, MutSet, SendMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
@@ -15,7 +15,7 @@ use roc_types::types::{
 pub struct Annotation {
     pub typ: Type,
     pub introduced_variables: IntroducedVariables,
-    pub references: MutSet<Symbol>,
+    pub references: VecSet<Symbol>,
     pub aliases: SendMap<Symbol, Alias>,
 }
 
@@ -58,8 +58,8 @@ pub struct IntroducedVariables {
     pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,
     pub inferred: Vec<Loc<Variable>>,
-    pub named: Vec<NamedVariable>,
-    pub able: Vec<AbleVariable>,
+    pub named: VecSet<NamedVariable>,
+    pub able: VecSet<AbleVariable>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,
 }
 
@@ -84,7 +84,7 @@ impl IntroducedVariables {
             first_seen: var.region,
         };
 
-        self.named.push(named_variable);
+        self.named.insert(named_variable);
     }
 
     pub fn insert_able(&mut self, name: Lowercase, var: Loc<Variable>, ability: Symbol) {
@@ -97,7 +97,7 @@ impl IntroducedVariables {
             first_seen: var.region,
         };
 
-        self.able.push(able_variable);
+        self.able.insert(able_variable);
     }
 
     pub fn insert_wildcard(&mut self, var: Loc<Variable>) {
@@ -128,12 +128,7 @@ impl IntroducedVariables {
             .extend(other.host_exposed_aliases.clone());
 
         self.named.extend(other.named.iter().cloned());
-        self.named.sort();
-        self.named.dedup();
-
         self.able.extend(other.able.iter().cloned());
-        self.able.sort();
-        self.able.dedup();
     }
 
     pub fn union_owned(&mut self, other: Self) {
@@ -143,8 +138,7 @@ impl IntroducedVariables {
         self.host_exposed_aliases.extend(other.host_exposed_aliases);
 
         self.named.extend(other.named);
-        self.named.sort();
-        self.named.dedup();
+        self.able.extend(other.able.iter().cloned());
     }
 
     pub fn var_by_name(&self, name: &Lowercase) -> Option<Variable> {
@@ -201,7 +195,7 @@ pub fn canonicalize_annotation(
     var_store: &mut VarStore,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
-    let mut references = MutSet::default();
+    let mut references = VecSet::default();
     let mut aliases = SendMap::default();
 
     let typ = can_annotation_help(
@@ -232,7 +226,7 @@ pub fn canonicalize_annotation_with_possible_clauses(
     abilities_in_scope: &[Symbol],
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
-    let mut references = MutSet::default();
+    let mut references = VecSet::default();
     let mut aliases = SendMap::default();
 
     let (annotation, region) = match annotation {
@@ -433,7 +427,7 @@ fn can_annotation_help(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut MutSet<Symbol>,
+    references: &mut VecSet<Symbol>,
 ) -> Type {
     use roc_parse::ast::TypeAnnotation::*;
 
@@ -861,7 +855,7 @@ fn canonicalize_has_clause(
     introduced_variables: &mut IntroducedVariables,
     clause: &Loc<roc_parse::ast::HasClause<'_>>,
     abilities_in_scope: &[Symbol],
-    references: &mut MutSet<Symbol>,
+    references: &mut VecSet<Symbol>,
 ) -> Result<(), Type> {
     let Loc {
         region,
@@ -923,7 +917,7 @@ fn can_extension_type<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut MutSet<Symbol>,
+    references: &mut VecSet<Symbol>,
     opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
 ) -> Type {
@@ -1105,7 +1099,7 @@ fn can_assigned_fields<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut MutSet<Symbol>,
+    references: &mut VecSet<Symbol>,
 ) -> SendMap<Lowercase, RecordField<Type>> {
     use roc_parse::ast::AssignedField::*;
     use roc_types::types::RecordField::*;
@@ -1218,7 +1212,7 @@ fn can_tags<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut MutSet<Symbol>,
+    references: &mut VecSet<Symbol>,
 ) -> Vec<(TagName, Vec<Type>)> {
     let mut tag_types = Vec::with_capacity(tags.len());
 

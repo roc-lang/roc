@@ -906,23 +906,23 @@ define_builtins! {
         30 DEV_TMP5: "#dev_tmp5"
     }
     1 NUM: "Num" => {
-        0 NUM_NUM: "Num" imported // the Num.Num type alias
+        0 NUM_NUM: "Num"  // the Num.Num type alias
         1 NUM_AT_NUM: "@Num" // the Num.@Num private tag
-        2 NUM_I128: "I128" imported // the Num.I128 type alias
-        3 NUM_U128: "U128" imported // the Num.U128 type alias
-        4 NUM_I64: "I64" imported // the Num.I64 type alias
-        5 NUM_U64: "U64" imported // the Num.U64 type alias
-        6 NUM_I32: "I32" imported // the Num.I32 type alias
-        7 NUM_U32: "U32" imported // the Num.U32 type alias
-        8 NUM_I16: "I16" imported // the Num.I16 type alias
-        9 NUM_U16: "U16" imported // the Num.U16 type alias
-        10 NUM_I8: "I8" imported // the Num.I8 type alias
-        11 NUM_U8: "U8" imported // the Num.U8 type alias
-        12 NUM_INTEGER: "Integer" imported // Int : Num Integer
+        2 NUM_I128: "I128"  // the Num.I128 type alias
+        3 NUM_U128: "U128"  // the Num.U128 type alias
+        4 NUM_I64: "I64"  // the Num.I64 type alias
+        5 NUM_U64: "U64"  // the Num.U64 type alias
+        6 NUM_I32: "I32"  // the Num.I32 type alias
+        7 NUM_U32: "U32"  // the Num.U32 type alias
+        8 NUM_I16: "I16"  // the Num.I16 type alias
+        9 NUM_U16: "U16"  // the Num.U16 type alias
+        10 NUM_I8: "I8"  // the Num.I8 type alias
+        11 NUM_U8: "U8"  // the Num.U8 type alias
+        12 NUM_INTEGER: "Integer" // Int : Num Integer
         13 NUM_AT_INTEGER: "@Integer" // the Int.@Integer private tag
-        14 NUM_F64: "F64" imported // the Num.F64 type alias
-        15 NUM_F32: "F32" imported // the Num.F32 type alias
-        16 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
+        14 NUM_F64: "F64"  // the Num.F64 type alias
+        15 NUM_F32: "F32"  // the Num.F32 type alias
+        16 NUM_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
         17 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
         18 NUM_MAX_FLOAT: "maxFloat"
         19 NUM_MIN_FLOAT: "minFloat"
@@ -948,8 +948,8 @@ define_builtins! {
         39 NUM_REM_CHECKED: "remChecked"
         40 NUM_DIV_FLOAT: "div"
         41 NUM_DIV_FLOAT_CHECKED: "divChecked"
-        42 NUM_DIV_FLOOR: "divFloor"
-        43 NUM_DIV_FLOOR_CHECKED: "divFloorChecked"
+        42 NUM_DIV_TRUNC: "divTrunc"
+        43 NUM_DIV_TRUNC_CHECKED: "divTruncChecked"
         44 NUM_MOD_INT: "modInt"
         45 NUM_MOD_INT_CHECKED: "modIntChecked"
         46 NUM_MOD_FLOAT: "modFloat"
@@ -971,29 +971,29 @@ define_builtins! {
         62 NUM_ACOS: "acos"
         63 NUM_ASIN: "asin"
         64 NUM_AT_SIGNED128: "@Signed128"
-        65 NUM_SIGNED128: "Signed128" imported
+        65 NUM_SIGNED128: "Signed128"
         66 NUM_AT_SIGNED64: "@Signed64"
-        67 NUM_SIGNED64: "Signed64" imported
+        67 NUM_SIGNED64: "Signed64"
         68 NUM_AT_SIGNED32: "@Signed32"
-        69 NUM_SIGNED32: "Signed32" imported
+        69 NUM_SIGNED32: "Signed32"
         70 NUM_AT_SIGNED16: "@Signed16"
-        71 NUM_SIGNED16: "Signed16" imported
+        71 NUM_SIGNED16: "Signed16"
         72 NUM_AT_SIGNED8: "@Signed8"
-        73 NUM_SIGNED8: "Signed8" imported
+        73 NUM_SIGNED8: "Signed8"
         74 NUM_AT_UNSIGNED128: "@Unsigned128"
-        75 NUM_UNSIGNED128: "Unsigned128" imported
+        75 NUM_UNSIGNED128: "Unsigned128"
         76 NUM_AT_UNSIGNED64: "@Unsigned64"
-        77 NUM_UNSIGNED64: "Unsigned64" imported
+        77 NUM_UNSIGNED64: "Unsigned64"
         78 NUM_AT_UNSIGNED32: "@Unsigned32"
-        79 NUM_UNSIGNED32: "Unsigned32" imported
+        79 NUM_UNSIGNED32: "Unsigned32"
         80 NUM_AT_UNSIGNED16: "@Unsigned16"
-        81 NUM_UNSIGNED16: "Unsigned16" imported
+        81 NUM_UNSIGNED16: "Unsigned16"
         82 NUM_AT_UNSIGNED8: "@Unsigned8"
-        83 NUM_UNSIGNED8: "Unsigned8" imported
+        83 NUM_UNSIGNED8: "Unsigned8"
         84 NUM_AT_BINARY64: "@Binary64"
-        85 NUM_BINARY64: "Binary64" imported
+        85 NUM_BINARY64: "Binary64"
         86 NUM_AT_BINARY32: "@Binary32"
-        87 NUM_BINARY32: "Binary32" imported
+        87 NUM_BINARY32: "Binary32"
         88 NUM_BITWISE_AND: "bitwiseAnd"
         89 NUM_BITWISE_XOR: "bitwiseXor"
         90 NUM_BITWISE_OR: "bitwiseOr"
@@ -1005,16 +1005,16 @@ define_builtins! {
         96 NUM_SUB_SATURATED: "subSaturated"
         97 NUM_MUL_WRAP: "mulWrap"
         98 NUM_MUL_CHECKED: "mulChecked"
-        99 NUM_INT: "Int" imported
-        100 NUM_FLOAT: "Float" imported
+        99 NUM_INT: "Int"
+        100 NUM_FLOAT: "Float"
         101 NUM_AT_NATURAL: "@Natural"
-        102 NUM_NATURAL: "Natural" imported
-        103 NUM_NAT: "Nat" imported
+        102 NUM_NATURAL: "Natural"
+        103 NUM_NAT: "Nat"
         104 NUM_INT_CAST: "intCast"
         105 NUM_IS_MULTIPLE_OF: "isMultipleOf"
         106 NUM_AT_DECIMAL: "@Decimal"
-        107 NUM_DECIMAL: "Decimal" imported
-        108 NUM_DEC: "Dec" imported // the Num.Dectype alias
+        107 NUM_DECIMAL: "Decimal"
+        108 NUM_DEC: "Dec"  // the Num.Dectype alias
         109 NUM_BYTES_TO_U16: "bytesToU16"
         110 NUM_BYTES_TO_U32: "bytesToU32"
         111 NUM_CAST_TO_NAT: "#castToNat"
@@ -1067,7 +1067,7 @@ define_builtins! {
         158 NUM_TO_F64_CHECKED: "toF64Checked"
     }
     2 BOOL: "Bool" => {
-        0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
+        0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
         1 BOOL_FALSE: "False" imported // Bool.Bool = [ False, True ]
                                        // NB: not strictly needed; used for finding global tag names in error suggestions
         2 BOOL_TRUE: "True" imported // Bool.Bool = [ False, True ]
@@ -1083,7 +1083,7 @@ define_builtins! {
         0 STR_STR: "Str" imported // the Str.Str type alias
         1 STR_AT_STR: "@Str" // the Str.@Str private tag
         2 STR_IS_EMPTY: "isEmpty"
-        3 STR_APPEND: "append"
+        3 STR_APPEND: "#append" // unused
         4 STR_CONCAT: "concat"
         5 STR_JOIN_WITH: "joinWith"
         6 STR_SPLIT: "split"
@@ -1178,7 +1178,7 @@ define_builtins! {
         58 LIST_REPLACE: "replace"
     }
     5 RESULT: "Result" => {
-        0 RESULT_RESULT: "Result" imported // the Result.Result type alias
+        0 RESULT_RESULT: "Result" // the Result.Result type alias
         1 RESULT_OK: "Ok" imported // Result.Result a e = [ Ok a, Err e ]
                                    // NB: not strictly needed; used for finding global tag names in error suggestions
         2 RESULT_ERR: "Err" imported // Result.Result a e = [ Ok a, Err e ]
@@ -1226,6 +1226,7 @@ define_builtins! {
         12 SET_WALK: "walk"
         13 SET_WALK_USER_FUNCTION: "#walk_user_function"
         14 SET_CONTAINS: "contains"
+        15 SET_TO_DICT: "toDict"
     }
     8 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type

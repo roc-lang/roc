@@ -1,4 +1,4 @@
-use crate::ability::{AbilityImplError, DeferredMustImplementAbility};
+use crate::ability::{type_implementing_member, AbilityImplError, DeferredMustImplementAbility};
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
 use roc_can::constraint::Constraint::{self, *};
@@ -703,7 +703,6 @@ fn solve(
                     check_ability_specialization(
                         arena,
                         subs,
-                        &new_env,
                         pools,
                         rank,
                         abilities_store,
@@ -812,7 +811,6 @@ fn solve(
                     check_ability_specialization(
                         arena,
                         subs,
-                        &new_env,
                         pools,
                         rank,
                         abilities_store,
@@ -1189,6 +1187,7 @@ fn solve(
                 match new_desc.content {
                     Content::Structure(FlatType::TagUnion(tags, _)) => {
                         let new_ext = subs.fresh_unnamed_flex_var();
+                        subs.set_rank(new_ext, new_desc.rank);
                         let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
                         new_desc.content = new_union;
                         subs.set(actual, new_desc);
@@ -1282,7 +1281,6 @@ fn solve(
 fn check_ability_specialization(
     arena: &Bump,
     subs: &mut Subs,
-    env: &Env,
     pools: &mut Pools,
     rank: Rank,
     abilities_store: &mut AbilitiesStore,
@@ -1295,9 +1293,7 @@ fn check_ability_specialization(
     // inferred type for the specialization actually aligns with the expected
     // implementation.
     if let Some((root_symbol, root_data)) = abilities_store.root_name_and_def(symbol) {
-        let root_signature_var = env
-            .get_var_by_symbol(&root_symbol)
-            .expect("Ability should be registered in env by now!");
+        let root_signature_var = root_data.signature_var;
 
         // Check if they unify - if they don't, then the claimed specialization isn't really one,
         // and that's a type error!
@@ -1351,16 +1347,8 @@ fn check_ability_specialization(
 
                 // First, figure out and register for what type does this symbol specialize
                 // the ability member.
-                let mut ability_implementations_for_specialization = must_implement_ability
-                    .iter()
-                    .filter(|mia| mia.ability == root_data.parent_ability)
-                    .collect::<Vec<_>>();
-                ability_implementations_for_specialization.dedup();
-
-                debug_assert!(ability_implementations_for_specialization.len() == 1, "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization");
-
-                // This is a valid specialization! Record it.
-                let specialization_type = ability_implementations_for_specialization[0].typ;
+                let specialization_type =
+                    type_implementing_member(&must_implement_ability, root_data.parent_ability);
                 let specialization = MemberSpecialization {
                     symbol,
                     region: symbol_loc_var.region,

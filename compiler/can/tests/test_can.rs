@@ -50,7 +50,7 @@ mod test_can {
                 assert_eq!(IntValue::I128(expected), actual);
             }
             actual => {
-                panic!("Expected an Int *, but got: {:?}", actual);
+                panic!("Expected an Num.Int *, but got: {:?}", actual);
             }
         }
     }
@@ -274,7 +274,7 @@ mod test_can {
     fn correct_annotated_body() {
         let src = indoc!(
             r#"
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
                 f = \ a -> a
 
                 f
@@ -290,7 +290,7 @@ mod test_can {
     fn correct_annotated_body_with_comments() {
         let src = indoc!(
             r#"
-                f : Int * -> Int * # comment
+                f : Num.Int * -> Num.Int * # comment
                 f = \ a -> a
 
                 f
@@ -306,7 +306,7 @@ mod test_can {
     fn name_mismatch_annotated_body() {
         let src = indoc!(
             r#"
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
                 g = \ a -> a
 
                 g
@@ -332,7 +332,7 @@ mod test_can {
     fn name_mismatch_annotated_body_with_comment() {
         let src = indoc!(
             r#"
-                f : Int * -> Int * # comment
+                f : Num.Int * -> Num.Int * # comment
                 g = \ a -> a
 
                 g
@@ -358,7 +358,7 @@ mod test_can {
     fn separated_annotated_body() {
         let src = indoc!(
             r#"
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
 
                 f = \ a -> a
 
@@ -381,7 +381,7 @@ mod test_can {
     fn separated_annotated_body_with_comment() {
         let src = indoc!(
             r#"
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
                 # comment
                 f = \ a -> a
 
@@ -404,9 +404,9 @@ mod test_can {
     fn shadowed_annotation() {
         let src = indoc!(
             r#"
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
 
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
 
                 f
             "#
@@ -428,7 +428,7 @@ mod test_can {
     fn correct_nested_unannotated_body() {
         let src = indoc!(
             r#"
-                f : Int *
+                f : Num.Int *
                 f =
                     g = 42
 
@@ -447,9 +447,9 @@ mod test_can {
     fn correct_nested_annotated_body() {
         let src = indoc!(
             r#"
-                f : Int *
+                f : Num.Int *
                 f =
-                    g : Int *
+                    g : Num.Int *
                     g = 42
 
                     g + 1
@@ -467,11 +467,11 @@ mod test_can {
     fn correct_nested_body_annotated_multiple_lines() {
         let src = indoc!(
             r#"
-                f : Int *
+                f : Num.Int *
                 f =
-                    g : Int *
+                    g : Num.Int *
                     g = 42
-                    h : Int *
+                    h : Num.Int *
                     h = 5
                     z = 4
                     g + h + z
@@ -489,10 +489,10 @@ mod test_can {
     fn correct_nested_body_unannotated_multiple_lines() {
         let src = indoc!(
             r#"
-                f : Int *
+                f : Num.Int *
                 f =
                     g = 42
-                    h : Int *
+                    h : Num.Int *
                     h = 5
                     z = 4
                     g + h + z
@@ -509,7 +509,7 @@ mod test_can {
     fn correct_double_nested_body() {
         let src = indoc!(
             r#"
-                f : Int *
+                f : Num.Int *
                 f =
                     g =
                         h = 42

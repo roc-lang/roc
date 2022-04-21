@@ -11,7 +11,6 @@ const NUM_BUILTIN_IMPORTS: usize = 8;
 
 /// These can be shared between definitions, they will get instantiated when converted to Type
 const TVAR1: VarId = VarId::from_u32(1);
-const TVAR2: VarId = VarId::from_u32(2);
 
 pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
     let mut aliases = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
@@ -316,19 +315,6 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: bool_alias_content(),
-        },
-    );
-
-    // Result ok err : [ Ok ok, Err err ]
-    add_alias(
-        Symbol::RESULT_RESULT,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![
-                Loc::at(Region::zero(), "ok".into()),
-                Loc::at(Region::zero(), "err".into()),
-            ],
-            typ: result_alias_content(flex(TVAR1), flex(TVAR2)),
         },
     );
 

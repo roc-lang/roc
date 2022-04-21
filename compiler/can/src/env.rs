@@ -1,5 +1,5 @@
 use crate::procedure::References;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::{MutMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
@@ -28,12 +28,12 @@ pub struct Env<'a> {
     pub closure_name_symbol: Option<Symbol>,
 
     /// Symbols of values/functions which were referenced by qualified lookups.
-    pub qualified_value_lookups: MutSet<Symbol>,
+    pub qualified_value_lookups: VecSet<Symbol>,
 
     /// Symbols of types which were referenced by qualified lookups.
-    pub qualified_type_lookups: MutSet<Symbol>,
+    pub qualified_type_lookups: VecSet<Symbol>,
 
-    pub top_level_symbols: MutSet<Symbol>,
+    pub top_level_symbols: VecSet<Symbol>,
 
     pub ident_ids: IdentIds,
     pub exposed_ident_ids: IdentIds,
@@ -54,11 +54,11 @@ impl<'a> Env<'a> {
             exposed_ident_ids,
             problems: Vec::new(),
             closures: MutMap::default(),
-            qualified_value_lookups: MutSet::default(),
-            qualified_type_lookups: MutSet::default(),
+            qualified_value_lookups: VecSet::default(),
+            qualified_type_lookups: VecSet::default(),
             tailcallable_symbol: None,
             closure_name_symbol: None,
-            top_level_symbols: MutSet::default(),
+            top_level_symbols: VecSet::default(),
         }
     }
 
@@ -97,16 +97,19 @@ impl<'a> Env<'a> {
 
                             Ok(symbol)
                         }
-                        None => Err(RuntimeError::LookupNotInScope(
-                            Loc {
-                                value: ident,
-                                region,
-                            },
-                            self.ident_ids
-                                .idents()
-                                .map(|(_, string)| string.as_ref().into())
-                                .collect(),
-                        )),
+                        None => {
+                            let error = RuntimeError::LookupNotInScope(
+                                Loc {
+                                    value: ident,
+                                    region,
+                                },
+                                self.ident_ids
+                                    .idents()
+                                    .map(|(_, string)| string.as_ref().into())
+                                    .collect(),
+                            );
+                            Err(error)
+                        }
                     }
                 } else {
                     match self.dep_idents.get(&module_id) {

@@ -125,6 +125,7 @@ mod test_reporting {
             mut solved,
             exposed_to_host,
             mut declarations_by_id,
+            abilities_store,
             ..
         } = result?;
 
@@ -177,6 +178,7 @@ mod test_reporting {
                 target_info,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,
+                abilities_store: &abilities_store,
             };
             let _mono_expr = Stmt::new(
                 &mut mono_env,
@@ -334,6 +336,7 @@ mod test_reporting {
                 target_info,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,
+                abilities_store: &abilities_store,
             };
             let _mono_expr = Stmt::new(
                 &mut mono_env,
@@ -814,9 +817,9 @@ mod test_reporting {
                 Did you mean one of these?
 
                     baz
-                    Nat
                     Str
                     Err
+                    main
                 "#
             ),
         )
@@ -843,8 +846,8 @@ mod test_reporting {
 
                     True
                     Str
-                    Num
                     Err
+                    List
                 "#
             ),
         )
@@ -1006,10 +1009,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
-                    Decimal
-                    Dec
-                    Result
-                    Num
+                    Set
+                    List
+                    True
+                    Box
                 "#
             ),
         );
@@ -1348,8 +1351,8 @@ mod test_reporting {
                 r#"
                 bar = { bar : 0x3 }
 
-                f : { foo : Int * } -> Bool
-                f = \_ -> True
+                f : { foo : Num.Int * } -> [ Yes, No ]
+                f = \_ -> Yes
 
                 f bar
                 "#
@@ -1386,8 +1389,8 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Red, Green ] -> Bool
-                f = \_ -> True
+                f : [ Red, Green ] -> [ Yes, No ]
+                f = \_ -> Yes
 
                 f Blue
                 "#
@@ -1424,8 +1427,8 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Red (Int *), Green Bool ] -> Bool
-                f = \_ -> True
+                f : [ Red (Num.Int *), Green Str ] -> Str
+                f = \_ -> "yes"
 
                 f (Blue 3.14)
                 "#
@@ -1445,7 +1448,7 @@ mod test_reporting {
 
                 But `f` needs the 1st argument to be:
 
-                    [ Green Bool, Red (Int *) ]
+                    [ Green Str, Red (Int *) ]
 
                 Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1462,7 +1465,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : Int *
+                x : Num.Int *
                 x = if True then 3.14 else 4
 
                 x
@@ -1474,7 +1477,7 @@ mod test_reporting {
 
                 Something is off with the `then` branch of this `if` expression:
 
-                1│  x : Int *
+                1│  x : Num.Int *
                 2│  x = if True then 3.14 else 4
                                      ^^^^
 
@@ -1498,7 +1501,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : Int *
+                x : Num.Int *
                 x =
                     when True is
                         _ -> 3.14
@@ -1512,7 +1515,7 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│   x : Int *
+                1│   x : Num.Int *
                 2│   x =
                 3│>      when True is
                 4│>          _ -> 3.14
@@ -1537,7 +1540,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : Int * -> Int *
+                x : Num.Int * -> Num.Int *
                 x = \_ -> 3.14
 
                 x
@@ -1549,7 +1552,7 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│  x : Int * -> Int *
+                1│  x : Num.Int * -> Num.Int *
                 2│  x = \_ -> 3.14
                               ^^^^
 
@@ -1573,7 +1576,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : I64
+                x : Num.I64
                 x = 42
 
                 x 3
@@ -1599,7 +1602,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : I64 -> I64
+                f : Num.I64 -> Num.I64
                 f = \_ -> 42
 
                 f 1 2
@@ -1625,7 +1628,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : I64, I64 -> I64
+                f : Num.I64, Num.I64 -> Num.I64
                 f = \_, _ -> 42
 
                 f 1
@@ -1790,9 +1793,9 @@ mod test_reporting {
                 Did you mean one of these?
 
                     Box
-                    Bool
-                    U8
-                    F64
+                    Set
+                    Str
+                    Ok
                 "#
             ),
         )
@@ -1901,7 +1904,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                { x } : { x : Int * }
+                { x } : { x : Num.Int * }
                 { x } = { x: 4.0 }
 
                 x
@@ -1913,7 +1916,7 @@ mod test_reporting {
 
                 Something is off with the body of this definition:
 
-                1│  { x } : { x : Int * }
+                1│  { x } : { x : Num.Int * }
                 2│  { x } = { x: 4.0 }
                             ^^^^^^^^^^
 
@@ -2062,7 +2065,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : { a : Int *, b : Float *, c : Bool }
+                x : { a : Num.Int *, b : Num.Float *, c : Str }
                 x = { b: 4.0 }
 
                 x
@@ -2074,7 +2077,7 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│  x : { a : Int *, b : Float *, c : Bool }
+                1│  x : { a : Num.Int *, b : Num.Float *, c : Str }
                 2│  x = { b: 4.0 }
                         ^^^^^^^^^^
 
@@ -2084,7 +2087,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    { a : Int *, b : Float *, c : Bool }
+                    { a : Int *, b : Float *, c : Str }
 
                 Tip: Looks like the c and a fields are missing.
                 "#
@@ -2150,7 +2153,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Bool -> msg
+                f : Str -> msg
                 f = \_ -> Foo
 
                 f
@@ -2162,7 +2165,7 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
-                1│  f : Bool -> msg
+                1│  f : Str -> msg
                 2│  f = \_ -> Foo
                               ^^^
 
@@ -2229,7 +2232,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Bool -> [ Ok I64, InvalidFoo ]
+                f : Str -> [ Ok Num.I64, InvalidFoo ]
                 f = \_ -> ok 4
 
                 f
@@ -2247,9 +2250,9 @@ mod test_reporting {
                 Did you mean one of these?
 
                     Ok
-                    U8
-                    Box
                     f
+                    Box
+                    Set
                "#
             ),
         )
@@ -2261,7 +2264,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Bool -> I64
+                f : Str -> Num.I64
                 f = \_ ->
                     ok = 3
 
@@ -2286,7 +2289,7 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
-                1│  f : Bool -> I64
+                1│  f : Str -> Num.I64
                 2│  f = \_ ->
                 3│      ok = 3
                 4│
@@ -2376,12 +2379,12 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `x` record does not have a `.foo` field:
+                This `x` record doesn’t have a `foo` field:
 
                 3│  { x & foo: 3 }
                           ^^^^^^
 
-                In fact, `x` is a record with NO fields!
+                In fact, `x` is a record with no fields at all!
                 "#
             ),
         )
@@ -2402,18 +2405,19 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `x` record does not have a `.foo` field:
+                This `x` record doesn’t have a `foo` field:
 
                 3│  { x & foo: 3 }
                           ^^^^^^
 
-                This is usually a typo. Here are the `x` fields that are most similar:
+                There may be a typo. These `x` fields are the most similar:
 
-                    { fo : Num b
-                    , bar : Num a
+                    {
+                        fo : Num b,
+                        bar : Num a,
                     }
 
-                So maybe `.foo` should be `.fo`?
+                Maybe `foo:` should be `fo:` instead?
                 "#
             ),
         )
@@ -2424,7 +2428,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { fo: I64 }ext -> I64
+                f : { fo: Num.I64 }ext -> Num.I64
                 f = \r ->
                     r2 = { r & foo: r.fo }
 
@@ -2438,17 +2442,18 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `r` record does not have a `.foo` field:
+                This `r` record doesn’t have a `foo` field:
 
                 3│      r2 = { r & foo: r.fo }
                                    ^^^^^^^^^
 
-                This is usually a typo. Here are the `r` fields that are most similar:
+                There may be a typo. These `r` fields are the most similar:
 
-                    { fo : I64
+                    {
+                        fo : I64,
                     }ext
 
-                So maybe `.foo` should be `.fo`?
+                Maybe `foo:` should be `fo:` instead?
                 "#
             ),
         )
@@ -2469,21 +2474,22 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The `x` record does not have a `.foo` field:
+                This `x` record doesn’t have a `foo` field:
 
                 3│  { x & foo: 3 }
                           ^^^^^^
 
-                This is usually a typo. Here are the `x` fields that are most similar:
+                There may be a typo. These `x` fields are the most similar:
 
-                    { fo : Num c
-                    , foobar : Num d
-                    , bar : Num a
-                    , baz : Num b
-                    , ...
+                    {
+                        fo : Num c,
+                        foobar : Num d,
+                        bar : Num a,
+                        baz : Num b,
+                        …
                     }
 
-                So maybe `.foo` should be `.fo`?
+                Maybe `foo:` should be `fo:` instead?
                 "#
             ),
         )
@@ -2661,12 +2667,12 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Either : [ Left I64, Right Bool ]
+                Either : [ Left {}, Right Str ]
 
                 x : Either
-                x = Left 42
+                x = Left {}
 
-                f : Either -> I64
+                f : Either -> {}
                 f = \Left v -> v
 
                 f x
@@ -2698,8 +2704,8 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : [ Left I64, Right Bool ]
-                x = Left 42
+                x : [ Left {}, Right Str ]
+                x = Left {}
 
 
                 (Left y) = x
@@ -2718,7 +2724,7 @@ mod test_reporting {
 
                 This `x` value is a:
 
-                    [ Left I64, Right Bool ]
+                    [ Left {}, Right Str ]
 
                 But you are trying to use it as:
 
@@ -2767,11 +2773,11 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : Bool
-                x = True
+                x : [ Red, Green ]
+                x = Green
 
                 when x is
-                    False -> 3
+                    Red -> 3
                 "#
             ),
             indoc!(
@@ -2781,11 +2787,11 @@ mod test_reporting {
                 This `when` does not cover all the possibilities:
 
                 4│>  when x is
-                5│>      False -> 3
+                5│>      Red -> 3
 
                 Other possibilities include:
 
-                    True
+                    Green
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#
@@ -2833,7 +2839,7 @@ mod test_reporting {
                 r#"
                 RemoteData e a :  [ NotAsked, Loading, Failure e, Success a ]
 
-                x : RemoteData I64 Str
+                x : RemoteData Num.I64 Str
 
                 when x is
                     NotAsked -> 3
@@ -2896,7 +2902,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                y : [ Nothing, Just I64 ]
+                y : [ Nothing, Just Num.I64 ]
                 y = Just 4
                 x = { a: y, b: 42}
 
@@ -2989,9 +2995,9 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Foo a : { x : Int a }
+                Foo a : { x : Num.Int a }
 
-                f : Foo a -> Int a
+                f : Foo a -> Num.Int a
                 f = \r -> r.x
 
                 f { y: 3.14 }
@@ -3243,8 +3249,8 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                a : { foo : I64, bar : F64, foo : Str }
-                a = { bar: 3.0, foo: "foo" }
+                a : { foo : Num.I64, bar : {}, foo : Str }
+                a = { bar: {}, foo: "foo" }
 
                 a
                 "#
@@ -3252,17 +3258,17 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── DUPLICATE FIELD NAME ────────────────────────────────────────────────────────
-
+                
                 This record type defines the `.foo` field twice!
-
-                1│  a : { foo : I64, bar : F64, foo : Str }
-                          ^^^^^^^^^             ^^^^^^^^^
-
+                
+                1│  a : { foo : Num.I64, bar : {}, foo : Str }
+                          ^^^^^^^^^^^^^            ^^^^^^^^^
+                
                 In the rest of the program, I will only use the latter definition:
-
-                1│  a : { foo : I64, bar : F64, foo : Str }
-                                                ^^^^^^^^^
-
+                
+                1│  a : { foo : Num.I64, bar : {}, foo : Str }
+                                                   ^^^^^^^^^
+                
                 For clarity, remove the previous `.foo` definitions from this record
                 type.
                 "#
@@ -3275,7 +3281,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                a : [ Foo I64, Bar F64, Foo Str ]
+                a : [ Foo Num.I64, Bar {}, Foo Str ]
                 a = Foo "foo"
 
                 a
@@ -3284,17 +3290,17 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── DUPLICATE TAG NAME ──────────────────────────────────────────────────────────
-
+                
                 This tag union type defines the `Foo` tag twice!
-
-                1│  a : [ Foo I64, Bar F64, Foo Str ]
-                          ^^^^^^^           ^^^^^^^
-
+                
+                1│  a : [ Foo Num.I64, Bar {}, Foo Str ]
+                          ^^^^^^^^^^^          ^^^^^^^
+                
                 In the rest of the program, I will only use the latter definition:
-
-                1│  a : [ Foo I64, Bar F64, Foo Str ]
-                                            ^^^^^^^
-
+                
+                1│  a : [ Foo Num.I64, Bar {}, Foo Str ]
+                                               ^^^^^^^
+                
                 For clarity, remove the previous `Foo` definitions from this tag union
                 type.
                 "#
@@ -3307,7 +3313,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                bar : I64
+                bar : Num.I64
                 foo = \x -> x
 
                 # NOTE: neither bar or foo are defined at this point
@@ -3321,7 +3327,7 @@ mod test_reporting {
                 This annotation does not match the definition immediately following
                 it:
 
-                1│>  bar : I64
+                1│>  bar : Num.I64
                 2│>  foo = \x -> x
 
                 Is it a typo? If not, put either a newline or comment between them.
@@ -3335,7 +3341,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                bar : I64
+                bar : Num.I64
 
                 foo = \x -> x
 
@@ -3351,7 +3357,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                MyAlias 1 : I64
+                MyAlias 1 : Num.I64
 
                 4
                 "#
@@ -3362,7 +3368,7 @@ mod test_reporting {
 
                 This pattern in the definition of `MyAlias` is not what I expect:
 
-                1│  MyAlias 1 : I64
+                1│  MyAlias 1 : Num.I64
                             ^
 
                 Only type variables like `a` or `value` can occur in this position.
@@ -3371,8 +3377,8 @@ mod test_reporting {
 
                 `MyAlias` is not used anywhere in your code.
 
-                1│  MyAlias 1 : I64
-                    ^^^^^^^^^^^^^^^
+                1│  MyAlias 1 : Num.I64
+                    ^^^^^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `MyAlias` then remove it so future readers
                 of your code don't wonder why it is there.
@@ -3386,7 +3392,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Age 1 := I64
+                Age 1 := Num.I64
 
                 a : Age
                 a
@@ -3398,7 +3404,7 @@ mod test_reporting {
 
                 This pattern in the definition of `Age` is not what I expect:
 
-                1│  Age 1 := I64
+                1│  Age 1 := Num.I64
                         ^
 
                 Only type variables like `a` or `value` can occur in this position.
@@ -3412,7 +3418,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                a : Num I64 F64
+                a : Num.Num Num.I64 Num.F64
                 a = 3
 
                 a
@@ -3421,12 +3427,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TOO MANY TYPE ARGUMENTS ─────────────────────────────────────────────────────
-
+                
                 The `Num` alias expects 1 type argument, but it got 2 instead:
-
-                1│  a : Num I64 F64
-                        ^^^^^^^^^^^
-
+                
+                1│  a : Num.Num Num.I64 Num.F64
+                        ^^^^^^^^^^^^^^^^^^^^^^^
+                
                 Are there missing parentheses?
                 "#
             ),
@@ -3438,7 +3444,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Bool -> Num I64 F64
+                f : Str -> Num.Num Num.I64 Num.F64
                 f = \_ -> 3
 
                 f
@@ -3447,12 +3453,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TOO MANY TYPE ARGUMENTS ─────────────────────────────────────────────────────
-
+                
                 The `Num` alias expects 1 type argument, but it got 2 instead:
-
-                1│  f : Bool -> Num I64 F64
-                                ^^^^^^^^^^^
-
+                
+                1│  f : Str -> Num.Num Num.I64 Num.F64
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+                
                 Are there missing parentheses?
                 "#
             ),
@@ -3466,7 +3472,7 @@ mod test_reporting {
                 r#"
                 Pair a b : [ Pair a b ]
 
-                x : Pair I64
+                x : Pair Num.I64
                 x = Pair 2 3
 
                 x
@@ -3478,8 +3484,8 @@ mod test_reporting {
 
                 The `Pair` alias expects 2 type arguments, but it got 1 instead:
 
-                3│  x : Pair I64
-                        ^^^^^^^^
+                3│  x : Pair Num.I64
+                        ^^^^^^^^^^^^
 
                 Are there missing parentheses?
                 "#
@@ -3494,7 +3500,7 @@ mod test_reporting {
                 r#"
                 Pair a b : [ Pair a b ]
 
-                x : Pair I64 I64 I64
+                x : Pair Num.I64 Num.I64 Num.I64
                 x = 3
 
                 x
@@ -3506,8 +3512,8 @@ mod test_reporting {
 
                 The `Pair` alias expects 2 type arguments, but it got 3 instead:
 
-                3│  x : Pair I64 I64 I64
-                        ^^^^^^^^^^^^^^^^
+                3│  x : Pair Num.I64 Num.I64 Num.I64
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Are there missing parentheses?
                 "#
@@ -3522,7 +3528,7 @@ mod test_reporting {
                 r#"
                 Foo a : [ Foo ]
 
-                f : Foo I64
+                f : Foo Num.I64
 
                 f
                 "#
@@ -3612,7 +3618,7 @@ mod test_reporting {
                 AList a b : [ ACons a (BList a b), ANil ]
                 BList a b : [ BCons a (AList a b), BNil ]
 
-                x : AList I64 I64
+                x : AList Num.I64 Num.I64
                 x = ACons 0 (BCons 1 (ACons "foo" BNil ))
 
                 y : BList a a
@@ -3629,7 +3635,7 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                4│  x : AList I64 I64
+                4│  x : AList Num.I64 Num.I64
                 5│  x = ACons 0 (BCons 1 (ACons "foo" BNil ))
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -4015,7 +4021,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : I64, y ? I64 } -> I64
+                f : { x : Num.I64, y ? Num.I64 } -> Num.I64
                 f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
 
                 f
@@ -4048,7 +4054,7 @@ mod test_reporting {
             indoc!(
                 r#"
                 \rec ->
-                    { x, y } : { x : I64, y ? Bool }
+                    { x, y } : { x : Num.I64, y ? Str }
                     { x, y } = rec
 
                     { x, y }
@@ -4060,16 +4066,16 @@ mod test_reporting {
 
                 Something is off with the body of this definition:
 
-                2│>      { x, y } : { x : I64, y ? Bool }
+                2│>      { x, y } : { x : Num.I64, y ? Str }
                 3│>      { x, y } = rec
 
                 The body is a value of type:
 
-                    { x : I64, y : Bool }
+                    { x : I64, y : Str }
 
                 But the type annotation says it should be:
 
-                    { x : I64, y ? Bool }
+                    { x : I64, y ? Str }
 
                 Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
@@ -4083,7 +4089,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : I64, y ? I64 } -> I64
+                f : { x : Num.I64, y ? Num.I64 } -> Num.I64
                 f = \{ x, y } -> x + y
 
                 f
@@ -4118,7 +4124,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : I64, y ? I64 } -> I64
+                f : { x : Num.I64, y ? Num.I64 } -> Num.I64
                 f = \r ->
                         when r is
                             { x, y } -> x + y
@@ -4155,7 +4161,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : I64, y ? I64 } -> I64
+                f : { x : Num.I64, y ? Num.I64 } -> Num.I64
                 f = \r -> r.y
 
                 f
@@ -4190,7 +4196,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                    f : { x : I64, y ? I64 } -> I64
+                    f : { x : Num.I64, y ? Num.I64 } -> Num.I64
                     f = \r -> .y r
 
                     f
@@ -4225,7 +4231,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : I64, y : I64 } -> I64
+                f : { x : Num.I64, y : Num.I64 } -> Num.I64
                 f = \r ->
                         when r is
                             { x, y : "foo" } -> x + 0
@@ -4260,7 +4266,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : I64, y ? I64 } -> I64
+                f : { x : Num.I64, y ? Num.I64 } -> Num.I64
                 f = \r ->
                         when r is
                             { x, y ? "foo" } -> (\g, _ -> g) x y
@@ -5175,7 +5181,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ @Foo Bool, @100 I64 ]
+                f : [ @Foo Str, @100 I64 ]
                 f = 0
 
                 f
@@ -5187,8 +5193,8 @@ mod test_reporting {
 
                 I am partway through parsing a tag union type, but I got stuck here:
 
-                1│  f : [ @Foo Bool, @100 I64 ]
-                                     ^
+                1│  f : [ @Foo Str, @100 I64 ]
+                                    ^
 
                 I was expecting to see a private tag name.
 
@@ -5205,7 +5211,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                myDict : Dict I64 Str
+                myDict : Dict Num.I64 Str
                 myDict = Dict.insert Dict.empty "foo" 42
 
                 myDict
@@ -5217,7 +5223,7 @@ mod test_reporting {
 
                 Something is off with the body of the `myDict` definition:
 
-                1│  myDict : Dict I64 Str
+                1│  myDict : Dict Num.I64 Str
                 2│  myDict = Dict.insert Dict.empty "foo" 42
                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -5919,20 +5925,12 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This expression is used in an unexpected way:
+                This `foo` record doesn’t have a `if` field:
 
                 3│  foo.if
                     ^^^^^^
 
-                This `foo` value is a:
-
-                    {}
-
-                But you are trying to use it as:
-
-                    { if : a }b
-
-
+                In fact, `foo` is a record with no fields at all!
             "#
             ),
         )
@@ -6184,10 +6182,10 @@ I need all branches in an `if` to have the same type!
 
                 Did you mean one of these?
 
-                    Nat
                     Str
                     Err
-                    U8
+                    Box
+                    Set
                 "#
             ),
         )
@@ -6390,7 +6388,7 @@ I need all branches in an `if` to have the same type!
                 2│      exposes [ main, Foo ]
                                              ^
 
-                I am expecting the `imports` keyword next, like 
+                I am expecting the `imports` keyword next, like
 
                     imports [ Animal, default, tame ]
                 "#
@@ -6807,7 +6805,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                mult : Num *, F64 -> F64
+                mult : Num.Num *, Num.F64 -> Num.F64
                 mult = \a, b -> a * b
 
                 mult 0 0
@@ -6834,7 +6832,7 @@ I need all branches in an `if` to have the same type!
 
                 Something is off with the body of the `mult` definition:
 
-                1│  mult : Num *, F64 -> F64
+                1│  mult : Num.Num *, Num.F64 -> Num.F64
                 2│  mult = \a, b -> a * b
                                     ^^^^^
 
@@ -6855,7 +6853,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                mult : Num a, F64 -> F64
+                mult : Num.Num a, Num.F64 -> Num.F64
                 mult = \a, b -> a * b
 
                 mult 0 0
@@ -6882,7 +6880,7 @@ I need all branches in an `if` to have the same type!
 
                 Something is off with the body of the `mult` definition:
 
-                1│  mult : Num a, F64 -> F64
+                1│  mult : Num.Num a, Num.F64 -> Num.F64
                 2│  mult = \a, b -> a * b
                                     ^^^^^
 
@@ -6903,6 +6901,8 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
+                Result a b : [ Ok a, Err b ]
+
                 canIGo : _ -> Result _
                 canIGo = \color ->
                     when color is
@@ -6919,7 +6919,7 @@ I need all branches in an `if` to have the same type!
 
                 The `Result` alias expects 2 type arguments, but it got 1 instead:
 
-                1│  canIGo : _ -> Result _
+                3│  canIGo : _ -> Result _
                                   ^^^^^^^^
 
                 Are there missing parentheses?
@@ -6933,6 +6933,8 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
+                Result a b : [ Ok a, Err b ]
+
                 canIGo : _ -> Result _ _ _
                 canIGo = \color ->
                     when color is
@@ -6949,7 +6951,7 @@ I need all branches in an `if` to have the same type!
 
                 The `Result` alias expects 2 type arguments, but it got 3 instead:
 
-                1│  canIGo : _ -> Result _ _ _
+                3│  canIGo : _ -> Result _ _ _
                                   ^^^^^^^^^^^^
 
                 Are there missing parentheses?
@@ -7230,7 +7232,7 @@ I need all branches in an `if` to have the same type!
                 C a b : a -> D a b
                 D a b : { a, b }
 
-                f : C a Nat -> D a Nat
+                f : C a Num.Nat -> D a Num.Nat
                 f = \c -> c 6
                 f
                 "#
@@ -7499,7 +7501,7 @@ I need all branches in an `if` to have the same type!
                 report_problem_as(
                     &format!(indoc!(
                         r#"
-                        use : {} -> U8
+                        use : Num.{} -> Num.U8
                         use {}{}
                         "#
                     ), bad_type, number, $suffix),
@@ -8192,7 +8194,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 R a : [ Only (R a) ]
 
-                v : R U8
+                v : R Str
                 v
                 "#
             ),
@@ -8219,7 +8221,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 R a : [ Only { very: [ Deep (R a) ] } ]
 
-                v : R U8
+                v : R Str
                 v
                 "#
             ),
@@ -8247,28 +8249,28 @@ I need all branches in an `if` to have the same type!
                 Foo a : [ Thing (Bar a) ]
                 Bar a : [ Stuff (Foo a) ]
 
-                v : Bar U8
+                v : Bar Str
                 v
                 "#
             ),
             indoc!(
                 r#"
                 ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
-                
+
                 The `Foo` alias is recursive in an invalid way:
-                
+
                 1│  Foo a : [ Thing (Bar a) ]
                     ^^^
-                
+
                 The `Foo` alias depends on itself through the following chain of
                 definitions:
-                
+
                     ┌─────┐
                     │     Foo
                     │     ↓
                     │     Bar
                     └─────┘
-                
+
                 Recursion in aliases is only allowed if recursion happens behind a
                 tagged union, at least one variant of which is not recursive.
                 "#
@@ -8281,10 +8283,12 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
+                Result a b : [ Ok a, Err b ]
+
                 Foo a : [ Blah (Result (Bar a) []) ]
                 Bar a : Foo a
 
-                v : Bar U8
+                v : Bar Str
                 v
                 "#
             ),
@@ -8320,7 +8324,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Age : U8
+                Age : Num.U8
 
                 $Age 21
                 "#
@@ -8336,7 +8340,7 @@ I need all branches in an `if` to have the same type!
 
                 Note: There is an alias of the same name:
 
-                1│  Age : U8
+                1│  Age : Num.U8
                     ^^^
 
                 Note: It looks like there are no opaque types declared in this scope yet!
@@ -8345,8 +8349,8 @@ I need all branches in an `if` to have the same type!
 
                 `Age` is not used anywhere in your code.
 
-                1│  Age : U8
-                    ^^^^^^^^
+                1│  Age : Num.U8
+                    ^^^^^^^^^^^^
 
                 If you didn't intend on using `Age` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -8397,7 +8401,7 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 age =
-                    Age := U8
+                    Age := Num.U8
                     21u8
 
                 $Age age
@@ -8412,8 +8416,8 @@ I need all branches in an `if` to have the same type!
 
                 `Age` is not used anywhere in your code.
 
-                2│      Age := U8
-                        ^^^^^^^^^
+                2│      Age := Num.U8
+                        ^^^^^^^^^^^^^
 
                 If you didn't intend on using `Age` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -8467,7 +8471,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Age := U8
+                Age := Num.U8
 
                 n : Age
                 n = $Age ""
@@ -8576,9 +8580,9 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Age := U8
+                Age := Num.U8
 
-                f : Age -> U8
+                f : Age -> Num.U8
                 f = \Age n -> n
 
                 f
@@ -8687,7 +8691,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 F n := n
 
-                v : F U8
+                v : F Num.U8
 
                 when v is
                     $F 1 -> ""
@@ -8792,7 +8796,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                f : { x : Nat }U32
+                f : { x : Num.Nat }[]
                 f
                 "#
             ),
@@ -8802,8 +8806,8 @@ I need all branches in an `if` to have the same type!
 
                 This record extension type is invalid:
 
-                1│  f : { x : Nat }U32
-                                   ^^^
+                1│  f : { x : Num.Nat }[]
+                                       ^^
 
                 Note: A record extension variable can only contain a type variable or
                 another record.
@@ -8843,11 +8847,11 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 Type : [ Constructor UnknownType ]
-                
+
                 insertHelper : UnknownType, Type -> Type
                 insertHelper = \h, m ->
                     when m is
-                        Constructor _ -> Constructor h 
+                        Constructor _ -> Constructor h
 
                 insertHelper
                 "#
@@ -8862,25 +8866,25 @@ I need all branches in an `if` to have the same type!
                                          ^^^^^^^^^^^
 
                 Did you mean one of these?
-
+                
                     Type
-                    Unsigned8
-                    Unsigned32
-                    Unsigned16
-
+                    True
+                    Box
+                    Ok
+                
                 ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
-
+                
                 I cannot find a `UnknownType` value
-
+                
                 3│  insertHelper : UnknownType, Type -> Type
                                                         ^^^^
-
+                
                 Did you mean one of these?
-
+                
                     Type
-                    Unsigned8
-                    Unsigned32
-                    Unsigned16
+                    True
+                    insertHelper
+                    Box
                 "#
             ),
         )
@@ -9002,7 +9006,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                I : Int *
+                I : Num.Int *
                 a : I
                 a
                 "#
@@ -9013,8 +9017,8 @@ I need all branches in an `if` to have the same type!
 
                 The definition of `I` has an unbound type variable:
 
-                1│  I : Int *
-                            ^
+                1│  I : Num.Int *
+                                ^
 
                 Tip: Type variables must be bound before the `:`. Perhaps you intended
                 to add a type parameter to this type?
@@ -9028,7 +9032,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                I := Int *
+                I := Num.Int *
                 a : I
                 a
                 "#
@@ -9039,8 +9043,8 @@ I need all branches in an `if` to have the same type!
 
                 The definition of `I` has an unbound type variable:
 
-                1│  I := Int *
-                             ^
+                1│  I := Num.Int *
+                                 ^
 
                 Tip: Type variables must be bound before the `:=`. Perhaps you intended
                 to add a type parameter to this type?
@@ -9054,7 +9058,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                I : [ A (Int *), B (Int *) ]
+                I : [ A (Num.Int *), B (Num.Int *) ]
                 a : I
                 a
                 "#
@@ -9067,8 +9071,8 @@ I need all branches in an `if` to have the same type!
 
                 Here is one occurrence:
 
-                1│  I : [ A (Int *), B (Int *) ]
-                                 ^
+                1│  I : [ A (Num.Int *), B (Num.Int *) ]
+                                     ^
 
                 Tip: Type variables must be bound before the `:`. Perhaps you intended
                 to add a type parameter to this type?
@@ -9082,7 +9086,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                I : Int _
+                I : Num.Int _
                 a : I
                 a
                 "#
@@ -9093,8 +9097,8 @@ I need all branches in an `if` to have the same type!
 
                 The definition of `I` has an unbound type variable:
 
-                1│  I : Int _
-                            ^
+                1│  I : Num.Int _
+                                ^
 
                 Tip: Type variables must be bound before the `:`. Perhaps you intended
                 to add a type parameter to this type?
@@ -9108,7 +9112,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                I : Int a
+                I : Num.Int a
                 a : I
                 a
                 "#
@@ -9119,8 +9123,8 @@ I need all branches in an `if` to have the same type!
 
                 The definition of `I` has an unbound type variable:
 
-                1│  I : Int a
-                            ^
+                1│  I : Num.Int a
+                                ^
 
                 Tip: Type variables must be bound before the `:`. Perhaps you intended
                 to add a type parameter to this type?
@@ -9134,10 +9138,10 @@ I need all branches in an `if` to have the same type!
         new_report_problem_as(
             indoc!(
                 r#"
+                app "test" provides [] to "./platform"
+
                 Hash a b c has
                   hash : a -> U64 | a has Hash
-
-                1
                 "#
             ),
             indoc!(
@@ -9146,8 +9150,8 @@ I need all branches in an `if` to have the same type!
 
                 The definition of the `Hash` ability includes type variables:
 
-                4│      Hash a b c has
-                             ^^^^^
+                3│  Hash a b c has
+                         ^^^^^
 
                 Abilities cannot depend on type variables, but their member values
                 can!
@@ -9156,8 +9160,8 @@ I need all branches in an `if` to have the same type!
 
                 `Hash` is not used anywhere in your code.
 
-                4│      Hash a b c has
-                        ^^^^
+                3│  Hash a b c has
+                    ^^^^
 
                 If you didn't intend on using `Hash` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -9173,7 +9177,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 app "test" provides [ hash ] to "./platform"
 
-                Hash has hash : a, b -> U64 | a has Hash, b has Bool
+                Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
                 "#
             ),
             indoc!(
@@ -9182,8 +9186,8 @@ I need all branches in an `if` to have the same type!
 
                 The type referenced in this "has" clause is not an ability:
 
-                3│  Hash has hash : a, b -> U64 | a has Hash, b has Bool
-                                                                    ^^^^
+                3│  Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
+                                                                        ^^^^^^^^^
                 "#
             ),
         )
@@ -9225,12 +9229,13 @@ I need all branches in an `if` to have the same type!
         new_report_problem_as(
             indoc!(
                 r#"
+                app "test" provides [ a ] to "./platform"
+
                 Ability has ab : a -> {} | a has Ability
 
                 Alias : Ability
 
                 a : Alias
-                a
                 "#
             ),
             indoc!(
@@ -9239,8 +9244,8 @@ I need all branches in an `if` to have the same type!
 
                 The definition of the `Alias` aliases references the ability `Ability`:
 
-                6│      Alias : Ability
-                        ^^^^^
+                5│  Alias : Ability
+                    ^^^^^
 
                 Abilities are not types, but you can add an ability constraint to a
                 type variable `a` by writing
@@ -9253,8 +9258,8 @@ I need all branches in an `if` to have the same type!
 
                 `ab` is not used anywhere in your code.
 
-                4│      Ability has ab : a -> {} | a has Ability
-                                    ^^
+                3│  Ability has ab : a -> {} | a has Ability
+                                ^^
 
                 If you didn't intend on using `ab` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -9268,39 +9273,29 @@ I need all branches in an `if` to have the same type!
         new_report_problem_as(
             indoc!(
                 r#"
+                app "test" provides [ ab ] to "./platform"
+
                 Ability has ab : a -> U64 | a has Ability
 
                 Ability has ab1 : a -> U64 | a has Ability
-
-                1
                 "#
             ),
             indoc!(
                 r#"
                 ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
-
+                
                 The `Ability` name is first defined here:
 
-                4│      Ability has ab : a -> U64 | a has Ability
-                        ^^^^^^^
+                3│  Ability has ab : a -> U64 | a has Ability
+                    ^^^^^^^
 
                 But then it's defined a second time here:
 
-                6│      Ability has ab1 : a -> U64 | a has Ability
-                        ^^^^^^^
+                5│  Ability has ab1 : a -> U64 | a has Ability
+                    ^^^^^^^
 
                 Since these abilities have the same name, it's easy to use the wrong
                 one on accident. Give one of them a new name.
-
-                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
-
-                `ab` is not used anywhere in your code.
-
-                4│      Ability has ab : a -> U64 | a has Ability
-                                    ^^
-
-                If you didn't intend on using `ab` then remove it so future readers of
-                your code don't wonder why it is there.
                 "#
             ),
         )
@@ -9364,8 +9359,8 @@ I need all branches in an `if` to have the same type!
                 r#"
                 app "test" provides [ eq ] to "./platform"
 
-                Eq has eq : a, a -> Bool | a has Eq
-                Hash has hash : a, b -> U64 | a has Eq, b has Hash
+                Eq has eq : a, a -> Bool.Bool | a has Eq
+                Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
                 "#
             ),
             indoc!(
@@ -9375,8 +9370,8 @@ I need all branches in an `if` to have the same type!
                 The definition of the ability member `hash` includes a has clause
                 binding an ability it is not a part of:
 
-                4│  Hash has hash : a, b -> U64 | a has Eq, b has Hash
-                                                  ^^^^^^^^
+                4│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
+                                                      ^^^^^^^^
 
                 Currently, ability members can only bind variables to the ability they
                 are a part of.
@@ -9387,7 +9382,7 @@ I need all branches in an `if` to have the same type!
 
                 `hash` is not used anywhere in your code.
 
-                4│  Hash has hash : a, b -> U64 | a has Eq, b has Hash
+                4│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
                              ^^^^
 
                 If you didn't intend on using `hash` then remove it so future readers of
@@ -9404,7 +9399,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 app "test" provides [ ] to "./platform"
 
-                Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                Eq has eq : a, b -> Bool.Bool | a has Eq, b has Eq
                 "#
             ),
             indoc!(
@@ -9414,8 +9409,8 @@ I need all branches in an `if` to have the same type!
                 The definition of the ability member `eq` includes multiple variables
                 bound to the `Eq`` ability:`
 
-                3│  Eq has eq : a, b -> Bool | a has Eq, b has Eq
-                                               ^^^^^^^^^^^^^^^^^^
+                3│  Eq has eq : a, b -> Bool.Bool | a has Eq, b has Eq
+                                                    ^^^^^^^^^^^^^^^^^^
 
                 Ability members can only bind one type variable to their parent
                 ability. Otherwise, I wouldn't know what type implements an ability by
@@ -9427,7 +9422,7 @@ I need all branches in an `if` to have the same type!
 
                 `eq` is not used anywhere in your code.
 
-                3│  Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                3│  Eq has eq : a, b -> Bool.Bool | a has Eq, b has Eq
                            ^^
 
                 If you didn't intend on using `eq` then remove it so future readers of
@@ -9444,9 +9439,9 @@ I need all branches in an `if` to have the same type!
                 r#"
                 app "test" provides [ hash, f ] to "./platform"
 
-                Hash has hash : a -> U64 | a has Hash
+                Hash has hash : a -> Num.U64 | a has Hash
 
-                f : a -> U64 | a has Hash
+                f : a -> Num.U64 | a has Hash
                 "#
             ),
             indoc!(
@@ -9455,8 +9450,8 @@ I need all branches in an `if` to have the same type!
 
                 A `has` clause is not allowed here:
 
-                5│  f : a -> U64 | a has Hash
-                                   ^^^^^^^^^^
+                5│  f : a -> Num.U64 | a has Hash
+                                       ^^^^^^^^^^
 
                 `has` clauses can only be specified on the top-level type annotation of
                 an ability member.
@@ -9472,7 +9467,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 app "test" provides [ hash ] to "./platform"
 
-                Hash has hash : a -> U64 | a has Hash
+                Hash has hash : a -> Num.U64 | a has Hash
 
                 hash = \{} -> 0u64
                 "#
@@ -9776,6 +9771,35 @@ I need all branches in an `if` to have the same type!
 
                 4│      hash : a -> U64 | a has Hash
                         ^^^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ability_not_on_toplevel() {
+        new_report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                main =
+                    Hash has
+                        hash : a -> U64 | a has Hash
+
+                    123
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ABILITY NOT ON TOP-LEVEL ────────────────────────────────────────────────────
+
+                This ability definition is not on the top-level of a module:
+
+                4│>      Hash has
+                5│>          hash : a -> U64 | a has Hash
+
+                Abilities can only be defined on the top-level of a Roc module.
                 "#
             ),
         )

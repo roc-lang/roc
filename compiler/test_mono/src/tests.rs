@@ -275,7 +275,7 @@ fn ir_round() {
 #[mono_test]
 fn ir_when_idiv() {
     r#"
-    when Num.divFloorChecked 1000 10 is
+    when Num.divTruncChecked 1000 10 is
         Ok val -> val
         Err _ -> -1
     "#
@@ -1290,6 +1290,25 @@ fn issue_2811() {
         x = Command { tool: "bash" }
         Command c = x
         c.tool
+        "#
+    )
+}
+
+#[mono_test]
+fn specialize_ability_call() {
+    indoc!(
+        r#"
+        app "test" provides [ main ] to "./platform"
+
+        Hash has
+            hash : a -> U64 | a has Hash
+
+        Id := U64
+
+        hash : Id -> U64
+        hash = \$Id n -> n
+
+        main = hash ($Id 1234)
         "#
     )
 }

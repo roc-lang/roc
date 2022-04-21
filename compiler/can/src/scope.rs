@@ -95,13 +95,17 @@ impl Scope {
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
         match self.idents.get(ident) {
             Some((symbol, _)) => Ok(*symbol),
-            None => Err(RuntimeError::LookupNotInScope(
-                Loc {
-                    region,
-                    value: ident.clone(),
-                },
-                self.idents.keys().map(|v| v.as_ref().into()).collect(),
-            )),
+            None => {
+                let error = RuntimeError::LookupNotInScope(
+                    Loc {
+                        region,
+                        value: ident.clone(),
+                    },
+                    self.idents.keys().map(|v| v.as_ref().into()).collect(),
+                );
+
+                Err(error)
+            }
         }
     }
 

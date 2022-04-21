@@ -2,6 +2,10 @@ on: [pull_request]
 
 name: Benchmarks
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   RUST_BACKTRACE: 1
   ROC_NUM_WORKERS: 1
