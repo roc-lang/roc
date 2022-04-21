@@ -9,8 +9,7 @@ use crate::pattern::{bindings_from_patterns, canonicalize_def_header_pattern, Pa
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::Scope;
-use roc_collections::all::ImSet;
-use roc_collections::all::{default_hasher, ImEntry, ImMap, MutMap, MutSet, SendMap};
+use roc_collections::{default_hasher, ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -29,7 +28,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use ven_graph::{strongly_connected_components, topological_sort};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Def {
     pub loc_pattern: Loc<Pattern>,
     pub loc_expr: Loc<Expr>,
@@ -38,7 +37,7 @@ pub struct Def {
     pub annotation: Option<Annotation>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Annotation {
     pub signature: Type,
     pub introduced_variables: IntroducedVariables,
@@ -56,7 +55,7 @@ pub struct CanDefs {
 /// A Def that has had patterns and type annnotations canonicalized,
 /// but no Expr canonicalization has happened yet. Also, it has had spaces
 /// and nesting resolved, and knows whether annotations are standalone or not.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 enum PendingValueDef<'a> {
     /// A standalone annotation with no body
     AnnotationOnly(
@@ -79,7 +78,7 @@ enum PendingValueDef<'a> {
     ),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 enum PendingTypeDef<'a> {
     /// A structural or opaque type alias, e.g. `Ints : List Int` or `Age := U32` respectively.
     Alias {
@@ -97,6 +96,7 @@ enum PendingTypeDef<'a> {
     /// An invalid alias, that is ignored in the rest of the pipeline
     /// e.g. a shadowed alias, or a definition like `MyAlias 1 : Int`
     /// with an incorrect pattern
+    #[allow(dead_code)]
     InvalidAlias { kind: AliasKind },
 
     /// An invalid ability, that is ignored in the rest of the pipeline.
@@ -105,7 +105,7 @@ enum PendingTypeDef<'a> {
 }
 
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Declaration {
     Declare(Def),
@@ -342,8 +342,7 @@ pub fn canonicalize_defs<'a>(
 
                 // Record all the annotation's references in output.references.lookups
                 for symbol in can_ann.references {
-                    output.references.type_lookups.insert(symbol);
-                    output.references.referenced_type_defs.insert(symbol);
+                    output.references.insert_type_lookup(symbol);
                 }
 
                 let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
@@ -453,8 +452,7 @@ pub fn canonicalize_defs<'a>(
 
             // Record all the annotation's references in output.references.lookups
             for symbol in member_annot.references {
-                output.references.type_lookups.insert(symbol);
-                output.references.referenced_type_defs.insert(symbol);
+                output.references.insert_type_lookup(symbol);
             }
 
             let name_region = member.name.region;
@@ -577,9 +575,17 @@ pub fn canonicalize_defs<'a>(
     // once we've finished assembling the entire scope.
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
     for loc_def in value_defs.into_iter() {
-        match to_pending_value_def(env, var_store, loc_def.value, &mut scope, pattern_type) {
+        let mut new_output = Output::default();
+        match to_pending_value_def(
+            env,
+            var_store,
+            loc_def.value,
+            &mut scope,
+            &mut new_output,
+            pattern_type,
+        ) {
             None => { /* skip */ }
-            Some((new_output, pending_def)) => {
+            Some(pending_def) => {
                 // store the top-level defs, used to ensure that closures won't capture them
                 if let PatternType::TopLevelDef = pattern_type {
                     match &pending_def {
@@ -706,10 +712,10 @@ pub fn sort_can_defs(
                 let mut loc_succ = local_successors_with_duplicates(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
-                if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
+                if let Some(references) = env.closures.get(symbol) {
                     let home = env.home;
 
-                    for lookup in value_lookups.iter() {
+                    for lookup in references.value_lookups() {
                         if lookup != symbol && lookup.module_id() == home {
                             // DO NOT register a self-call behind a lambda!
                             //
@@ -759,8 +765,8 @@ pub fn sort_can_defs(
                 let mut loc_succ = local_successors_with_duplicates(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
-                if let Some(References { value_lookups, .. }) = env.closures.get(symbol) {
-                    for lookup in value_lookups.iter() {
+                if let Some(references) = env.closures.get(symbol) {
+                    for lookup in references.value_lookups() {
                         loc_succ.push(*lookup);
                     }
                 }
@@ -1182,8 +1188,7 @@ fn canonicalize_pending_value_def<'a>(
             // Record all the annotation's references in output.references.lookups
 
             for symbol in type_annotation.references.iter() {
-                output.references.type_lookups.insert(*symbol);
-                output.references.referenced_type_defs.insert(*symbol);
+                output.references.insert_type_lookup(*symbol);
             }
 
             add_annotation_aliases(&type_annotation, aliases);
@@ -1308,8 +1313,7 @@ fn canonicalize_pending_value_def<'a>(
 
             // Record all the annotation's references in output.references.lookups
             for symbol in type_annotation.references.iter() {
-                output.references.type_lookups.insert(*symbol);
-                output.references.referenced_type_defs.insert(*symbol);
+                output.references.insert_type_lookup(*symbol);
             }
 
             add_annotation_aliases(&type_annotation, aliases);
@@ -1388,7 +1392,7 @@ fn canonicalize_pending_value_def<'a>(
                     // Recursion doesn't count as referencing. (If it did, all recursive functions
                     // would result in circular def errors!)
                     refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
-                        refs.value_lookups.remove(&symbol);
+                        refs.remove_value_lookup(&symbol);
                     });
 
                     // renamed_closure_def = Some(&symbol);
@@ -1528,7 +1532,7 @@ fn canonicalize_pending_value_def<'a>(
                     // Recursion doesn't count as referencing. (If it did, all recursive functions
                     // would result in circular def errors!)
                     refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
-                        refs.value_lookups.remove(&symbol);
+                        refs.remove_value_lookup(&symbol);
                     });
 
                     loc_can_expr.value = Closure(ClosureData {
@@ -1623,8 +1627,7 @@ pub fn can_defs_with_return<'a>(
     // Now that we've collected all the references, check to see if any of the new idents
     // we defined went unused by the return expression. If any were unused, report it.
     for (symbol, region) in symbols_introduced {
-        if !output.references.has_value_lookup(symbol)
-            && !output.references.has_type_lookup(symbol)
+        if !output.references.has_type_or_value_lookup(symbol)
             && !scope.abilities_store.is_specialization_name(symbol)
         {
             env.problem(Problem::UnusedDef(symbol, region));
@@ -1672,7 +1675,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
     let mut stack = Vec::new();
 
     if let Some(references) = closures.get(&symbol) {
-        for v in references.calls.iter() {
+        for v in references.calls() {
             stack.push(*v);
         }
 
@@ -1688,7 +1691,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
                 // if it calls any functions
                 if let Some(nested_references) = closures.get(&nested_symbol) {
                     // add its called to the stack
-                    for v in nested_references.calls.iter() {
+                    for v in nested_references.calls() {
                         stack.push(*v);
                     }
                 }
@@ -1850,41 +1853,46 @@ fn to_pending_value_def<'a>(
     var_store: &mut VarStore,
     def: &'a ast::ValueDef<'a>,
     scope: &mut Scope,
+    output: &mut Output,
     pattern_type: PatternType,
-) -> Option<(Output, PendingValueDef<'a>)> {
+) -> Option<PendingValueDef<'a>> {
     use ast::ValueDef::*;
 
     match def {
         Annotation(loc_pattern, loc_ann) => {
             // This takes care of checking for shadowing and adding idents to scope.
-            let (output, loc_can_pattern) = canonicalize_def_header_pattern(
+            let loc_can_pattern = canonicalize_def_header_pattern(
                 env,
                 var_store,
                 scope,
+                output,
                 pattern_type,
                 &loc_pattern.value,
                 loc_pattern.region,
             );
 
-            Some((
-                output,
-                PendingValueDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_ann),
+            Some(PendingValueDef::AnnotationOnly(
+                loc_pattern,
+                loc_can_pattern,
+                loc_ann,
             ))
         }
         Body(loc_pattern, loc_expr) => {
             // This takes care of checking for shadowing and adding idents to scope.
-            let (output, loc_can_pattern) = canonicalize_def_header_pattern(
+            let loc_can_pattern = canonicalize_def_header_pattern(
                 env,
                 var_store,
                 scope,
+                output,
                 pattern_type,
                 &loc_pattern.value,
                 loc_pattern.region,
             );
 
-            Some((
-                output,
-                PendingValueDef::Body(loc_pattern, loc_can_pattern, loc_expr),
+            Some(PendingValueDef::Body(
+                loc_pattern,
+                loc_can_pattern,
+                loc_expr,
             ))
         }
 
@@ -1903,18 +1911,21 @@ fn to_pending_value_def<'a>(
                 // { x, y ? False } = rec
                 //
                 // This takes care of checking for shadowing and adding idents to scope.
-                let (output, loc_can_pattern) = canonicalize_def_header_pattern(
+                let loc_can_pattern = canonicalize_def_header_pattern(
                     env,
                     var_store,
                     scope,
+                    output,
                     pattern_type,
                     &body_pattern.value,
                     body_pattern.region,
                 );
 
-                Some((
-                    output,
-                    PendingValueDef::TypedBody(body_pattern, loc_can_pattern, ann_type, body_expr),
+                Some(PendingValueDef::TypedBody(
+                    body_pattern,
+                    loc_can_pattern,
+                    ann_type,
+                    body_expr,
                 ))
             } else {
                 // the pattern of the annotation does not match the pattern of the body direc

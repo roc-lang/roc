@@ -601,7 +601,7 @@ impl Constraints {
 
 roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub enum Constraint {
     Eq(
         EitherIndex<Type, Variable>,
@@ -643,13 +643,13 @@ pub enum Constraint {
     ),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct DefTypes {
     pub types: Slice<Type>,
     pub loc_symbols: Slice<(Symbol, Region)>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct LetConstraint {
     pub rigid_vars: Slice<Variable>,
     pub flex_vars: Slice<Variable>,
@@ -657,7 +657,7 @@ pub struct LetConstraint {
     pub defs_and_ret_constraint: Index<(Constraint, Constraint)>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct IncludesTag {
     pub type_index: Index<Type>,
     pub tag_name: TagName,

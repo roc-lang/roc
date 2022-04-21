@@ -108,7 +108,7 @@ pub struct EntryPoint<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct PartialProcId(usize);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PartialProcs<'a> {
     /// maps a function name (symbol) to an index
     symbols: Vec<'a, Symbol>,
@@ -190,7 +190,7 @@ impl<'a> PartialProcs<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
     pub pattern_symbols: &'a [Symbol],

@@ -1,5 +1,5 @@
 use crate::procedure::References;
-use roc_collections::all::{MutMap, VecSet};
+use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};

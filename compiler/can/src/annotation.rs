@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_collections::all::{ImMap, MutMap, MutSet, SendMap, VecSet};
+use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
@@ -12,7 +12,7 @@ use roc_types::types::{
     TypeExtension,
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Annotation {
     pub typ: Type,
     pub introduced_variables: IntroducedVariables,
@@ -68,14 +68,14 @@ pub struct AbleVariable {
     pub first_seen: Region,
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct IntroducedVariables {
     pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,
     pub inferred: Vec<Loc<Variable>>,
     pub named: VecSet<NamedVariable>,
     pub able: VecSet<AbleVariable>,
-    pub host_exposed_aliases: MutMap<Symbol, Variable>,
+    pub host_exposed_aliases: VecMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {
@@ -140,7 +140,7 @@ impl IntroducedVariables {
         self.lambda_sets.extend(other.lambda_sets.iter().copied());
         self.inferred.extend(other.inferred.iter().copied());
         self.host_exposed_aliases
-            .extend(other.host_exposed_aliases.clone());
+            .extend(other.host_exposed_aliases.iter().map(|(k, v)| (*k, *v)));
 
         self.named.extend(other.named.iter().cloned());
         self.able.extend(other.able.iter().cloned());

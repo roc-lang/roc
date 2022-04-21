@@ -4,7 +4,7 @@ use crate::env::Env;
 use crate::expr::{ClosureData, Expr, Recursive};
 use crate::pattern::Pattern;
 use crate::scope::Scope;
-use roc_collections::all::{SendMap, VecSet};
+use roc_collections::{SendMap, VecSet};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;

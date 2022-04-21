@@ -4,3 +4,9 @@
 
 pub mod all;
 pub mod soa;
+mod vec_map;
+mod vec_set;
+
+pub use all::{default_hasher, BumpMap, ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
+pub use vec_map::VecMap;
+pub use vec_set::VecSet;
