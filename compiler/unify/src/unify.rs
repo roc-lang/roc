@@ -577,15 +577,15 @@ fn unify_structure(
         RecursionVar { structure, .. } => match flat_type {
             FlatType::TagUnion(_, _) => {
                 // unify the structure with this unrecursive tag union
-                let mut problems = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
+                let mut outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
 
-                if problems.is_empty() {
-                    problems.extend(fix_tag_union_recursion_variable(
+                if outcome.mismatches.is_empty() {
+                    outcome.union(fix_tag_union_recursion_variable(
                         subs, ctx, ctx.first, other,
                     ));
                 }
 
-                problems
+                outcome
             }
             FlatType::RecursiveTagUnion(rec, _, _) => {
                 debug_assert!(is_recursion_var(subs, *rec));
@@ -594,15 +594,15 @@ fn unify_structure(
             }
             FlatType::FunctionOrTagUnion(_, _, _) => {
                 // unify the structure with this unrecursive tag union
-                let mut problems = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
+                let mut outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
 
-                if problems.is_empty() {
-                    problems.extend(fix_tag_union_recursion_variable(
+                if outcome.mismatches.is_empty() {
+                    outcome.union(fix_tag_union_recursion_variable(
                         subs, ctx, ctx.first, other,
                     ));
                 }
 
-                problems
+                outcome
             }
             // Only tag unions can be recursive; everything else is an error.
             _ => mismatch!(
@@ -707,7 +707,7 @@ fn fix_tag_union_recursion_variable(
     if !has_recursing_recursive_variable {
         merge(subs, ctx, *recursion_var)
     } else {
-        vec![]
+        Outcome::default()
     }
 }
 
