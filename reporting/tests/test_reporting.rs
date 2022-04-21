@@ -9470,7 +9470,7 @@ I need all branches in an `if` to have the same type!
 
                 `has` clauses can only be specified on the top-level type annotations.
 
-                ── ABILITY MEMBER MISSING HAS CLAUSE ───────────────────────────────────────────
+                ── ABILITY MEMBER MISSING HAS CLAUSE ───────────────────── /code/proj/Main.roc ─
 
                 The definition of the ability member `hash` does not include a `has`
                 clause binding a type variable to the ability `Hash`:
@@ -9485,7 +9485,7 @@ I need all branches in an `if` to have the same type!
 
                 Otherwise, the function does not need to be part of the ability!
 
-                ── UNUSED DEFINITION ───────────────────────────────────────────────────────────
+                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
 
                 `hash` is not used anywhere in your code.
 
@@ -9839,7 +9839,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── ABILITY NOT ON TOP-LEVEL ────────────────────────────────────────────────────
+                ── ABILITY NOT ON TOP-LEVEL ────────────────────────────── /code/proj/Main.roc ─
 
                 This ability definition is not on the top-level of a module:
 
@@ -9872,7 +9872,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
                 Something is off with the body of the `hashable` definition:
 
@@ -9923,7 +9923,7 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── ABILITY USED AS TYPE ────────────────────────────────────────────────────────
+                ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
 
                 You are attempting to use the ability `Hash` as a type directly:
 
@@ -9937,7 +9937,7 @@ I need all branches in an `if` to have the same type!
 
                     a has Hash
 
-                ── ABILITY USED AS TYPE ────────────────────────────────────────────────────────
+                ── ABILITY USED AS TYPE ────────────────────────────────── /code/proj/Main.roc ─
 
                 You are attempting to use the ability `Hash` as a type directly:
 
