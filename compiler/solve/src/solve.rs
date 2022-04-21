@@ -1188,34 +1188,26 @@ fn solve(
                     use {Content::*, FlatType::*};
 
                     let mut desc = subs.get(var);
-                    match desc.content {
-                        Structure(TagUnion(tags, ext)) => {
-                            match subs.get_content_without_compacting(ext) {
-                                Structure(FlatType::EmptyTagUnion) => {
-                                    let new_ext = subs.fresh_unnamed_flex_var();
-                                    subs.set_rank(new_ext, desc.rank);
-                                    let new_union = Structure(TagUnion(tags, new_ext));
-                                    desc.content = new_union;
-                                    subs.set(var, desc);
-                                }
-                                _ => {}
-                            }
+                    if let Structure(TagUnion(tags, ext)) = desc.content {
+                        if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
+                            let new_ext = subs.fresh_unnamed_flex_var();
+                            subs.set_rank(new_ext, desc.rank);
+                            let new_union = Structure(TagUnion(tags, new_ext));
+                            desc.content = new_union;
+                            subs.set(var, desc);
+                        }
 
-                            // Also open up all nested tag unions.
-                            let all_vars = tags.variables().into_iter();
-                            stack.extend(
-                                all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]),
-                            );
-                        }
-                        _ => {
-                            // Today, an "open" constraint doesn't affect any types
-                            // other than tag unions. Recursive tag unions are constructed
-                            // at a later time (during occurs checks after tag unions are
-                            // resolved), so that's not handled here either.
-                            // NB: Handle record types here if we add presence constraints
-                            // to their type inference as well.
-                        }
+                        // Also open up all nested tag unions.
+                        let all_vars = tags.variables().into_iter();
+                        stack.extend(all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]));
                     }
+
+                    // Today, an "open" constraint doesn't affect any types
+                    // other than tag unions. Recursive tag unions are constructed
+                    // at a later time (during occurs checks after tag unions are
+                    // resolved), so that's not handled here either.
+                    // NB: Handle record types here if we add presence constraints
+                    // to their type inference as well.
                 }
 
                 state
