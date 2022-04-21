@@ -45,11 +45,12 @@ fn walk_def<V: Visitor>(visitor: &mut V, def: &Def) {
         ..
     } = def;
 
-    visitor.visit_pattern(
-        &loc_pattern.value,
-        loc_pattern.region,
-        loc_pattern.value.opt_var(),
-    );
+    let opt_var = match loc_pattern.value {
+        Pattern::Identifier(..) | Pattern::AbilityMemberSpecialization { .. } => Some(*expr_var),
+        _ => loc_pattern.value.opt_var(),
+    };
+
+    visitor.visit_pattern(&loc_pattern.value, loc_pattern.region, opt_var);
     visitor.visit_expr(&loc_expr.value, loc_expr.region, *expr_var);
     if let Some(annot) = &annotation {
         visitor.visit_annotation(annot);
@@ -69,6 +70,9 @@ fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr) {
             exhaustive: _,
         } => {
             walk_when(visitor, *cond_var, *expr_var, loc_cond, branches);
+        }
+        Expr::Call(f, loc_args, _) => {
+            walk_call(visitor, f, loc_args);
         }
         e => todo!("{:?}", e),
     }
@@ -118,6 +122,18 @@ fn walk_when_branch<V: Visitor>(visitor: &mut V, branch: &WhenBranch, expr_var: 
     if let Some(guard) = guard {
         visitor.visit_expr(&guard.value, guard.region, Variable::BOOL);
     }
+}
+
+fn walk_call<V: Visitor>(
+    visitor: &mut V,
+    f: &(Variable, Loc<Expr>, Variable, Variable),
+    loc_args: &[(Variable, Loc<Expr>)],
+) {
+    let (fn_var, loc_fn_expr, _lambda_set, _ret) = f;
+    visitor.visit_expr(&loc_fn_expr.value, loc_fn_expr.region, *fn_var);
+    loc_args
+        .iter()
+        .for_each(|(v, e)| visitor.visit_expr(&e.value, e.region, *v));
 }
 
 fn walk_pattern<V: Visitor>(_visitor: &mut V, _pat: &Pattern) {

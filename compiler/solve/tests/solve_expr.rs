@@ -25,7 +25,8 @@ mod solve_expr {
     // HELPERS
 
     lazy_static! {
-        static ref RE_TYPE_QUERY: Regex = Regex::new(r#"^\s*#\s*(?P<where>\^+)\s*$"#).unwrap();
+        static ref RE_TYPE_QUERY: Regex =
+            Regex::new(r#"(?P<where>\^+)(?:\{-(?P<sub>\d+)\})?"#).unwrap();
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -35,9 +36,14 @@ mod solve_expr {
         let line_info = LineInfo::new(src);
         let mut queries = vec![];
         for (i, line) in src.lines().enumerate() {
-            if let Some(capture) = RE_TYPE_QUERY.captures(line) {
+            for capture in RE_TYPE_QUERY.captures_iter(line) {
                 let wher = capture.name("where").unwrap();
+                let subtract_col = capture
+                    .name("sub")
+                    .and_then(|m| str::parse(m.as_str()).ok())
+                    .unwrap_or(0);
                 let (start, end) = (wher.start() as u32, wher.end() as u32);
+                let (start, end) = (start - subtract_col, end - subtract_col);
                 let last_line = i as u32 - 1;
                 let start_lc = LineColumn {
                     line: last_line,
@@ -273,7 +279,8 @@ mod solve_expr {
             let start = region.start().offset;
             let end = region.end().offset;
             let text = &src[start as usize..end as usize];
-            let var = find_type_at(region, &decls).expect(&format!("No type for {}!", &text));
+            let var = find_type_at(region, &decls)
+                .expect(&format!("No type for {} ({:?})!", &text, region));
 
             name_all_type_vars(var, subs);
             let content = subs.get_content_without_compacting(var);
@@ -6232,6 +6239,38 @@ mod solve_expr {
                 "#
             ),
             "F b -> b",
+        );
+    }
+
+    #[test]
+    fn ability_member_takes_different_able_variable() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test" provides [ result ] to "./platform"
+
+                Hash has hash : a -> U64 | a has Hash
+
+                IntoHash has intoHash : a, b -> b | a has IntoHash, b has Hash
+
+                Id := U64
+                hash = \$Id n -> n
+                #^^^^{-1}
+
+                User := Id
+                intoHash = \$User id, _ -> id
+                #^^^^^^^^{-1}
+
+                result = hash (intoHash ($User ($Id 123)) ($Id 1))
+                #        ^^^^  ^^^^^^^^
+                "#
+            ),
+            &[
+                "hash : Id -> U64",
+                "intoHash : User, Id -> Id",
+                "hash : Id -> U64",
+                "intoHash : User, Id -> Id",
+            ],
         )
     }
 

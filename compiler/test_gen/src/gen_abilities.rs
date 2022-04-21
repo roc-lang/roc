@@ -216,3 +216,29 @@ fn ability_used_as_type_still_compiles() {
         u64
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn ability_member_takes_different_able_variable() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ result ] to "./platform"
+
+            Hash has hash : a -> U64 | a has Hash
+
+            IntoHash has intoHash : a, b -> b | a has IntoHash, b has Hash
+
+            Id := U64
+            hash = \$Id n -> n
+
+            User := Id
+            intoHash = \$User id, _ -> id
+
+            result = hash (intoHash ($User ($Id 123)) ($Id 1))
+            "#
+        ),
+        123,
+        u64
+    )
+}

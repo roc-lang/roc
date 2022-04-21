@@ -173,9 +173,12 @@ pub fn type_implementing_member(
             let ability_implementations_for_specialization =
                 specialization_must_implement_constraints
                     .clone()
-                    .get_unique();
+                    .get_unique()
+                    .into_iter()
+                    .filter(|mia| mia.ability == ability)
+                    .count();
 
-            ability_implementations_for_specialization.len()
+            ability_implementations_for_specialization
         },
         1,
         "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization: {:?}",

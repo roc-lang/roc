@@ -4922,6 +4922,14 @@ fn get_specialization<'a>(
         Some(member) => {
             let snapshot = env.subs.snapshot();
             instantiate_rigids(env.subs, member.signature_var);
+            let this_f = env.subs.get_content_without_compacting(symbol_var);
+            let member_f = env
+                .subs
+                .get_content_without_compacting(member.signature_var);
+            use roc_types::subs::SubsFmtContent;
+            let this_f = SubsFmtContent(&this_f, env.subs);
+            let member_f = SubsFmtContent(&member_f, env.subs);
+            dbg!(symbol, this_f, member_f);
             let (_, must_implement_ability) = unify(
                 env.subs,
                 symbol_var,

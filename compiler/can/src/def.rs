@@ -578,12 +578,14 @@ fn resolve_abilities<'a>(
 
             // What variables in the annotation are bound to the parent ability, and what variables
             // are bound to some other ability?
-            let (variables_bound_to_ability, variables_bound_to_other_abilities): (Vec<_>, Vec<_>) =
-                member_annot
-                    .introduced_variables
-                    .able
-                    .iter()
-                    .partition(|av| av.ability == loc_ability_name.value);
+            let (variables_bound_to_ability, _variables_bound_to_other_abilities): (
+                Vec<_>,
+                Vec<_>,
+            ) = member_annot
+                .introduced_variables
+                .able
+                .iter()
+                .partition(|av| av.ability == loc_ability_name.value);
 
             let mut bad_has_clauses = false;
 
@@ -615,18 +617,6 @@ fn resolve_abilities<'a>(
                     span_has_clauses,
                     bound_var_names,
                 });
-                bad_has_clauses = true;
-            }
-
-            if !variables_bound_to_other_abilities.is_empty() {
-                // Disallow variables bound to other abilities, for now.
-                for bad_variable in variables_bound_to_other_abilities.iter() {
-                    env.problem(Problem::AbilityMemberBindsExternalAbility {
-                        member: member_sym,
-                        ability: loc_ability_name.value,
-                        region: bad_variable.first_seen,
-                    });
-                }
                 bad_has_clauses = true;
             }
 
