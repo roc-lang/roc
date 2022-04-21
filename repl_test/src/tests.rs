@@ -901,8 +901,7 @@ fn parse_problem() {
 
 #[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
-#[ignore = "temporary"]
-fn mono_problem() {
+fn exhautiveness_problem() {
     expect_failure(
         r#"
             t : [A, B, C]
@@ -913,22 +912,29 @@ fn mono_problem() {
             "#,
         indoc!(
             r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+            ── TYPE MISMATCH ──────────────────────────────────────────────────── REPL.roc ─
 
-                This when does not cover all the possibilities:
+            This expression is used in an unexpected way:
 
-                7│>                  when t is
-                8│>                      A -> "a"
+            7│>                  when t is
+            8│>                      A -> "a"
 
-                Other possibilities include:
+            This t value is a:
 
-                    B
-                    C
-
-                I would have to crash if I saw one of those! Add branches for them!
-
-
-                Enter an expression, or :help, or :exit/:q."#
+                [ A, B, C ]
+            
+            But you are trying to use it as:
+            
+                [ A ]
+            
+            Tip: Seems like a tag typo. Maybe C should be A?
+            
+            Tip: Can more type annotations be added? Type annotations always help
+            me give more specific messages, and I think they could help a lot in
+            this case
+            
+            
+            Enter an expression, or :help, or :exit/:q."#
         ),
     );
 }
