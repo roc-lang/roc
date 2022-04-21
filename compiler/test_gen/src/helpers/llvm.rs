@@ -106,7 +106,6 @@ fn create_llvm_module<'a>(
 
         use roc_problem::can::Problem::*;
         for problem in can_problems.into_iter() {
-            dbg!(&problem);
             match problem {
                 // Ignore "unused" problems
                 UnusedDef(_, _)
