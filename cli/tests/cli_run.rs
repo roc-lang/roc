@@ -844,7 +844,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
 
                 I cannot find a `d` value
 
@@ -870,7 +870,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── MISSING DEFINITION ──────────────────────────────────────────────────────────
+                ── MISSING DEFINITION ────────────────── tests/known_bad/ExposedNotDefined.roc ─
 
                 bar is listed as exposed, but it isn't defined in this module.
 
@@ -889,7 +889,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNUSED IMPORT ───────────────────────────────────────────────────────────────
+                ── UNUSED IMPORT ──────────────────────────── tests/known_bad/UnusedImport.roc ─
 
                 Nothing from Symbol is used in this module.
 
@@ -910,7 +910,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNKNOWN GENERATES FUNCTION ──────────────────────────────────────────────────
+                ── UNKNOWN GENERATES FUNCTION ─────── tests/known_bad/UnknownGeneratesWith.roc ─
 
                 I don't know how to generate the foobar function.
 

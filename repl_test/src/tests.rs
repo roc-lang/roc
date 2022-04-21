@@ -575,7 +575,7 @@ fn too_few_args() {
         "Num.add 2",
         indoc!(
             r#"
-                ── TOO FEW ARGS ────────────────────────────────────────────────────────────────
+                ── TOO FEW ARGS ───────────────────────────────────────────────────── REPL.roc ─
 
                 The add function expects 2 arguments, but it got only 1:
 
@@ -596,7 +596,7 @@ fn type_problem() {
         "1 + \"\"",
         indoc!(
             r#"
-                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                ── TYPE MISMATCH ──────────────────────────────────────────────────── REPL.roc ─
 
                 The 2nd argument to add is not what I expect:
 
@@ -882,7 +882,7 @@ fn parse_problem() {
         "add m n = m + n",
         indoc!(
             r#"
-                ── ARGUMENTS BEFORE EQUALS ─────────────────────────────────────────────────────
+                ── ARGUMENTS BEFORE EQUALS ────────────────────────────────────────── REPL.roc ─
 
                 I am partway through parsing a definition, but I got stuck here:
 
@@ -912,7 +912,7 @@ fn mono_problem() {
             "#,
         indoc!(
             r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+                ── UNSAFE PATTERN ─────────────────────────────────────────────────── REPL.roc ─
 
                 This when does not cover all the possibilities:
 
@@ -948,7 +948,7 @@ fn issue_2343_complete_mono_with_shadowed_vars() {
         ),
         indoc!(
             r#"
-                ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
+                ── DUPLICATE NAME ─────────────────────────────────────────────────── REPL.roc ─
 
                 The b name is first defined here:
 
