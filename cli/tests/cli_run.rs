@@ -61,13 +61,19 @@ mod cli_run {
             .replace(ANSI_STYLE_CODES.bold, "")
             .replace(ANSI_STYLE_CODES.underline, "")
             .replace(ANSI_STYLE_CODES.reset, "")
+            .replace(ANSI_STYLE_CODES.color_reset, "")
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
         let compile_out = run_roc(&[&["check", file.to_str().unwrap()], flags].concat());
         let err = compile_out.stdout.trim();
         let err = strip_colors(err);
-        assert_multiline_str_eq!(err, expected.into());
+
+        // e.g. "1 error and 0 warnings found in 123 ms."
+        let (before_first_digit, _) = err.split_at(err.rfind("found in ").unwrap());
+        let err = format!("{}found in <ignored for test> ms.", before_first_digit);
+
+        assert_multiline_str_eq!(err.as_str(), expected.into());
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
@@ -175,8 +181,8 @@ mod cli_run {
         };
         if !&out.stdout.ends_with(expected_ending) {
             panic!(
-                "expected output to end with {:?} but instead got {:#?}",
-                expected_ending, out.stdout
+                "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
+                expected_ending, out.stdout, out.stderr
             );
         }
         assert!(out.status.success());
@@ -858,7 +864,9 @@ mod cli_run {
                     I8
                     F64
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }
@@ -877,7 +885,9 @@ mod cli_run {
                 You can fix this by adding a definition for bar, or by removing it
                 from exposes.
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }
@@ -898,7 +908,9 @@ mod cli_run {
 
                 Since Symbol isn't used, you don't need to import it.
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                0 errors and 1 warning found in <ignored for test> ms."#
             ),
         );
     }
@@ -920,7 +932,9 @@ mod cli_run {
                 Only specific functions like `after` and `map` can be generated.Learn
                 more about hosted modules at TODO.
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }

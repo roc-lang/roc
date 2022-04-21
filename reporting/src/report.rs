@@ -248,6 +248,7 @@ pub struct StyleCodes {
     pub bold: &'static str,
     pub underline: &'static str,
     pub reset: &'static str,
+    pub color_reset: &'static str,
 }
 
 pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
@@ -261,6 +262,7 @@ pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
     bold: "\u{001b}[1m",
     underline: "\u{001b}[4m",
     reset: "\u{001b}[0m",
+    color_reset: "\u{1b}[39m",
 };
 
 macro_rules! html_color {
@@ -280,6 +282,7 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     bold: "<span style='font-weight: bold'>",
     underline: "<span style='text-decoration: underline'>",
     reset: "</span>",
+    color_reset: "</span>",
 };
 
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
