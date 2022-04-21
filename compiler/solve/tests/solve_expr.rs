@@ -255,8 +255,15 @@ mod solve_expr {
         let can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
 
-        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
-        assert_eq!(type_problems, Vec::new(), "Type problems: ");
+        let (can_problems, type_problems) =
+            format_problems(&src, home, &interns, can_problems, type_problems);
+
+        assert!(
+            can_problems.is_empty(),
+            "Canonicalization problems: {}",
+            can_problems
+        );
+        assert!(type_problems.is_empty(), "Type problems: {}", type_problems);
 
         let queries = parse_queries(&src);
         assert!(!queries.is_empty(), "No queries provided!");
