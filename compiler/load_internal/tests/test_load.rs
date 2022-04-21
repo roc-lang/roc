@@ -856,7 +856,7 @@ mod test_load {
             ),
         ];
 
-        match multiple_modules(modules) {
+        match multiple_modules("issue_2863_module_type_does_not_exist", modules) {
             Err(report) => {
                 assert_eq!(
                     report,

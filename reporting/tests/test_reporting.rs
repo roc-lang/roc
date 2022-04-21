@@ -9825,6 +9825,7 @@ I need all branches in an `if` to have the same type!
     #[test]
     fn ability_not_on_toplevel() {
         new_report_problem_as(
+            "ability_not_on_toplevel",
             indoc!(
                 r#"
                 app "test" provides [ main ] to "./platform"
