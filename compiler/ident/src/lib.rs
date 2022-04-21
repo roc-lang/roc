@@ -202,8 +202,19 @@ impl From<&str> for IdentStr {
 }
 
 impl From<String> for IdentStr {
-    fn from(str: String) -> Self {
-        Self::from_str(&str)
+    fn from(string: String) -> Self {
+        if string.len() <= Self::SMALL_STR_BYTES {
+            Self::from_str(string.as_str())
+        } else {
+            // Take over the string's heap allocation
+            let length = string.len();
+            let elements = string.as_ptr();
+
+            // Make sure the existing string doesn't get dropped.
+            std::mem::forget(string);
+
+            Self { elements, length }
+        }
     }
 }
 

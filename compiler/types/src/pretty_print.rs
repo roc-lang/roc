@@ -248,7 +248,12 @@ fn name_root(
     subs: &mut Subs,
     taken: &mut MutSet<Lowercase>,
 ) -> u32 {
-    let (generated_name, new_letters_used) = name_type_var(letters_used, taken);
+    let (generated_name, new_letters_used) =
+        name_type_var(letters_used, &mut taken.iter(), |var, str| {
+            var.as_str() == str
+        });
+
+    taken.insert(generated_name.clone());
 
     set_root_name(root, generated_name, subs);
 
