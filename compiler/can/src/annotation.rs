@@ -398,14 +398,11 @@ pub fn find_type_def_symbols(
     result
 }
 
-/// Generates a fresh type variable name. PERF: not super performant, don't prefer using this in
-/// non-degenerate compilation paths!
 fn find_fresh_var_name(introduced_variables: &IntroducedVariables) -> Lowercase {
-    let mut taken = introduced_variables
-        .iter_named()
-        .map(|v| v.name().clone())
-        .collect();
-    name_type_var(0, &mut taken).0
+    name_type_var(0, &mut introduced_variables.iter_named(), |var, str| {
+        var.name().as_str() == str
+    })
+    .0
 }
 
 #[allow(clippy::too_many_arguments)]
