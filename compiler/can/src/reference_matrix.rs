@@ -51,17 +51,14 @@ impl ReferenceMatrix {
 // Thank you, Samuel!
 impl ReferenceMatrix {
     pub fn topological_sort_into_groups(&self) -> TopologicalSort {
-        let length = self.length;
-        let bitvec = &self.bitvec;
-
-        if length == 0 {
+        if self.length == 0 {
             return TopologicalSort::Groups { groups: Vec::new() };
         }
 
-        let mut preds_map: Vec<i64> = vec![0; length];
+        let mut preds_map: Vec<i64> = vec![0; self.length];
 
         // this is basically summing the columns, I don't see a better way to do it
-        for row in bitvec.chunks(length) {
+        for row in self.bitvec.chunks(self.length) {
             for succ in row.iter_ones() {
                 preds_map[succ] += 1;
             }
@@ -83,7 +80,7 @@ impl ReferenceMatrix {
             .collect();
 
         if prev_group.is_empty() {
-            let remaining: Vec<u32> = (0u32..length as u32).collect();
+            let remaining: Vec<u32> = (0u32..self.length as u32).collect();
 
             return TopologicalSort::HasCycles {
                 groups: Vec::new(),
@@ -94,8 +91,7 @@ impl ReferenceMatrix {
         while preds_map.iter().any(|x| *x > 0) {
             let mut next_group = Vec::<u32>::new();
             for node in &prev_group {
-                let row = &bitvec[length * (*node as usize)..][..length];
-                for succ in row.iter_ones() {
+                for succ in self.references_for(*node as usize) {
                     {
                         let num_preds = preds_map.get_mut(succ).unwrap();
                         *num_preds = num_preds.saturating_sub(1);
@@ -116,7 +112,7 @@ impl ReferenceMatrix {
             }
             groups.push(std::mem::replace(&mut prev_group, next_group));
             if prev_group.is_empty() {
-                let remaining: Vec<u32> = (0u32..length as u32)
+                let remaining: Vec<u32> = (0u32..self.length as u32)
                     .filter(|i| preds_map[*i as usize] > 0)
                     .collect();
 
