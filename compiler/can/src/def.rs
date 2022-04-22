@@ -7,6 +7,7 @@ use crate::expr::Expr::{self, *};
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{bindings_from_patterns, canonicalize_def_header_pattern, Pattern};
 use crate::procedure::References;
+use crate::reference_matrix::ReferenceMatrix;
 use crate::scope::create_alias;
 use crate::scope::Scope;
 use roc_collections::{default_hasher, ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
@@ -670,21 +671,19 @@ struct DefOrdering {
     symbol_to_id: Vec<(IdentId, u32)>,
 
     // an length x length matrix indicating who references who
-    references: bitvec::vec::BitVec<u8>,
+    references: ReferenceMatrix,
 
     // references without looking into closure bodies.
     // Used to spot definitely-wrong recursion
-    direct_references: bitvec::vec::BitVec<u8>,
+    direct_references: ReferenceMatrix,
 
     length: u32,
 }
 
 impl DefOrdering {
     fn with_capacity(home: ModuleId, capacity: usize) -> Self {
-        use bitvec::vec::BitVec;
-
-        let references = BitVec::repeat(false, capacity * capacity);
-        let direct_references = BitVec::repeat(false, capacity * capacity);
+        let references = ReferenceMatrix::new(capacity);
+        let direct_references = ReferenceMatrix::new(capacity);
 
         Self {
             home,
@@ -753,7 +752,7 @@ impl DefOrdering {
         id: DefId,
         referenced: Option<u32>,
         length: usize,
-        bitvec: &mut bitvec::vec::BitVec<u8>,
+        refmatrix: &mut ReferenceMatrix,
     ) -> bool {
         match referenced {
             None => {
@@ -766,7 +765,7 @@ impl DefOrdering {
 
                 let index = row * length + column;
 
-                bitvec.set(index, true);
+                refmatrix.set(index, true);
 
                 true
             }
@@ -805,122 +804,26 @@ impl DefOrdering {
         // id'th row, id'th column
         let index = (id * self.length) + id;
 
-        self.references[index as usize]
+        self.references.get(index as usize)
     }
 
     #[inline(always)]
     fn direct_successors(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
-        let row = &self.direct_references[(id * self.length) as usize..][..self.length as usize];
-
-        row.iter_ones().map(|x| x as u32)
+        self.direct_references
+            .references_for(id as usize)
+            .map(|x| x as u32)
     }
 
     #[inline(always)]
     fn successors(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
-        let row = &self.references[(id * self.length) as usize..][..self.length as usize];
-
-        row.iter_ones().map(|x| x as u32)
+        self.references
+            .references_for(id as usize)
+            .map(|x| x as u32)
     }
 
     #[inline(always)]
     fn successors_without_self(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
         self.successors(id).filter(move |x| *x != id)
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn topological_sort_into_groups(&self) -> Result<Vec<Vec<u32>>, (Vec<Vec<u32>>, Vec<u32>)> {
-        let length = self.length as usize;
-        let bitvec = &self.references;
-
-        if length == 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut preds_map: Vec<i64> = vec![0; length];
-
-        // this is basically summing the columns, I don't see a better way to do it
-        for row in bitvec.chunks(length) {
-            for succ in row.iter_ones() {
-                preds_map[succ] += 1;
-            }
-        }
-
-        let mut groups = Vec::<Vec<u32>>::new();
-
-        // the initial group contains all symbols with no predecessors
-        let mut prev_group: Vec<u32> = preds_map
-            .iter()
-            .enumerate()
-            .filter_map(|(node, &num_preds)| {
-                if num_preds == 0 {
-                    Some(node as u32)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if prev_group.is_empty() {
-            let remaining: Vec<u32> = (0u32..length as u32).collect();
-            return Err((Vec::new(), remaining));
-        }
-
-        // NOTE: the original now removes elements from the preds_map if they have count 0
-        //    for node in &prev_group {
-        //        preds_map.remove(node);
-        //    }
-
-        while preds_map.iter().any(|x| *x > 0) {
-            let mut next_group = Vec::<u32>::new();
-            for node in &prev_group {
-                let row = &bitvec[length * (*node as usize)..][..length];
-                for succ in row.iter_ones() {
-                    {
-                        let num_preds = preds_map.get_mut(succ).unwrap();
-                        *num_preds = num_preds.saturating_sub(1);
-                        if *num_preds > 0 {
-                            continue;
-                        }
-                    }
-
-                    let count = preds_map[succ];
-                    preds_map[succ] = -1;
-
-                    if count > -1 {
-                        next_group.push(succ as u32);
-                    }
-                }
-            }
-            groups.push(std::mem::replace(&mut prev_group, next_group));
-            if prev_group.is_empty() {
-                let remaining: Vec<u32> = (0u32..length as u32)
-                    .filter(|i| preds_map[*i as usize] > 0)
-                    .collect();
-                return Err((groups, remaining));
-            }
-        }
-        groups.push(prev_group);
-        Ok(groups)
-    }
-
-    #[allow(dead_code)]
-    fn debug_relations(&self) {
-        for id in 0u32..self.length as u32 {
-            let row = &self.references[(id * self.length) as usize..][..self.length as usize];
-
-            let matches = row
-                .iter()
-                .enumerate()
-                .filter(move |t| *t.1)
-                .map(|t| t.0 as u32);
-
-            for m in matches {
-                let a = self.get_symbol(id).unwrap();
-                let b = self.get_symbol(m).unwrap();
-
-                println!("{:?} <- {:?}", a, b);
-            }
-        }
     }
 }
 
@@ -945,7 +848,7 @@ pub fn sort_can_defs(
 
     // TODO also do the same `addDirects` check elm/compiler does, so we can
     // report an error if a recursive definition can't possibly terminate!
-    match def_ids.topological_sort_into_groups() {
+    match def_ids.references.topological_sort_into_groups() {
         Ok(groups) => {
             let mut declarations = Vec::new();
 
@@ -977,11 +880,9 @@ pub fn sort_can_defs(
             //
             // foo = if b then foo else bar
 
-            let sccs = strongly_connected_components(
-                def_ids.length as usize,
-                &def_ids.references,
-                &nodes_in_cycle,
-            );
+            let sccs = def_ids
+                .references
+                .strongly_connected_components(&nodes_in_cycle);
 
             for cycle in sccs {
                 // check whether the cycle is faulty, which is when it has
@@ -1109,111 +1010,6 @@ pub fn sort_can_defs(
     }
 }
 
-fn strongly_connected_components(
-    length: usize,
-    bitvec: &bitvec::vec::BitVec<u8>,
-    group: &[u32],
-) -> Vec<Vec<u32>> {
-    let mut params = Params::new(length, group);
-
-    'outer: loop {
-        for (node, value) in params.preorders.iter().enumerate() {
-            if let Preorder::Removed = value {
-                continue;
-            }
-
-            recurse_onto(length, bitvec, node, &mut params);
-
-            continue 'outer;
-        }
-
-        break params.scc;
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Preorder {
-    Empty,
-    Filled(usize),
-    Removed,
-}
-
-struct Params {
-    preorders: Vec<Preorder>,
-    c: usize,
-    p: Vec<u32>,
-    s: Vec<u32>,
-    scc: Vec<Vec<u32>>,
-    scca: Vec<u32>,
-}
-
-impl Params {
-    fn new(length: usize, group: &[u32]) -> Self {
-        let mut preorders = vec![Preorder::Removed; length];
-
-        for value in group {
-            preorders[*value as usize] = Preorder::Empty;
-        }
-
-        Self {
-            preorders,
-            c: 0,
-            s: Vec::new(),
-            p: Vec::new(),
-            scc: Vec::new(),
-            scca: Vec::new(),
-        }
-    }
-}
-
-fn recurse_onto(length: usize, bitvec: &bitvec::vec::BitVec<u8>, v: usize, params: &mut Params) {
-    params.preorders[v] = Preorder::Filled(params.c);
-
-    params.c += 1;
-
-    params.s.push(v as u32);
-    params.p.push(v as u32);
-
-    for w in bitvec[v * length..][..length].iter_ones() {
-        if !params.scca.contains(&(w as u32)) {
-            match params.preorders[w] {
-                Preorder::Filled(pw) => loop {
-                    let index = *params.p.last().unwrap();
-
-                    match params.preorders[index as usize] {
-                        Preorder::Empty => unreachable!(),
-                        Preorder::Filled(current) => {
-                            if current > pw {
-                                params.p.pop();
-                            } else {
-                                break;
-                            }
-                        }
-                        Preorder::Removed => {}
-                    }
-                },
-                Preorder::Empty => recurse_onto(length, bitvec, w, params),
-                Preorder::Removed => {}
-            }
-        }
-    }
-
-    if params.p.last() == Some(&(v as u32)) {
-        params.p.pop();
-
-        let mut component = Vec::new();
-        while let Some(node) = params.s.pop() {
-            component.push(node);
-            params.scca.push(node);
-            params.preorders[node as usize] = Preorder::Removed;
-            if node as usize == v {
-                break;
-            }
-        }
-        params.scc.push(component);
-    }
-}
-
 fn group_to_declaration(
     def_ids: &DefOrdering,
     group: &[u32],
@@ -1232,7 +1028,7 @@ fn group_to_declaration(
     // for a definition, so every definition is only inserted (thus typechecked and emitted) once
     let mut seen_pattern_regions: Vec<Region> = Vec::with_capacity(2);
 
-    let sccs = strongly_connected_components(def_ids.length as usize, &def_ids.references, group);
+    let sccs = def_ids.references.strongly_connected_components(group);
 
     for cycle in sccs {
         if cycle.len() == 1 {

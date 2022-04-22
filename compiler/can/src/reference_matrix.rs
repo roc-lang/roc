@@ -3,6 +3,7 @@ pub(crate) type Element = u8;
 pub(crate) type BitVec = bitvec::vec::BitVec<Element>;
 pub(crate) type BitSlice = bitvec::prelude::BitSlice<Element>;
 
+#[derive(Debug)]
 pub(crate) struct ReferenceMatrix {
     bitvec: BitVec,
     length: usize,
@@ -25,26 +26,19 @@ impl ReferenceMatrix {
         &self.bitvec[row * self.length..][..self.length]
     }
 
-    pub const fn len(&self) -> usize {
-        self.length
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.length == 0
-    }
-
     #[inline(always)]
-    fn set(&mut self, index: usize, value: bool) {
+    pub fn set(&mut self, index: usize, value: bool) {
         self.bitvec.set(index, value)
     }
 
     #[inline(always)]
-    fn get(&self, index: usize) -> bool {
+    pub fn get(&self, index: usize) -> bool {
         self.bitvec[index]
     }
 }
 
 impl ReferenceMatrix {
+    #[allow(clippy::type_complexity)]
     pub fn topological_sort_into_groups(&self) -> Result<Vec<Vec<u32>>, (Vec<Vec<u32>>, Vec<u32>)> {
         let length = self.length;
         let bitvec = &self.bitvec;
