@@ -723,7 +723,6 @@ pub fn constrain_expr(
 
             // Now check the condition against the type expected by the branches.
             let sketched_rows = sketch_rows(real_cond_var, branches_region, &branches);
-            // let exhaustive_reason = Reason::Exhaustive(sketched_rows, ExhaustiveContext::BadCase);
             let cond_matches_branches_constraint = constraints.exhaustive(
                 real_cond_var,
                 loc_cond.region,
