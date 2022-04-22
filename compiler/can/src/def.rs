@@ -665,7 +665,7 @@ pub fn canonicalize_defs<'a>(
 struct DefId(u32);
 
 #[derive(Debug)]
-struct DefIds {
+struct DefOrdering {
     home: ModuleId,
     symbol_to_id: Vec<(IdentId, u32)>,
 
@@ -679,7 +679,7 @@ struct DefIds {
     length: u32,
 }
 
-impl DefIds {
+impl DefOrdering {
     fn with_capacity(home: ModuleId, capacity: usize) -> Self {
         use bitvec::vec::BitVec;
 
@@ -930,7 +930,8 @@ pub fn sort_can_defs(
     defs: CanDefs,
     mut output: Output,
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
-    let def_ids = DefIds::from_defs_by_symbol(env, &defs.can_defs_by_symbol, &defs.refs_by_symbol);
+    let def_ids =
+        DefOrdering::from_defs_by_symbol(env, &defs.can_defs_by_symbol, &defs.refs_by_symbol);
 
     let CanDefs {
         refs_by_symbol,
@@ -1214,7 +1215,7 @@ fn recurse_onto(length: usize, bitvec: &bitvec::vec::BitVec<u8>, v: usize, param
 }
 
 fn group_to_declaration(
-    def_ids: &DefIds,
+    def_ids: &DefOrdering,
     group: &[u32],
     closures: &MutMap<Symbol, References>,
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
