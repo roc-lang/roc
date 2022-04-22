@@ -361,9 +361,7 @@ pub fn canonicalize_module_defs<'a>(
         ..Default::default()
     };
 
-    let sorted = sort_can_defs(&mut env, defs, new_output);
-
-    match sorted {
+    match sort_can_defs(&mut env, defs, new_output) {
         (Ok(mut declarations), output) => {
             use crate::def::Declaration::*;
 
