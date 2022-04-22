@@ -912,7 +912,7 @@ fn exhaustiveness_problem() {
             "#,
         indoc!(
             r#"
-            ── TYPE MISMATCH ──────────────────────────────────────────────────── REPL.roc ─
+            ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
             The branches of this when expression don't match the condition:
 
