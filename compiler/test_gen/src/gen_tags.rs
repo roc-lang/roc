@@ -1055,10 +1055,10 @@ fn phantom_polymorphic() {
             r"#
                 Point coordinate : [ Point coordinate I64 I64 ]
 
-                World : [ @World ]
+                World := {}
 
                 zero : Point World
-                zero = Point @World 0 0
+                zero = Point ($World {}) 0 0
 
                 add : Point a -> Point a
                 add = \(Point c x y) -> (Point c x y)

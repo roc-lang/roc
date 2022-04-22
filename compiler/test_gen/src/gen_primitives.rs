@@ -1134,13 +1134,13 @@ fn io_poc_effect() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             succeed : a -> Effect a
-            succeed = \x -> @Effect \{} -> x
+            succeed = \x -> $Effect \{} -> x
 
             runEffect : Effect a -> a
-            runEffect = \@Effect thunk -> thunk {}
+            runEffect = \$Effect thunk -> thunk {}
 
             foo : Effect F64
             foo =
@@ -1193,10 +1193,10 @@ fn return_wrapped_function_pointer() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             foo : Effect {}
-            foo = @Effect \{} -> {}
+            foo = $Effect \{} -> {}
 
             main : Effect {}
             main = foo
@@ -1238,13 +1238,13 @@ fn return_wrapped_closure() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             foo : Effect {}
             foo =
                 x = 5
 
-                @Effect (\{} -> if x > 3 then {} else {})
+                $Effect (\{} -> if x > 3 then {} else {})
 
             main : Effect {}
             main = foo
@@ -1864,16 +1864,16 @@ fn task_always_twice() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             effectAlways : a -> Effect a
             effectAlways = \x ->
                 inner = \{} -> x
 
-                @Effect inner
+                $Effect inner
 
             effectAfter : Effect a, (a -> Effect b) -> Effect b
-            effectAfter = \(@Effect thunk), transform -> transform (thunk {})
+            effectAfter = \($Effect thunk), transform -> transform (thunk {})
 
             Task a err : Effect (Result a err)
 
@@ -1909,7 +1909,7 @@ fn wildcard_rigid() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             Task a err : Effect (Result a err)
 
@@ -1918,7 +1918,7 @@ fn wildcard_rigid() {
             always = \x ->
                 inner = \{} -> (Ok x)
 
-                @Effect inner
+                $Effect inner
 
 
             main : Task {} (Float *)
@@ -1939,7 +1939,7 @@ fn alias_of_alias_with_type_arguments() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect a ]
+            Effect a := {} -> a
 
             Task a err : Effect (Result a err)
 
@@ -1947,7 +1947,7 @@ fn alias_of_alias_with_type_arguments() {
             always = \x ->
                 inner = (Ok x)
 
-                @Effect inner
+                $Effect inner
 
 
             main : Task {} (Float *)
@@ -1969,16 +1969,16 @@ fn todo_bad_error_message() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             effectAlways : a -> Effect a
             effectAlways = \x ->
                 inner = \{} -> x
 
-                @Effect inner
+                $Effect inner
 
             effectAfter : Effect a, (a -> Effect b) -> Effect b
-            effectAfter = \(@Effect thunk), transform -> transform (thunk {})
+            effectAfter = \($Effect thunk), transform -> transform (thunk {})
 
             Task a err : Effect (Result a err)
 
@@ -3101,7 +3101,7 @@ fn nested_rigid_alias() {
             r#"
                 app "test" provides [ main ] to "./platform"
 
-                Identity a : [ @Identity a ]
+                Identity a := a
 
                 foo : Identity a -> Identity a
                 foo = \list ->
@@ -3111,7 +3111,7 @@ fn nested_rigid_alias() {
                     p2
 
                 main =
-                    when foo (@Identity "foo") is
+                    when foo ($Identity "foo") is
                         _ -> "hello world"
             "#
         ),
@@ -3128,15 +3128,15 @@ fn nested_rigid_tag_union() {
             r#"
                 app "test" provides [ main ] to "./platform"
 
-                foo : [ @Identity a ] -> [ @Identity a ]
+                foo : [ Identity a ] -> [ Identity a ]
                 foo = \list ->
-                    p2 : [ @Identity a ]
+                    p2 : [ Identity a ]
                     p2 = list
 
                     p2
 
                 main =
-                    when foo (@Identity "foo") is
+                    when foo (Identity "foo") is
                         _ -> "hello world"
             "#
         ),
@@ -3222,16 +3222,16 @@ fn recursively_build_effect() {
                         always {} |> after \_ -> nestHelp (m - 1)
 
 
-            XEffect a : [ @XEffect ({} -> a) ]
+            XEffect a := {} -> a
 
             always : a -> XEffect a
-            always = \x -> @XEffect (\{} -> x)
+            always = \x -> $XEffect (\{} -> x)
 
             after : XEffect a, (a -> XEffect b) -> XEffect b
-            after = \(@XEffect e), toB ->
-                @XEffect \{} ->
+            after = \($XEffect e), toB ->
+                $XEffect \{} ->
                     when toB (e {}) is
-                        @XEffect e2 ->
+                        $XEffect e2 ->
                             e2 {}
             "#
         ),
