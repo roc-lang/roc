@@ -1,5 +1,5 @@
 // see if we get better performance with different integer types
-pub(crate) type Element = u8;
+pub(crate) type Element = usize;
 pub(crate) type BitVec = bitvec::vec::BitVec<Element>;
 pub(crate) type BitSlice = bitvec::prelude::BitSlice<Element>;
 
@@ -169,7 +169,7 @@ impl Params {
     }
 }
 
-fn recurse_onto(length: usize, bitvec: &bitvec::vec::BitVec<u8>, v: usize, params: &mut Params) {
+fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
     params.preorders[v] = Preorder::Filled(params.c);
 
     params.c += 1;
