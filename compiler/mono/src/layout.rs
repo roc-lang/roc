@@ -78,7 +78,7 @@ impl<'a> RawFunctionLayout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
-            Structure(flat_type) => Self::layout_from_flat_type(env, var, flat_type),
+            Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(typ, _) => Self::from_var(env, typ),
 
             // Ints
@@ -152,7 +152,6 @@ impl<'a> RawFunctionLayout<'a> {
 
     fn layout_from_flat_type(
         env: &mut Env<'a, '_>,
-        var: Variable,
         flat_type: FlatType,
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::FlatType::*;
@@ -196,7 +195,7 @@ impl<'a> RawFunctionLayout<'a> {
                 Self::from_var(env, var)
             }
             _ => {
-                let layout = layout_from_flat_type(env, var, flat_type)?;
+                let layout = layout_from_flat_type(env, flat_type)?;
                 Ok(Self::ZeroArgumentThunk(layout))
             }
         }
@@ -1004,7 +1003,7 @@ impl<'a> Layout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
-            Structure(flat_type) => layout_from_flat_type(env, var, flat_type),
+            Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(symbol, _args, actual_var, _) => {
                 if let Some(int_width) = IntWidth::try_from_symbol(symbol) {
@@ -1342,8 +1341,6 @@ impl<'a> LayoutCache<'a> {
             target_info: self.target_info,
         };
 
-        //if true {panic!()}
-
         Layout::from_var(&mut env, var)
     }
 
@@ -1617,7 +1614,6 @@ impl<'a> Builtin<'a> {
 
 fn layout_from_flat_type<'a>(
     env: &mut Env<'a, '_>,
-    _var: Variable,
     flat_type: FlatType,
 ) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::FlatType::*;
