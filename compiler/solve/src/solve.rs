@@ -1207,7 +1207,7 @@ fn solve(
             } => {
                 // A few cases:
                 //  1. Either condition or branch types already have a type error. In this case just
-                //     propogate it.
+                //     propagate it.
                 //  2. Types are correct, but there are redundancies. In this case we want
                 //     exhaustiveness checking to pull those out.
                 //  3. Condition and branch types are "almost equal", that is one or the other is
