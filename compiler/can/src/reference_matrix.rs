@@ -127,8 +127,9 @@ impl ReferenceMatrix {
         TopologicalSort::Groups { groups }
     }
 
-    pub fn strongly_connected_components(&self, group: &[u32]) -> Vec<Vec<u32>> {
-        let mut params = Params::new(self.length, group);
+    /// Get the strongly-connected components of the set of input nodes.
+    pub fn strongly_connected_components(&self, nodes: &[u32]) -> Vec<Vec<u32>> {
+        let mut params = Params::new(self.length, nodes);
 
         'outer: loop {
             for (node, value) in params.preorders.iter().enumerate() {
