@@ -6163,7 +6163,7 @@ mod solve_expr {
             ),
             &[
                 "ob : Bool",
-                "ob : [ False, True ]",
+                "ob : Bool",
                 "True : [ False, True ]",
                 "False : [ False, True ]",
             ],

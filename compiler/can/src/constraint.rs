@@ -574,7 +574,7 @@ impl Constraints {
             Constraint::IsOpenType(_) => false,
             Constraint::IncludesTag(_) => false,
             Constraint::PatternPresence(_, _, _, _) => false,
-            Constraint::Exhaustive(_, _) => false,
+            Constraint::Exhaustive { .. } => false,
         }
     }
 
@@ -603,10 +603,27 @@ impl Constraints {
         Constraint::Store(type_index, variable, string_index, line_number)
     }
 
-    pub fn exhaustive(&mut self, rows: SketchedRows, context: ExhaustiveContext) -> Constraint {
-        let rows_index = Index::push_new(&mut self.sketched_rows, rows);
+    pub fn exhaustive(
+        &mut self,
+        real_var: Variable,
+        real_region: Region,
+        real_category: Category,
+        expected_branches: Expected<Type>,
+        sketched_rows: SketchedRows,
+        context: ExhaustiveContext,
+    ) -> Constraint {
+        let real_category = Index::push_new(&mut self.categories, real_category);
+        let expected_branches = Index::push_new(&mut self.expectations, expected_branches);
+        let sketched_rows = Index::push_new(&mut self.sketched_rows, sketched_rows);
 
-        Constraint::Exhaustive(rows_index, context)
+        Constraint::Exhaustive {
+            real_var,
+            real_region,
+            real_category,
+            expected_branches,
+            sketched_rows,
+            context,
+        }
     }
 }
 
@@ -652,7 +669,14 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
-    Exhaustive(Index<SketchedRows>, ExhaustiveContext),
+    Exhaustive {
+        real_var: Variable,
+        real_region: Region,
+        real_category: Index<Category>,
+        expected_branches: Index<Expected<Type>>,
+        sketched_rows: Index<SketchedRows>,
+        context: ExhaustiveContext,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -707,8 +731,19 @@ impl std::fmt::Debug for Constraint {
                     arg0, arg1, arg2, arg3
                 )
             }
-            Self::Exhaustive(arg0, arg1) => {
-                write!(f, "Exhaustive({:?}, {:?})", arg0, arg1)
+            Self::Exhaustive {
+                real_var: arg0,
+                real_region: arg1,
+                real_category: arg2,
+                expected_branches: arg3,
+                sketched_rows: arg4,
+                context: arg5,
+            } => {
+                write!(
+                    f,
+                    "Exhaustive({:?}, {:?}, {:?}, {:?}, {:?}, {:?})",
+                    arg0, arg1, arg2, arg3, arg4, arg5
+                )
             }
         }
     }

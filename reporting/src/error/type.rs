@@ -1528,7 +1528,7 @@ fn format_category<'b>(
             alloc.concat([this_is, alloc.text(" an uniqueness attribute")]),
             alloc.text(" of type:"),
         ),
-        Storage(_file, _line) => (
+        Storage(..) | Unknown => (
             alloc.concat([this_is, alloc.text(" a value")]),
             alloc.text(" of type:"),
         ),
@@ -1538,6 +1538,10 @@ fn format_category<'b>(
         ),
         AbilityMemberSpecialization(_ability_member) => (
             alloc.concat([this_is, alloc.text(" a declared specialization")]),
+            alloc.text(" of type:"),
+        ),
+        Expect => (
+            alloc.concat([this_is, alloc.text(" an expectation")]),
             alloc.text(" of type:"),
         ),
     }

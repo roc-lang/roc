@@ -4727,6 +4727,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(
@@ -4824,6 +4825,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(
@@ -4887,6 +4889,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(
@@ -4964,6 +4967,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(
@@ -5041,6 +5045,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(
@@ -5133,6 +5138,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(

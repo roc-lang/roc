@@ -2118,6 +2118,18 @@ impl Content {
 
         self
     }
+
+    pub fn unroll_structural_alias<'a>(&'a self, subs: &'a Subs) -> &'a Self {
+        let mut result = self;
+        loop {
+            match result {
+                Self::Alias(_, _, real_var, AliasKind::Structural) => {
+                    result = subs.get_content_without_compacting(*real_var)
+                }
+                _ => return result,
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

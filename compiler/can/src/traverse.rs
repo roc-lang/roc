@@ -65,6 +65,7 @@ fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr) {
             loc_cond,
             branches,
             region: _,
+            branches_cond_var: _,
         } => {
             walk_when(visitor, *cond_var, *expr_var, loc_cond, branches);
         }

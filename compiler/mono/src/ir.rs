@@ -2091,6 +2091,7 @@ fn pattern_to_when<'a>(
                     value: body,
                     guard: None,
                 }],
+                branches_cond_var: pattern_var,
             };
 
             (symbol, Loc::at_zero(wrapped_body))
@@ -3753,6 +3754,7 @@ pub fn with_hole<'a>(
             region,
             loc_cond,
             branches,
+            branches_cond_var: _,
         } => {
             let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
 
@@ -5443,6 +5445,7 @@ pub fn from_can<'a>(
             region,
             loc_cond,
             branches,
+            branches_cond_var: _,
         } => {
             let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
 

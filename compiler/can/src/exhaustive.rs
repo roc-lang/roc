@@ -6,6 +6,7 @@ use roc_exhaustive::{is_useful, Ctor, Error, Guard, Literal, Pattern, RenderAs, 
 use roc_module::ident::{TagIdIntType, TagName};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{Content, FlatType, Subs, SubsFmtContent, Variable};
+use roc_types::types::AliasKind;
 
 pub use roc_exhaustive::Context as ExhaustiveContext;
 
@@ -22,7 +23,7 @@ pub fn check(
     roc_exhaustive::check(overall_region, context, matrix)
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum SketchedPattern {
     Anything,
     Literal(Literal),
@@ -52,14 +53,14 @@ impl SketchedPattern {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct SketchedRow {
     patterns: Vec<SketchedPattern>,
     region: Region,
     guard: Guard,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SketchedRows {
     rows: Vec<SketchedRow>,
     overall_region: Region,
@@ -155,13 +156,15 @@ fn sketch_pattern(var: Variable, pattern: &crate::pattern::Pattern) -> SketchedP
             )
         }
 
+        // Treat this like a literal so we mark it as non-exhaustive
+        MalformedPattern(..) => SP::Literal(Literal::Byte(1)),
+
         Underscore
         | Identifier(_)
         | AbilityMemberSpecialization { .. }
         | Shadowed(..)
         | OpaqueNotInScope(..)
-        | UnsupportedPattern(..)
-        | MalformedPattern(..) => SP::Anything,
+        | UnsupportedPattern(..) => SP::Anything,
     }
 }
 
@@ -232,7 +235,7 @@ pub fn sketch_rows(target_var: Variable, region: Region, patterns: &[WhenBranch]
 
             let row = SketchedRow {
                 patterns,
-                region,
+                region: loc_pat.region,
                 guard,
             };
             rows.push(row);
@@ -285,7 +288,7 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
 
     use {Content::*, FlatType::*};
 
-    match content {
+    match dealias_tag(subs, content) {
         Structure(TagUnion(tags, ext) | RecursiveTagUnion(_, tags, ext)) => {
             let (sorted_tags, ext) = tags.sorted_iterator_and_ext(subs, *ext);
 
@@ -333,5 +336,20 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
             "Content is not a tag union: {:?}",
             SubsFmtContent(content, subs)
         ),
+    }
+}
+
+pub fn dealias_tag<'a>(subs: &'a Subs, content: &'a Content) -> &'a Content {
+    use Content::*;
+    let mut result = content;
+    loop {
+        match result {
+            Alias(_, _, real_var, AliasKind::Structural)
+            | RecursionVar {
+                structure: real_var,
+                ..
+            } => result = subs.get_content_without_compacting(*real_var),
+            _ => return result,
+        }
     }
 }
