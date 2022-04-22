@@ -104,6 +104,8 @@ impl ReferenceMatrix {
                         }
                     }
 
+                    // NOTE: we use -1 to mark nodes that have no predecessors, but are already
+                    // part of an earlier group. That ensures nodes are added to just 1 group
                     let count = preds_map[succ];
                     preds_map[succ] = -1;
 
