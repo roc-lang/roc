@@ -10,8 +10,8 @@ use roc_types::types::AliasKind;
 
 pub use roc_exhaustive::Context as ExhaustiveContext;
 
-pub const GUARD_CTOR: &'static str = "#Guard";
-pub const NONEXHAUSIVE_CTOR: &'static str = "#Open";
+pub const GUARD_CTOR: &str = "#Guard";
+pub const NONEXHAUSIVE_CTOR: &str = "#Open";
 
 pub fn check(
     subs: &Subs,
