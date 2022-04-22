@@ -1222,11 +1222,16 @@ fn solve(
 
                 let real_content = subs.get_content_without_compacting(real_var);
                 let branches_content = subs.get_content_without_compacting(branches_var);
-                let already_have_error = match (real_content, branches_content) {
-                    (Content::Error | Content::Structure(FlatType::Erroneous(_)), _) => true,
-                    (_, Content::Error | Content::Structure(FlatType::Erroneous(_))) => true,
-                    _ => false,
-                };
+                let already_have_error = matches!(
+                    (real_content, branches_content),
+                    (
+                        Content::Error | Content::Structure(FlatType::Erroneous(_)),
+                        _
+                    ) | (
+                        _,
+                        Content::Error | Content::Structure(FlatType::Erroneous(_))
+                    )
+                );
 
                 let snapshot = subs.snapshot();
                 let outcome = unify(subs, real_var, branches_var, Mode::EQ);
@@ -1303,7 +1308,7 @@ fn solve(
                 let sketched_rows = constraints.sketched_rows[sketched_rows.index()].clone();
 
                 if should_check_exhaustiveness {
-                    let checked = roc_can::exhaustive::check(&subs, sketched_rows, context);
+                    let checked = roc_can::exhaustive::check(subs, sketched_rows, context);
                     if let Err(errors) = checked {
                         problems.extend(errors.into_iter().map(TypeError::Exhaustive));
                     }

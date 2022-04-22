@@ -722,7 +722,7 @@ pub fn constrain_expr(
             pattern_cons.push(expr_con);
 
             // Now check the condition against the type expected by the branches.
-            let sketched_rows = sketch_rows(real_cond_var, branches_region, &branches);
+            let sketched_rows = sketch_rows(real_cond_var, branches_region, branches);
             let cond_matches_branches_constraint = constraints.exhaustive(
                 real_cond_var,
                 loc_cond.region,

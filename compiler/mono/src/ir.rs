@@ -5847,7 +5847,7 @@ fn to_opt_branches<'a>(
                 Ok((mono_pattern, assignments)) => {
                     loc_branches.push((
                         Loc::at(loc_pattern.region, mono_pattern.clone()),
-                        exhaustive_guard.clone(),
+                        exhaustive_guard,
                     ));
 
                     let mut loc_expr = when_branch.value.clone();
@@ -5877,7 +5877,7 @@ fn to_opt_branches<'a>(
                 Err(runtime_error) => {
                     loc_branches.push((
                         Loc::at(loc_pattern.region, Pattern::Underscore),
-                        exhaustive_guard.clone(),
+                        exhaustive_guard,
                     ));
 
                     // TODO remove clone?
