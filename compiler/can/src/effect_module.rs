@@ -6,11 +6,11 @@ use crate::pattern::Pattern;
 use crate::scope::Scope;
 use roc_collections::{SendMap, VecSet};
 use roc_module::called_via::CalledVia;
-use roc_module::ident::TagName;
+use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{AliasKind, Type, TypeExtension};
+use roc_types::types::{AliasKind, LambdaSet, Type, TypeExtension};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct HostedGeneratedFunctions {
@@ -30,7 +30,7 @@ pub(crate) struct HostedGeneratedFunctions {
 ///
 /// The effect alias is implemented as
 ///
-///  Effect a : [ @Effect ({} -> a) ]
+///  Effect a := {} -> a
 ///
 /// For this alias we implement the functions specified in HostedGeneratedFunctions with the
 /// standard implementation.
@@ -45,13 +45,7 @@ pub(crate) fn build_effect_builtins(
 ) {
     macro_rules! helper {
         ($f:expr) => {{
-            let (symbol, def) = $f(
-                env,
-                scope,
-                effect_symbol,
-                TagName::Private(effect_symbol),
-                var_store,
-            );
+            let (symbol, def) = $f(env, scope, effect_symbol, var_store);
 
             // make the outside world know this symbol exists
             exposed_symbols.insert(symbol);
@@ -114,10 +108,9 @@ fn build_effect_always(
     env: &mut Env,
     scope: &mut Scope,
     effect_symbol: Symbol,
-    effect_tag_name: TagName,
     var_store: &mut VarStore,
 ) -> (Symbol, Def) {
-    // Effect.always = \value -> @Effect \{} -> value
+    // Effect.always = \value -> $Effect \{} -> value
 
     let value_symbol = {
         scope
@@ -174,14 +167,18 @@ fn build_effect_always(
         })
     };
 
-    // \value -> @Effect \{} -> value
+    // \value -> $Effect \{} -> value
     let (function_var, always_closure) = {
-        // `@Effect \{} -> value`
-        let body = Expr::Tag {
-            variant_var: var_store.fresh(),
-            ext_var: var_store.fresh(),
-            name: effect_tag_name.clone(),
-            arguments: vec![(var_store.fresh(), Loc::at_zero(const_closure))],
+        // `$Effect \{} -> value`
+        let (specialized_def_type, type_arguments, lambda_set_variables) =
+            build_fresh_opaque_variables(var_store);
+        let body = Expr::OpaqueRef {
+            opaque_var: var_store.fresh(),
+            name: effect_symbol,
+            argument: Box::new((var_store.fresh(), Loc::at_zero(const_closure))),
+            specialized_def_type,
+            type_arguments,
+            lambda_set_variables,
         };
 
         let arguments = vec![(
@@ -212,9 +209,8 @@ fn build_effect_always(
         let var_a = var_store.fresh();
         introduced_variables.insert_named("a".into(), Loc::at_zero(var_a));
 
-        let effect_a = build_effect_alias(
+        let effect_a = build_effect_opaque(
             effect_symbol,
-            effect_tag_name,
             "a",
             var_a,
             Type::Variable(var_a),
@@ -257,10 +253,9 @@ fn build_effect_map(
     env: &mut Env,
     scope: &mut Scope,
     effect_symbol: Symbol,
-    effect_tag_name: TagName,
     var_store: &mut VarStore,
 ) -> (Symbol, Def) {
-    // Effect.map = \@Effect thunk, mapper -> @Effect \{} -> mapper (thunk {})
+    // Effect.map = \$Effect thunk, mapper -> $Effect \{} -> mapper (thunk {})
 
     let thunk_symbol = {
         scope
@@ -355,17 +350,22 @@ fn build_effect_map(
         })
     };
 
+    // \$Effect thunk, mapper
+    let (specialized_def_type, type_arguments, lambda_set_variables) =
+        build_fresh_opaque_variables(var_store);
     let arguments = vec![
         (
             var_store.fresh(),
-            Loc::at_zero(Pattern::AppliedTag {
+            Loc::at_zero(Pattern::UnwrappedOpaque {
+                opaque: effect_symbol,
                 whole_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                tag_name: effect_tag_name.clone(),
-                arguments: vec![(
+                argument: Box::new((
                     var_store.fresh(),
                     Loc::at_zero(Pattern::Identifier(thunk_symbol)),
-                )],
+                )),
+                specialized_def_type,
+                type_arguments,
+                lambda_set_variables,
             }),
         ),
         (
@@ -374,12 +374,16 @@ fn build_effect_map(
         ),
     ];
 
-    // `@Effect \{} -> (mapper (thunk {}))`
-    let body = Expr::Tag {
-        variant_var: var_store.fresh(),
-        ext_var: var_store.fresh(),
-        name: effect_tag_name.clone(),
-        arguments: vec![(var_store.fresh(), Loc::at_zero(inner_closure))],
+    // `$Effect \{} -> (mapper (thunk {}))`
+    let (specialized_def_type, type_arguments, lambda_set_variables) =
+        build_fresh_opaque_variables(var_store);
+    let body = Expr::OpaqueRef {
+        opaque_var: var_store.fresh(),
+        name: effect_symbol,
+        argument: Box::new((var_store.fresh(), Loc::at_zero(inner_closure))),
+        specialized_def_type,
+        type_arguments,
+        lambda_set_variables,
     };
 
     let function_var = var_store.fresh();
@@ -405,9 +409,8 @@ fn build_effect_map(
         introduced_variables.insert_named("a".into(), Loc::at_zero(var_a));
         introduced_variables.insert_named("b".into(), Loc::at_zero(var_b));
 
-        let effect_a = build_effect_alias(
+        let effect_a = build_effect_opaque(
             effect_symbol,
-            effect_tag_name.clone(),
             "a",
             var_a,
             Type::Variable(var_a),
@@ -415,9 +418,8 @@ fn build_effect_map(
             &mut introduced_variables,
         );
 
-        let effect_b = build_effect_alias(
+        let effect_b = build_effect_opaque(
             effect_symbol,
-            effect_tag_name,
             "b",
             var_b,
             Type::Variable(var_b),
@@ -469,10 +471,9 @@ fn build_effect_after(
     env: &mut Env,
     scope: &mut Scope,
     effect_symbol: Symbol,
-    effect_tag_name: TagName,
     var_store: &mut VarStore,
 ) -> (Symbol, Def) {
-    // Effect.after = \@Effect effect, toEffect -> toEffect (effect {})
+    // Effect.after = \$Effect effect, toEffect -> toEffect (effect {})
 
     let thunk_symbol = {
         scope
@@ -533,17 +534,22 @@ fn build_effect_after(
         Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
     };
 
+    let (specialized_def_type, type_arguments, lambda_set_variables) =
+        build_fresh_opaque_variables(var_store);
+
     let arguments = vec![
         (
             var_store.fresh(),
-            Loc::at_zero(Pattern::AppliedTag {
+            Loc::at_zero(Pattern::UnwrappedOpaque {
+                opaque: effect_symbol,
                 whole_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                tag_name: effect_tag_name.clone(),
-                arguments: vec![(
+                argument: Box::new((
                     var_store.fresh(),
                     Loc::at_zero(Pattern::Identifier(thunk_symbol)),
-                )],
+                )),
+                specialized_def_type,
+                type_arguments,
+                lambda_set_variables,
             }),
         ),
         (
@@ -574,9 +580,8 @@ fn build_effect_after(
         introduced_variables.insert_named("a".into(), Loc::at_zero(var_a));
         introduced_variables.insert_named("b".into(), Loc::at_zero(var_b));
 
-        let effect_a = build_effect_alias(
+        let effect_a = build_effect_opaque(
             effect_symbol,
-            effect_tag_name.clone(),
             "a",
             var_a,
             Type::Variable(var_a),
@@ -584,9 +589,8 @@ fn build_effect_after(
             &mut introduced_variables,
         );
 
-        let effect_b = build_effect_alias(
+        let effect_b = build_effect_opaque(
             effect_symbol,
-            effect_tag_name,
             "b",
             var_b,
             Type::Variable(var_b),
@@ -632,10 +636,10 @@ fn build_effect_after(
     (after_symbol, def)
 }
 
-/// turn `value` into `@Effect \{} -> value`
+/// turn `value` into `$Effect \{} -> value`
 fn wrap_in_effect_thunk(
     body: Expr,
-    effect_tag_name: TagName,
+    effect_symbol: Symbol,
     closure_name: Symbol,
     captured_symbols: Vec<Symbol>,
     var_store: &mut VarStore,
@@ -666,32 +670,39 @@ fn wrap_in_effect_thunk(
         })
     };
 
-    // `@Effect \{} -> value`
-    Expr::Tag {
-        variant_var: var_store.fresh(),
-        ext_var: var_store.fresh(),
-        name: effect_tag_name,
-        arguments: vec![(var_store.fresh(), Loc::at_zero(const_closure))],
+    // `$Effect \{} -> value`
+    let (specialized_def_type, type_arguments, lambda_set_variables) =
+        build_fresh_opaque_variables(var_store);
+    Expr::OpaqueRef {
+        opaque_var: var_store.fresh(),
+        name: effect_symbol,
+        argument: Box::new((var_store.fresh(), Loc::at_zero(const_closure))),
+        specialized_def_type,
+        type_arguments,
+        lambda_set_variables,
     }
 }
 
 /// given `effect : Effect a`, unwrap the thunk and force it, giving a value of type `a`
 fn force_effect(
     effect: Expr,
-    effect_tag_name: TagName,
+    effect_symbol: Symbol,
     thunk_symbol: Symbol,
     var_store: &mut VarStore,
 ) -> Expr {
     let whole_var = var_store.fresh();
-    let ext_var = var_store.fresh();
 
     let thunk_var = var_store.fresh();
 
-    let pattern = Pattern::AppliedTag {
-        ext_var,
+    let (specialized_def_type, type_arguments, lambda_set_variables) =
+        build_fresh_opaque_variables(var_store);
+    let pattern = Pattern::UnwrappedOpaque {
         whole_var,
-        tag_name: effect_tag_name,
-        arguments: vec![(thunk_var, Loc::at_zero(Pattern::Identifier(thunk_symbol)))],
+        opaque: effect_symbol,
+        argument: Box::new((thunk_var, Loc::at_zero(Pattern::Identifier(thunk_symbol)))),
+        specialized_def_type,
+        type_arguments,
+        lambda_set_variables,
     };
 
     let pattern_vars = SendMap::default();
@@ -728,7 +739,6 @@ fn build_effect_forever(
     env: &mut Env,
     scope: &mut Scope,
     effect_symbol: Symbol,
-    effect_tag_name: TagName,
     var_store: &mut VarStore,
 ) -> (Symbol, Def) {
     // morally
@@ -739,14 +749,14 @@ fn build_effect_forever(
     //
     //  Effect.forever : Effect a -> Effect b
     //  Effect.forever = \effect ->
-    //      @Effect \{} ->
-    //          @Effect thunk1 = effect
+    //      $Effect \{} ->
+    //          $Effect thunk1 = effect
     //          _ = thunk1 {}
-    //          @Effect thunk2 = Effect.forever effect
+    //          $Effect thunk2 = Effect.forever effect
     //          thunk2 {}
     //
     // We then rely on our defunctionalization to turn this into a tail-recursive loop.
-    // First the `@Effect` wrapper melts away
+    // First the `$Effect` wrapper melts away
     //
     //  Effect.forever : ({} -> a) -> ({} -> b)
     //  Effect.forever = \effect ->
@@ -801,14 +811,8 @@ fn build_effect_forever(
             .unwrap()
     };
 
-    let body = build_effect_forever_body(
-        env,
-        scope,
-        effect_tag_name.clone(),
-        forever_symbol,
-        effect,
-        var_store,
-    );
+    let body =
+        build_effect_forever_body(env, scope, effect_symbol, forever_symbol, effect, var_store);
 
     let arguments = vec![(var_store.fresh(), Loc::at_zero(Pattern::Identifier(effect)))];
 
@@ -834,9 +838,8 @@ fn build_effect_forever(
         introduced_variables.insert_named("a".into(), Loc::at_zero(var_a));
         introduced_variables.insert_named("b".into(), Loc::at_zero(var_b));
 
-        let effect_a = build_effect_alias(
+        let effect_a = build_effect_opaque(
             effect_symbol,
-            effect_tag_name.clone(),
             "a",
             var_a,
             Type::Variable(var_a),
@@ -844,9 +847,8 @@ fn build_effect_forever(
             &mut introduced_variables,
         );
 
-        let effect_b = build_effect_alias(
+        let effect_b = build_effect_opaque(
             effect_symbol,
-            effect_tag_name,
             "b",
             var_b,
             Type::Variable(var_b),
@@ -888,7 +890,7 @@ fn build_effect_forever(
 fn build_effect_forever_body(
     env: &mut Env,
     scope: &mut Scope,
-    effect_tag_name: TagName,
+    effect_symbol: Symbol,
     forever_symbol: Symbol,
     effect: Symbol,
     var_store: &mut VarStore,
@@ -907,7 +909,7 @@ fn build_effect_forever_body(
     let inner_body = build_effect_forever_inner_body(
         env,
         scope,
-        effect_tag_name.clone(),
+        effect_symbol,
         forever_symbol,
         effect,
         var_store,
@@ -916,7 +918,7 @@ fn build_effect_forever_body(
     let captured_symbols = vec![effect];
     wrap_in_effect_thunk(
         inner_body,
-        effect_tag_name,
+        effect_symbol,
         closure_name,
         captured_symbols,
         var_store,
@@ -926,7 +928,7 @@ fn build_effect_forever_body(
 fn build_effect_forever_inner_body(
     env: &mut Env,
     scope: &mut Scope,
-    effect_tag_name: TagName,
+    effect_symbol: Symbol,
     forever_symbol: Symbol,
     effect: Symbol,
     var_store: &mut VarStore,
@@ -953,18 +955,21 @@ fn build_effect_forever_inner_body(
             .unwrap()
     };
 
-    // Effect thunk1 = effect
+    // $Effect thunk1 = effect
     let thunk_from_effect = {
         let whole_var = var_store.fresh();
-        let ext_var = var_store.fresh();
 
         let thunk_var = var_store.fresh();
 
-        let pattern = Pattern::AppliedTag {
-            ext_var,
+        let (specialized_def_type, type_arguments, lambda_set_variables) =
+            build_fresh_opaque_variables(var_store);
+        let pattern = Pattern::UnwrappedOpaque {
             whole_var,
-            tag_name: effect_tag_name.clone(),
-            arguments: vec![(thunk_var, Loc::at_zero(Pattern::Identifier(thunk1_symbol)))],
+            opaque: effect,
+            argument: Box::new((thunk_var, Loc::at_zero(Pattern::Identifier(thunk1_symbol)))),
+            specialized_def_type,
+            type_arguments,
+            lambda_set_variables,
         };
 
         let pattern_vars = SendMap::default();
@@ -1017,12 +1022,12 @@ fn build_effect_forever_inner_body(
     };
 
     // ```
-    // Effect thunk2 = forever effect
+    // $Effect thunk2 = forever effect
     // thunk2 {}
     // ```
     let force_thunk2 = Loc::at_zero(force_effect(
         forever_effect,
-        effect_tag_name,
+        effect_symbol,
         thunk2_symbol,
         var_store,
     ));
@@ -1042,7 +1047,6 @@ fn build_effect_loop(
     env: &mut Env,
     scope: &mut Scope,
     effect_symbol: Symbol,
-    effect_tag_name: TagName,
     var_store: &mut VarStore,
 ) -> (Symbol, Def) {
     let loop_symbol = new_symbol!(scope, env, "loop");
@@ -1052,7 +1056,7 @@ fn build_effect_loop(
     let body = build_effect_loop_body(
         env,
         scope,
-        effect_tag_name.clone(),
+        effect_symbol,
         loop_symbol,
         state_symbol,
         step_symbol,
@@ -1092,9 +1096,8 @@ fn build_effect_loop(
         introduced_variables.insert_named("a".into(), Loc::at_zero(var_a));
         introduced_variables.insert_named("b".into(), Loc::at_zero(var_b));
 
-        let effect_b = build_effect_alias(
+        let effect_b = build_effect_opaque(
             effect_symbol,
-            effect_tag_name.clone(),
             "b",
             var_b,
             Type::Variable(var_b),
@@ -1119,19 +1122,11 @@ fn build_effect_loop(
             let closure_var = var_store.fresh();
             introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
 
-            let actual = {
-                Type::TagUnion(
-                    vec![(
-                        effect_tag_name,
-                        vec![Type::Function(
-                            vec![Type::EmptyRec],
-                            Box::new(Type::Variable(closure_var)),
-                            Box::new(state_type.clone()),
-                        )],
-                    )],
-                    TypeExtension::Closed,
-                )
-            };
+            let actual = Type::Function(
+                vec![Type::EmptyRec],
+                Box::new(Type::Variable(closure_var)),
+                Box::new(state_type.clone()),
+            );
 
             Type::Alias {
                 symbol: effect_symbol,
@@ -1140,7 +1135,7 @@ fn build_effect_loop(
                     closure_var,
                 ))],
                 actual: Box::new(actual),
-                kind: AliasKind::Structural,
+                kind: AliasKind::Opaque,
             }
         };
 
@@ -1187,7 +1182,7 @@ fn build_effect_loop(
 fn build_effect_loop_body(
     env: &mut Env,
     scope: &mut Scope,
-    effect_tag_name: TagName,
+    effect_symbol: Symbol,
     loop_symbol: Symbol,
     state_symbol: Symbol,
     step_symbol: Symbol,
@@ -1207,7 +1202,7 @@ fn build_effect_loop_body(
     let inner_body = build_effect_loop_inner_body(
         env,
         scope,
-        effect_tag_name.clone(),
+        effect_symbol,
         loop_symbol,
         state_symbol,
         step_symbol,
@@ -1217,7 +1212,7 @@ fn build_effect_loop_body(
     let captured_symbols = vec![state_symbol, step_symbol];
     wrap_in_effect_thunk(
         inner_body,
-        effect_tag_name,
+        effect_symbol,
         closure_name,
         captured_symbols,
         var_store,
@@ -1249,7 +1244,7 @@ fn applied_tag_pattern(
 fn build_effect_loop_inner_body(
     env: &mut Env,
     scope: &mut Scope,
-    effect_tag_name: TagName,
+    effect_symbol: Symbol,
     loop_symbol: Symbol,
     state_symbol: Symbol,
     step_symbol: Symbol,
@@ -1264,15 +1259,18 @@ fn build_effect_loop_inner_body(
     // Effect thunk1 = step state
     let thunk_from_effect = {
         let whole_var = var_store.fresh();
-        let ext_var = var_store.fresh();
 
         let thunk_var = var_store.fresh();
 
-        let pattern = Pattern::AppliedTag {
-            ext_var,
+        let (specialized_def_type, type_arguments, lambda_set_variables) =
+            build_fresh_opaque_variables(var_store);
+        let pattern = Pattern::UnwrappedOpaque {
             whole_var,
-            tag_name: effect_tag_name.clone(),
-            arguments: vec![(thunk_var, Loc::at_zero(Pattern::Identifier(thunk1_symbol)))],
+            opaque: effect_symbol,
+            argument: Box::new((thunk_var, Loc::at_zero(Pattern::Identifier(thunk1_symbol)))),
+            specialized_def_type,
+            type_arguments,
+            lambda_set_variables,
         };
 
         let pattern_vars = SendMap::default();
@@ -1332,15 +1330,10 @@ fn build_effect_loop_inner_body(
     };
 
     // ```
-    // Effect thunk2 = loop effect
+    // $Effect thunk2 = loop effect
     // thunk2 {}
     // ```
-    let force_thunk2 = force_effect(
-        loop_new_state_step,
-        effect_tag_name,
-        thunk2_symbol,
-        var_store,
-    );
+    let force_thunk2 = force_effect(loop_new_state_step, effect_symbol, thunk2_symbol, var_store);
 
     let step_branch = {
         let step_tag_name = TagName::Global("Step".into());
@@ -1549,9 +1542,9 @@ pub fn build_host_exposed_def(
     }
 }
 
-fn build_effect_alias(
+/// Effect a := {} -> a
+fn build_effect_opaque(
     effect_symbol: Symbol,
-    effect_tag_name: TagName,
     a_name: &str,
     a_var: Variable,
     a_type: Type,
@@ -1561,27 +1554,39 @@ fn build_effect_alias(
     let closure_var = var_store.fresh();
     introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
 
-    let actual = {
-        Type::TagUnion(
-            vec![(
-                effect_tag_name,
-                vec![Type::Function(
-                    vec![Type::EmptyRec],
-                    Box::new(Type::Variable(closure_var)),
-                    Box::new(a_type),
-                )],
-            )],
-            TypeExtension::Closed,
-        )
-    };
+    let actual = Type::Function(
+        vec![Type::EmptyRec],
+        Box::new(Type::Variable(closure_var)),
+        Box::new(a_type),
+    );
 
     Type::Alias {
         symbol: effect_symbol,
         type_arguments: vec![(a_name.into(), Type::Variable(a_var))],
         lambda_set_variables: vec![roc_types::types::LambdaSet(Type::Variable(closure_var))],
         actual: Box::new(actual),
-        kind: AliasKind::Structural,
+        kind: AliasKind::Opaque,
     }
+}
+
+fn build_fresh_opaque_variables(
+    var_store: &mut VarStore,
+) -> (Box<Type>, Vec<(Lowercase, Type)>, Vec<LambdaSet>) {
+    let closure_var = var_store.fresh();
+
+    // NB: if there are bugs, check whether not introducing variables is a problem!
+    // introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
+
+    let a_var = var_store.fresh();
+    let actual = Type::Function(
+        vec![Type::EmptyRec],
+        Box::new(Type::Variable(closure_var)),
+        Box::new(Type::Variable(a_var)),
+    );
+    let type_arguments = vec![("a".into(), Type::Variable(a_var))];
+    let lambda_set_variables = vec![roc_types::types::LambdaSet(Type::Variable(closure_var))];
+
+    (Box::new(actual), type_arguments, lambda_set_variables)
 }
 
 pub fn build_effect_actual(
