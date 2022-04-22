@@ -742,8 +742,6 @@ pub fn constrain_expr(
             let total_cons = [when_body_con, result_con];
             let branch_constraints = constraints.and_constraint(total_cons);
 
-            // exhautiveness checking happens when converting to mono::Expr
-            // ...for now
             constraints.exists([cond_var, *expr_var], branch_constraints)
         }
         Access {
