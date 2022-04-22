@@ -18,10 +18,10 @@ interface Unicode.Scalar
         ]
 
 ## A [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value)
-Scalar : [ @Scalar U32 ]
+Scalar := U32
 
 toStr : Scalar -> Str
-toStr = \@Scalar u32
+toStr = \$Scalar u32
     when Str.fromScalar u32 is
         Ok str -> str
         Err _ ->
@@ -29,10 +29,10 @@ toStr = \@Scalar u32
             # this Err branch will never run. That's because it only runs
             # if Str.fromScalar receives an invalid scalar value, and we've
             # already validated this!
-            toStr (@Scalar (scalar * 256))
+            toStr ($Scalar (scalar * 256))
 
 toCodePt : Scalar -> CodePt
-toCodePt = \@Scalar u32 -> Internal.fromU32Unchecked u32
+toCodePt = \$Scalar u32 -> Internal.fromU32Unchecked u32
 
 fromCodePt : CodePt -> Result Scalar [ PointWasSurrogate ]*
 
