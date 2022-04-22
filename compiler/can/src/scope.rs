@@ -88,10 +88,6 @@ impl Scope {
         }
     }
 
-    pub fn idents(&self) -> impl Iterator<Item = (&Ident, &(Symbol, Region))> {
-        self.idents.iter()
-    }
-
     pub fn symbols(&self) -> impl Iterator<Item = (&Symbol, &Region)> {
         self.symbols.iter()
     }
@@ -181,7 +177,8 @@ impl Scope {
         opt_defined_alias: Option<Region>,
     ) -> RuntimeError {
         let opaques_in_scope = self
-            .idents()
+            .idents
+            .iter()
             .filter(|(_, (sym, _))| {
                 self.aliases
                     .get(sym)

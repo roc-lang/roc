@@ -1274,7 +1274,7 @@ fn canonicalize_pending_value_def<'a>(
                 );
                 can_defs_by_symbol.insert(symbol, def);
             } else {
-                for (_, (symbol, _)) in scope.idents() {
+                for (symbol, _) in scope.symbols() {
                     if !vars_by_symbol.contains_key(symbol) {
                         continue;
                     }
@@ -1432,7 +1432,7 @@ fn canonicalize_pending_value_def<'a>(
                 );
                 can_defs_by_symbol.insert(symbol, def);
             } else {
-                for (_, (symbol, region)) in scope.idents() {
+                for (symbol, region) in scope.symbols() {
                     if !vars_by_symbol.contains_key(symbol) {
                         continue;
                     }
