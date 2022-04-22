@@ -1511,6 +1511,111 @@ fn group_to_declaration(
     }
 }
 
+fn strongly_connected_components_improved(
+    length: usize,
+    bitvec: &bitvec::vec::BitVec<u8>,
+    group: &[u32],
+) -> Vec<Vec<u32>> {
+    let mut params = Params::new(length, group);
+
+    'outer: loop {
+        for (node, value) in params.preorders.iter().enumerate() {
+            if let Preorder::Removed = value {
+                continue;
+            }
+
+            recurse_onto(length, bitvec, node, &mut params);
+
+            continue 'outer;
+        }
+
+        break params.scc;
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Preorder {
+    Empty,
+    Filled(usize),
+    Removed,
+}
+
+struct Params {
+    preorders: Vec<Preorder>,
+    c: usize,
+    p: Vec<u32>,
+    s: Vec<u32>,
+    scc: Vec<Vec<u32>>,
+    scca: Vec<u32>,
+}
+
+impl Params {
+    fn new(length: usize, group: &[u32]) -> Self {
+        let mut preorders = vec![Preorder::Removed; length];
+
+        for value in group {
+            preorders[*value as usize] = Preorder::Empty;
+        }
+
+        Self {
+            preorders,
+            c: 0,
+            s: Vec::new(),
+            p: Vec::new(),
+            scc: Vec::new(),
+            scca: Vec::new(),
+        }
+    }
+}
+
+fn recurse_onto(length: usize, bitvec: &bitvec::vec::BitVec<u8>, v: usize, params: &mut Params) {
+    params.preorders[v] = Preorder::Filled(params.c);
+
+    params.c += 1;
+
+    params.s.push(v as u32);
+    params.p.push(v as u32);
+
+    for w in bitvec[v * length..][..length].iter_ones() {
+        if !params.scca.contains(&(w as u32)) {
+            match params.preorders[w] {
+                Preorder::Filled(pw) => loop {
+                    let index = *params.p.last().unwrap();
+
+                    match params.preorders[index as usize] {
+                        Preorder::Empty => unreachable!(),
+                        Preorder::Filled(current) => {
+                            if current > pw {
+                                params.p.pop();
+                            } else {
+                                break;
+                            }
+                        }
+                        Preorder::Removed => {}
+                    }
+                },
+                Preorder::Empty => recurse_onto(length, bitvec, w, params),
+                Preorder::Removed => {}
+            }
+        }
+    }
+
+    if params.p.last() == Some(&(v as u32)) {
+        params.p.pop();
+
+        let mut component = Vec::new();
+        while let Some(node) = params.s.pop() {
+            component.push(node);
+            params.scca.push(node);
+            params.preorders[node as usize] = Preorder::Removed;
+            if node as usize == v {
+                break;
+            }
+        }
+        params.scc.push(component);
+    }
+}
+
 fn group_to_declaration_improved(
     def_ids: &DefIds,
     group: &[u32],
@@ -1519,9 +1624,6 @@ fn group_to_declaration_improved(
     declarations: &mut Vec<Declaration>,
 ) {
     use Declaration::*;
-
-    // We want only successors in the current group, otherwise definitions get duplicated
-    let filtered_successors = |id: &u32| def_ids.successors(*id).filter(|key| group.contains(key));
 
     // Patterns like
     //
@@ -1532,7 +1634,11 @@ fn group_to_declaration_improved(
     // for a definition, so every definition is only inserted (thus typechecked and emitted) once
     let mut seen_pattern_regions: Vec<Region> = Vec::with_capacity(2);
 
-    for cycle in strongly_connected_components(group, filtered_successors) {
+    let bitvec = def_ids.references.clone();
+
+    let sccs = strongly_connected_components_improved(def_ids.length as usize, &bitvec, group);
+
+    for cycle in sccs {
         if cycle.len() == 1 {
             let def_id = cycle[0];
             let symbol = def_ids.get_symbol(def_id).unwrap();
