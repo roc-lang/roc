@@ -19,10 +19,7 @@ interface Parser
     exposes [ Parser ]
     imports []
 
-Parser a :
-    [
-        @Parser (Str -> Result { answer : a, rest : Str } RawProblem),
-    ]
+Parser a := Str -> Result { answer : a, rest : Str } RawProblem
 
 Problem :
     [
@@ -51,16 +48,16 @@ keep : Parser a, (a -> Parser b) -> Parser b
 skip : Parser *, ({} -> Parser b) -> Parser b
 
 symbol : Str -> Parser {}
-symbol = \symbol -> @Parser Str.chompStr symbol
+symbol = \symbol -> $Parser Str.chompStr symbol
 
 u8 : Parser U8
-u8 = @Parser Str.parseU8
+u8 = $Parser Str.parseU8
 
 i8 : Parser I8
-i8 = @Parser Str.parseI8
+i8 = $Parser Str.parseI8
 
 end : Parser {}
-end = @Parser \str ->
+end = $Parser \str ->
     if Str.isEmpty str then
         Ok {}
     else
@@ -68,7 +65,7 @@ end = @Parser \str ->
 
 lazy : ({} -> Parser a) -> Parser a
 lazy = \thunk ->
-    @Parser \str ->
-        @Parser parse = thunk {}
+    $Parser \str ->
+        $Parser parse = thunk {}
 
         parse str
