@@ -28,7 +28,7 @@ use roc_types::types::LambdaSet;
 use roc_types::types::{Alias, Type};
 use std::collections::HashMap;
 use std::fmt::Debug;
-use ven_graph::{strongly_connected_components, topological_sort};
+use ven_graph::topological_sort;
 
 #[derive(Clone, Debug)]
 pub struct Def {
@@ -143,7 +143,7 @@ fn sort_type_defs_before_introduction(
 
         let all_successors_with_self = |symbol: &Symbol| referenced_symbols[symbol].iter().copied();
 
-        strongly_connected_components(&defined_symbols, all_successors_with_self)
+        ven_graph::strongly_connected_components(&defined_symbols, all_successors_with_self)
     };
 
     // then sort the strongly connected components
@@ -925,7 +925,7 @@ impl DefIds {
 }
 
 #[inline(always)]
-pub fn sort_can_defs_improved(
+pub fn sort_can_defs(
     env: &mut Env<'_>,
     defs: CanDefs,
     mut output: Output,
@@ -950,7 +950,7 @@ pub fn sort_can_defs_improved(
 
             // groups are in reversed order
             for group in groups.into_iter().rev() {
-                group_to_declaration_improved(
+                group_to_declaration(
                     &def_ids,
                     &group,
                     &env.closures,
@@ -976,7 +976,7 @@ pub fn sort_can_defs_improved(
             //
             // foo = if b then foo else bar
 
-            let sccs = strongly_connected_components_improved(
+            let sccs = strongly_connected_components(
                 def_ids.length as usize,
                 &def_ids.references,
                 &nodes_in_cycle,
@@ -1086,7 +1086,7 @@ pub fn sort_can_defs_improved(
                         for group_id in sorted_group.iter().rev() {
                             let group = &groups[*group_id];
 
-                            group_to_declaration_improved(
+                            group_to_declaration(
                                 &def_ids,
                                 group,
                                 &env.closures,
@@ -1108,7 +1108,7 @@ pub fn sort_can_defs_improved(
     }
 }
 
-fn strongly_connected_components_improved(
+fn strongly_connected_components(
     length: usize,
     bitvec: &bitvec::vec::BitVec<u8>,
     group: &[u32],
@@ -1213,7 +1213,7 @@ fn recurse_onto(length: usize, bitvec: &bitvec::vec::BitVec<u8>, v: usize, param
     }
 }
 
-fn group_to_declaration_improved(
+fn group_to_declaration(
     def_ids: &DefIds,
     group: &[u32],
     closures: &MutMap<Symbol, References>,
@@ -1231,8 +1231,7 @@ fn group_to_declaration_improved(
     // for a definition, so every definition is only inserted (thus typechecked and emitted) once
     let mut seen_pattern_regions: Vec<Region> = Vec::with_capacity(2);
 
-    let sccs =
-        strongly_connected_components_improved(def_ids.length as usize, &def_ids.references, group);
+    let sccs = strongly_connected_components(def_ids.length as usize, &def_ids.references, group);
 
     for cycle in sccs {
         if cycle.len() == 1 {
@@ -1874,7 +1873,7 @@ pub fn can_defs_with_return<'a>(
         }
     }
 
-    let (can_defs, output) = sort_can_defs_improved(env, unsorted, output);
+    let (can_defs, output) = sort_can_defs(env, unsorted, output);
 
     match can_defs {
         Ok(decls) => {
@@ -2209,7 +2208,8 @@ fn correct_mutual_recursive_type_alias<'a>(
     // TODO investigate should this be in a loop?
     let defined_symbols: Vec<Symbol> = original_aliases.keys().copied().collect();
 
-    let cycles = strongly_connected_components(&defined_symbols, all_successors_with_self);
+    let cycles =
+        ven_graph::strongly_connected_components(&defined_symbols, all_successors_with_self);
     let mut solved_aliases = ImMap::default();
 
     for cycle in cycles {

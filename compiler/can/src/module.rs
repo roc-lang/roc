@@ -1,5 +1,5 @@
 use crate::abilities::AbilitiesStore;
-use crate::def::{canonicalize_defs, sort_can_defs_improved, Declaration, Def};
+use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{ClosureData, Expr, Output};
@@ -361,7 +361,7 @@ pub fn canonicalize_module_defs<'a>(
         ..Default::default()
     };
 
-    let sorted = sort_can_defs_improved(&mut env, defs, new_output);
+    let sorted = sort_can_defs(&mut env, defs, new_output);
 
     match sorted {
         (Ok(mut declarations), output) => {
