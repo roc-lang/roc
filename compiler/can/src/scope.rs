@@ -1,6 +1,5 @@
 use roc_collections::all::{MutSet, SendMap};
 use roc_collections::soa;
-use roc_collections::VecMap;
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -10,6 +9,7 @@ use roc_types::types::{Alias, AliasKind, Type};
 
 use crate::abilities::AbilitiesStore;
 
+#[derive(Clone, Debug)]
 struct IdentStore {
     /// One big byte array that stores all `Ident`s
     string: Vec<u8>,
@@ -42,7 +42,39 @@ impl IdentStore {
 
         this
     }
-    fn get(&self, ident: &Ident) -> Option<usize> {
+
+    fn iter_idents(&self) -> impl Iterator<Item = Ident> + '_ {
+        self.idents.iter().filter_map(move |slice| {
+            // empty slice is used when ability members are shadowed
+            if slice.is_empty() {
+                None
+            } else {
+                let bytes = &self.string[slice.indices()];
+                let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+
+                Some(Ident::from(string))
+            }
+        })
+    }
+
+    fn iter_idents_symbols(&self) -> impl Iterator<Item = (Ident, Symbol)> + '_ {
+        self.idents
+            .iter()
+            .zip(self.symbols.iter())
+            .filter_map(move |(slice, symbol)| {
+                // empty slice is used when ability members are shadowed
+                if slice.is_empty() {
+                    None
+                } else {
+                    let bytes = &self.string[slice.indices()];
+                    let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+
+                    Some((Ident::from(string), *symbol))
+                }
+            })
+    }
+
+    fn get_index(&self, ident: &Ident) -> Option<usize> {
         let ident_bytes = ident.as_inline_str().as_str().as_bytes();
 
         for (i, slice) in self.idents.iter().enumerate() {
@@ -54,8 +86,14 @@ impl IdentStore {
         None
     }
 
-    fn ident_to_symbol(&self, ident: &Ident) -> Option<Symbol> {
-        Some(self.symbols[self.get(ident)?])
+    fn get_symbol(&self, ident: &Ident) -> Option<Symbol> {
+        Some(self.symbols[self.get_index(ident)?])
+    }
+
+    fn get_symbol_and_region(&self, ident: &Ident) -> Option<(Symbol, Region)> {
+        let index = self.get_index(ident)?;
+
+        Some((self.symbols[index], self.regions[index]))
     }
 
     /// Does not check that the ident is unique
@@ -76,13 +114,7 @@ impl IdentStore {
 
 #[derive(Clone, Debug)]
 pub struct Scope {
-    /// All the identifiers in scope, mapped to were they were defined and
-    /// the Symbol they resolve to.
-    idents: VecMap<Ident, (Symbol, Region)>,
-
-    /// A cache of all the symbols in scope. This makes lookups much
-    /// faster when checking for unused defs and unused arguments.
-    symbols: SendMap<Symbol, Region>,
+    idents: IdentStore,
 
     /// The type aliases currently in scope
     pub aliases: SendMap<Symbol, Alias>,
@@ -133,13 +165,9 @@ fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
 
 impl Scope {
     pub fn new(home: ModuleId, _var_store: &mut VarStore) -> Scope {
-        let mut idents = VecMap::default();
-        idents.extend(Symbol::default_in_scope());
-
         Scope {
             home,
-            idents,
-            symbols: SendMap::default(),
+            idents: IdentStore::new(),
             aliases: SendMap::default(),
             // TODO(abilities): default abilities in scope
             abilities_store: AbilitiesStore::default(),
@@ -147,13 +175,9 @@ impl Scope {
     }
 
     pub fn new_with_aliases(home: ModuleId, var_store: &mut VarStore) -> Scope {
-        let mut idents = VecMap::default();
-        idents.extend(Symbol::default_in_scope());
-
         Scope {
             home,
-            idents,
-            symbols: SendMap::default(),
+            idents: IdentStore::new(),
             aliases: add_aliases(var_store),
             // TODO(abilities): default abilities in scope
             abilities_store: AbilitiesStore::default(),
@@ -161,15 +185,15 @@ impl Scope {
     }
 
     pub fn symbols(&self) -> impl Iterator<Item = (&Symbol, &Region)> {
-        self.symbols.iter()
+        self.idents.symbols.iter().zip(self.idents.regions.iter())
     }
 
     pub fn contains_ident(&self, ident: &Ident) -> bool {
-        self.idents.contains_key(ident)
+        self.idents.get_index(ident).is_some()
     }
 
     pub fn contains_symbol(&self, symbol: Symbol) -> bool {
-        self.symbols.contains_key(&symbol)
+        self.idents.symbols.contains(&symbol)
     }
 
     pub fn num_idents(&self) -> usize {
@@ -177,15 +201,23 @@ impl Scope {
     }
 
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
-        match self.idents.get(ident) {
-            Some((symbol, _)) => Ok(*symbol),
+        println!(
+            "stats: string length: {}, ident len {}",
+            self.idents.string.len(),
+            self.idents.len()
+        );
+        match self.idents.get_symbol(ident) {
+            Some(symbol) => Ok(symbol),
             None => {
                 let error = RuntimeError::LookupNotInScope(
                     Loc {
                         region,
                         value: ident.clone(),
                     },
-                    self.idents.keys().map(|v| v.as_ref().into()).collect(),
+                    self.idents
+                        .iter_idents()
+                        .map(|v| v.as_ref().into())
+                        .collect(),
                 );
 
                 Err(error)
@@ -209,7 +241,7 @@ impl Scope {
         debug_assert!(opaque_ref.starts_with('$'));
         let opaque = opaque_ref[1..].into();
 
-        match self.idents.get(&opaque) {
+        match self.idents.get_symbol_and_region(&opaque) {
             // TODO: is it worth caching any of these results?
             Some((symbol, decl_region)) => {
                 if symbol.module_id() != self.home {
@@ -219,11 +251,11 @@ impl Scope {
                     return Err(RuntimeError::OpaqueOutsideScope {
                         opaque,
                         referenced_region: lookup_region,
-                        imported_region: *decl_region,
+                        imported_region: decl_region,
                     });
                 }
 
-                match self.aliases.get(symbol) {
+                match self.aliases.get(&symbol) {
                     None => Err(self.opaque_not_defined_error(opaque, lookup_region, None)),
 
                     Some(alias) => match alias.kind {
@@ -234,7 +266,7 @@ impl Scope {
                             Some(alias.header_region()),
                         )),
                         // All is good
-                        AliasKind::Opaque => Ok((*symbol, alias)),
+                        AliasKind::Opaque => Ok((symbol, alias)),
                     },
                 }
             }
@@ -250,8 +282,8 @@ impl Scope {
     ) -> RuntimeError {
         let opaques_in_scope = self
             .idents
-            .iter()
-            .filter(|(_, (sym, _))| {
+            .iter_idents_symbols()
+            .filter(|(_, sym)| {
                 self.aliases
                     .get(sym)
                     .map(|alias| alias.kind)
@@ -284,8 +316,9 @@ impl Scope {
         all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
-        match self.idents.get(&ident) {
-            Some(&(_, original_region)) => {
+        match self.idents.get_index(&ident) {
+            Some(index) => {
+                let original_region = self.idents.regions[index];
                 let shadow = Loc {
                     value: ident.clone(),
                     region,
@@ -294,8 +327,8 @@ impl Scope {
                 let ident_id = all_ident_ids.add(ident.clone());
                 let symbol = Symbol::new(self.home, ident_id);
 
-                self.symbols.insert(symbol, region);
-                self.idents.insert(ident, (symbol, region));
+                self.idents.symbols[index] = symbol;
+                self.idents.regions[index] = region;
 
                 Err((original_region, shadow, symbol))
             }
@@ -311,8 +344,8 @@ impl Scope {
         all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>)> {
-        match self.idents.get(&ident) {
-            Some(&(_, original_region)) => {
+        match self.idents.get_symbol_and_region(&ident) {
+            Some((_, original_region)) => {
                 let shadow = Loc {
                     value: ident.clone(),
                     region,
@@ -337,17 +370,22 @@ impl Scope {
         all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
-        match self.idents.get(&ident) {
-            Some(&(original_symbol, original_region)) => {
+        match self.idents.get_index(&ident) {
+            Some(index) => {
+                let original_symbol = self.idents.symbols[index];
+                let original_region = self.idents.regions[index];
+
                 let shadow_ident_id = all_ident_ids.add(ident.clone());
                 let shadow_symbol = Symbol::new(self.home, shadow_ident_id);
-
-                self.symbols.insert(shadow_symbol, region);
 
                 if self.abilities_store.is_ability_member_name(original_symbol) {
                     self.abilities_store
                         .register_specializing_symbol(shadow_symbol, original_symbol);
+
                     // Add a symbol for the shadow, but don't re-associate the member name.
+                    let dummy = Ident::default();
+                    self.idents.insert_unchecked(dummy, shadow_symbol, region);
+
                     Ok((shadow_symbol, Some(original_symbol)))
                 } else {
                     // This is an illegal shadow.
@@ -356,7 +394,9 @@ impl Scope {
                         region,
                     };
 
-                    self.idents.insert(ident, (shadow_symbol, region));
+                    // overwrite the data for this ident with the shadowed values
+                    self.idents.symbols[index] = shadow_symbol;
+                    self.idents.regions[index] = region;
 
                     Err((original_region, shadow, shadow_symbol))
                 }
@@ -386,8 +426,7 @@ impl Scope {
 
         let symbol = Symbol::new(self.home, ident_id);
 
-        self.symbols.insert(symbol, region);
-        self.idents.insert(ident, (symbol, region));
+        self.idents.insert_unchecked(ident, symbol, region);
 
         symbol
     }
@@ -410,11 +449,10 @@ impl Scope {
         symbol: Symbol,
         region: Region,
     ) -> Result<(), (Symbol, Region)> {
-        match self.idents.get(&ident) {
-            Some(shadowed) => Err(*shadowed),
+        match self.idents.get_symbol_and_region(&ident) {
+            Some(shadowed) => Err(shadowed),
             None => {
-                self.symbols.insert(symbol, region);
-                self.idents.insert(ident, (symbol, region));
+                self.idents.insert_unchecked(ident, symbol, region);
 
                 Ok(())
             }

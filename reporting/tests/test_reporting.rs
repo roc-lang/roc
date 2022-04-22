@@ -650,13 +650,12 @@ mod test_reporting {
 
                 Booly : [ Yes, No, Maybe ]
 
-                x =
-                    No
+                x : List Booly
+                x = []
 
                 x
            "#
             ),
-            // Booly is called a "variable"
             indoc!(
                 r#"
                 ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
@@ -673,26 +672,6 @@ mod test_reporting {
 
                 Since these aliases have the same name, it's easy to use the wrong one
                 on accident. Give one of them a new name.
-
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
-
-                `Booly` is not used anywhere in your code.
-
-                1│  Booly : [ Yes, No ]
-                    ^^^^^^^^^^^^^^^^^^^
-
-                If you didn't intend on using `Booly` then remove it so future readers
-                of your code don't wonder why it is there.
-
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
-
-                `Booly` is not used anywhere in your code.
-
-                3│  Booly : [ Yes, No, Maybe ]
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                If you didn't intend on using `Booly` then remove it so future readers
-                of your code don't wonder why it is there.
                 "#
             ),
         )
