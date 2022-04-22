@@ -799,7 +799,7 @@ impl DefIds {
         )
     }
 
-    fn calls_itself(&self, id: u32) -> bool {
+    fn is_self_recursive(&self, id: u32) -> bool {
         debug_assert!(id < self.length);
 
         // id'th row, id'th column
@@ -1548,7 +1548,7 @@ fn group_to_declaration_improved(
                         *recursive = closure_recursivity(symbol, closures);
                     }
 
-                    let is_recursive = def_ids.calls_itself(def_id);
+                    let is_recursive = def_ids.is_self_recursive(def_id);
 
                     if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
                         seen_pattern_regions.push(new_def.loc_pattern.region);
