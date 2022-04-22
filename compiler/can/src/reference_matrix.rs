@@ -50,13 +50,12 @@ impl ReferenceMatrix {
 //
 // Thank you, Samuel!
 impl ReferenceMatrix {
-    #[allow(clippy::type_complexity)]
-    pub fn topological_sort_into_groups(&self) -> Result<Vec<Vec<u32>>, (Vec<Vec<u32>>, Vec<u32>)> {
+    pub fn topological_sort_into_groups(&self) -> TopologicalSort {
         let length = self.length;
         let bitvec = &self.bitvec;
 
         if length == 0 {
-            return Ok(Vec::new());
+            return TopologicalSort::Groups { groups: Vec::new() };
         }
 
         let mut preds_map: Vec<i64> = vec![0; length];
@@ -85,7 +84,11 @@ impl ReferenceMatrix {
 
         if prev_group.is_empty() {
             let remaining: Vec<u32> = (0u32..length as u32).collect();
-            return Err((Vec::new(), remaining));
+
+            return TopologicalSort::HasCycles {
+                groups: Vec::new(),
+                nodes_in_cycle: remaining,
+            };
         }
 
         while preds_map.iter().any(|x| *x > 0) {
@@ -114,12 +117,16 @@ impl ReferenceMatrix {
                 let remaining: Vec<u32> = (0u32..length as u32)
                     .filter(|i| preds_map[*i as usize] > 0)
                     .collect();
-                return Err((groups, remaining));
+
+                return TopologicalSort::HasCycles {
+                    groups,
+                    nodes_in_cycle: remaining,
+                };
             }
         }
         groups.push(prev_group);
 
-        Ok(groups)
+        TopologicalSort::Groups { groups }
     }
 
     pub fn strongly_connected_components(&self, group: &[u32]) -> Vec<Vec<u32>> {
@@ -139,6 +146,19 @@ impl ReferenceMatrix {
             break params.scc;
         }
     }
+}
+
+pub(crate) enum TopologicalSort {
+    /// There were no cycles, all nodes have been partitioned into groups
+    Groups { groups: Vec<Vec<u32>> },
+    /// Cycles were found. All nodes that are not part of a cycle have been partitioned
+    /// into groups. The other elements are in the `cyclic` vector. However, there may be
+    /// many cycles, or just one big one. Use strongly-connected components to find out
+    /// exactly what the cycles are and how they fit into the groups.
+    HasCycles {
+        groups: Vec<Vec<u32>>,
+        nodes_in_cycle: Vec<u32>,
+    },
 }
 
 #[derive(Clone, Copy)]

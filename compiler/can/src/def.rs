@@ -8,6 +8,7 @@ use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{bindings_from_patterns, canonicalize_def_header_pattern, Pattern};
 use crate::procedure::References;
 use crate::reference_matrix::ReferenceMatrix;
+use crate::reference_matrix::TopologicalSort;
 use crate::scope::create_alias;
 use crate::scope::Scope;
 use roc_collections::{default_hasher, ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
@@ -812,7 +813,7 @@ pub fn sort_can_defs(
     // TODO also do the same `addDirects` check elm/compiler does, so we can
     // report an error if a recursive definition can't possibly terminate!
     match def_ids.references.topological_sort_into_groups() {
-        Ok(groups) => {
+        TopologicalSort::Groups { groups } => {
             let mut declarations = Vec::new();
 
             // groups are in reversed order
@@ -828,7 +829,10 @@ pub fn sort_can_defs(
 
             (Ok(declarations), output)
         }
-        Err((mut groups, nodes_in_cycle)) => {
+        TopologicalSort::HasCycles {
+            mut groups,
+            nodes_in_cycle,
+        } => {
             let mut declarations = Vec::new();
             let mut problems = Vec::new();
 
