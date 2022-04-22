@@ -976,13 +976,13 @@ pub fn sort_can_defs_improved(
             //
             // foo = if b then foo else bar
 
-            let all_successors_without_self = |id: &u32| {
-                let id = *id;
-                def_ids.successors_without_self(id)
-            };
+            let sccs = strongly_connected_components_improved(
+                def_ids.length as usize,
+                &def_ids.references,
+                &nodes_in_cycle,
+            );
 
-            for cycle in strongly_connected_components(&nodes_in_cycle, all_successors_without_self)
-            {
+            for cycle in sccs {
                 // check whether the cycle is faulty, which is when it has
                 // a direct successor in the current cycle. This catches things like:
                 //
@@ -1063,7 +1063,7 @@ pub fn sort_can_defs_improved(
                 // for each symbol in this group
                 for symbol in &groups[*group_id] {
                     // find its successors
-                    for succ in all_successors_without_self(symbol) {
+                    for succ in def_ids.successors_without_self(*symbol) {
                         // and add its group to the result
                         match symbol_to_group_index.get(&succ) {
                             Some(index) => {
