@@ -54,8 +54,15 @@ impl<K: PartialEq, V> VecMap<K, V> {
         }
     }
 
-    pub fn contains(&self, key: &K) -> bool {
+    pub fn contains_key(&self, key: &K) -> bool {
         self.keys.contains(key)
+    }
+
+    pub fn get(&self, key: &K) -> Option<&V> {
+        match self.keys.iter().position(|k| k == key) {
+            None => None,
+            Some(index) => Some(&self.values[index]),
+        }
     }
 
     pub fn remove(&mut self, key: &K) {
@@ -71,6 +78,10 @@ impl<K: PartialEq, V> VecMap<K, V> {
 
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.keys.iter().zip(self.values.iter())
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.keys.iter()
     }
 
     pub fn values(&self) -> impl Iterator<Item = &V> {

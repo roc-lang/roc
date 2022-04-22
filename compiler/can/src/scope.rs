@@ -1,4 +1,6 @@
 use roc_collections::all::{MutSet, SendMap};
+use roc_collections::soa;
+use roc_collections::VecMap;
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -8,11 +10,75 @@ use roc_types::types::{Alias, AliasKind, Type};
 
 use crate::abilities::AbilitiesStore;
 
-#[derive(Clone, Debug, PartialEq)]
+struct IdentStore {
+    /// One big byte array that stores all `Ident`s
+    string: Vec<u8>,
+
+    /// Slices into `string` to get an individual `Ident`
+    idents: Vec<soa::Slice<u8>>,
+
+    /// A Symbol for each Ident
+    symbols: Vec<Symbol>,
+
+    /// A Region for each Ident
+    regions: Vec<Region>,
+}
+
+impl IdentStore {
+    fn new() -> Self {
+        let defaults = Symbol::default_in_scope();
+        let capacity = defaults.len();
+
+        let mut this = Self {
+            string: Vec::with_capacity(capacity),
+            idents: Vec::with_capacity(capacity),
+            symbols: Vec::with_capacity(capacity),
+            regions: Vec::with_capacity(capacity),
+        };
+
+        for (ident, (symbol, region)) in defaults {
+            this.insert_unchecked(ident, symbol, region);
+        }
+
+        this
+    }
+    fn get(&self, ident: &Ident) -> Option<usize> {
+        let ident_bytes = ident.as_inline_str().as_str().as_bytes();
+
+        for (i, slice) in self.idents.iter().enumerate() {
+            if slice.len() == ident_bytes.len() && &self.string[slice.indices()] == ident_bytes {
+                return Some(i);
+            }
+        }
+
+        None
+    }
+
+    fn ident_to_symbol(&self, ident: &Ident) -> Option<Symbol> {
+        Some(self.symbols[self.get(ident)?])
+    }
+
+    /// Does not check that the ident is unique
+    fn insert_unchecked(&mut self, ident: Ident, symbol: Symbol, region: Region) {
+        let ident_bytes = ident.as_inline_str().as_str().as_bytes();
+
+        let slice = soa::Slice::extend_new(&mut self.string, ident_bytes.iter().copied());
+
+        self.idents.push(slice);
+        self.symbols.push(symbol);
+        self.regions.push(region);
+    }
+
+    fn len(&self) -> usize {
+        self.idents.len()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Scope {
     /// All the identifiers in scope, mapped to were they were defined and
     /// the Symbol they resolve to.
-    idents: SendMap<Ident, (Symbol, Region)>,
+    idents: VecMap<Ident, (Symbol, Region)>,
 
     /// A cache of all the symbols in scope. This makes lookups much
     /// faster when checking for unused defs and unused arguments.
@@ -67,9 +133,12 @@ fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
 
 impl Scope {
     pub fn new(home: ModuleId, _var_store: &mut VarStore) -> Scope {
+        let mut idents = VecMap::default();
+        idents.extend(Symbol::default_in_scope());
+
         Scope {
             home,
-            idents: Symbol::default_in_scope(),
+            idents,
             symbols: SendMap::default(),
             aliases: SendMap::default(),
             // TODO(abilities): default abilities in scope
@@ -78,9 +147,12 @@ impl Scope {
     }
 
     pub fn new_with_aliases(home: ModuleId, var_store: &mut VarStore) -> Scope {
+        let mut idents = VecMap::default();
+        idents.extend(Symbol::default_in_scope());
+
         Scope {
             home,
-            idents: Symbol::default_in_scope(),
+            idents,
             symbols: SendMap::default(),
             aliases: add_aliases(var_store),
             // TODO(abilities): default abilities in scope
