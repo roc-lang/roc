@@ -9,7 +9,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::{MutMap, MutSet, SendMap, VecMap, VecSet};
+use roc_collections::{MutSet, SendMap, VecMap, VecSet};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -1089,34 +1089,6 @@ fn canonicalize_when_branch<'a>(
         },
         references,
     )
-}
-
-pub fn local_successors_with_duplicates<'a>(
-    references: &'a References,
-    closures: &'a MutMap<Symbol, References>,
-) -> Vec<Symbol> {
-    let mut answer: Vec<_> = references.value_lookups().copied().collect();
-
-    let mut stack: Vec<_> = references.calls().copied().collect();
-    let mut seen = Vec::new();
-
-    while let Some(symbol) = stack.pop() {
-        if seen.contains(&symbol) {
-            continue;
-        }
-
-        if let Some(references) = closures.get(&symbol) {
-            answer.extend(references.value_lookups().copied());
-            stack.extend(references.calls().copied());
-
-            seen.push(symbol);
-        }
-    }
-
-    answer.sort();
-    answer.dedup();
-
-    answer
 }
 
 enum CanonicalizeRecordProblem {

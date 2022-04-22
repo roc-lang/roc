@@ -15,5 +15,6 @@ pub mod num;
 pub mod operator;
 pub mod pattern;
 pub mod procedure;
+mod reference_matrix;
 pub mod scope;
 pub mod string;
