@@ -21,6 +21,7 @@ pub struct Constraints {
     pub includes_tags: Vec<IncludesTag>,
     pub strings: Vec<&'static str>,
     pub sketched_rows: Vec<SketchedRows>,
+    pub eq: Vec<Eq>,
 }
 
 impl Default for Constraints {
@@ -43,6 +44,7 @@ impl Constraints {
         let includes_tags = Vec::new();
         let strings = Vec::new();
         let sketched_rows = Vec::new();
+        let eq = Vec::new();
 
         types.extend([
             Type::EmptyRec,
@@ -94,6 +96,7 @@ impl Constraints {
             includes_tags,
             strings,
             sketched_rows,
+            eq,
         }
     }
 
@@ -229,7 +232,7 @@ impl Constraints {
         let expected_index = Index::push_new(&mut self.expectations, expected);
         let category_index = Self::push_category(self, category);
 
-        Constraint::Eq(type_index, expected_index, category_index, region)
+        Constraint::Eq(Eq(type_index, expected_index, category_index, region))
     }
 
     #[inline(always)]
@@ -244,7 +247,7 @@ impl Constraints {
         let expected_index = Index::push_new(&mut self.expectations, expected);
         let category_index = Self::push_category(self, category);
 
-        Constraint::Eq(type_index, expected_index, category_index, region)
+        Constraint::Eq(Eq(type_index, expected_index, category_index, region))
     }
 
     #[inline(always)]
@@ -260,17 +263,17 @@ impl Constraints {
         let expected_index = Index::push_new(&mut self.expectations, expected);
         let category_index = Self::push_category(self, category);
 
-        let equal = Constraint::Eq(type_index, expected_index, category_index, region);
+        let equal = Constraint::Eq(Eq(type_index, expected_index, category_index, region));
 
         let storage_type_index = Self::push_type_variable(storage_var);
         let storage_category = Category::Storage(std::file!(), std::line!());
         let storage_category_index = Self::push_category(self, storage_category);
-        let storage = Constraint::Eq(
+        let storage = Constraint::Eq(Eq(
             storage_type_index,
             expected_index,
             storage_category_index,
             region,
-        );
+        ));
 
         self.and_constraint([equal, storage])
     }
@@ -612,31 +615,31 @@ impl Constraints {
         sketched_rows: SketchedRows,
         context: ExhaustiveContext,
     ) -> Constraint {
+        let real_var = Self::push_type_variable(real_var);
         let real_category = Index::push_new(&mut self.categories, real_category);
         let expected_branches = Index::push_new(&mut self.expectations, expected_branches);
+        let equality = Eq(real_var, expected_branches, real_category, real_region);
+        let equality = Index::push_new(&mut self.eq, equality);
         let sketched_rows = Index::push_new(&mut self.sketched_rows, sketched_rows);
 
-        Constraint::Exhaustive {
-            real_var,
-            real_region,
-            real_category,
-            expected_branches,
-            sketched_rows,
-            context,
-        }
+        Constraint::Exhaustive(equality, sketched_rows, context)
     }
 }
 
 roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Constraint, 3 * 8);
+
+#[derive(Clone, Copy, Debug)]
+pub struct Eq(
+    pub EitherIndex<Type, Variable>,
+    pub Index<Expected<Type>>,
+    pub Index<Category>,
+    pub Region,
+);
 
 #[derive(Clone, Copy)]
 pub enum Constraint {
-    Eq(
-        EitherIndex<Type, Variable>,
-        Index<Expected<Type>>,
-        Index<Category>,
-        Region,
-    ),
+    Eq(Eq),
     Store(
         EitherIndex<Type, Variable>,
         Variable,
@@ -669,14 +672,7 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
-    Exhaustive {
-        real_var: Variable,
-        real_region: Region,
-        real_category: Index<Category>,
-        expected_branches: Index<Expected<Type>>,
-        sketched_rows: Index<SketchedRows>,
-        context: ExhaustiveContext,
-    },
+    Exhaustive(Index<Eq>, Index<SketchedRows>, ExhaustiveContext),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -706,7 +702,7 @@ pub struct IncludesTag {
 impl std::fmt::Debug for Constraint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Eq(arg0, arg1, arg2, arg3) => {
+            Self::Eq(Eq(arg0, arg1, arg2, arg3)) => {
                 write!(f, "Eq({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
             }
             Self::Store(arg0, arg1, arg2, arg3) => {
@@ -731,19 +727,8 @@ impl std::fmt::Debug for Constraint {
                     arg0, arg1, arg2, arg3
                 )
             }
-            Self::Exhaustive {
-                real_var: arg0,
-                real_region: arg1,
-                real_category: arg2,
-                expected_branches: arg3,
-                sketched_rows: arg4,
-                context: arg5,
-            } => {
-                write!(
-                    f,
-                    "Exhaustive({:?}, {:?}, {:?}, {:?}, {:?}, {:?})",
-                    arg0, arg1, arg2, arg3, arg4, arg5
-                )
+            Self::Exhaustive(arg0, arg1, arg2) => {
+                write!(f, "Exhaustive({:?}, {:?}, {:?})", arg0, arg1, arg2)
             }
         }
     }

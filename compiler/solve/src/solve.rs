@@ -776,7 +776,7 @@ fn solve(
 
                 copy
             }
-            Eq(type_index, expectation_index, category_index, region) => {
+            Eq(roc_can::constraint::Eq(type_index, expectation_index, category_index, region)) => {
                 let category = &constraints.categories[category_index.index()];
 
                 let actual =
@@ -1197,14 +1197,7 @@ fn solve(
                     }
                 }
             }
-            &Exhaustive {
-                real_var,
-                real_region,
-                real_category,
-                expected_branches,
-                sketched_rows,
-                context,
-            } => {
+            &Exhaustive(eq, sketched_rows, context) => {
                 // A few cases:
                 //  1. Either condition or branch types already have a type error. In this case just
                 //     propagate it.
@@ -1215,6 +1208,16 @@ fn solve(
                 //     exhaustiveness checking both ways, to see which one is missing tags.
                 //  4. Condition and branch types aren't "almost equal", this is just a normal type
                 //     error.
+
+                let roc_can::constraint::Eq(
+                    real_var,
+                    expected_branches,
+                    real_category,
+                    real_region,
+                ) = constraints.eq[eq.index()];
+
+                let real_var =
+                    either_type_index_to_var(constraints, subs, rank, pools, aliases, real_var);
 
                 let expected_branches = &constraints.expectations[expected_branches.index()];
                 let branches_var =
