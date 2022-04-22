@@ -3632,6 +3632,7 @@ fn pattern_to_doc_help<'b>(
     pattern: roc_exhaustive::Pattern,
     in_type_param: bool,
 ) -> RocDocBuilder<'b> {
+    use roc_can::exhaustive::{GUARD_CTOR, NONEXHAUSIVE_CTOR};
     use roc_exhaustive::Literal::*;
     use roc_exhaustive::Pattern::*;
     use roc_exhaustive::RenderAs;
@@ -3654,7 +3655,7 @@ fn pattern_to_doc_help<'b>(
                     // #Guard <fake-condition-tag> <unexhausted-pattern>
                     debug_assert_eq!(
                         union.alternatives[tag_id.0 as usize].name,
-                        TagName::Global("#Guard".into())
+                        TagName::Global(GUARD_CTOR.into())
                     );
                     debug_assert!(args.len() == 2);
                     let tag = pattern_to_doc_help(alloc, args[1].clone(), in_type_param);
@@ -3693,7 +3694,7 @@ fn pattern_to_doc_help<'b>(
                 RenderAs::Tag | RenderAs::Opaque => {
                     let tag = &union.alternatives[tag_id.0 as usize];
                     match &tag.name {
-                        TagName::Global(name) if name.as_str() == "#Open" => {
+                        TagName::Global(name) if name.as_str() == NONEXHAUSIVE_CTOR => {
                             return pattern_to_doc_help(
                                 alloc,
                                 roc_exhaustive::Pattern::Anything,

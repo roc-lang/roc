@@ -10,6 +10,9 @@ use roc_types::types::AliasKind;
 
 pub use roc_exhaustive::Context as ExhaustiveContext;
 
+pub const GUARD_CTOR: &'static str = "#Guard";
+pub const NONEXHAUSIVE_CTOR: &'static str = "#Open";
+
 pub fn check(
     subs: &Subs,
     sketched_rows: SketchedRows,
@@ -215,7 +218,7 @@ pub fn sketch_rows(target_var: Variable, region: Region, patterns: &[WhenBranch]
                     render_as: RenderAs::Guard,
                     alternatives: vec![Ctor {
                         tag_id,
-                        name: TagName::Global("#Guard".into()),
+                        name: TagName::Global(GUARD_CTOR.into()),
                         arity: 2,
                     }],
                 };
@@ -298,7 +301,7 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
             // be matched unless there's an `Anything` pattern.
             let opt_openness_tag = match subs.get_content_without_compacting(ext) {
                 FlexVar(_) | RigidVar(_) => {
-                    let openness_tag = TagName::Global("#Open".into());
+                    let openness_tag = TagName::Global(NONEXHAUSIVE_CTOR.into());
                     num_tags += 1;
                     Some((openness_tag, &[] as _))
                 }
