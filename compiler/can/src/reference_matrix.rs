@@ -37,6 +37,14 @@ impl ReferenceMatrix {
     }
 }
 
+// Topological sort and strongly-connected components
+//
+// Adapted from the Pathfinding crate v2.0.3 by Samuel Tardieu <sam@rfc1149.net>,
+// licensed under the Apache License, version 2.0 - https://www.apache.org/licenses/LICENSE-2.0
+//
+// The original source code can be found at: https://github.com/samueltardieu/pathfinding
+//
+// Thank you, Samuel!
 impl ReferenceMatrix {
     #[allow(clippy::type_complexity)]
     pub fn topological_sort_into_groups(&self) -> Result<Vec<Vec<u32>>, (Vec<Vec<u32>>, Vec<u32>)> {
@@ -75,11 +83,6 @@ impl ReferenceMatrix {
             let remaining: Vec<u32> = (0u32..length as u32).collect();
             return Err((Vec::new(), remaining));
         }
-
-        // NOTE: the original now removes elements from the preds_map if they have count 0
-        //    for node in &prev_group {
-        //        preds_map.remove(node);
-        //    }
 
         while preds_map.iter().any(|x| *x > 0) {
             let mut next_group = Vec::<u32>::new();
