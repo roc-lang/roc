@@ -3,7 +3,7 @@ use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::LineColumnRegion;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
 pub use crate::error::canonicalize::can_problem;
@@ -60,7 +60,15 @@ pub fn cycle<'b>(
         .annotate(Annotation::TypeBlock)
 }
 
-pub fn pretty_header(title: &str, path: &std::path::Path) -> String {
+const HEADER_WIDTH: usize = 80;
+
+pub fn pretty_header(title: &str) -> String {
+    let title_width = title.len() + 4;
+    let header = format!("── {} {}", title, "─".repeat(HEADER_WIDTH - title_width));
+    header
+}
+
+pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
     let cwd = std::env::current_dir().unwrap();
     let relative_path = match path.strip_prefix(cwd) {
         Ok(p) => p,
@@ -69,17 +77,12 @@ pub fn pretty_header(title: &str, path: &std::path::Path) -> String {
     .to_str()
     .unwrap();
 
-    let header_width = 80;
     let title_width = title.len() + 4;
     let relative_path_width = relative_path.len() + 3;
-    let available_path_width = header_width - title_width - 1;
+    let available_path_width = HEADER_WIDTH - title_width - 1;
 
     // If path is too long to fit in 80 characters with everything else then truncate it
-    let path_width = if relative_path_width <= available_path_width {
-        relative_path_width
-    } else {
-        available_path_width
-    };
+    let path_width = relative_path_width.min(available_path_width);
     let path_trim = relative_path_width - path_width;
     let path = if path_trim > 0 {
         format!("...{}", &relative_path[(path_trim + 3)..])
@@ -90,7 +93,7 @@ pub fn pretty_header(title: &str, path: &std::path::Path) -> String {
     let header = format!(
         "── {} {} {} ─",
         title,
-        "─".repeat(header_width - (title_width + path_width)),
+        "─".repeat(HEADER_WIDTH - (title_width + path_width)),
         path
     );
 
@@ -166,7 +169,11 @@ impl<'b> Report<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
-            let header = crate::report::pretty_header(&self.title, &self.filename);
+            let header = if self.filename == PathBuf::from("") {
+                crate::report::pretty_header(&self.title)
+            } else {
+                crate::report::pretty_header_with_path(&self.title, &self.filename)
+            };
 
             alloc.stack([alloc.text(header).annotate(Annotation::Header), self.doc])
         }
