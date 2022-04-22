@@ -671,6 +671,11 @@ struct DefIds {
 
     // an length x length matrix indicating who references who
     references: bitvec::vec::BitVec<u8>,
+
+    // references without looking into closure bodies.
+    // Used to spot definitely-wrong recursion
+    direct_references: bitvec::vec::BitVec<u8>,
+
     length: u32,
 }
 
@@ -678,14 +683,14 @@ impl DefIds {
     fn with_capacity(home: ModuleId, capacity: usize) -> Self {
         use bitvec::vec::BitVec;
 
-        // makes each new row start at a multiple of 8
-        // let hack = capacity + (8 - capacity % 8);
         let references = BitVec::repeat(false, capacity * capacity);
+        let direct_references = BitVec::repeat(false, capacity * capacity);
 
         Self {
             home,
             symbol_to_id: Vec::with_capacity(capacity),
             references,
+            direct_references,
             length: capacity as u32,
         }
     }
@@ -708,10 +713,12 @@ impl DefIds {
 
             for referenced in references.value_lookups() {
                 this.register_reference(def_id, *referenced);
+                this.register_direct_reference(def_id, *referenced);
             }
 
             for referenced in references.calls() {
                 this.register_reference(def_id, *referenced);
+                this.register_direct_reference(def_id, *referenced);
             }
 
             if let Some(references) = env.closures.get(symbol) {
@@ -742,33 +749,70 @@ impl DefIds {
             .map(|t| Symbol::new(self.home, t.0))
     }
 
-    fn register_reference(&mut self, id: DefId, referenced: Symbol) -> bool {
-        if referenced.module_id() != self.home {
-            return false;
-        }
-
-        match self.get_id(referenced) {
+    fn register_help(
+        id: DefId,
+        referenced: Option<u32>,
+        length: usize,
+        bitvec: &mut bitvec::vec::BitVec<u8>,
+    ) -> bool {
+        match referenced {
             None => {
                 // this symbol is not defined within the let-block that this DefIds represents
                 false
             }
             Some(referenced_id) => {
-                let row = id.0;
-                let column = referenced_id;
+                let row = id.0 as usize;
+                let column = referenced_id as usize;
 
-                let index = row * self.length + column;
+                let index = row * length + column;
 
-                self.references.set(index as usize, true);
+                bitvec.set(index, true);
 
                 true
             }
         }
     }
 
-    fn calls_itself_directly(&self, id: u32) -> bool {
-        let row = &self.references[(id * self.length) as usize..][..self.length as usize];
+    fn register_direct_reference(&mut self, id: DefId, referenced: Symbol) -> bool {
+        if referenced.module_id() != self.home {
+            return false;
+        }
 
-        row[id as usize]
+        Self::register_help(
+            id,
+            self.get_id(referenced),
+            self.length as usize,
+            &mut self.direct_references,
+        )
+    }
+
+    fn register_reference(&mut self, id: DefId, referenced: Symbol) -> bool {
+        if referenced.module_id() != self.home {
+            return false;
+        }
+
+        Self::register_help(
+            id,
+            self.get_id(referenced),
+            self.length as usize,
+            &mut self.references,
+        )
+    }
+
+    fn calls_itself(&self, id: u32) -> bool {
+        debug_assert!(id < self.length);
+
+        // id'th row, id'th column
+        let index = (id * self.length) + id;
+
+        self.references[index as usize]
+    }
+
+    #[inline(always)]
+    fn direct_successors(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
+        let row = &self.direct_references[(id * self.length) as usize..][..self.length as usize];
+
+        row.iter_ones().map(|x| x as u32)
     }
 
     #[inline(always)]
@@ -949,7 +993,9 @@ pub fn sort_can_defs_improved(
                 // p = q
                 // q = p
                 let is_invalid_cycle = match cycle.get(0) {
-                    Some(def_id) => def_ids.successors(*def_id).any(|key| cycle.contains(&key)),
+                    Some(def_id) => def_ids
+                        .direct_successors(*def_id)
+                        .any(|key| cycle.contains(&key)),
                     None => false,
                 };
 
@@ -1502,7 +1548,7 @@ fn group_to_declaration_improved(
                         *recursive = closure_recursivity(symbol, closures);
                     }
 
-                    let is_recursive = def_ids.calls_itself_directly(def_id);
+                    let is_recursive = def_ids.calls_itself(def_id);
 
                     if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
                         seen_pattern_regions.push(new_def.loc_pattern.region);
