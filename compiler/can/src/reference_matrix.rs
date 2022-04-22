@@ -27,8 +27,8 @@ impl ReferenceMatrix {
     }
 
     #[inline(always)]
-    pub fn set(&mut self, index: usize, value: bool) {
-        self.bitvec.set(index, value)
+    pub fn set_row_col(&mut self, row: usize, col: usize, value: bool) {
+        self.bitvec.set(row * self.length + col, value)
     }
 
     #[inline(always)]

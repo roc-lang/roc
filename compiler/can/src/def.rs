@@ -662,9 +662,6 @@ pub fn canonicalize_defs<'a>(
     )
 }
 
-#[derive(Clone, Copy)]
-struct DefId(u32);
-
 #[derive(Debug)]
 struct DefOrdering {
     home: ModuleId,
@@ -682,14 +679,11 @@ struct DefOrdering {
 
 impl DefOrdering {
     fn with_capacity(home: ModuleId, capacity: usize) -> Self {
-        let references = ReferenceMatrix::new(capacity);
-        let direct_references = ReferenceMatrix::new(capacity);
-
         Self {
             home,
             symbol_to_id: Vec::with_capacity(capacity),
-            references,
-            direct_references,
+            references: ReferenceMatrix::new(capacity),
+            direct_references: ReferenceMatrix::new(capacity),
             length: capacity as u32,
         }
     }
@@ -708,7 +702,7 @@ impl DefOrdering {
         }
 
         for (symbol, (_, references)) in refs_by_symbol.iter() {
-            let def_id = DefId(this.get_id(*symbol).unwrap());
+            let def_id = this.get_id(*symbol).unwrap();
 
             for referenced in references.value_lookups() {
                 this.register_reference(def_id, *referenced);
@@ -735,67 +729,43 @@ impl DefOrdering {
     }
 
     fn get_id(&self, symbol: Symbol) -> Option<u32> {
-        self.symbol_to_id
-            .iter()
-            .find(|(id, _)| *id == symbol.ident_id())
-            .map(|t| t.1)
+        if symbol.module_id() != self.home {
+            return None;
+        }
+
+        let target = symbol.ident_id();
+
+        for (ident_id, def_id) in self.symbol_to_id.iter() {
+            if target == *ident_id {
+                return Some(*def_id);
+            }
+        }
+
+        None
     }
 
     fn get_symbol(&self, id: u32) -> Option<Symbol> {
-        self.symbol_to_id
-            .iter()
-            .find(|(_, def_id)| id == *def_id)
-            .map(|t| Symbol::new(self.home, t.0))
-    }
-
-    fn register_help(
-        id: DefId,
-        referenced: Option<u32>,
-        length: usize,
-        refmatrix: &mut ReferenceMatrix,
-    ) -> bool {
-        match referenced {
-            None => {
-                // this symbol is not defined within the let-block that this DefIds represents
-                false
-            }
-            Some(referenced_id) => {
-                let row = id.0 as usize;
-                let column = referenced_id as usize;
-
-                let index = row * length + column;
-
-                refmatrix.set(index, true);
-
-                true
+        for (ident_id, def_id) in self.symbol_to_id.iter() {
+            if id == *def_id {
+                return Some(Symbol::new(self.home, *ident_id));
             }
         }
+
+        None
     }
 
-    fn register_direct_reference(&mut self, id: DefId, referenced: Symbol) -> bool {
-        if referenced.module_id() != self.home {
-            return false;
+    fn register_direct_reference(&mut self, id: u32, referenced: Symbol) {
+        if let Some(ref_id) = self.get_id(referenced) {
+            self.direct_references
+                .set_row_col(id as usize, ref_id as usize, true);
         }
-
-        Self::register_help(
-            id,
-            self.get_id(referenced),
-            self.length as usize,
-            &mut self.direct_references,
-        )
     }
 
-    fn register_reference(&mut self, id: DefId, referenced: Symbol) -> bool {
-        if referenced.module_id() != self.home {
-            return false;
+    fn register_reference(&mut self, id: u32, referenced: Symbol) {
+        if let Some(ref_id) = self.get_id(referenced) {
+            self.references
+                .set_row_col(id as usize, ref_id as usize, true);
         }
-
-        Self::register_help(
-            id,
-            self.get_id(referenced),
-            self.length as usize,
-            &mut self.references,
-        )
     }
 
     fn is_self_recursive(&self, id: u32) -> bool {
@@ -805,13 +775,6 @@ impl DefOrdering {
         let index = (id * self.length) + id;
 
         self.references.get(index as usize)
-    }
-
-    #[inline(always)]
-    fn direct_successors(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
-        self.direct_references
-            .references_for(id as usize)
-            .map(|x| x as u32)
     }
 
     #[inline(always)]
@@ -896,8 +859,9 @@ pub fn sort_can_defs(
                 // q = p
                 let is_invalid_cycle = match cycle.get(0) {
                     Some(def_id) => def_ids
-                        .direct_successors(*def_id)
-                        .any(|key| cycle.contains(&key)),
+                        .direct_references
+                        .references_for(*def_id as usize)
+                        .any(|key| cycle.contains(&(key as u32))),
                     None => false,
                 };
 
