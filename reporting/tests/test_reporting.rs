@@ -9881,4 +9881,37 @@ I need all branches in an `if` to have the same type!
             "",
         )
     }
+
+    #[test]
+    fn not_enough_cases_for_open_union() {
+        new_report_problem_as(
+            "branches_have_more_cases_than_condition",
+            indoc!(
+                r#"
+                foo : [A, B]a -> Str
+                foo = \it ->
+                    when it is
+                        A -> ""
+                foo
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                This `when` does not cover all the possibilities:
+
+                6│>          when it is
+                7│>              A -> ""
+
+                Other possibilities include:
+
+                    B
+                    _
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
 }

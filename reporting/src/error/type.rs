@@ -3691,12 +3691,18 @@ fn pattern_to_doc_help<'b>(
                         .append(" }")
                 }
                 RenderAs::Tag | RenderAs::Opaque => {
-                    let has_args = !args.is_empty();
-                    let arg_docs = args
-                        .into_iter()
-                        .map(|v| pattern_to_doc_help(alloc, v, true));
-
                     let tag = &union.alternatives[tag_id.0 as usize];
+                    match &tag.name {
+                        TagName::Global(name) if name.as_str() == "#Open" => {
+                            return pattern_to_doc_help(
+                                alloc,
+                                roc_exhaustive::Pattern::Anything,
+                                in_type_param,
+                            )
+                        }
+                        _ => {}
+                    }
+
                     let tag_name = match union.render_as {
                         RenderAs::Tag => alloc.tag_name(tag.name.clone()),
                         RenderAs::Opaque => match tag.name {
@@ -3705,6 +3711,11 @@ fn pattern_to_doc_help<'b>(
                         },
                         _ => unreachable!(),
                     };
+
+                    let has_args = !args.is_empty();
+                    let arg_docs = args
+                        .into_iter()
+                        .map(|v| pattern_to_doc_help(alloc, v, true));
 
                     // We assume the alternatives are sorted. If not, this assert will trigger
                     debug_assert!(tag_id == tag.tag_id);
