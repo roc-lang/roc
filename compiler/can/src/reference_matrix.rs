@@ -3,6 +3,10 @@ pub(crate) type Element = usize;
 pub(crate) type BitVec = bitvec::vec::BitVec<Element>;
 pub(crate) type BitSlice = bitvec::prelude::BitSlice<Element>;
 
+/// A square boolean matrix used to store relations
+///
+/// We use this for sorting definitions so every definition is defined before it is used.
+/// This functionality is also used to spot and report invalid recursion.
 #[derive(Debug)]
 pub(crate) struct ReferenceMatrix {
     bitvec: BitVec,
