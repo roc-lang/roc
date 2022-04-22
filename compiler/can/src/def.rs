@@ -1634,9 +1634,8 @@ fn group_to_declaration_improved(
     // for a definition, so every definition is only inserted (thus typechecked and emitted) once
     let mut seen_pattern_regions: Vec<Region> = Vec::with_capacity(2);
 
-    let bitvec = def_ids.references.clone();
-
-    let sccs = strongly_connected_components_improved(def_ids.length as usize, &bitvec, group);
+    let sccs =
+        strongly_connected_components_improved(def_ids.length as usize, &def_ids.references, group);
 
     for cycle in sccs {
         if cycle.len() == 1 {
@@ -1645,21 +1644,25 @@ fn group_to_declaration_improved(
 
             match can_defs_by_symbol.remove(&symbol) {
                 Some(mut new_def) => {
-                    // Determine recursivity of closures that are not tail-recursive
+                    // there is only one definition in this cycle, so we only have
+                    // to check whether it recurses with itself; there is nobody else
+                    // to recurse with, or they would also be in this cycle.
+                    let is_self_recursive = def_ids.is_self_recursive(def_id);
+
                     if let Closure(ClosureData {
                         recursive: recursive @ Recursive::NotRecursive,
                         ..
                     }) = &mut new_def.loc_expr.value
                     {
-                        *recursive = closure_recursivity(symbol, closures);
+                        if is_self_recursive {
+                            *recursive = Recursive::Recursive
+                        }
                     }
-
-                    let is_recursive = def_ids.is_self_recursive(def_id);
 
                     if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
                         seen_pattern_regions.push(new_def.loc_pattern.region);
 
-                        if is_recursive {
+                        if is_self_recursive {
                             declarations.push(DeclareRec(vec![new_def]));
                         } else {
                             declarations.push(Declare(new_def));
