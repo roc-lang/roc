@@ -5,6 +5,7 @@ use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::{Declaration, Def};
+use roc_can::exhaustive::{sketch_rows, ExhaustiveContext};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
@@ -717,6 +718,11 @@ pub fn constrain_expr(
             let mut total_cons = Vec::with_capacity(1 + 2 * branches.len() + 1);
             // total_cons.push(expr_con);
             pattern_cons.push(expr_con);
+
+            let sketched_rows = sketch_rows(cond_var, branches_region, &branches);
+            let exhaustiveness_constraint =
+                constraints.exhaustive(sketched_rows, ExhaustiveContext::BadCase);
+            pattern_cons.push(exhaustiveness_constraint);
 
             // Solve all the pattern constraints together, introducing variables in the pattern as
             // need be before solving the bodies.

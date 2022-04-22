@@ -78,6 +78,7 @@ pub enum Literal {
     U128(u128),
     Bit(bool),
     Byte(u8),
+    /// Stores the float bits
     Float(u64),
     Decimal(RocDec),
     Str(Box<str>),
@@ -95,14 +96,14 @@ pub enum Error {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Context {
     BadArg,
     BadDestruct,
     BadCase,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Guard {
     HasGuard,
     NoGuard,

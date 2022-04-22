@@ -8,6 +8,7 @@ pub mod constraint;
 pub mod def;
 pub mod effect_module;
 pub mod env;
+pub mod exhaustive;
 pub mod expected;
 pub mod expr;
 pub mod module;

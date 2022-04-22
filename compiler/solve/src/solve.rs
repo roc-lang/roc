@@ -100,6 +100,7 @@ pub enum TypeError {
         ErrorType,
         Vec<IncompleteAbilityImplementation>,
     ),
+    Exhaustive(roc_exhaustive::Error),
 }
 
 use roc_types::types::Alias;
@@ -1195,6 +1196,16 @@ fn solve(
                         state
                     }
                 }
+            }
+            Exhaustive(rows_index, context) => {
+                let sketched_rows = constraints.sketched_rows[rows_index.index()].clone();
+
+                let checked = roc_can::exhaustive::check(&subs, sketched_rows, *context);
+                if let Err(errors) = checked {
+                    problems.extend(errors.into_iter().map(TypeError::Exhaustive));
+                }
+
+                state
             }
         };
     }

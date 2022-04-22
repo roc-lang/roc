@@ -2333,7 +2333,8 @@ impl UnionTags {
 
     pub fn iter_all(
         &self,
-    ) -> impl Iterator<Item = (SubsIndex<TagName>, SubsIndex<VariableSubsSlice>)> {
+    ) -> impl Iterator<Item = (SubsIndex<TagName>, SubsIndex<VariableSubsSlice>)> + ExactSizeIterator
+    {
         self.tag_names()
             .into_iter()
             .zip(self.variables().into_iter())
@@ -2436,7 +2437,7 @@ impl<'a> UnsortedUnionTags<'a> {
     }
 }
 
-pub type SortedTagsIterator<'a> = Box<dyn Iterator<Item = (TagName, &'a [Variable])> + 'a>;
+pub type SortedTagsIterator<'a> = Box<dyn ExactSizeIterator<Item = (TagName, &'a [Variable])> + 'a>;
 pub type SortedTagsSlicesIterator<'a> = Box<dyn Iterator<Item = (TagName, VariableSubsSlice)> + 'a>;
 
 pub fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {

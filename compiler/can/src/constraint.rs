@@ -1,3 +1,4 @@
+use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::ident::TagName;
@@ -19,6 +20,7 @@ pub struct Constraints {
     pub pattern_expectations: Vec<PExpected<Type>>,
     pub includes_tags: Vec<IncludesTag>,
     pub strings: Vec<&'static str>,
+    pub sketched_rows: Vec<SketchedRows>,
 }
 
 impl Default for Constraints {
@@ -40,6 +42,7 @@ impl Constraints {
         let pattern_expectations = Vec::new();
         let includes_tags = Vec::new();
         let strings = Vec::new();
+        let sketched_rows = Vec::new();
 
         types.extend([
             Type::EmptyRec,
@@ -90,6 +93,7 @@ impl Constraints {
             pattern_expectations,
             includes_tags,
             strings,
+            sketched_rows,
         }
     }
 
@@ -570,6 +574,7 @@ impl Constraints {
             Constraint::IsOpenType(_) => false,
             Constraint::IncludesTag(_) => false,
             Constraint::PatternPresence(_, _, _, _) => false,
+            Constraint::Exhaustive(_, _) => false,
         }
     }
 
@@ -597,11 +602,17 @@ impl Constraints {
 
         Constraint::Store(type_index, variable, string_index, line_number)
     }
+
+    pub fn exhaustive(&mut self, rows: SketchedRows, context: ExhaustiveContext) -> Constraint {
+        let rows_index = Index::push_new(&mut self.sketched_rows, rows);
+
+        Constraint::Exhaustive(rows_index, context)
+    }
 }
 
 roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum Constraint {
     Eq(
         EitherIndex<Type, Variable>,
@@ -641,6 +652,7 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
+    Exhaustive(Index<SketchedRows>, ExhaustiveContext),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -694,6 +706,9 @@ impl std::fmt::Debug for Constraint {
                     "PatternPresence({:?}, {:?}, {:?}, {:?})",
                     arg0, arg1, arg2, arg3
                 )
+            }
+            Self::Exhaustive(arg0, arg1) => {
+                write!(f, "Exhaustive({:?}, {:?})", arg0, arg1)
             }
         }
     }
