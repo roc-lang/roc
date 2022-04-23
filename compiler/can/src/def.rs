@@ -505,7 +505,7 @@ pub fn canonicalize_defs<'a>(
         symbol_to_id.push((s.ident_id(), binding_index as u32));
     }
 
-    let mut def_order = DefOrdering::from_symbol_to_id(env.home, symbol_to_id);
+    // let mut def_order = DefOrdering::from_symbol_to_id(env.home, symbol_to_id);
 
     let mut can_defs_by_symbol = HashMap::with_capacity_and_hasher(num_defs, default_hasher());
 
@@ -757,17 +757,17 @@ impl DefOrdering {
         }
     }
 
-    fn from_symbol_to_id(home: ModuleId, symbol_to_id: Vec<(IdentId, u32)>) -> Self {
-        let capacity = symbol_to_id.len();
-
-        Self {
-            home,
-            symbol_to_id,
-            references: ReferenceMatrix::new(capacity),
-            direct_references: ReferenceMatrix::new(capacity),
-            length: capacity as u32,
-        }
-    }
+    //    fn from_symbol_to_id(home: ModuleId, symbol_to_id: Vec<(IdentId, u32)>) -> Self {
+    //        let capacity = symbol_to_id.len();
+    //
+    //        Self {
+    //            home,
+    //            symbol_to_id,
+    //            references: ReferenceMatrix::new(capacity),
+    //            direct_references: ReferenceMatrix::new(capacity),
+    //            length: capacity as u32,
+    //        }
+    //    }
 
     fn from_defs_by_symbol(
         env: &Env,
@@ -1695,7 +1695,7 @@ fn canonicalize_pending_value_def_new<'a>(
     pending_def: PendingValueDef<'a>,
     mut output: Output,
     scope: &mut Scope,
-    can_defs_by_symbol: &mut MutMap<Symbol, Def>,
+    _can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     var_store: &mut VarStore,
     refs_by_symbol: &mut MutMap<Symbol, (Region, References)>,
     aliases: &mut ImMap<Symbol, Alias>,
