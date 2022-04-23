@@ -1966,13 +1966,12 @@ fn correct_mutual_recursive_type_alias<'a>(
             // Don't try to instantiate the alias itself in its definition.
             let original_alias_def = to_instantiate.remove(&rec).unwrap();
 
+            let helper = |s| to_instantiate.get(&s);
+
             let mut new_lambda_sets = ImSet::default();
-            alias.typ.instantiate_aliases(
-                alias.region,
-                &to_instantiate,
-                var_store,
-                &mut new_lambda_sets,
-            );
+            alias
+                .typ
+                .instantiate_aliases(alias.region, &helper, var_store, &mut new_lambda_sets);
 
             for lambda_set_var in new_lambda_sets {
                 alias
