@@ -321,6 +321,9 @@ pub(crate) fn canonicalize_defs<'a>(
         }
     }
 
+    // Determine which idents we introduced in the course of this process.
+    let mut symbols_introduced = MutMap::default();
+
     let sorted = sort_type_defs_before_introduction(referenced_type_symbols);
     let mut aliases = SendMap::default();
     let mut abilities = MutMap::default();
@@ -328,6 +331,8 @@ pub(crate) fn canonicalize_defs<'a>(
     for type_name in sorted {
         match type_defs.remove(&type_name).unwrap() {
             TypeDef::AliasLike(name, vars, ann, kind) => {
+                symbols_introduced.insert(name.value, name.region);
+
                 let symbol = name.value;
                 let can_ann = canonicalize_annotation(
                     env,
@@ -428,6 +433,8 @@ pub(crate) fn canonicalize_defs<'a>(
             }
 
             TypeDef::Ability(name, members) => {
+                symbols_introduced.insert(name.value, name.region);
+
                 // For now we enforce that aliases cannot reference abilities, so let's wait to
                 // resolve ability definitions until aliases are resolved and in scope below.
                 abilities.insert(name.value, (name, members));
@@ -487,9 +494,6 @@ pub(crate) fn canonicalize_defs<'a>(
             }
         }
     }
-
-    // Determine which idents we introduced in the course of this process.
-    let mut symbols_introduced = MutMap::default();
 
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
