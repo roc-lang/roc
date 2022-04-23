@@ -1384,20 +1384,12 @@ fn canonicalize_pending_value_def_new<'a>(
                 {
                     // Since everywhere in the code it'll be referred to by its defined name,
                     // remove its generated name from the closure map. (We'll re-insert it later.)
-                    let references = env.closures.remove(closure_name).unwrap_or_else(|| {
+                    let closure_references  = env.closures.remove(closure_name).unwrap_or_else(|| {
                         panic!(
                             "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
                             closure_name, env.closures
                         )
                     });
-
-                    let closure_references = references.clone();
-
-                    // Re-insert the closure into the map, under its defined name.
-                    // closures don't have a name, and therefore pick a fresh symbol. But in this
-                    // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
-                    // and we want to reference it by that name.
-                    env.closures.insert(symbol, references);
 
                     // The closure is self tail recursive iff it tail calls itself (by defined name).
                     let is_recursive = match can_output.tail_call {
@@ -1532,20 +1524,12 @@ fn canonicalize_pending_value_def_new<'a>(
                 {
                     // Since everywhere in the code it'll be referred to by its defined name,
                     // remove its generated name from the closure map. (We'll re-insert it later.)
-                    let references = env.closures.remove(closure_name).unwrap_or_else(|| {
+                    let closure_references  = env.closures.remove(closure_name).unwrap_or_else(|| {
                         panic!(
                             "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
                             closure_name, env.closures
                         )
                     });
-
-                    let closure_references = references.clone();
-
-                    // Re-insert the closure into the map, under its defined name.
-                    // closures don't have a name, and therefore pick a fresh symbol. But in this
-                    // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
-                    // and we want to reference it by that name.
-                    env.closures.insert(symbol, references);
 
                     // The closure is self tail recursive iff it tail calls itself (by defined name).
                     let is_recursive = match can_output.tail_call {
