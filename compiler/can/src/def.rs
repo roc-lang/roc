@@ -1358,21 +1358,23 @@ fn canonicalize_pending_value_def_new<'a>(
             // which also implies it's not a self tail call!
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let Pattern::Identifier(symbol)
-            | Pattern::AbilityMemberSpecialization { ident: symbol, .. } = loc_can_pattern.value
-            {
-                if let Closure(ClosureData {
-                    function_type,
-                    closure_type,
-                    closure_ext_var,
-                    return_type,
-                    name: ref closure_name,
-                    ref arguments,
-                    loc_body: ref body,
-                    ref captured_symbols,
-                    ..
-                }) = loc_can_expr.value
-                {
+
+            match (&loc_can_pattern.value, &loc_can_expr.value) {
+                (
+                    Pattern::Identifier(symbol)
+                    | Pattern::AbilityMemberSpecialization { ident: symbol, .. },
+                    Closure(ClosureData {
+                        function_type,
+                        closure_type,
+                        closure_ext_var,
+                        return_type,
+                        name: closure_name,
+                        arguments,
+                        loc_body: body,
+                        captured_symbols,
+                        ..
+                    }),
+                ) => {
                     // Since everywhere in the code it'll be referred to by its defined name,
                     // remove its generated name from the closure map. (We'll re-insert it later.)
                     let closure_references  = env.closures.remove(closure_name).unwrap_or_else(|| {
@@ -1384,17 +1386,16 @@ fn canonicalize_pending_value_def_new<'a>(
 
                     // The closure is self tail recursive iff it tail calls itself (by defined name).
                     let is_recursive = match can_output.tail_call {
-                        Some(tail_symbol) if tail_symbol == symbol => Recursive::TailRecursive,
+                        Some(tail_symbol) if tail_symbol == *symbol => Recursive::TailRecursive,
                         _ => Recursive::NotRecursive,
                     };
 
-                    // renamed_closure_def = Some(&symbol);
                     loc_can_expr.value = Closure(ClosureData {
-                        function_type,
-                        closure_type,
-                        closure_ext_var,
-                        return_type,
-                        name: symbol,
+                        function_type: *function_type,
+                        closure_type: *closure_type,
+                        closure_ext_var: *closure_ext_var,
+                        return_type: *return_type,
+                        name: *symbol,
                         captured_symbols: captured_symbols.clone(),
                         recursive: is_recursive,
                         arguments: arguments.clone(),
@@ -1416,7 +1417,8 @@ fn canonicalize_pending_value_def_new<'a>(
                         references: DefReferences::Function(closure_references),
                         def,
                     }
-                } else {
+                }
+                _ => {
                     let refs = can_output.references.clone();
 
                     let def = single_can_def(
@@ -1434,24 +1436,6 @@ fn canonicalize_pending_value_def_new<'a>(
                         references: DefReferences::Value(refs),
                         def,
                     }
-                }
-            } else {
-                let refs = can_output.references.clone();
-
-                let def = single_can_def(
-                    loc_can_pattern,
-                    loc_can_expr,
-                    expr_var,
-                    Some(Loc::at(loc_ann.region, type_annotation)),
-                    vars_by_symbol.clone(),
-                );
-
-                output.union(can_output);
-
-                TempOutput {
-                    output,
-                    references: DefReferences::Value(refs),
-                    def,
                 }
             }
         }
@@ -1490,40 +1474,42 @@ fn canonicalize_pending_value_def_new<'a>(
             // which also implies it's not a self tail call!
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
-                if let Closure(ClosureData {
-                    function_type,
-                    closure_type,
-                    closure_ext_var,
-                    return_type,
-                    name: ref closure_name,
-                    ref arguments,
-                    loc_body: ref body,
-                    ref captured_symbols,
-                    ..
-                }) = loc_can_expr.value
-                {
-                    // Since everywhere in the code it'll be referred to by its defined name,
-                    // remove its generated name from the closure map. (We'll re-insert it later.)
-                    let closure_references  = env.closures.remove(closure_name).unwrap_or_else(|| {
-                        panic!(
-                            "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                            closure_name, env.closures
-                        )
-                    });
-
-                    // The closure is self tail recursive iff it tail calls itself (by defined name).
-                    let is_recursive = match can_output.tail_call {
-                        Some(tail_symbol) if tail_symbol == symbol => Recursive::TailRecursive,
-                        _ => Recursive::NotRecursive,
-                    };
-
-                    loc_can_expr.value = Closure(ClosureData {
+            match (&loc_can_pattern.value, &loc_can_expr.value) {
+                (
+                    Pattern::Identifier(symbol),
+                    Closure(ClosureData {
                         function_type,
                         closure_type,
                         closure_ext_var,
                         return_type,
-                        name: symbol,
+                        name: closure_name,
+                        arguments,
+                        loc_body: body,
+                        captured_symbols,
+                        ..
+                    }),
+                ) => {
+                    // Since everywhere in the code it'll be referred to by its defined name,
+                    // remove its generated name from the closure map. (We'll re-insert it later.)
+                    let closure_references  = env.closures.remove(closure_name).unwrap_or_else(|| {
+                            panic!(
+                                "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
+                                closure_name, env.closures
+                            )
+                        });
+
+                    // The closure is self tail recursive iff it tail calls itself (by defined name).
+                    let is_recursive = match can_output.tail_call {
+                        Some(tail_symbol) if tail_symbol == *symbol => Recursive::TailRecursive,
+                        _ => Recursive::NotRecursive,
+                    };
+
+                    loc_can_expr.value = Closure(ClosureData {
+                        function_type: *function_type,
+                        closure_type: *closure_type,
+                        closure_ext_var: *closure_ext_var,
+                        return_type: *return_type,
+                        name: *symbol,
                         captured_symbols: captured_symbols.clone(),
                         recursive: is_recursive,
                         arguments: arguments.clone(),
@@ -1545,7 +1531,8 @@ fn canonicalize_pending_value_def_new<'a>(
                         references: DefReferences::Function(closure_references),
                         def,
                     }
-                } else {
+                }
+                _ => {
                     let refs = can_output.references.clone();
 
                     let def = single_can_def(
@@ -1563,25 +1550,6 @@ fn canonicalize_pending_value_def_new<'a>(
                         references: DefReferences::Value(refs),
                         def,
                     }
-                }
-            } else {
-                let refs = can_output.references.clone();
-
-                let def = single_can_def(
-                    loc_can_pattern,
-                    loc_can_expr,
-                    expr_var,
-                    None,
-                    vars_by_symbol.clone(),
-                );
-
-                output.union(can_output);
-
-                TempOutput {
-                    output,
-                    references: refs,
-                    closure_references: None,
-                    def,
                 }
             }
         }
