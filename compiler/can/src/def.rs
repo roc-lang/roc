@@ -278,14 +278,7 @@ pub(crate) fn canonicalize_defs<'a>(
     #[allow(clippy::needless_collect)]
     let pending_type_defs = type_defs
         .into_iter()
-        .filter_map(|loc_def| {
-            to_pending_type_def(env, loc_def.value, &mut scope, pattern_type).map(
-                |(new_output, pending_def)| {
-                    output.union(new_output);
-                    pending_def
-                },
-            )
-        })
+        .filter_map(|loc_def| to_pending_type_def(env, loc_def.value, &mut scope, pattern_type))
         .collect::<Vec<_>>();
 
     if cfg!(debug_assertions) {
@@ -1665,7 +1658,7 @@ fn to_pending_type_def<'a>(
     def: &'a ast::TypeDef<'a>,
     scope: &mut Scope,
     pattern_type: PatternType,
-) -> Option<(Output, PendingTypeDef<'a>)> {
+) -> Option<PendingTypeDef<'a>> {
     use ast::TypeDef::*;
 
     match def {
@@ -1713,14 +1706,11 @@ fn to_pending_type_def<'a>(
                                 };
                                 env.problems.push(problem);
 
-                                return Some((
-                                    Output::default(),
-                                    PendingTypeDef::InvalidAlias {
-                                        kind,
-                                        symbol,
-                                        region,
-                                    },
-                                ));
+                                return Some(PendingTypeDef::InvalidAlias {
+                                    kind,
+                                    symbol,
+                                    region,
+                                });
                             }
                         }
                     }
@@ -1737,7 +1727,7 @@ fn to_pending_type_def<'a>(
                         kind,
                     };
 
-                    Some((Output::default(), pending_def))
+                    Some(pending_def)
                 }
 
                 Err((original_region, loc_shadowed_symbol, new_symbol)) => {
@@ -1747,14 +1737,11 @@ fn to_pending_type_def<'a>(
                         kind: shadow_kind,
                     });
 
-                    Some((
-                        Output::default(),
-                        PendingTypeDef::InvalidAlias {
-                            kind,
-                            symbol: new_symbol,
-                            region,
-                        },
-                    ))
+                    Some(PendingTypeDef::InvalidAlias {
+                        kind,
+                        symbol: new_symbol,
+                        region,
+                    })
                 }
             }
         }
@@ -1769,7 +1756,7 @@ fn to_pending_type_def<'a>(
             );
             env.problem(Problem::AbilityNotOnToplevel { region });
 
-            Some((Output::default(), PendingTypeDef::AbilityNotOnToplevel))
+            Some(PendingTypeDef::AbilityNotOnToplevel)
         }
 
         Ability {
@@ -1790,7 +1777,7 @@ fn to_pending_type_def<'a>(
                         shadow: shadowed_symbol,
                         kind: ShadowKind::Ability,
                     });
-                    return Some((Output::default(), PendingTypeDef::AbilityShadows));
+                    return Some(PendingTypeDef::AbilityShadows);
                 }
             };
 
@@ -1802,13 +1789,10 @@ fn to_pending_type_def<'a>(
                     name: name.value,
                     variables_region,
                 });
-                return Some((
-                    Output::default(),
-                    PendingTypeDef::InvalidAbility {
-                        symbol: name.value,
-                        region: name.region,
-                    },
-                ));
+                return Some(PendingTypeDef::InvalidAbility {
+                    symbol: name.value,
+                    region: name.region,
+                });
             }
 
             let pending_ability = PendingTypeDef::Ability {
@@ -1817,7 +1801,7 @@ fn to_pending_type_def<'a>(
                 members,
             };
 
-            Some((Output::default(), pending_ability))
+            Some(pending_ability)
         }
     }
 }
