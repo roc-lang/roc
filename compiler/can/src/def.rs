@@ -514,7 +514,7 @@ pub(crate) fn canonicalize_defs<'a>(
     let mut def_ordering = DefOrdering::from_symbol_to_id(env.home, symbol_to_index, capacity);
 
     for (def_id, pending_def) in pending_value_defs.into_iter().enumerate() {
-        let temp_output = canonicalize_pending_value_def_new(
+        let temp_output = canonicalize_pending_value_def(
             env,
             pending_def,
             output,
@@ -1190,7 +1190,7 @@ struct TempOutput {
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::cognitive_complexity)]
-fn canonicalize_pending_value_def_new<'a>(
+fn canonicalize_pending_value_def<'a>(
     env: &mut Env<'a>,
     pending_def: PendingValueDef<'a>,
     mut output: Output,
