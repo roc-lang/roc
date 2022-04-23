@@ -1907,24 +1907,29 @@ fn correct_mutual_recursive_type_alias<'a>(
 ) -> ImMap<Symbol, Alias> {
     let symbols_introduced: Vec<Symbol> = original_aliases.keys().copied().collect();
 
-    let all_successors_with_self = |symbol: &Symbol| -> Vec<Symbol> {
-        match original_aliases.get(symbol) {
-            Some(alias) => {
-                let mut loc_succ = alias.typ.symbols();
-                // remove anything that is not defined in the current block
-                loc_succ.retain(|key| symbols_introduced.contains(key));
+    let mut matrix = ReferenceMatrix::new(original_aliases.len());
 
-                loc_succ
+    for (index, (_, alias)) in original_aliases.iter().enumerate() {
+        for referenced in alias.typ.symbols() {
+            match symbols_introduced.iter().position(|k| referenced == *k) {
+                None => { /* ignore */ }
+                Some(ref_id) => matrix.set_row_col(index, ref_id, true),
             }
+        }
+    }
+
+    let all_successors_with_self = |symbol: &Symbol| -> Vec<Symbol> {
+        match symbols_introduced.iter().position(|k| symbol == k) {
+            Some(index) => matrix
+                .references_for(index)
+                .map(|r| symbols_introduced[r])
+                .collect(),
             None => vec![],
         }
     };
 
-    // TODO investigate should this be in a loop?
-    let defined_symbols: Vec<Symbol> = original_aliases.keys().copied().collect();
-
     let cycles =
-        ven_graph::strongly_connected_components(&defined_symbols, all_successors_with_self);
+        ven_graph::strongly_connected_components(&symbols_introduced, all_successors_with_self);
     let mut solved_aliases = ImMap::default();
 
     for cycle in cycles {
