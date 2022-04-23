@@ -732,16 +732,6 @@ struct DefOrdering {
 }
 
 impl DefOrdering {
-    //    fn with_capacity(home: ModuleId, capacity: usize) -> Self {
-    //        Self {
-    //            home,
-    //            symbol_to_id: Vec::with_capacity(capacity),
-    //            references: ReferenceMatrix::new(capacity),
-    //            direct_references: ReferenceMatrix::new(capacity),
-    //            length: capacity as u32,
-    //        }
-    //    }
-
     fn from_symbol_to_id(
         home: ModuleId,
         symbol_to_id: Vec<(IdentId, u32)>,
@@ -758,32 +748,6 @@ impl DefOrdering {
             length: capacity as u32,
         }
     }
-
-    //    fn from_defs_by_symbol(
-    //        env: &Env,
-    //        symbol_to_id: Vec<(IdentId, u32)>,
-    //        references: &[(References, Region)],
-    //        capacity: usize,
-    //    ) -> Self {
-    //
-    //        let mut this = Self {
-    //            home: env.home,
-    //            symbol_to_id,
-    //            references: ReferenceMatrix::new(capacity),
-    //            direct_references: ReferenceMatrix::new(capacity),
-    //            length: capacity as u32,
-    //        };
-    //
-    //        for (ident_id, def_id) in this.symbol_to_id.iter() {
-    //            let def_id = *def_id;
-    //            let references = &references[def_id as usize].0;
-    //            let symbol = Symbol::new(this.home, *ident_id);
-    //
-    //            this.insert_symbol_references(def_id, symbol, references, &env.closures);
-    //        }
-    //
-    //        this
-    //    }
 
     fn insert_symbol_references(
         &mut self,
@@ -827,46 +791,6 @@ impl DefOrdering {
             }
         }
     }
-
-    //    fn from_defs_by_symbol_old(
-    //        env: &Env,
-    //        can_defs_by_symbol: &MutMap<Symbol, Def>,
-    //        refs_by_symbol: &MutMap<Symbol, (Region, References)>,
-    //    ) -> Self {
-    //        let mut this = Self::with_capacity(env.home, can_defs_by_symbol.len());
-    //
-    //        for (i, symbol) in can_defs_by_symbol.keys().enumerate() {
-    //            debug_assert_eq!(env.home, symbol.module_id());
-    //
-    //            this.symbol_to_id.push((symbol.ident_id(), i as u32));
-    //        }
-    //
-    //        for (symbol, (_, references)) in refs_by_symbol.iter() {
-    //            let def_id = this.get_id(*symbol).unwrap();
-    //
-    //            for referenced in references.value_lookups() {
-    //                this.register_reference(def_id, *referenced);
-    //                this.register_direct_reference(def_id, *referenced);
-    //            }
-    //
-    //            for referenced in references.calls() {
-    //                this.register_reference(def_id, *referenced);
-    //                this.register_direct_reference(def_id, *referenced);
-    //            }
-    //
-    //            if let Some(references) = env.closures.get(symbol) {
-    //                for referenced in references.value_lookups() {
-    //                    this.register_reference(def_id, *referenced);
-    //                }
-    //
-    //                for referenced in references.calls() {
-    //                    this.register_reference(def_id, *referenced);
-    //                }
-    //            }
-    //        }
-    //
-    //        this
-    //    }
 
     fn get_id(&self, symbol: Symbol) -> Option<u32> {
         if symbol.module_id() != self.home {
