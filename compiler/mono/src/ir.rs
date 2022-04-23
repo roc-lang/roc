@@ -3499,15 +3499,24 @@ pub fn with_hole<'a>(
 
         OpaqueRef { argument, .. } => {
             let (arg_var, loc_arg_expr) = *argument;
-            with_hole(
-                env,
-                loc_arg_expr.value,
-                arg_var,
-                procs,
-                layout_cache,
-                assigned,
-                hole,
-            )
+
+            match can_reuse_symbol(env, procs, &loc_arg_expr.value) {
+                // Opaques decay to their argument.
+                ReuseSymbol::Value(real_name) => {
+                    let mut result = hole.clone();
+                    substitute_in_exprs(arena, &mut result, assigned, real_name);
+                    result
+                }
+                _ => with_hole(
+                    env,
+                    loc_arg_expr.value,
+                    arg_var,
+                    procs,
+                    layout_cache,
+                    assigned,
+                    hole,
+                ),
+            }
         }
 
         Record {
