@@ -82,6 +82,16 @@ enum PendingValueDef<'a> {
     ),
 }
 
+impl PendingValueDef<'_> {
+    fn loc_pattern(&self) -> &Loc<Pattern> {
+        match self {
+            PendingValueDef::AnnotationOnly(_, loc_pattern, _) => loc_pattern,
+            PendingValueDef::Body(_, loc_pattern, _) => loc_pattern,
+            PendingValueDef::TypedBody(_, loc_pattern, _, _) => loc_pattern,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum PendingTypeDef<'a> {
     /// A structural or opaque type alias, e.g. `Ints : List Int` or `Age := U32` respectively.
@@ -494,6 +504,23 @@ pub fn canonicalize_defs<'a>(
         }
     }
 
+    let mut symbol_to_id: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
+
+    let mut def_count = 0;
+    for pending_def in pending_value_defs.iter() {
+        let pattern = &pending_def.loc_pattern().value;
+
+        for s in crate::pattern::symbols_from_pattern(pattern) {
+            debug_assert_eq!(env.home, s.module_id());
+            debug_assert!(!symbol_to_id.iter().any(|(id, _)| *id == s.ident_id()));
+
+            symbol_to_id.push((s.ident_id(), def_count));
+            def_count += 1;
+        }
+    }
+
+    let mut def_order = DefOrdering::from_symbol_to_id(env.home, symbol_to_id);
+
     for pending_def in pending_value_defs.into_iter() {
         output = canonicalize_pending_value_def(
             env,
@@ -704,6 +731,18 @@ impl DefOrdering {
         Self {
             home,
             symbol_to_id: Vec::with_capacity(capacity),
+            references: ReferenceMatrix::new(capacity),
+            direct_references: ReferenceMatrix::new(capacity),
+            length: capacity as u32,
+        }
+    }
+
+    fn from_symbol_to_id(home: ModuleId, symbol_to_id: Vec<(IdentId, u32)>) -> Self {
+        let capacity = symbol_to_id.len();
+
+        Self {
+            home,
+            symbol_to_id,
             references: ReferenceMatrix::new(capacity),
             direct_references: ReferenceMatrix::new(capacity),
             length: capacity as u32,
