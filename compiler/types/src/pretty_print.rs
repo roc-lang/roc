@@ -248,7 +248,12 @@ fn name_root(
     subs: &mut Subs,
     taken: &mut MutSet<Lowercase>,
 ) -> u32 {
-    let (generated_name, new_letters_used) = name_type_var(letters_used, taken);
+    let (generated_name, new_letters_used) =
+        name_type_var(letters_used, &mut taken.iter(), |var, str| {
+            var.as_str() == str
+        });
+
+    taken.insert(generated_name.clone());
 
     set_root_name(root, generated_name, subs);
 
@@ -307,6 +312,8 @@ pub fn content_to_string(
 
     write_content(&env, &mut ctx, content, subs, &mut buf, Parens::Unnecessary);
 
+    ctx.able_variables.sort();
+    ctx.able_variables.dedup();
     for (i, (var, ability)) in ctx.able_variables.into_iter().enumerate() {
         buf.push_str(if i == 0 { " | " } else { ", " });
         buf.push_str(var);
@@ -443,7 +450,9 @@ fn write_content<'a>(
                     }
 
                     // useful for debugging
-                    if false {
+                    if cfg!(debug_assertions)
+                        && std::env::var("ROC_PRETTY_PRINT_ALIAS_CONTENTS").is_ok()
+                    {
                         buf.push_str("[[ but really ");
                         let content = subs.get_content_without_compacting(*_actual);
                         write_content(env, ctx, content, subs, buf, parens);

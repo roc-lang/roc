@@ -108,7 +108,7 @@ pub struct EntryPoint<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct PartialProcId(usize);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PartialProcs<'a> {
     /// maps a function name (symbol) to an index
     symbols: Vec<'a, Symbol>,
@@ -190,7 +190,7 @@ impl<'a> PartialProcs<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
     pub pattern_symbols: &'a [Symbol],
@@ -3499,15 +3499,24 @@ pub fn with_hole<'a>(
 
         OpaqueRef { argument, .. } => {
             let (arg_var, loc_arg_expr) = *argument;
-            with_hole(
-                env,
-                loc_arg_expr.value,
-                arg_var,
-                procs,
-                layout_cache,
-                assigned,
-                hole,
-            )
+
+            match can_reuse_symbol(env, procs, &loc_arg_expr.value) {
+                // Opaques decay to their argument.
+                ReuseSymbol::Value(real_name) => {
+                    let mut result = hole.clone();
+                    substitute_in_exprs(arena, &mut result, assigned, real_name);
+                    result
+                }
+                _ => with_hole(
+                    env,
+                    loc_arg_expr.value,
+                    arg_var,
+                    procs,
+                    layout_cache,
+                    assigned,
+                    hole,
+                ),
+            }
         }
 
         Record {
@@ -4750,6 +4759,7 @@ fn get_specialization<'a>(
     symbol: Symbol,
 ) -> Option<Symbol> {
     use roc_solve::ability::type_implementing_member;
+    use roc_solve::solve::instantiate_rigids;
     use roc_unify::unify::unify;
 
     match env.abilities_store.member_def(symbol) {
@@ -4759,6 +4769,7 @@ fn get_specialization<'a>(
         }
         Some(member) => {
             let snapshot = env.subs.snapshot();
+            instantiate_rigids(env.subs, member.signature_var);
             let (_, must_implement_ability) = unify(
                 env.subs,
                 symbol_var,

@@ -167,6 +167,20 @@ For a more detailed understanding of the compilation phases, see the `Phase`, `B
 
 ## Debugging intermediate representations
 
+### Debugging the typechecker
+
+Setting the following environment variables:
+
+- `ROC_PRINT_UNIFICATIONS` prints all type unifications that are done,
+    before and after the unification.
+- `ROC_PRINT_MISMATCHES` prints all type mismatches hit during unification.
+- `ROC_PRETTY_PRINT_ALIAS_CONTENTS` expands the contents of aliases during
+    pretty-printing of types.
+
+Note that this is only relevant during debug builds. Eventually we should have
+some better debugging tools here, see https://github.com/rtfeldman/roc/issues/2486
+for one.
+
 ### The mono IR
 
 If you observe a miscomplication, you may first want to check the generated mono

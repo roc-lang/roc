@@ -45,6 +45,8 @@ const ILLEGAL_HAS_CLAUSE: &str = "ILLEGAL HAS CLAUSE";
 const ABILITY_MEMBER_MISSING_HAS_CLAUSE: &str = "ABILITY MEMBER MISSING HAS CLAUSE";
 const ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE: &str = "ABILITY MEMBER HAS EXTRANEOUS HAS CLAUSE";
 const ABILITY_MEMBER_BINDS_MULTIPLE_VARIABLES: &str = "ABILITY MEMBER BINDS MULTIPLE VARIABLES";
+const ABILITY_NOT_ON_TOPLEVEL: &str = "ABILITY NOT ON TOP-LEVEL";
+const ABILITY_USED_AS_TYPE: &str = "ABILITY USED AS TYPE";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -642,7 +644,9 @@ pub fn can_problem<'b>(
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
                     alloc.keyword("has"),
-                    alloc.reflow(" clauses can only be specified on the top-level type annotation of an ability member."),
+                    alloc.reflow(
+                        " clauses can only be specified on the top-level type annotations.",
+                    ),
                 ]),
             ]);
             title = ILLEGAL_HAS_CLAUSE.to_string();
@@ -733,6 +737,46 @@ pub fn can_problem<'b>(
                 ]),
             ]);
             title = ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AbilityNotOnToplevel { region } => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![alloc.reflow(
+                    "This ability definition is not on the top-level of a module:",
+                )]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Abilities can only be defined on the top-level of a Roc module."),
+            ]);
+            title = ABILITY_NOT_ON_TOPLEVEL.to_string();
+            severity = Severity::RuntimeError;
+        }
+
+        Problem::AbilityUsedAsType(suggested_var_name, ability, region) => {
+            doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("You are attempting to use the ability "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(" as a type directly:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow(
+                    "Abilities can only be used in type annotations to constrain type variables.",
+                ),
+                alloc
+                    .hint("")
+                    .append(alloc.reflow("Perhaps you meant to include a "))
+                    .append(alloc.keyword("has"))
+                    .append(alloc.reflow(" annotation, like")),
+                alloc.type_block(alloc.concat(vec![
+                    alloc.type_variable(suggested_var_name),
+                    alloc.space(),
+                    alloc.keyword("has"),
+                    alloc.space(),
+                    alloc.symbol_unqualified(ability),
+                ])),
+            ]);
+            title = ABILITY_USED_AS_TYPE.to_string();
             severity = Severity::RuntimeError;
         }
     };
