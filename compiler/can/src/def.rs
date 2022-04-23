@@ -51,7 +51,7 @@ pub struct Annotation {
 #[derive(Debug)]
 pub(crate) struct CanDefs {
     symbol_to_index: Vec<(IdentId, u32)>,
-    defs: Vec<Def>,
+    defs: Vec<Option<Def>>,
     references: Vec<(References, Region)>,
 
     aliases: SendMap<Symbol, Alias>,
@@ -527,7 +527,7 @@ pub(crate) fn canonicalize_defs<'a>(
 
         output = temp_output.output;
 
-        defs.push(temp_output.def);
+        defs.push(Some(temp_output.def));
         references.push((temp_output.references, region));
     }
 
@@ -901,7 +901,7 @@ pub(crate) fn sort_can_defs(
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
     let CanDefs {
         symbol_to_index,
-        defs,
+        mut defs,
         references,
         aliases,
     } = defs;
@@ -920,7 +920,13 @@ pub(crate) fn sort_can_defs(
 
             // groups are in reversed order
             for group in groups.into_iter().rev() {
-                group_to_declaration(&def_ids, &group, &env.closures, &defs, &mut declarations);
+                group_to_declaration(
+                    &def_ids,
+                    &group,
+                    &env.closures,
+                    &mut defs,
+                    &mut declarations,
+                );
             }
 
             (Ok(declarations), output)
@@ -978,7 +984,7 @@ pub(crate) fn sort_can_defs(
                             ),
                             Some((_, region)) => {
                                 let expr_region =
-                                    defs.get(*def_id as usize).unwrap().loc_expr.region;
+                                    defs[*def_id as usize].as_ref().unwrap().loc_expr.region;
 
                                 let entry = CycleEntry {
                                     symbol,
@@ -1056,7 +1062,7 @@ pub(crate) fn sort_can_defs(
                                 &def_ids,
                                 group,
                                 &env.closures,
-                                &defs,
+                                &mut defs,
                                 &mut declarations,
                             );
                         }
@@ -1078,7 +1084,7 @@ fn group_to_declaration(
     def_ids: &DefOrdering,
     group: &[u32],
     closures: &MutMap<Symbol, References>,
-    defs: &[Def],
+    defs: &mut [Option<Def>],
     declarations: &mut Vec<Declaration>,
 ) {
     use Declaration::*;
@@ -1099,7 +1105,7 @@ fn group_to_declaration(
             let def_id = cycle[0];
             let symbol = def_ids.get_symbol(def_id).unwrap();
 
-            match defs.get(def_id as usize).cloned() {
+            match defs[def_id as usize].take() {
                 Some(mut new_def) => {
                     // there is only one definition in this cycle, so we only have
                     // to check whether it recurses with itself; there is nobody else
@@ -1134,7 +1140,7 @@ fn group_to_declaration(
             // Topological sort gives us the reverse of the sorting we want!
             for def_id in cycle.into_iter().rev() {
                 let symbol = def_ids.get_symbol(def_id).unwrap();
-                match defs.get(def_id as usize).cloned() {
+                match defs[def_id as usize].take() {
                     Some(mut new_def) => {
                         // Determine recursivity of closures that are not tail-recursive
                         if let Closure(ClosureData {
