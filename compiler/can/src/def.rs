@@ -1018,7 +1018,7 @@ pub(crate) fn sort_can_defs(
 }
 
 fn group_to_declaration(
-    def_ids: &DefOrdering,
+    def_ordering: &DefOrdering,
     group: &[u32],
     closures: &MutMap<Symbol, References>,
     defs: &mut [Option<Def>],
@@ -1035,7 +1035,7 @@ fn group_to_declaration(
     // for a definition, so every definition is only inserted (thus typechecked and emitted) once
     let mut seen_pattern_regions: Vec<Region> = Vec::with_capacity(2);
 
-    let sccs = def_ids.references.strongly_connected_components(group);
+    let sccs = def_ordering.references.strongly_connected_components(group);
 
     for cycle in sccs {
         if cycle.len() == 1 {
@@ -1046,7 +1046,7 @@ fn group_to_declaration(
                     // there is only one definition in this cycle, so we only have
                     // to check whether it recurses with itself; there is nobody else
                     // to recurse with, or they would also be in this cycle.
-                    let is_self_recursive = def_ids.is_self_recursive(def_id);
+                    let is_self_recursive = def_ordering.is_self_recursive(def_id);
 
                     if let Closure(ClosureData {
                         recursive: recursive @ Recursive::NotRecursive,
@@ -1070,7 +1070,7 @@ fn group_to_declaration(
                 }
                 None => {
                     // NOTE: a `_ = someDef` can mean we don't have a symbol here
-                    let symbol = def_ids.get_symbol(def_id);
+                    let symbol = def_ordering.get_symbol(def_id);
 
                     roc_error_macros::internal_error!("def not available {:?}", symbol)
                 }
@@ -1085,11 +1085,12 @@ fn group_to_declaration(
                         // Determine recursivity of closures that are not tail-recursive
                         if let Closure(ClosureData {
                             recursive: recursive @ Recursive::NotRecursive,
-                            name,
                             ..
                         }) = &mut new_def.loc_expr.value
                         {
-                            *recursive = closure_recursivity(*name, closures);
+                            if def_ordering.references.is_recursive(def_id as usize) {
+                                *recursive = Recursive::Recursive
+                            }
                         }
 
                         if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
@@ -1100,7 +1101,7 @@ fn group_to_declaration(
                     }
                     None => {
                         // NOTE: a `_ = someDef` can mean we don't have a symbol here
-                        let symbol = def_ids.get_symbol(def_id);
+                        let symbol = def_ordering.get_symbol(def_id);
 
                         roc_error_macros::internal_error!("def not available {:?}", symbol)
                     }
