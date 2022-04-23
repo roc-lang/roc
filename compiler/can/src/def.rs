@@ -1902,15 +1902,25 @@ fn to_pending_value_def<'a>(
 /// Make aliases recursive
 fn correct_mutual_recursive_type_alias<'a>(
     env: &mut Env<'a>,
-    mut original_aliases: SendMap<Symbol, Alias>,
+    original_aliases: SendMap<Symbol, Alias>,
     var_store: &mut VarStore,
 ) -> ImMap<Symbol, Alias> {
-    let symbols_introduced: Vec<Symbol> = original_aliases.keys().copied().collect();
+    let capacity = original_aliases.len();
+    let mut matrix = ReferenceMatrix::new(capacity);
 
-    let mut matrix = ReferenceMatrix::new(original_aliases.len());
+    let (symbols_introduced, mut aliases): (Vec<_>, Vec<_>) = original_aliases
+        .into_iter()
+        .map(|(k, v)| (k, Some(v)))
+        .unzip();
 
-    for (index, (_, alias)) in original_aliases.iter().enumerate() {
-        for referenced in alias.typ.symbols() {
+    for (index, alias) in aliases.iter().enumerate() {
+        let it = alias
+            .as_ref()
+            .map(|a| a.typ.symbols().into_iter())
+            .into_iter()
+            .flatten();
+
+        for referenced in it {
             match symbols_introduced.iter().position(|k| referenced == *k) {
                 None => { /* ignore */ }
                 Some(ref_id) => matrix.set_row_col(index, ref_id, true),
@@ -1918,26 +1928,23 @@ fn correct_mutual_recursive_type_alias<'a>(
         }
     }
 
-    let all_successors_with_self = |symbol: &Symbol| -> Vec<Symbol> {
-        match symbols_introduced.iter().position(|k| symbol == k) {
-            Some(index) => matrix
-                .references_for(index)
-                .map(|r| symbols_introduced[r])
-                .collect(),
-            None => vec![],
-        }
-    };
-
-    let cycles =
-        ven_graph::strongly_connected_components(&symbols_introduced, all_successors_with_self);
     let mut solved_aliases = ImMap::default();
+
+    let group: Vec<_> = (0u32..capacity as u32).collect();
+
+    let cycles = matrix.strongly_connected_components(&group);
 
     for cycle in cycles {
         debug_assert!(!cycle.is_empty());
 
         let mut pending_aliases: ImMap<_, _> = cycle
             .iter()
-            .map(|&sym| (sym, original_aliases.remove(&sym).unwrap()))
+            .map(|index| {
+                (
+                    symbols_introduced[*index as usize],
+                    aliases[*index as usize].take().unwrap(),
+                )
+            })
             .collect();
 
         // Make sure we report only one error for the cycle, not an error for every
@@ -1952,7 +1959,9 @@ fn correct_mutual_recursive_type_alias<'a>(
         // NB: ImMap::clone is O(1): https://docs.rs/im/latest/src/im/hash/map.rs.html#1527-1544
         let mut to_instantiate = solved_aliases.clone().union(pending_aliases.clone());
 
-        for &rec in cycle.iter() {
+        for index in cycle.iter() {
+            let rec = symbols_introduced[*index as usize];
+
             let alias = pending_aliases.get_mut(&rec).unwrap();
             // Don't try to instantiate the alias itself in its definition.
             let original_alias_def = to_instantiate.remove(&rec).unwrap();
@@ -1992,14 +2001,18 @@ fn correct_mutual_recursive_type_alias<'a>(
         // The cycle we just instantiated and marked recursive may still be an illegal cycle, if
         // all the types in the cycle are narrow newtypes. We can't figure this out until now,
         // because we need all the types to be deeply instantiated.
-        let all_are_narrow = cycle.iter().all(|sym| {
+        let all_are_narrow = cycle.iter().all(|index| {
+            let sym = &symbols_introduced[*index as usize];
             let typ = &pending_aliases.get(sym).unwrap().typ;
             matches!(typ, Type::RecursiveTagUnion(..)) && typ.is_narrow()
         });
 
         if all_are_narrow {
             // This cycle is illegal!
-            let mut rest = cycle;
+            let mut rest: Vec<Symbol> = cycle
+                .into_iter()
+                .map(|i| symbols_introduced[i as usize])
+                .collect();
             let alias_name = rest.pop().unwrap();
 
             let alias = pending_aliases.get_mut(&alias_name).unwrap();
