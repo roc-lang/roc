@@ -864,13 +864,7 @@ pub(crate) fn sort_can_defs(
 
             // groups are in reversed order
             for group in groups.into_iter().rev() {
-                group_to_declaration(
-                    &def_ordering,
-                    &group,
-                    &env.closures,
-                    &mut defs,
-                    &mut declarations,
-                );
+                group_to_declaration(&def_ordering, &group, &mut defs, &mut declarations);
             }
 
             (Ok(declarations), output)
@@ -998,7 +992,6 @@ pub(crate) fn sort_can_defs(
                             group_to_declaration(
                                 &def_ordering,
                                 group,
-                                &env.closures,
                                 &mut defs,
                                 &mut declarations,
                             );
@@ -1020,7 +1013,6 @@ pub(crate) fn sort_can_defs(
 fn group_to_declaration(
     def_ordering: &DefOrdering,
     group: &[u32],
-    closures: &MutMap<Symbol, References>,
     defs: &mut [Option<Def>],
     declarations: &mut Vec<Declaration>,
 ) {
@@ -1705,40 +1697,6 @@ fn decl_to_let(var_store: &mut VarStore, decl: Declaration, loc_ret: Loc<Expr>) 
             unreachable!()
         }
     }
-}
-
-fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) -> Recursive {
-    let mut visited = MutSet::default();
-
-    let mut stack = Vec::new();
-
-    if let Some(references) = closures.get(&symbol) {
-        for v in references.calls() {
-            stack.push(*v);
-        }
-
-        // while there are symbols left to visit
-        while let Some(nested_symbol) = stack.pop() {
-            if nested_symbol == symbol {
-                return Recursive::Recursive;
-            }
-
-            // if the called symbol not yet in the graph
-            if !visited.contains(&nested_symbol) {
-                // add it to the visited set
-                // if it calls any functions
-                if let Some(nested_references) = closures.get(&nested_symbol) {
-                    // add its called to the stack
-                    for v in nested_references.calls() {
-                        stack.push(*v);
-                    }
-                }
-                visited.insert(nested_symbol);
-            }
-        }
-    }
-
-    Recursive::NotRecursive
 }
 
 fn to_pending_type_def<'a>(
