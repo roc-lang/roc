@@ -182,8 +182,4 @@ impl<'a> Env<'a> {
     pub fn problem(&mut self, problem: Problem) {
         self.problems.push(problem)
     }
-
-    pub fn register_closure(&mut self, symbol: Symbol, references: References) {
-        self.closures.insert(symbol, references);
-    }
 }

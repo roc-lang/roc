@@ -1180,8 +1180,13 @@ fn add_annotation_aliases(
 // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
 // parent commit for the bug this fixed!
 enum DefReferences {
+    /// A value may not reference itself
     Value(References),
+
+    /// If the def is a function, different rules apply (it can call itself)
     Function(References),
+
+    /// An annotation without a body references no other defs
     AnnotationWithoutBody,
 }
 
