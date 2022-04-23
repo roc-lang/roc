@@ -440,18 +440,130 @@ pub fn canonicalize_defs<'a>(
         );
     }
 
-    // Now we can go through and resolve all pending abilities, to add them to scope.
+    // Resolve all pending abilities, to add them to scope.
+    resolve_abilities(
+        env,
+        &mut output,
+        var_store,
+        &mut scope,
+        abilities,
+        &abilities_in_scope,
+        pattern_type,
+    );
+
+    // Now that we have the scope completely assembled, and shadowing resolved,
+    // we're ready to canonicalize any body exprs.
+
+    // Canonicalize all the patterns, record shadowing problems, and store
+    // the ast::Expr values in pending_exprs for further canonicalization
+    // once we've finished assembling the entire scope.
+    let mut pending_value_defs = Vec::with_capacity(value_defs.len());
+    for loc_def in value_defs.into_iter() {
+        let mut new_output = Output::default();
+        match to_pending_value_def(
+            env,
+            var_store,
+            loc_def.value,
+            &mut scope,
+            &mut new_output,
+            pattern_type,
+        ) {
+            None => { /* skip */ }
+            Some(pending_def) => {
+                // store the top-level defs, used to ensure that closures won't capture them
+                if let PatternType::TopLevelDef = pattern_type {
+                    match &pending_def {
+                        PendingValueDef::AnnotationOnly(_, loc_can_pattern, _)
+                        | PendingValueDef::Body(_, loc_can_pattern, _)
+                        | PendingValueDef::TypedBody(_, loc_can_pattern, _, _) => {
+                            env.top_level_symbols.extend(
+                                bindings_from_patterns(std::iter::once(loc_can_pattern))
+                                    .iter()
+                                    .map(|t| t.0),
+                            )
+                        }
+                    }
+                }
+                // Record the ast::Expr for later. We'll do another pass through these
+                // once we have the entire scope assembled. If we were to canonicalize
+                // the exprs right now, they wouldn't have symbols in scope from defs
+                // that get would have gotten added later in the defs list!
+                pending_value_defs.push(pending_def);
+                output.union(new_output);
+            }
+        }
+    }
+
+    for pending_def in pending_value_defs.into_iter() {
+        output = canonicalize_pending_value_def(
+            env,
+            pending_def,
+            output,
+            &mut scope,
+            &mut can_defs_by_symbol,
+            var_store,
+            &mut refs_by_symbol,
+            &mut aliases,
+            &abilities_in_scope,
+        );
+
+        // TODO we should do something with these references; they include
+        // things like type annotations.
+    }
+
+    // Determine which idents we introduced in the course of this process.
+    let mut symbols_introduced = MutMap::default();
+
+    for (symbol, region) in scope.symbols() {
+        if !original_scope.contains_symbol(*symbol) {
+            symbols_introduced.insert(*symbol, *region);
+        }
+    }
+
+    // This returns both the defs info as well as the new scope.
+    //
+    // We have to return the new scope because we added defs to it
+    // (and those lookups shouldn't fail later, e.g. when canonicalizing
+    // the return expr), but we didn't want to mutate the original scope
+    // directly because we wanted to keep a clone of it around to diff
+    // when looking for unused idents.
+    //
+    // We have to return the scope separately from the defs, because the
+    // defs need to get moved later.
+    (
+        CanDefs {
+            refs_by_symbol,
+            can_defs_by_symbol,
+            // The result needs a thread-safe `SendMap`
+            aliases: aliases.into_iter().collect(),
+        },
+        scope,
+        output,
+        symbols_introduced,
+    )
+}
+
+/// Resolve all pending abilities, to add them to scope.
+fn resolve_abilities<'a>(
+    env: &mut Env<'a>,
+    output: &mut Output,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    abilities: MutMap<Symbol, (Loc<Symbol>, &[AbilityMember])>,
+    abilities_in_scope: &[Symbol],
+    pattern_type: PatternType,
+) {
     for (loc_ability_name, members) in abilities.into_values() {
         let mut can_members = Vec::with_capacity(members.len());
 
         for member in members {
             let member_annot = canonicalize_annotation(
                 env,
-                &mut scope,
+                scope,
                 &member.typ.value,
                 member.typ.region,
                 var_store,
-                &abilities_in_scope,
+                abilities_in_scope,
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -570,97 +682,6 @@ pub fn canonicalize_defs<'a>(
             .abilities_store
             .register_ability(loc_ability_name.value, can_members);
     }
-
-    // Now that we have the scope completely assembled, and shadowing resolved,
-    // we're ready to canonicalize any body exprs.
-
-    // Canonicalize all the patterns, record shadowing problems, and store
-    // the ast::Expr values in pending_exprs for further canonicalization
-    // once we've finished assembling the entire scope.
-    let mut pending_value_defs = Vec::with_capacity(value_defs.len());
-    for loc_def in value_defs.into_iter() {
-        let mut new_output = Output::default();
-        match to_pending_value_def(
-            env,
-            var_store,
-            loc_def.value,
-            &mut scope,
-            &mut new_output,
-            pattern_type,
-        ) {
-            None => { /* skip */ }
-            Some(pending_def) => {
-                // store the top-level defs, used to ensure that closures won't capture them
-                if let PatternType::TopLevelDef = pattern_type {
-                    match &pending_def {
-                        PendingValueDef::AnnotationOnly(_, loc_can_pattern, _)
-                        | PendingValueDef::Body(_, loc_can_pattern, _)
-                        | PendingValueDef::TypedBody(_, loc_can_pattern, _, _) => {
-                            env.top_level_symbols.extend(
-                                bindings_from_patterns(std::iter::once(loc_can_pattern))
-                                    .iter()
-                                    .map(|t| t.0),
-                            )
-                        }
-                    }
-                }
-                // Record the ast::Expr for later. We'll do another pass through these
-                // once we have the entire scope assembled. If we were to canonicalize
-                // the exprs right now, they wouldn't have symbols in scope from defs
-                // that get would have gotten added later in the defs list!
-                pending_value_defs.push(pending_def);
-                output.union(new_output);
-            }
-        }
-    }
-
-    for pending_def in pending_value_defs.into_iter() {
-        output = canonicalize_pending_value_def(
-            env,
-            pending_def,
-            output,
-            &mut scope,
-            &mut can_defs_by_symbol,
-            var_store,
-            &mut refs_by_symbol,
-            &mut aliases,
-            &abilities_in_scope,
-        );
-
-        // TODO we should do something with these references; they include
-        // things like type annotations.
-    }
-
-    // Determine which idents we introduced in the course of this process.
-    let mut symbols_introduced = MutMap::default();
-
-    for (symbol, region) in scope.symbols() {
-        if !original_scope.contains_symbol(*symbol) {
-            symbols_introduced.insert(*symbol, *region);
-        }
-    }
-
-    // This returns both the defs info as well as the new scope.
-    //
-    // We have to return the new scope because we added defs to it
-    // (and those lookups shouldn't fail later, e.g. when canonicalizing
-    // the return expr), but we didn't want to mutate the original scope
-    // directly because we wanted to keep a clone of it around to diff
-    // when looking for unused idents.
-    //
-    // We have to return the scope separately from the defs, because the
-    // defs need to get moved later.
-    (
-        CanDefs {
-            refs_by_symbol,
-            can_defs_by_symbol,
-            // The result needs a thread-safe `SendMap`
-            aliases: aliases.into_iter().collect(),
-        },
-        scope,
-        output,
-        symbols_introduced,
-    )
 }
 
 #[derive(Debug)]
