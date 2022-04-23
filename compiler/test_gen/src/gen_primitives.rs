@@ -2992,7 +2992,7 @@ fn mix_function_and_closure_level_of_indirection() {
 }
 
 #[test]
-#[ignore]
+#[cfg_if(not(debug_assertions), ignore)] // this test stack-overflows the compiler in debug mode
 #[cfg(any(feature = "gen-llvm"))]
 fn do_pass_bool_byte_closure_layout() {
     // see https://github.com/rtfeldman/roc/pull/1706
