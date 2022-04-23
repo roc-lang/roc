@@ -204,6 +204,12 @@ impl<'a> From<&'a str> for Lowercase {
     }
 }
 
+impl<'a> From<&'a Lowercase> for &'a str {
+    fn from(lowercase: &'a Lowercase) -> Self {
+        lowercase.as_str()
+    }
+}
+
 impl<'a> From<String> for Lowercase {
     fn from(string: String) -> Self {
         Self(string.into())

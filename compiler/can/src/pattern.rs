@@ -17,7 +17,7 @@ use roc_types::types::{LambdaSet, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Pattern {
     Identifier(Symbol),
     AppliedTag {
@@ -82,7 +82,7 @@ pub enum Pattern {
     MalformedPattern(MalformedPatternProblem, Region),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct RecordDestruct {
     pub var: Variable,
     pub label: Lowercase,
@@ -90,7 +90,7 @@ pub struct RecordDestruct {
     pub typ: DestructType,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum DestructType {
     Required,
     Optional(Variable, Loc<Expr>),
@@ -156,13 +156,13 @@ pub fn canonicalize_def_header_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
+    output: &mut Output,
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
     region: Region,
-) -> (Output, Loc<Pattern>) {
+) -> Loc<Pattern> {
     use roc_parse::ast::Pattern::*;
 
-    let mut output = Output::default();
     match pattern {
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
         Identifier(name) => match scope.introduce_or_shadow_ability_member(
@@ -172,7 +172,7 @@ pub fn canonicalize_def_header_pattern<'a>(
             region,
         ) {
             Ok((symbol, shadowing_ability_member)) => {
-                output.references.bound_symbols.insert(symbol);
+                output.references.insert_bound(symbol);
                 let can_pattern = match shadowing_ability_member {
                     // A fresh identifier.
                     None => Pattern::Identifier(symbol),
@@ -182,7 +182,7 @@ pub fn canonicalize_def_header_pattern<'a>(
                         specializes: ability_member_name,
                     },
                 };
-                (output, Loc::at(region, can_pattern))
+                Loc::at(region, can_pattern)
             }
             Err((original_region, shadow, new_symbol)) => {
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
@@ -190,13 +190,13 @@ pub fn canonicalize_def_header_pattern<'a>(
                     shadow: shadow.clone(),
                     kind: ShadowKind::Variable,
                 }));
-                output.references.bound_symbols.insert(new_symbol);
+                output.references.insert_bound(new_symbol);
 
                 let can_pattern = Pattern::Shadowed(original_region, shadow, new_symbol);
-                (output, Loc::at(region, can_pattern))
+                Loc::at(region, can_pattern)
             }
         },
-        _ => canonicalize_pattern(env, var_store, scope, pattern_type, pattern, region),
+        _ => canonicalize_pattern(env, var_store, scope, output, pattern_type, pattern, region),
     }
 }
 
@@ -204,14 +204,14 @@ pub fn canonicalize_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
+    output: &mut Output,
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
     region: Region,
-) -> (Output, Loc<Pattern>) {
+) -> Loc<Pattern> {
     use roc_parse::ast::Pattern::*;
     use PatternType::*;
 
-    let mut output = Output::default();
     let can_pattern = match pattern {
         Identifier(name) => match scope.introduce(
             (*name).into(),
@@ -220,7 +220,7 @@ pub fn canonicalize_pattern<'a>(
             region,
         ) {
             Ok(symbol) => {
-                output.references.bound_symbols.insert(symbol);
+                output.references.insert_bound(symbol);
 
                 Pattern::Identifier(symbol)
             }
@@ -230,7 +230,7 @@ pub fn canonicalize_pattern<'a>(
                     shadow: shadow.clone(),
                     kind: ShadowKind::Variable,
                 }));
-                output.references.bound_symbols.insert(new_symbol);
+                output.references.insert_bound(new_symbol);
 
                 Pattern::Shadowed(original_region, shadow, new_symbol)
             }
@@ -266,16 +266,15 @@ pub fn canonicalize_pattern<'a>(
         Apply(tag, patterns) => {
             let mut can_patterns = Vec::with_capacity(patterns.len());
             for loc_pattern in *patterns {
-                let (new_output, can_pattern) = canonicalize_pattern(
+                let can_pattern = canonicalize_pattern(
                     env,
                     var_store,
                     scope,
+                    output,
                     pattern_type,
                     &loc_pattern.value,
                     loc_pattern.region,
                 );
-
-                output.union(new_output);
 
                 can_patterns.push((var_store.fresh(), can_pattern));
             }
@@ -318,8 +317,7 @@ pub fn canonicalize_pattern<'a>(
                             let (type_arguments, lambda_set_variables, specialized_def_type) =
                                 freshen_opaque_def(var_store, opaque_def);
 
-                            output.references.referenced_type_defs.insert(opaque);
-                            output.references.type_lookups.insert(opaque);
+                            output.references.insert_type_lookup(opaque);
 
                             Pattern::UnwrappedOpaque {
                                 whole_var: var_store.fresh(),
@@ -443,7 +441,15 @@ pub fn canonicalize_pattern<'a>(
         }
 
         SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
-            return canonicalize_pattern(env, var_store, scope, pattern_type, sub_pattern, region)
+            return canonicalize_pattern(
+                env,
+                var_store,
+                scope,
+                output,
+                pattern_type,
+                sub_pattern,
+                region,
+            )
         }
         RecordDestructure(patterns) => {
             let ext_var = var_store.fresh();
@@ -461,7 +467,7 @@ pub fn canonicalize_pattern<'a>(
                             region,
                         ) {
                             Ok(symbol) => {
-                                output.references.bound_symbols.insert(symbol);
+                                output.references.insert_bound(symbol);
 
                                 destructs.push(Loc {
                                     region: loc_pattern.region,
@@ -493,16 +499,15 @@ pub fn canonicalize_pattern<'a>(
                     RequiredField(label, loc_guard) => {
                         // a guard does not introduce the label into scope!
                         let symbol = scope.ignore(label.into(), &mut env.ident_ids);
-                        let (new_output, can_guard) = canonicalize_pattern(
+                        let can_guard = canonicalize_pattern(
                             env,
                             var_store,
                             scope,
+                            output,
                             pattern_type,
                             &loc_guard.value,
                             loc_guard.region,
                         );
-
-                        output.union(new_output);
 
                         destructs.push(Loc {
                             region: loc_pattern.region,
@@ -532,7 +537,7 @@ pub fn canonicalize_pattern<'a>(
                                 );
 
                                 // an optional field binds the symbol!
-                                output.references.bound_symbols.insert(symbol);
+                                output.references.insert_bound(symbol);
 
                                 output.union(expr_output);
 
@@ -598,13 +603,10 @@ pub fn canonicalize_pattern<'a>(
         }
     };
 
-    (
-        output,
-        Loc {
-            region,
-            value: can_pattern,
-        },
-    )
+    Loc {
+        region,
+        value: can_pattern,
+    }
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't

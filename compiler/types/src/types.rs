@@ -2328,26 +2328,33 @@ fn write_type_ext(ext: TypeExt, buf: &mut String) {
 
 static THE_LETTER_A: u32 = 'a' as u32;
 
-pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lowercase, u32) {
+pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
+    letters_used: u32,
+    taken: &mut impl Iterator<Item = I>,
+    mut predicate: F,
+) -> (Lowercase, u32) {
     // TODO we should arena-allocate this String,
     // so all the strings in the entire pass only require ~1 allocation.
-    let mut generated_name = String::with_capacity((letters_used as usize) / 26 + 1);
+    let mut buf = String::with_capacity((letters_used as usize) / 26 + 1);
 
-    let mut remaining = letters_used as i32;
-    while remaining >= 0 {
-        generated_name.push(std::char::from_u32(THE_LETTER_A + ((remaining as u32) % 26)).unwrap());
-        remaining -= 26;
-    }
+    let is_taken = {
+        let mut remaining = letters_used as i32;
 
-    let generated_name = generated_name.into();
+        while remaining >= 0 {
+            buf.push(std::char::from_u32(THE_LETTER_A + ((remaining as u32) % 26)).unwrap());
+            remaining -= 26;
+        }
 
-    if taken.contains(&generated_name) {
+        let generated_name: &str = buf.as_str();
+
+        taken.any(|item| predicate(&item, generated_name))
+    };
+
+    if is_taken {
         // If the generated name is already taken, try again.
-        name_type_var(letters_used + 1, taken)
+        name_type_var(letters_used + 1, taken, predicate)
     } else {
-        taken.insert(generated_name.clone());
-
-        (generated_name, letters_used + 1)
+        (buf.into(), letters_used + 1)
     }
 }
 

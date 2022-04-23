@@ -75,7 +75,7 @@ use crate::mem_pool::shallow_clone::ShallowClone;
 // Ranks are used to limit the number of type variables considered for generalization. Only those inside
 // of the let (so those used in inferring the type of `\x -> x`) are considered.
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),

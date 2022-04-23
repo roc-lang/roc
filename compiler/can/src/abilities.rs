@@ -85,6 +85,10 @@ impl AbilitiesStore {
         );
     }
 
+    pub fn is_ability(&self, ability: Symbol) -> bool {
+        self.members_of_ability.contains_key(&ability)
+    }
+
     /// Records a specialization of `ability_member` with specialized type `implementing_type`.
     /// Entries via this function are considered a source of truth. It must be ensured that a
     /// specialization is validated before being registered here.

@@ -20,11 +20,32 @@ mod test_can {
     use roc_region::all::{Position, Region};
     use std::{f64, i64};
 
-    fn assert_can(input: &str, expected: Expr) {
+    fn assert_can_runtime_error(input: &str, expected: RuntimeError) {
         let arena = Bump::new();
         let actual_out = can_expr_with(&arena, test_home(), input);
 
-        assert_eq!(actual_out.loc_expr.value, expected);
+        match actual_out.loc_expr.value {
+            Expr::RuntimeError(actual) => {
+                assert_eq!(expected, actual);
+            }
+            actual => {
+                panic!("Expected a Float, but got: {:?}", actual);
+            }
+        }
+    }
+
+    fn assert_can_string(input: &str, expected: &str) {
+        let arena = Bump::new();
+        let actual_out = can_expr_with(&arena, test_home(), input);
+
+        match actual_out.loc_expr.value {
+            Expr::Str(actual) => {
+                assert_eq!(expected, &*actual);
+            }
+            actual => {
+                panic!("Expected a Float, but got: {:?}", actual);
+            }
+        }
     }
 
     fn assert_can_float(input: &str, expected: f64) {
@@ -69,10 +90,6 @@ mod test_can {
         }
     }
 
-    fn expr_str(contents: &str) -> Expr {
-        Expr::Str(contents.into())
-    }
-
     // NUMBER LITERALS
 
     #[test]
@@ -81,14 +98,14 @@ mod test_can {
 
         let string = "340_282_366_920_938_463_463_374_607_431_768_211_456".to_string();
 
-        assert_can(
+        assert_can_runtime_error(
             &string.clone(),
-            RuntimeError(RuntimeError::InvalidInt(
+            RuntimeError::InvalidInt(
                 IntErrorKind::Overflow,
                 Base::Decimal,
                 Region::zero(),
                 string.into_boxed_str(),
-            )),
+            ),
         );
     }
 
@@ -98,14 +115,14 @@ mod test_can {
 
         let string = "-170_141_183_460_469_231_731_687_303_715_884_105_729".to_string();
 
-        assert_can(
+        assert_can_runtime_error(
             &string.clone(),
-            RuntimeError(RuntimeError::InvalidInt(
+            RuntimeError::InvalidInt(
                 IntErrorKind::Underflow,
                 Base::Decimal,
                 Region::zero(),
                 string.into(),
-            )),
+            ),
         );
     }
 
@@ -114,13 +131,9 @@ mod test_can {
         let string = format!("{}1.0", f64::MAX);
         let region = Region::zero();
 
-        assert_can(
+        assert_can_runtime_error(
             &string.clone(),
-            RuntimeError(RuntimeError::InvalidFloat(
-                FloatErrorKind::PositiveInfinity,
-                region,
-                string.into(),
-            )),
+            RuntimeError::InvalidFloat(FloatErrorKind::PositiveInfinity, region, string.into()),
         );
     }
 
@@ -129,13 +142,9 @@ mod test_can {
         let string = format!("{}1.0", f64::MIN);
         let region = Region::zero();
 
-        assert_can(
+        assert_can_runtime_error(
             &string.clone(),
-            RuntimeError(RuntimeError::InvalidFloat(
-                FloatErrorKind::NegativeInfinity,
-                region,
-                string.into(),
-            )),
+            RuntimeError::InvalidFloat(FloatErrorKind::NegativeInfinity, region, string.into()),
         );
     }
 
@@ -144,13 +153,9 @@ mod test_can {
         let string = "1.1.1";
         let region = Region::zero();
 
-        assert_can(
+        assert_can_runtime_error(
             string.clone(),
-            RuntimeError(RuntimeError::InvalidFloat(
-                FloatErrorKind::Error,
-                region,
-                string.into(),
-            )),
+            RuntimeError::InvalidFloat(FloatErrorKind::Error, region, string.into()),
         );
     }
 
@@ -1582,27 +1587,27 @@ mod test_can {
 
     #[test]
     fn string_with_valid_unicode_escapes() {
-        assert_can(r#""x\u(00A0)x""#, expr_str("x\u{00A0}x"));
-        assert_can(r#""x\u(101010)x""#, expr_str("x\u{101010}x"));
+        assert_can_string(r#""x\u(00A0)x""#, "x\u{00A0}x");
+        assert_can_string(r#""x\u(101010)x""#, "x\u{101010}x");
     }
 
     #[test]
     fn block_string() {
-        assert_can(
+        assert_can_string(
             r#"
             """foobar"""
             "#,
-            expr_str("foobar"),
+            "foobar",
         );
 
-        assert_can(
+        assert_can_string(
             indoc!(
                 r#"
             """foo
             bar"""
             "#
             ),
-            expr_str("foo\nbar"),
+            "foo\nbar",
         );
     }
 
