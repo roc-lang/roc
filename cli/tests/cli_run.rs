@@ -394,6 +394,14 @@ mod cli_run {
             expected_ending: "",
             use_valgrind: false,
         },
+        breakout:"breakout" => Example {
+            filename: "breakout.roc",
+            executable_filename: "breakout",
+            stdin: &[],
+            input_file: None,
+            expected_ending: "",
+            use_valgrind: false,
+        },
         quicksort:"algorithms" => Example {
             filename: "quicksort.roc",
             executable_filename: "quicksort",
