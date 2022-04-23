@@ -480,20 +480,6 @@ pub fn canonicalize_defs<'a>(
         ) {
             None => { /* skip */ }
             Some(pending_def) => {
-                // store the top-level defs, used to ensure that closures won't capture them
-                if let PatternType::TopLevelDef = pattern_type {
-                    match &pending_def {
-                        PendingValueDef::AnnotationOnly(_, loc_can_pattern, _)
-                        | PendingValueDef::Body(_, loc_can_pattern, _)
-                        | PendingValueDef::TypedBody(_, loc_can_pattern, _, _) => {
-                            env.top_level_symbols.extend(
-                                bindings_from_patterns(std::iter::once(loc_can_pattern))
-                                    .iter()
-                                    .map(|t| t.0),
-                            )
-                        }
-                    }
-                }
                 // Record the ast::Expr for later. We'll do another pass through these
                 // once we have the entire scope assembled. If we were to canonicalize
                 // the exprs right now, they wouldn't have symbols in scope from defs
@@ -504,19 +490,20 @@ pub fn canonicalize_defs<'a>(
         }
     }
 
+    // the bindings by all defs in the current block
+    let bindings = bindings_from_patterns(pending_value_defs.iter().map(|p| p.loc_pattern()));
+
     let mut symbol_to_id: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
-
-    let mut def_count = 0;
-    for pending_def in pending_value_defs.iter() {
-        let pattern = &pending_def.loc_pattern().value;
-
-        for s in crate::pattern::symbols_from_pattern(pattern) {
-            debug_assert_eq!(env.home, s.module_id());
-            debug_assert!(!symbol_to_id.iter().any(|(id, _)| *id == s.ident_id()));
-
-            symbol_to_id.push((s.ident_id(), def_count));
-            def_count += 1;
+    for (binding_index, (s, _)) in bindings.into_iter().enumerate() {
+        // store the top-level defs, used to ensure that closures won't capture them
+        if let PatternType::TopLevelDef = pattern_type {
+            env.top_level_symbols.insert(s);
         }
+
+        debug_assert_eq!(env.home, s.module_id());
+        debug_assert!(!symbol_to_id.iter().any(|(id, _)| *id == s.ident_id()));
+
+        symbol_to_id.push((s.ident_id(), binding_index as u32));
     }
 
     let mut def_order = DefOrdering::from_symbol_to_id(env.home, symbol_to_id);
