@@ -761,8 +761,8 @@ impl DefOrdering {
                     }
                 }
             }
-            DefReferences::Empty => {
-                // produced by annotations without bodies
+            DefReferences::AnnotationWithoutBody => {
+                // annotatations without bodies don't reference any other definitions
             }
         }
     }
@@ -1178,7 +1178,7 @@ fn add_annotation_aliases(
 enum DefReferences {
     Value(References),
     Function(References),
-    Empty,
+    AnnotationWithoutBody,
 }
 
 struct TempOutput {
@@ -1301,7 +1301,7 @@ fn canonicalize_pending_value_def_new<'a>(
 
             TempOutput {
                 output,
-                references: DefReferences::Empty,
+                references: DefReferences::AnnotationWithoutBody,
                 def,
             }
         }
