@@ -528,11 +528,7 @@ pub(crate) fn canonicalize_defs<'a>(
 
         defs.push(Some(temp_output.def));
 
-        def_ordering.insert_symbol_references(
-            def_id as u32,
-            &temp_output.references,
-            temp_output.closure_references,
-        )
+        def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
     }
 
     // this is now mostly responsible for adding type names and ability members
@@ -740,45 +736,33 @@ impl DefOrdering {
         }
     }
 
-    fn insert_symbol_references(
-        &mut self,
-        def_id: u32,
-        references: &References,
-        closure_references: Option<References>,
-    ) {
-        for referenced in references.value_lookups() {
-            if let Some(ref_id) = self.get_id(*referenced) {
-                self.references
-                    .set_row_col(def_id as usize, ref_id as usize, true);
+    fn insert_symbol_references(&mut self, def_id: u32, def_references: &DefReferences) {
+        match def_references {
+            DefReferences::Value(references) => {
+                let it = references.value_lookups().chain(references.calls());
 
-                self.direct_references
-                    .set_row_col(def_id as usize, ref_id as usize, true);
-            }
-        }
+                for referenced in it {
+                    if let Some(ref_id) = self.get_id(*referenced) {
+                        self.references
+                            .set_row_col(def_id as usize, ref_id as usize, true);
 
-        for referenced in references.calls() {
-            if let Some(ref_id) = self.get_id(*referenced) {
-                self.references
-                    .set_row_col(def_id as usize, ref_id as usize, true);
-
-                self.direct_references
-                    .set_row_col(def_id as usize, ref_id as usize, true);
-            }
-        }
-
-        if let Some(references) = closure_references {
-            for referenced in references.value_lookups() {
-                if let Some(ref_id) = self.get_id(*referenced) {
-                    self.references
-                        .set_row_col(def_id as usize, ref_id as usize, true);
+                        self.direct_references
+                            .set_row_col(def_id as usize, ref_id as usize, true);
+                    }
                 }
             }
+            DefReferences::Function(references) => {
+                let it = references.value_lookups().chain(references.calls());
 
-            for referenced in references.calls() {
-                if let Some(ref_id) = self.get_id(*referenced) {
-                    self.references
-                        .set_row_col(def_id as usize, ref_id as usize, true);
+                for referenced in it {
+                    if let Some(ref_id) = self.get_id(*referenced) {
+                        self.references
+                            .set_row_col(def_id as usize, ref_id as usize, true);
+                    }
                 }
+            }
+            DefReferences::Empty => {
+                // produced by annotations without bodies
             }
         }
     }
@@ -1188,11 +1172,19 @@ fn add_annotation_aliases(
     }
 }
 
+// Functions' references don't count in defs.
+// See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
+// parent commit for the bug this fixed!
+enum DefReferences {
+    Value(References),
+    Function(References),
+    Empty,
+}
+
 struct TempOutput {
     output: Output,
     def: Def,
-    references: References,
-    closure_references: Option<References>,
+    references: DefReferences,
 }
 
 // TODO trim down these arguments!
@@ -1309,8 +1301,7 @@ fn canonicalize_pending_value_def_new<'a>(
 
             TempOutput {
                 output,
-                references: References::default(),
-                closure_references: None,
+                references: DefReferences::Empty,
                 def,
             }
         }
@@ -1410,13 +1401,6 @@ fn canonicalize_pending_value_def_new<'a>(
                         loc_body: body.clone(),
                     });
 
-                    // Functions' references don't count in defs.
-                    // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
-                    // parent commit for the bug this fixed!
-                    //
-                    // NOTE: this is where we lose reference information for closure bodies.
-                    let refs = References::new();
-
                     let def = single_can_def(
                         loc_can_pattern,
                         loc_can_expr,
@@ -1429,8 +1413,7 @@ fn canonicalize_pending_value_def_new<'a>(
 
                     TempOutput {
                         output,
-                        references: refs,
-                        closure_references: Some(closure_references),
+                        references: DefReferences::Function(closure_references),
                         def,
                     }
                 } else {
@@ -1448,8 +1431,7 @@ fn canonicalize_pending_value_def_new<'a>(
 
                     TempOutput {
                         output,
-                        references: refs,
-                        closure_references: None,
+                        references: DefReferences::Value(refs),
                         def,
                     }
                 }
@@ -1468,8 +1450,7 @@ fn canonicalize_pending_value_def_new<'a>(
 
                 TempOutput {
                     output,
-                    references: refs,
-                    closure_references: None,
+                    references: DefReferences::Value(refs),
                     def,
                 }
             }
@@ -1549,11 +1530,6 @@ fn canonicalize_pending_value_def_new<'a>(
                         loc_body: body.clone(),
                     });
 
-                    // Functions' references don't count in defs.
-                    // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
-                    // parent commit for the bug this fixed!
-                    let refs = References::new();
-
                     let def = single_can_def(
                         loc_can_pattern,
                         loc_can_expr,
@@ -1566,8 +1542,7 @@ fn canonicalize_pending_value_def_new<'a>(
 
                     TempOutput {
                         output,
-                        references: refs,
-                        closure_references: Some(closure_references),
+                        references: DefReferences::Function(closure_references),
                         def,
                     }
                 } else {
@@ -1585,8 +1560,7 @@ fn canonicalize_pending_value_def_new<'a>(
 
                     TempOutput {
                         output,
-                        references: refs,
-                        closure_references: None,
+                        references: DefReferences::Value(refs),
                         def,
                     }
                 }
