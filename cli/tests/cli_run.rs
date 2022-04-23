@@ -256,8 +256,8 @@ mod cli_run {
                                 return;
                             }
                         }
-                        "hello-gui" => {
-                            // Since this one requires opening a window, we do `roc build` on it but don't run it.
+                        "hello-gui" | "breakout" => {
+                            // Since these require opening a window, we do `roc build` on them but don't run them.
                             build_example(&file_name, &["--optimize"]);
 
                             return;
