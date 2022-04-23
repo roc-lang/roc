@@ -110,12 +110,39 @@ enum PendingTypeDef<'a> {
     /// An invalid alias, that is ignored in the rest of the pipeline
     /// e.g. a shadowed alias, or a definition like `MyAlias 1 : Int`
     /// with an incorrect pattern
-    #[allow(dead_code)]
-    InvalidAlias { kind: AliasKind },
+    InvalidAlias {
+        #[allow(dead_code)]
+        kind: AliasKind,
+        symbol: Symbol,
+        region: Region,
+    },
 
     /// An invalid ability, that is ignored in the rest of the pipeline.
     /// E.g. a shadowed ability, or with a bad definition.
-    InvalidAbility,
+    InvalidAbility {
+        symbol: Symbol,
+        region: Region,
+    },
+
+    AbilityNotOnToplevel,
+    AbilityShadows,
+}
+
+impl PendingTypeDef<'_> {
+    fn introduction(&self) -> Option<(Symbol, Region)> {
+        match self {
+            PendingTypeDef::Alias { name, ann, .. } => {
+                let region = Region::span_across(&name.region, &ann.region);
+
+                Some((name.value, region))
+            }
+            PendingTypeDef::Ability { name, .. } => Some((name.value, name.region)),
+            PendingTypeDef::InvalidAlias { symbol, region, .. } => Some((*symbol, *region)),
+            PendingTypeDef::InvalidAbility { symbol, region } => Some((*symbol, *region)),
+            PendingTypeDef::AbilityNotOnToplevel => None,
+            PendingTypeDef::AbilityShadows => None,
+        }
+    }
 }
 
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
@@ -280,7 +307,14 @@ pub(crate) fn canonicalize_defs<'a>(
 
     let mut referenced_type_symbols = MutMap::default();
 
+    // Determine which idents we introduced in the course of this process.
+    let mut symbols_introduced = MutMap::default();
+
     for pending_def in pending_type_defs.into_iter() {
+        if let Some((symbol, region)) = pending_def.introduction() {
+            symbols_introduced.insert(symbol, region);
+        }
+
         match pending_def {
             PendingTypeDef::Alias {
                 name,
@@ -316,13 +350,12 @@ pub(crate) fn canonicalize_defs<'a>(
                 type_defs.insert(name.value, TypeDef::Ability(name, members));
                 abilities_in_scope.push(name.value);
             }
-            PendingTypeDef::InvalidAlias { .. } | PendingTypeDef::InvalidAbility { .. } => { /* ignore */
-            }
+            PendingTypeDef::InvalidAlias { .. }
+            | PendingTypeDef::InvalidAbility { .. }
+            | PendingTypeDef::AbilityShadows
+            | PendingTypeDef::AbilityNotOnToplevel => { /* ignore */ }
         }
     }
-
-    // Determine which idents we introduced in the course of this process.
-    let mut symbols_introduced = MutMap::default();
 
     let sorted = sort_type_defs_before_introduction(referenced_type_symbols);
     let mut aliases = SendMap::default();
@@ -331,8 +364,6 @@ pub(crate) fn canonicalize_defs<'a>(
     for type_name in sorted {
         match type_defs.remove(&type_name).unwrap() {
             TypeDef::AliasLike(name, vars, ann, kind) => {
-                symbols_introduced.insert(name.value, name.region);
-
                 let symbol = name.value;
                 let can_ann = canonicalize_annotation(
                     env,
@@ -433,8 +464,6 @@ pub(crate) fn canonicalize_defs<'a>(
             }
 
             TypeDef::Ability(name, members) => {
-                symbols_introduced.insert(name.value, name.region);
-
                 // For now we enforce that aliases cannot reference abilities, so let's wait to
                 // resolve ability definitions until aliases are resolved and in scope below.
                 abilities.insert(name.value, (name, members));
@@ -461,6 +490,7 @@ pub(crate) fn canonicalize_defs<'a>(
         &mut output,
         var_store,
         &mut scope,
+        &mut symbols_introduced,
         abilities,
         &abilities_in_scope,
         pattern_type,
@@ -535,14 +565,6 @@ pub(crate) fn canonicalize_defs<'a>(
         def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
     }
 
-    // this is now mostly responsible for adding type names and ability members
-    // see if we can do this in a more efficient way
-    for (symbol, region) in scope.symbols() {
-        if !original_scope.contains_symbol(*symbol) {
-            symbols_introduced.insert(*symbol, *region);
-        }
-    }
-
     // This returns both the defs info as well as the new scope.
     //
     // We have to return the new scope because we added defs to it
@@ -550,9 +572,6 @@ pub(crate) fn canonicalize_defs<'a>(
     // the return expr), but we didn't want to mutate the original scope
     // directly because we wanted to keep a clone of it around to diff
     // when looking for unused idents.
-    //
-    // We have to return the scope separately from the defs, because the
-    // defs need to get moved later.
     (
         CanDefs {
             defs,
@@ -567,11 +586,13 @@ pub(crate) fn canonicalize_defs<'a>(
 }
 
 /// Resolve all pending abilities, to add them to scope.
+#[allow(clippy::too_many_arguments)]
 fn resolve_abilities<'a>(
     env: &mut Env<'a>,
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
+    symbols_introduced: &mut MutMap<Symbol, Region>,
     abilities: MutMap<Symbol, (Loc<Symbol>, &[AbilityMember])>,
     abilities_in_scope: &[Symbol],
     pattern_type: PatternType,
@@ -614,6 +635,8 @@ fn resolve_abilities<'a>(
                     continue;
                 }
             };
+
+            symbols_introduced.insert(member_sym, name_region);
 
             if pattern_type == PatternType::TopLevelDef {
                 env.top_level_symbols.insert(member_sym);
@@ -1692,7 +1715,11 @@ fn to_pending_type_def<'a>(
 
                                 return Some((
                                     Output::default(),
-                                    PendingTypeDef::InvalidAlias { kind },
+                                    PendingTypeDef::InvalidAlias {
+                                        kind,
+                                        symbol,
+                                        region,
+                                    },
                                 ));
                             }
                         }
@@ -1713,14 +1740,21 @@ fn to_pending_type_def<'a>(
                     Some((Output::default(), pending_def))
                 }
 
-                Err((original_region, loc_shadowed_symbol, _new_symbol)) => {
+                Err((original_region, loc_shadowed_symbol, new_symbol)) => {
                     env.problem(Problem::Shadowing {
                         original_region,
                         shadow: loc_shadowed_symbol,
                         kind: shadow_kind,
                     });
 
-                    Some((Output::default(), PendingTypeDef::InvalidAlias { kind }))
+                    Some((
+                        Output::default(),
+                        PendingTypeDef::InvalidAlias {
+                            kind,
+                            symbol: new_symbol,
+                            region,
+                        },
+                    ))
                 }
             }
         }
@@ -1735,7 +1769,7 @@ fn to_pending_type_def<'a>(
             );
             env.problem(Problem::AbilityNotOnToplevel { region });
 
-            Some((Output::default(), PendingTypeDef::InvalidAbility))
+            Some((Output::default(), PendingTypeDef::AbilityNotOnToplevel))
         }
 
         Ability {
@@ -1756,7 +1790,7 @@ fn to_pending_type_def<'a>(
                         shadow: shadowed_symbol,
                         kind: ShadowKind::Ability,
                     });
-                    return Some((Output::default(), PendingTypeDef::InvalidAbility));
+                    return Some((Output::default(), PendingTypeDef::AbilityShadows));
                 }
             };
 
@@ -1768,7 +1802,13 @@ fn to_pending_type_def<'a>(
                     name: name.value,
                     variables_region,
                 });
-                return Some((Output::default(), PendingTypeDef::InvalidAbility));
+                return Some((
+                    Output::default(),
+                    PendingTypeDef::InvalidAbility {
+                        symbol: name.value,
+                        region: name.region,
+                    },
+                ));
             }
 
             let pending_ability = PendingTypeDef::Ability {
