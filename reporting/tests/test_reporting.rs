@@ -7092,26 +7092,23 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `f` definition:
-
-                1│  f : a, b, * -> *
-                2│  f = \_, _, x2 ->
+                
+                Something is off with the body of the `inner` definition:
+                
                 3│      inner : * -> *
                 4│      inner = \y -> y
-                5│      inner x2
-                        ^^^^^^^^
-
-                The type annotation on `f` says this `inner` call should have the type:
-
+                                      ^
+                
+                The type annotation on `inner` says this `y` value should have the type:
+                
                     *
-
-                However, the type of this `inner` call is connected to another type in a
+                
+                However, the type of this `y` value is connected to another type in a
                 way that isn't reflected in this annotation.
-
+                
                 Tip: Any connection between types must use a named type variable, not
-                a `*`! Maybe the annotation  on `f` should have a named type variable in
-                place of the `*`?
+                a `*`! Maybe the annotation  on `inner` should have a named type variable
+                in place of the `*`?
                 "#
             ),
         )

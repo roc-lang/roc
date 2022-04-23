@@ -594,6 +594,27 @@ fn top_level_constant() {
 }
 
 #[test]
+#[ignore]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn top_level_destructure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            {a, b} = { a: 1, b: 2 }
+
+            main =
+
+                a + b
+                "#
+        ),
+        3,
+        i64
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn linked_list_len_0() {
     assert_non_opt_evals_to!(
@@ -2971,6 +2992,7 @@ fn mix_function_and_closure_level_of_indirection() {
 }
 
 #[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm"))]
 fn do_pass_bool_byte_closure_layout() {
     // see https://github.com/rtfeldman/roc/pull/1706
