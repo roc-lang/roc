@@ -9951,4 +9951,23 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn always_function() {
+        // from https://github.com/rtfeldman/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
+        // There was a bug where this reported UnusedArgument("val")
+        // since it was used only in the returned function only.
+        //
+        // we want this to not give any warnings/errors!
+        report_problem_as(
+            indoc!(
+                r#"
+                always = \val -> \_ -> val
+
+                always
+                "#
+            ),
+            "",
+        )
+    }
 }
