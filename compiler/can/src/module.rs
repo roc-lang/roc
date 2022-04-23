@@ -7,7 +7,7 @@ use crate::operator::desugar_def;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, SendMap, VecSet};
+use roc_collections::{MutMap, SendMap, VecSet};
 use roc_module::ident::Lowercase;
 use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -302,8 +302,7 @@ pub fn canonicalize_module_defs<'a>(
     // See if any of the new idents we defined went unused.
     // If any were unused and also not exposed, report it.
     for (symbol, region) in symbols_introduced {
-        if !output.references.has_value_lookup(symbol)
-            && !output.references.has_type_lookup(symbol)
+        if !output.references.has_type_or_value_lookup(symbol)
             && !exposed_symbols.contains(&symbol)
             && !scope.abilities_store.is_specialization_name(symbol)
         {
@@ -329,11 +328,11 @@ pub fn canonicalize_module_defs<'a>(
     let mut referenced_types = VecSet::default();
 
     // Gather up all the symbols that were referenced across all the defs' lookups.
-    referenced_values.extend(output.references.value_lookups);
-    referenced_types.extend(output.references.type_lookups);
+    referenced_values.extend(output.references.value_lookups().copied());
+    referenced_types.extend(output.references.type_lookups().copied());
 
     // Gather up all the symbols that were referenced across all the defs' calls.
-    referenced_values.extend(output.references.calls);
+    referenced_values.extend(output.references.calls().copied());
 
     // Gather up all the symbols that were referenced from other modules.
     referenced_values.extend(env.qualified_value_lookups.iter().copied());
@@ -528,11 +527,11 @@ pub fn canonicalize_module_defs<'a>(
             }
 
             // Incorporate any remaining output.lookups entries into references.
-            referenced_values.extend(output.references.value_lookups);
-            referenced_types.extend(output.references.type_lookups);
+            referenced_values.extend(output.references.value_lookups().copied());
+            referenced_types.extend(output.references.type_lookups().copied());
 
             // Incorporate any remaining output.calls entries into references.
-            referenced_values.extend(output.references.calls);
+            referenced_values.extend(output.references.calls().copied());
 
             // Gather up all the symbols that were referenced from other modules.
             referenced_values.extend(env.qualified_value_lookups.iter().copied());

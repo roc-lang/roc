@@ -138,6 +138,7 @@ pub enum Problem {
     AbilityNotOnToplevel {
         region: Region,
     },
+    AbilityUsedAsType(Lowercase, Symbol, Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]

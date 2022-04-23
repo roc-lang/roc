@@ -47,7 +47,7 @@ pub fn compile_to_mono<'a>(
     target_info: TargetInfo,
     palette: Palette,
 ) -> Result<MonomorphizedModule<'a>, Vec<String>> {
-    let filename = PathBuf::from("REPL.roc");
+    let filename = PathBuf::from("");
     let src_dir = Path::new("fake/test/path");
 
     let module_src = arena.alloc(promote_expr_to_module(src));

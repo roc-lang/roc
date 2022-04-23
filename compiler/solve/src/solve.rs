@@ -79,7 +79,7 @@ pub struct IncompleteAbilityImplementation {
     pub missing_members: Vec<Loc<Symbol>>,
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),

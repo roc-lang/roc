@@ -29,44 +29,60 @@ pub struct Scope {
     home: ModuleId,
 }
 
-impl Scope {
-    pub fn new(home: ModuleId, var_store: &mut VarStore) -> Scope {
-        use roc_types::solved_types::{BuiltinAlias, FreeVars};
-        let solved_aliases = roc_types::builtin_aliases::aliases();
-        let mut aliases = SendMap::default();
+fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
+    use roc_types::solved_types::{BuiltinAlias, FreeVars};
 
-        for (symbol, builtin_alias) in solved_aliases {
-            let BuiltinAlias { region, vars, typ } = builtin_alias;
+    let solved_aliases = roc_types::builtin_aliases::aliases();
+    let mut aliases = SendMap::default();
 
-            let mut free_vars = FreeVars::default();
-            let typ = roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
+    for (symbol, builtin_alias) in solved_aliases {
+        let BuiltinAlias { region, vars, typ } = builtin_alias;
 
-            let mut variables = Vec::new();
-            // make sure to sort these variables to make them line up with the type arguments
-            let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
-            type_variables.sort();
-            for (loc_name, (_, var)) in vars.iter().zip(type_variables) {
-                variables.push(Loc::at(loc_name.region, (loc_name.value.clone(), var)));
-            }
+        let mut free_vars = FreeVars::default();
+        let typ = roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
 
-            let alias = Alias {
-                region,
-                typ,
-                lambda_set_variables: Vec::new(),
-                recursion_variables: MutSet::default(),
-                type_variables: variables,
-                // TODO(opaques): replace when opaques are included in the stdlib
-                kind: AliasKind::Structural,
-            };
-
-            aliases.insert(symbol, alias);
+        let mut variables = Vec::new();
+        // make sure to sort these variables to make them line up with the type arguments
+        let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
+        type_variables.sort();
+        for (loc_name, (_, var)) in vars.iter().zip(type_variables) {
+            variables.push(Loc::at(loc_name.region, (loc_name.value.clone(), var)));
         }
 
+        let alias = Alias {
+            region,
+            typ,
+            lambda_set_variables: Vec::new(),
+            recursion_variables: MutSet::default(),
+            type_variables: variables,
+            // TODO(opaques): replace when opaques are included in the stdlib
+            kind: AliasKind::Structural,
+        };
+
+        aliases.insert(symbol, alias);
+    }
+
+    aliases
+}
+
+impl Scope {
+    pub fn new(home: ModuleId, _var_store: &mut VarStore) -> Scope {
         Scope {
             home,
             idents: Symbol::default_in_scope(),
             symbols: SendMap::default(),
-            aliases,
+            aliases: SendMap::default(),
+            // TODO(abilities): default abilities in scope
+            abilities_store: AbilitiesStore::default(),
+        }
+    }
+
+    pub fn new_with_aliases(home: ModuleId, var_store: &mut VarStore) -> Scope {
+        Scope {
+            home,
+            idents: Symbol::default_in_scope(),
+            symbols: SendMap::default(),
+            aliases: add_aliases(var_store),
             // TODO(abilities): default abilities in scope
             abilities_store: AbilitiesStore::default(),
         }

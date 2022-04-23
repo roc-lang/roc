@@ -3,7 +3,7 @@ use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::LineColumnRegion;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
 pub use crate::error::canonicalize::can_problem;
@@ -58,6 +58,46 @@ pub fn cycle<'b>(
         .vcat(lines)
         .indent(indent)
         .annotate(Annotation::TypeBlock)
+}
+
+const HEADER_WIDTH: usize = 80;
+
+pub fn pretty_header(title: &str) -> String {
+    let title_width = title.len() + 4;
+    let header = format!("── {} {}", title, "─".repeat(HEADER_WIDTH - title_width));
+    header
+}
+
+pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
+    let cwd = std::env::current_dir().unwrap();
+    let relative_path = match path.strip_prefix(cwd) {
+        Ok(p) => p,
+        _ => path,
+    }
+    .to_str()
+    .unwrap();
+
+    let title_width = title.len() + 4;
+    let relative_path_width = relative_path.len() + 3;
+    let available_path_width = HEADER_WIDTH - title_width - 1;
+
+    // If path is too long to fit in 80 characters with everything else then truncate it
+    let path_width = relative_path_width.min(available_path_width);
+    let path_trim = relative_path_width - path_width;
+    let path = if path_trim > 0 {
+        format!("...{}", &relative_path[(path_trim + 3)..])
+    } else {
+        relative_path.to_string()
+    };
+
+    let header = format!(
+        "── {} {} {} ─",
+        title,
+        "─".repeat(HEADER_WIDTH - (title_width + path_width)),
+        path
+    );
+
+    header
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -129,11 +169,11 @@ impl<'b> Report<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
-            let header = format!(
-                "── {} {}",
-                self.title,
-                "─".repeat(80 - (self.title.len() + 4))
-            );
+            let header = if self.filename == PathBuf::from("") {
+                crate::report::pretty_header(&self.title)
+            } else {
+                crate::report::pretty_header_with_path(&self.title, &self.filename)
+            };
 
             alloc.stack([alloc.text(header).annotate(Annotation::Header), self.doc])
         }
@@ -215,6 +255,7 @@ pub struct StyleCodes {
     pub bold: &'static str,
     pub underline: &'static str,
     pub reset: &'static str,
+    pub color_reset: &'static str,
 }
 
 pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
@@ -228,6 +269,7 @@ pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
     bold: "\u{001b}[1m",
     underline: "\u{001b}[4m",
     reset: "\u{001b}[0m",
+    color_reset: "\u{1b}[39m",
 };
 
 macro_rules! html_color {
@@ -247,6 +289,7 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     bold: "<span style='font-weight: bold'>",
     underline: "<span style='text-decoration: underline'>",
     reset: "</span>",
+    color_reset: "</span>",
 };
 
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
