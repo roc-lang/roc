@@ -252,9 +252,6 @@ divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
 divCeil : Int a, Int a -> Int a
 divCeilChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
 
-divFloor : Int a, Int a -> Int a
-divFloorChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
-
 divTrunc : Int a, Int a -> Int a
 divTruncChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
 
