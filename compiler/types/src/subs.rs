@@ -772,7 +772,15 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
                 AliasKind::Opaque => "Opaque",
             };
 
-            write!(f, "{}({:?}, {:?}, {:?})", wrap, name, slice, actual)
+            write!(
+                f,
+                "{}({:?}, {:?}, <{:?}>{:?})",
+                wrap,
+                name,
+                slice,
+                actual,
+                SubsFmtContent(subs.get_content_without_compacting(*actual), subs)
+            )
         }
         Content::RangedNumber(typ, range) => {
             let slice = subs.get_subs_slice(*range);
@@ -833,7 +841,16 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
 
             let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
             for (name, slice) in it {
-                write!(f, "{:?} {:?}, ", name, slice)?;
+                write!(f, "{:?} ", name)?;
+                for var in slice {
+                    write!(
+                        f,
+                        "<{:?}>{:?} ",
+                        var,
+                        SubsFmtContent(subs.get_content_without_compacting(*var), subs)
+                    )?;
+                }
+                write!(f, ", ")?;
             }
 
             write!(f, "]<{:?}>", new_ext)
@@ -1889,7 +1906,14 @@ impl Subs {
     }
 
     pub fn occurs(&self, var: Variable) -> Result<(), (Variable, Vec<Variable>)> {
-        occurs(self, &[], var)
+        occurs(self, &[], var, false)
+    }
+
+    pub fn occurs_including_recursion_vars(
+        &self,
+        var: Variable,
+    ) -> Result<(), (Variable, Vec<Variable>)> {
+        occurs(self, &[], var, true)
     }
 
     pub fn mark_tag_union_recursive(
@@ -2859,6 +2883,7 @@ fn occurs(
     subs: &Subs,
     seen: &[Variable],
     input_var: Variable,
+    include_recursion_var: bool,
 ) -> Result<(), (Variable, Vec<Variable>)> {
     use self::Content::*;
     use self::FlatType::*;
@@ -2882,47 +2907,77 @@ fn occurs(
                 new_seen.push(root_var);
 
                 match flat_type {
-                    Apply(_, args) => {
-                        short_circuit(subs, root_var, &new_seen, subs.get_subs_slice(*args).iter())
-                    }
+                    Apply(_, args) => short_circuit(
+                        subs,
+                        root_var,
+                        &new_seen,
+                        subs.get_subs_slice(*args).iter(),
+                        include_recursion_var,
+                    ),
                     Func(arg_vars, closure_var, ret_var) => {
                         let it = once(ret_var)
                             .chain(once(closure_var))
                             .chain(subs.get_subs_slice(*arg_vars).iter());
-                        short_circuit(subs, root_var, &new_seen, it)
+                        short_circuit(subs, root_var, &new_seen, it, include_recursion_var)
                     }
                     Record(vars_by_field, ext_var) => {
                         let slice =
                             SubsSlice::new(vars_by_field.variables_start, vars_by_field.length);
                         let it = once(ext_var).chain(subs.get_subs_slice(slice).iter());
-                        short_circuit(subs, root_var, &new_seen, it)
+                        short_circuit(subs, root_var, &new_seen, it, include_recursion_var)
                     }
                     TagUnion(tags, ext_var) => {
                         for slice_index in tags.variables() {
                             let slice = subs[slice_index];
                             for var_index in slice {
                                 let var = subs[var_index];
-                                short_circuit_help(subs, root_var, &new_seen, var)?;
+                                short_circuit_help(
+                                    subs,
+                                    root_var,
+                                    &new_seen,
+                                    var,
+                                    include_recursion_var,
+                                )?;
                             }
                         }
 
-                        short_circuit_help(subs, root_var, &new_seen, *ext_var)
+                        short_circuit_help(
+                            subs,
+                            root_var,
+                            &new_seen,
+                            *ext_var,
+                            include_recursion_var,
+                        )
                     }
                     FunctionOrTagUnion(_, _, ext_var) => {
                         let it = once(ext_var);
-                        short_circuit(subs, root_var, &new_seen, it)
+                        short_circuit(subs, root_var, &new_seen, it, include_recursion_var)
                     }
-                    RecursiveTagUnion(_rec_var, tags, ext_var) => {
-                        // TODO rec_var is excluded here, verify that this is correct
+                    RecursiveTagUnion(rec_var, tags, ext_var) => {
+                        if include_recursion_var {
+                            new_seen.push(subs.get_root_key_without_compacting(*rec_var));
+                        }
                         for slice_index in tags.variables() {
                             let slice = subs[slice_index];
                             for var_index in slice {
                                 let var = subs[var_index];
-                                short_circuit_help(subs, root_var, &new_seen, var)?;
+                                short_circuit_help(
+                                    subs,
+                                    root_var,
+                                    &new_seen,
+                                    var,
+                                    include_recursion_var,
+                                )?;
                             }
                         }
 
-                        short_circuit_help(subs, root_var, &new_seen, *ext_var)
+                        short_circuit_help(
+                            subs,
+                            root_var,
+                            &new_seen,
+                            *ext_var,
+                            include_recursion_var,
+                        )
                     }
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => Ok(()),
                 }
@@ -2933,7 +2988,7 @@ fn occurs(
 
                 for var_index in args.into_iter() {
                     let var = subs[var_index];
-                    short_circuit_help(subs, root_var, &new_seen, var)?;
+                    short_circuit_help(subs, root_var, &new_seen, var, include_recursion_var)?;
                 }
 
                 Ok(())
@@ -2942,7 +2997,7 @@ fn occurs(
                 let mut new_seen = seen.to_owned();
                 new_seen.push(root_var);
 
-                short_circuit_help(subs, root_var, &new_seen, *typ)?;
+                short_circuit_help(subs, root_var, &new_seen, *typ, include_recursion_var)?;
                 // _range_vars excluded because they are not explicitly part of the type.
 
                 Ok(())
@@ -2957,12 +3012,13 @@ fn short_circuit<'a, T>(
     root_key: Variable,
     seen: &[Variable],
     iter: T,
+    include_recursion_var: bool,
 ) -> Result<(), (Variable, Vec<Variable>)>
 where
     T: Iterator<Item = &'a Variable>,
 {
     for var in iter {
-        short_circuit_help(subs, root_key, seen, *var)?;
+        short_circuit_help(subs, root_key, seen, *var, include_recursion_var)?;
     }
 
     Ok(())
@@ -2974,8 +3030,9 @@ fn short_circuit_help(
     root_key: Variable,
     seen: &[Variable],
     var: Variable,
+    include_recursion_var: bool,
 ) -> Result<(), (Variable, Vec<Variable>)> {
-    if let Err((v, mut vec)) = occurs(subs, seen, var) {
+    if let Err((v, mut vec)) = occurs(subs, seen, var, include_recursion_var) {
         vec.push(root_key);
         return Err((v, vec));
     }

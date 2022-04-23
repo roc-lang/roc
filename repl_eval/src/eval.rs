@@ -86,12 +86,17 @@ enum NewtypeKind<'a> {
 ///
 /// The returned list of newtype containers is ordered by increasing depth. As an example,
 /// `A ({b : C 123})` will have the unrolled list `[Tag(A), RecordField(b), Tag(C)]`.
-fn unroll_newtypes<'a>(
+///
+/// If we pass through aliases, the top-level alias that should be displayed to the user is passed
+/// back as an option.
+///
+/// Returns (new type containers, optional alias content, real content).
+fn unroll_newtypes_and_aliases<'a>(
     env: &Env<'a, 'a>,
     mut content: &'a Content,
-) -> (Vec<'a, NewtypeKind<'a>>, &'a Content) {
+) -> (Vec<'a, NewtypeKind<'a>>, Option<&'a Content>, &'a Content) {
     let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
-    let mut force_alias_content = None;
+    let mut alias_content = None;
     loop {
         match content {
             Content::Structure(FlatType::TagUnion(tags, _))
@@ -118,18 +123,19 @@ fn unroll_newtypes<'a>(
             }
             Content::Alias(_, _, real_var, _) => {
                 // We need to pass through aliases too, because their underlying types may have
-                // unrolled newtypes. In such cases return the list of unrolled newtypes, but keep
-                // the content as the alias for readability. For example,
+                // unrolled newtypes. For example,
                 //   T : { a : Str }
                 //   v : T
                 //   v = { a : "value" }
                 //   v
-                // Here we need the newtype container to be `[RecordField(a)]`, but the content to
-                // remain as the alias `T`.
-                force_alias_content = Some(content);
+                // Here we need the newtype container to be `[RecordField(a)]`.
+                //
+                // At the end of the day what we should show to the user is the alias content, not
+                // what's inside, so keep that around too.
+                alias_content = Some(content);
                 content = env.subs.get_content_without_compacting(*real_var);
             }
-            _ => return (newtype_containers, force_alias_content.unwrap_or(content)),
+            _ => return (newtype_containers, alias_content, content),
         }
     }
 }
@@ -140,8 +146,8 @@ fn apply_newtypes<'a>(
     mut expr: Expr<'a>,
 ) -> Expr<'a> {
     let arena = env.arena;
-    // Reverse order of what we receieve from `unroll_newtypes` since we want the deepest
-    // container applied first.
+    // Reverse order of what we receieve from `unroll_newtypes_and_aliases` since
+    // we want the deepest container applied first.
     for container in newtype_containers.into_iter().rev() {
         match container {
             NewtypeKind::Tag(tag_name) => {
@@ -160,13 +166,6 @@ fn apply_newtypes<'a>(
         }
     }
     expr
-}
-
-fn unroll_aliases<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
-    while let Content::Alias(_, _, real, _) = content {
-        content = env.subs.get_content_without_compacting(*real);
-    }
-    content
 }
 
 fn unroll_recursion_var<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
@@ -278,13 +277,18 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     layout: &Layout<'a>,
     content: &'a Content,
 ) -> Result<Expr<'a>, ToAstProblem> {
-    let (newtype_containers, content) = unroll_newtypes(env, content);
-    let content = unroll_aliases(env, content);
+    let (newtype_containers, alias_content, raw_content) =
+        unroll_newtypes_and_aliases(env, content);
 
     macro_rules! num_helper {
         ($ty:ty) => {
             app.call_function(main_fn_name, |_, num: $ty| {
-                num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+                num_to_ast(
+                    env,
+                    number_literal_to_ast(env.arena, num),
+                    // We determine the number from what the alias looks like.
+                    alias_content.unwrap_or(raw_content),
+                )
             })
         };
     }
@@ -292,17 +296,17 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     let result = match layout {
         Layout::Builtin(Builtin::Bool) => Ok(app
             .call_function(main_fn_name, |mem: &A::Memory, num: bool| {
-                bool_to_ast(env, mem, num, content)
+                bool_to_ast(env, mem, num, raw_content)
             })),
         Layout::Builtin(Builtin::Int(int_width)) => {
             use IntWidth::*;
 
-            let result = match (content, int_width) {
+            let result = match (raw_content, int_width) {
                 (Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _)), U8) => num_helper!(u8),
                 (_, U8) => {
                     // This is not a number, it's a tag union or something else
                     app.call_function(main_fn_name, |mem: &A::Memory, num: u8| {
-                        byte_to_ast(env, mem, num, content)
+                        byte_to_ast(env, mem, num, raw_content)
                     })
                 }
                 // The rest are numbers... for now
@@ -344,14 +348,14 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         Layout::Builtin(Builtin::List(elem_layout)) => Ok(app.call_function(
             main_fn_name,
             |mem: &A::Memory, (addr, len): (usize, usize)| {
-                list_to_ast(env, mem, addr, len, elem_layout, content)
+                list_to_ast(env, mem, addr, len, elem_layout, raw_content)
             },
         )),
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
         }
         Layout::Struct { field_layouts, .. } => {
-            let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match content {
+            let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match raw_content {
                 Content::Structure(FlatType::Record(fields, _)) => {
                     Ok(struct_to_ast(env, mem, addr, *fields))
                 }
@@ -413,7 +417,14 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 main_fn_name,
                 size as usize,
                 |mem: &'a A::Memory, addr: usize| {
-                    addr_to_ast(env, mem, addr, layout, WhenRecursive::Unreachable, content)
+                    addr_to_ast(
+                        env,
+                        mem,
+                        addr,
+                        layout,
+                        WhenRecursive::Unreachable,
+                        raw_content,
+                    )
                 },
             ))
         }
@@ -432,7 +443,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                         addr,
                         layout,
                         WhenRecursive::Loop(*layout),
-                        content,
+                        raw_content,
                     )
                 },
             ))
@@ -447,7 +458,14 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 main_fn_name,
                 size as usize,
                 |mem: &A::Memory, addr| {
-                    addr_to_ast(env, mem, addr, layout, WhenRecursive::Unreachable, content)
+                    addr_to_ast(
+                        env,
+                        mem,
+                        addr,
+                        layout,
+                        WhenRecursive::Unreachable,
+                        raw_content,
+                    )
                 },
             ))
         }
@@ -493,9 +511,10 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         }};
     }
 
-    let (newtype_containers, content) = unroll_newtypes(env, content);
-    let content = unroll_aliases(env, content);
-    let expr = match (content, layout) {
+    let (newtype_containers, _alias_content, raw_content) =
+        unroll_newtypes_and_aliases(env, content);
+
+    let expr = match (raw_content, layout) {
         (Content::Structure(FlatType::Func(_, _, _)), _)
         | (_, Layout::LambdaSet(_)) => OPAQUE_FUNCTION,
         (_, Layout::Builtin(Builtin::Bool)) => {
@@ -503,7 +522,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             // num is always false at the moment.
             let num: bool = mem.deref_bool(addr);
 
-            bool_to_ast(env, mem, num, content)
+            bool_to_ast(env, mem, num, raw_content)
         }
         (_, Layout::Builtin(Builtin::Int(int_width))) => {
             use IntWidth::*;
@@ -534,14 +553,14 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             let elem_addr = mem.deref_usize(addr);
             let len = mem.deref_usize(addr + env.target_info.ptr_width() as usize);
 
-            list_to_ast(env, mem, elem_addr, len, elem_layout, content)
+            list_to_ast(env, mem, elem_addr, len, elem_layout, raw_content)
         }
         (_, Layout::Builtin(Builtin::Str)) => {
             let string = mem.deref_str(addr);
             let arena_str = env.arena.alloc_str(string);
             Expr::Str(StrLiteral::PlainLine(arena_str))
         }
-        (_, Layout::Struct{field_layouts, ..}) => match content {
+        (_, Layout::Struct{field_layouts, ..}) => match raw_content {
             Content::Structure(FlatType::Record(fields, _)) => {
                 struct_to_ast(env, mem, addr, *fields)
             }
@@ -566,7 +585,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             }
         },
         (_, Layout::RecursivePointer) => {
-            match (content, when_recursive) {
+            match (raw_content, when_recursive) {
                 (Content::RecursionVar {
                     structure,
                     opt_name: _,
@@ -580,7 +599,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         (_, Layout::Union(UnionLayout::NonRecursive(union_layouts))) => {
             let union_layout = UnionLayout::NonRecursive(union_layouts);
 
-            let tags = match content {
+            let tags = match raw_content {
                 Content::Structure(FlatType::TagUnion(tags, _)) => tags,
                 other => unreachable!("Weird content for nonrecursive Union layout: {:?}", other),
             };
@@ -614,7 +633,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             )
         }
         (_, Layout::Union(union_layout @ UnionLayout::Recursive(union_layouts))) => {
-            let (rec_var, tags) = match content {
+            let (rec_var, tags) = match raw_content {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 _ => unreachable!("any other content would have a different layout"),
             };
@@ -644,7 +663,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             )
         }
         (_, Layout::Union(UnionLayout::NonNullableUnwrapped(_))) => {
-            let (rec_var, tags) = match unroll_recursion_var(env, content) {
+            let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
             };
@@ -672,7 +691,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             )
         }
         (_, Layout::Union(UnionLayout::NullableUnwrapped { .. })) => {
-            let (rec_var, tags) = match unroll_recursion_var(env, content) {
+            let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
             };
@@ -706,7 +725,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             }
         }
         (_, Layout::Union(union_layout @ UnionLayout::NullableWrapped { .. })) => {
-            let (rec_var, tags) = match unroll_recursion_var(env, content) {
+            let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => (rec_var, tags),
                 other => unreachable!("Unexpected content for NonNullableUnwrapped: {:?}", other),
             };
@@ -803,7 +822,8 @@ fn list_to_ast<'a, M: ReplAppMemory>(
     for index in 0..len {
         let offset_bytes = index * elem_size;
         let elem_addr = addr + offset_bytes;
-        let (newtype_containers, elem_content) = unroll_newtypes(env, elem_content);
+        let (newtype_containers, _alias_content, elem_content) =
+            unroll_newtypes_and_aliases(env, elem_content);
         let expr = addr_to_ast(
             env,
             mem,

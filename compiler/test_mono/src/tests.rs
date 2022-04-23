@@ -1284,6 +1284,23 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
 }
 
 #[mono_test]
+fn issue_2810() {
+    indoc!(
+        r#"
+        Command : [ Command Tool ]
+
+        Job : [ Job Command ]
+
+        Tool : [ SystemTool, FromJob Job ]
+
+        a : Job
+        a = Job (Command (FromJob (Job (Command SystemTool))))
+        a
+        "#
+    )
+}
+
+#[mono_test]
 fn issue_2811() {
     indoc!(
         r#"
