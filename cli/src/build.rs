@@ -256,6 +256,8 @@ pub fn build_file<'a>(
             inputs.push(bitcode::BUILTINS_HOST_OBJ_PATH);
         }
 
+        //std::fs::copy(app_o_file.to_str().unwrap(), "/home/anton/Desktop/roc_app.o").unwrap();
+
         let (mut child, _) =  // TODO use lld
             link(
                 target,

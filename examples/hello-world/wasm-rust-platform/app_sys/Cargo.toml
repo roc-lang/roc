@@ -2,7 +2,7 @@
 name = "app_sys"
 version = "0.1.0"
 edition = "2018"
-links = "app"
+links = "roc_app"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
