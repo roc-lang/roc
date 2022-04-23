@@ -514,13 +514,6 @@ pub(crate) fn canonicalize_defs<'a>(
     let mut def_ordering = DefOrdering::from_symbol_to_id(env.home, symbol_to_index, capacity);
 
     for (def_id, pending_def) in pending_value_defs.into_iter().enumerate() {
-        // if this def were a function, what would its name be?
-        let closure_symbol = match pending_def.loc_pattern().value {
-            Pattern::Identifier(symbol) => Some(symbol),
-            Pattern::AbilityMemberSpecialization { ident, .. } => Some(ident),
-            _ => None,
-        };
-
         let temp_output = canonicalize_pending_value_def_new(
             env,
             pending_def,
@@ -535,12 +528,10 @@ pub(crate) fn canonicalize_defs<'a>(
 
         defs.push(Some(temp_output.def));
 
-        let closure_references = closure_symbol.and_then(|s| env.closures.get(&s));
-
         def_ordering.insert_symbol_references(
             def_id as u32,
             &temp_output.references,
-            closure_references,
+            temp_output.closure_references,
         )
     }
 
@@ -753,7 +744,7 @@ impl DefOrdering {
         &mut self,
         def_id: u32,
         references: &References,
-        closure_references: Option<&References>,
+        closure_references: Option<References>,
     ) {
         for referenced in references.value_lookups() {
             if let Some(ref_id) = self.get_id(*referenced) {
@@ -1201,6 +1192,7 @@ struct TempOutput {
     output: Output,
     def: Def,
     references: References,
+    closure_references: Option<References>,
 }
 
 // TODO trim down these arguments!
@@ -1318,6 +1310,7 @@ fn canonicalize_pending_value_def_new<'a>(
             TempOutput {
                 output,
                 references: References::default(),
+                closure_references: None,
                 def,
             }
         }
@@ -1398,6 +1391,8 @@ fn canonicalize_pending_value_def_new<'a>(
                         )
                     });
 
+                    let closure_references = references.clone();
+
                     // Re-insert the closure into the map, under its defined name.
                     // closures don't have a name, and therefore pick a fresh symbol. But in this
                     // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
@@ -1443,6 +1438,7 @@ fn canonicalize_pending_value_def_new<'a>(
                     TempOutput {
                         output,
                         references: refs,
+                        closure_references: Some(closure_references),
                         def,
                     }
                 } else {
@@ -1461,6 +1457,7 @@ fn canonicalize_pending_value_def_new<'a>(
                     TempOutput {
                         output,
                         references: refs,
+                        closure_references: None,
                         def,
                     }
                 }
@@ -1480,6 +1477,7 @@ fn canonicalize_pending_value_def_new<'a>(
                 TempOutput {
                     output,
                     references: refs,
+                    closure_references: None,
                     def,
                 }
             }
@@ -1541,6 +1539,8 @@ fn canonicalize_pending_value_def_new<'a>(
                         )
                     });
 
+                    let closure_references = references.clone();
+
                     // Re-insert the closure into the map, under its defined name.
                     // closures don't have a name, and therefore pick a fresh symbol. But in this
                     // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
@@ -1583,6 +1583,7 @@ fn canonicalize_pending_value_def_new<'a>(
                     TempOutput {
                         output,
                         references: refs,
+                        closure_references: Some(closure_references),
                         def,
                     }
                 } else {
@@ -1601,6 +1602,7 @@ fn canonicalize_pending_value_def_new<'a>(
                     TempOutput {
                         output,
                         references: refs,
+                        closure_references: None,
                         def,
                     }
                 }
@@ -1620,6 +1622,7 @@ fn canonicalize_pending_value_def_new<'a>(
                 TempOutput {
                     output,
                     references: refs,
+                    closure_references: None,
                     def,
                 }
             }
