@@ -278,7 +278,7 @@ pub(crate) fn canonicalize_defs<'a>(
     #[allow(clippy::needless_collect)]
     let pending_type_defs = type_defs
         .into_iter()
-        .filter_map(|loc_def| to_pending_type_def(env, loc_def.value, &mut scope, pattern_type))
+        .map(|loc_def| to_pending_type_def(env, loc_def.value, &mut scope, pattern_type))
         .collect::<Vec<_>>();
 
     if cfg!(debug_assertions) {
@@ -1658,7 +1658,7 @@ fn to_pending_type_def<'a>(
     def: &'a ast::TypeDef<'a>,
     scope: &mut Scope,
     pattern_type: PatternType,
-) -> Option<PendingTypeDef<'a>> {
+) -> PendingTypeDef<'a> {
     use ast::TypeDef::*;
 
     match def {
@@ -1706,11 +1706,11 @@ fn to_pending_type_def<'a>(
                                 };
                                 env.problems.push(problem);
 
-                                return Some(PendingTypeDef::InvalidAlias {
+                                return PendingTypeDef::InvalidAlias {
                                     kind,
                                     symbol,
                                     region,
-                                });
+                                };
                             }
                         }
                     }
@@ -1720,14 +1720,12 @@ fn to_pending_type_def<'a>(
                         value: symbol,
                     };
 
-                    let pending_def = PendingTypeDef::Alias {
+                    PendingTypeDef::Alias {
                         name,
                         vars: can_rigids,
                         ann,
                         kind,
-                    };
-
-                    Some(pending_def)
+                    }
                 }
 
                 Err((original_region, loc_shadowed_symbol, new_symbol)) => {
@@ -1737,11 +1735,11 @@ fn to_pending_type_def<'a>(
                         kind: shadow_kind,
                     });
 
-                    Some(PendingTypeDef::InvalidAlias {
+                    PendingTypeDef::InvalidAlias {
                         kind,
                         symbol: new_symbol,
                         region,
-                    })
+                    }
                 }
             }
         }
@@ -1756,7 +1754,7 @@ fn to_pending_type_def<'a>(
             );
             env.problem(Problem::AbilityNotOnToplevel { region });
 
-            Some(PendingTypeDef::AbilityNotOnToplevel)
+            PendingTypeDef::AbilityNotOnToplevel
         }
 
         Ability {
@@ -1777,7 +1775,7 @@ fn to_pending_type_def<'a>(
                         shadow: shadowed_symbol,
                         kind: ShadowKind::Ability,
                     });
-                    return Some(PendingTypeDef::AbilityShadows);
+                    return PendingTypeDef::AbilityShadows;
                 }
             };
 
@@ -1789,19 +1787,17 @@ fn to_pending_type_def<'a>(
                     name: name.value,
                     variables_region,
                 });
-                return Some(PendingTypeDef::InvalidAbility {
+                return PendingTypeDef::InvalidAbility {
                     symbol: name.value,
                     region: name.region,
-                });
+                };
             }
 
-            let pending_ability = PendingTypeDef::Ability {
+            PendingTypeDef::Ability {
                 name,
                 // We'll handle adding the member symbols later on when we do all value defs.
                 members,
-            };
-
-            Some(pending_ability)
+            }
         }
     }
 }
