@@ -50,9 +50,8 @@ pub struct Annotation {
 
 #[derive(Debug)]
 pub(crate) struct CanDefs {
-    symbol_to_index: Vec<(IdentId, u32)>,
     defs: Vec<Option<Def>>,
-    references: Vec<(References, Region)>,
+    def_ordering: DefOrdering,
 
     aliases: SendMap<Symbol, Alias>,
 }
@@ -489,14 +488,19 @@ pub(crate) fn canonicalize_defs<'a>(
         }
     }
 
+    // Determine which idents we introduced in the course of this process.
+    let mut symbols_introduced = MutMap::default();
+
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        for (s, _) in bindings_from_patterns(std::iter::once(pending_def.loc_pattern())) {
+        for (s, r) in bindings_from_patterns(std::iter::once(pending_def.loc_pattern())) {
             // store the top-level defs, used to ensure that closures won't capture them
             if let PatternType::TopLevelDef = pattern_type {
                 env.top_level_symbols.insert(s);
             }
+
+            symbols_introduced.insert(s, r);
 
             debug_assert_eq!(env.home, s.module_id());
             debug_assert!(!symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()));
@@ -505,15 +509,17 @@ pub(crate) fn canonicalize_defs<'a>(
         }
     }
 
-    // let mut def_order = DefOrdering::from_symbol_to_id(env.home, symbol_to_id);
+    let capacity = pending_value_defs.len();
+    let mut defs = Vec::with_capacity(capacity);
+    let mut def_ordering = DefOrdering::from_symbol_to_id(env.home, symbol_to_index, capacity);
 
-    // env.home.register_debug_idents(&env.ident_ids);
-
-    let mut defs = Vec::with_capacity(pending_value_defs.len());
-    let mut references = Vec::with_capacity(pending_value_defs.len());
-
-    for pending_def in pending_value_defs.into_iter() {
-        let region = pending_def.loc_pattern().region;
+    for (def_id, pending_def) in pending_value_defs.into_iter().enumerate() {
+        // if this def were a function, what would its name be?
+        let closure_symbol = match pending_def.loc_pattern().value {
+            Pattern::Identifier(symbol) => Some(symbol),
+            Pattern::AbilityMemberSpecialization { ident, .. } => Some(ident),
+            _ => None,
+        };
 
         let temp_output = canonicalize_pending_value_def_new(
             env,
@@ -528,12 +534,18 @@ pub(crate) fn canonicalize_defs<'a>(
         output = temp_output.output;
 
         defs.push(Some(temp_output.def));
-        references.push((temp_output.references, region));
+
+        let closure_references = closure_symbol.and_then(|s| env.closures.get(&s));
+
+        def_ordering.insert_symbol_references(
+            def_id as u32,
+            &temp_output.references,
+            closure_references,
+        )
     }
 
-    // Determine which idents we introduced in the course of this process.
-    let mut symbols_introduced = MutMap::default();
-
+    // this is now mostly responsible for adding type names and ability members
+    // see if we can do this in a more efficient way
     for (symbol, region) in scope.symbols() {
         if !original_scope.contains_symbol(*symbol) {
             symbols_introduced.insert(*symbol, *region);
@@ -552,9 +564,8 @@ pub(crate) fn canonicalize_defs<'a>(
     // defs need to get moved later.
     (
         CanDefs {
-            symbol_to_index,
             defs,
-            references,
+            def_ordering,
             // The result needs a thread-safe `SendMap`
             aliases: aliases.into_iter().collect(),
         },
@@ -731,78 +742,90 @@ impl DefOrdering {
     //        }
     //    }
 
-    //    fn from_symbol_to_id(home: ModuleId, symbol_to_id: Vec<(IdentId, u32)>) -> Self {
-    //        let capacity = symbol_to_id.len();
-    //
-    //        Self {
-    //            home,
-    //            symbol_to_id,
-    //            references: ReferenceMatrix::new(capacity),
-    //            direct_references: ReferenceMatrix::new(capacity),
-    //            length: capacity as u32,
-    //        }
-    //    }
-
-    fn from_defs_by_symbol(
-        env: &Env,
+    fn from_symbol_to_id(
+        home: ModuleId,
         symbol_to_id: Vec<(IdentId, u32)>,
-        references: &[(References, Region)],
         capacity: usize,
     ) -> Self {
         // NOTE: because of `Pair a b = someDef` patterns, we can have more symbols than defs
         // but because `_ = someDef` we can also have more defs than symbols
 
-        let mut this = Self {
-            home: env.home,
+        Self {
+            home,
             symbol_to_id,
             references: ReferenceMatrix::new(capacity),
             direct_references: ReferenceMatrix::new(capacity),
             length: capacity as u32,
-        };
+        }
+    }
 
-        for (ident_id, def_id) in this.symbol_to_id.iter() {
-            let def_id = *def_id;
-            let references = &references[def_id as usize].0;
-            let symbol = Symbol::new(this.home, *ident_id);
+    //    fn from_defs_by_symbol(
+    //        env: &Env,
+    //        symbol_to_id: Vec<(IdentId, u32)>,
+    //        references: &[(References, Region)],
+    //        capacity: usize,
+    //    ) -> Self {
+    //
+    //        let mut this = Self {
+    //            home: env.home,
+    //            symbol_to_id,
+    //            references: ReferenceMatrix::new(capacity),
+    //            direct_references: ReferenceMatrix::new(capacity),
+    //            length: capacity as u32,
+    //        };
+    //
+    //        for (ident_id, def_id) in this.symbol_to_id.iter() {
+    //            let def_id = *def_id;
+    //            let references = &references[def_id as usize].0;
+    //            let symbol = Symbol::new(this.home, *ident_id);
+    //
+    //            this.insert_symbol_references(def_id, symbol, references, &env.closures);
+    //        }
+    //
+    //        this
+    //    }
 
+    fn insert_symbol_references(
+        &mut self,
+        def_id: u32,
+        references: &References,
+        closure_references: Option<&References>,
+    ) {
+        for referenced in references.value_lookups() {
+            if let Some(ref_id) = self.get_id(*referenced) {
+                self.references
+                    .set_row_col(def_id as usize, ref_id as usize, true);
+
+                self.direct_references
+                    .set_row_col(def_id as usize, ref_id as usize, true);
+            }
+        }
+
+        for referenced in references.calls() {
+            if let Some(ref_id) = self.get_id(*referenced) {
+                self.references
+                    .set_row_col(def_id as usize, ref_id as usize, true);
+
+                self.direct_references
+                    .set_row_col(def_id as usize, ref_id as usize, true);
+            }
+        }
+
+        if let Some(references) = closure_references {
             for referenced in references.value_lookups() {
-                if let Some(ref_id) = this.get_id(*referenced) {
-                    this.references
-                        .set_row_col(def_id as usize, ref_id as usize, true);
-
-                    this.direct_references
+                if let Some(ref_id) = self.get_id(*referenced) {
+                    self.references
                         .set_row_col(def_id as usize, ref_id as usize, true);
                 }
             }
 
             for referenced in references.calls() {
-                if let Some(ref_id) = this.get_id(*referenced) {
-                    this.references
+                if let Some(ref_id) = self.get_id(*referenced) {
+                    self.references
                         .set_row_col(def_id as usize, ref_id as usize, true);
-
-                    this.direct_references
-                        .set_row_col(def_id as usize, ref_id as usize, true);
-                }
-            }
-
-            if let Some(references) = env.closures.get(&symbol) {
-                for referenced in references.value_lookups() {
-                    if let Some(ref_id) = this.get_id(*referenced) {
-                        this.references
-                            .set_row_col(def_id as usize, ref_id as usize, true);
-                    }
-                }
-
-                for referenced in references.calls() {
-                    if let Some(ref_id) = this.get_id(*referenced) {
-                        this.references
-                            .set_row_col(def_id as usize, ref_id as usize, true);
-                    }
                 }
             }
         }
-
-        this
     }
 
     //    fn from_defs_by_symbol_old(
@@ -900,13 +923,10 @@ pub(crate) fn sort_can_defs(
     mut output: Output,
 ) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
     let CanDefs {
-        symbol_to_index,
         mut defs,
-        references,
+        def_ordering,
         aliases,
     } = defs;
-
-    let def_ids = DefOrdering::from_defs_by_symbol(env, symbol_to_index, &references, defs.len());
 
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
@@ -914,14 +934,14 @@ pub(crate) fn sort_can_defs(
 
     // TODO also do the same `addDirects` check elm/compiler does, so we can
     // report an error if a recursive definition can't possibly terminate!
-    match def_ids.references.topological_sort_into_groups() {
+    match def_ordering.references.topological_sort_into_groups() {
         TopologicalSort::Groups { groups } => {
             let mut declarations = Vec::new();
 
             // groups are in reversed order
             for group in groups.into_iter().rev() {
                 group_to_declaration(
-                    &def_ids,
+                    &def_ordering,
                     &group,
                     &env.closures,
                     &mut defs,
@@ -949,7 +969,7 @@ pub(crate) fn sort_can_defs(
             //
             // foo = if b then foo else bar
 
-            let sccs = def_ids
+            let sccs = def_ordering
                 .references
                 .strongly_connected_components(&nodes_in_cycle);
 
@@ -964,7 +984,7 @@ pub(crate) fn sort_can_defs(
                 // p = q
                 // q = p
                 let is_invalid_cycle = match cycle.get(0) {
-                    Some(def_id) => def_ids
+                    Some(def_id) => def_ordering
                         .direct_references
                         .references_for(*def_id as usize)
                         .any(|key| cycle.contains(&(key as u32))),
@@ -976,25 +996,18 @@ pub(crate) fn sort_can_defs(
                     let mut entries = Vec::new();
 
                     for def_id in &cycle {
-                        let symbol = def_ids.get_symbol(*def_id).unwrap();
-                        match references.get(*def_id as usize) {
-                            None => unreachable!(
-                                r#"Symbol `{:?}` not found in references! references was: {:?}"#,
-                                symbol, references
-                            ),
-                            Some((_, region)) => {
-                                let expr_region =
-                                    defs[*def_id as usize].as_ref().unwrap().loc_expr.region;
+                        let symbol = def_ordering.get_symbol(*def_id).unwrap();
+                        let def = &defs[*def_id as usize];
 
-                                let entry = CycleEntry {
-                                    symbol,
-                                    symbol_region: *region,
-                                    expr_region,
-                                };
+                        let expr_region = defs[*def_id as usize].as_ref().unwrap().loc_expr.region;
 
-                                entries.push(entry);
-                            }
-                        }
+                        let entry = CycleEntry {
+                            symbol,
+                            symbol_region: def.as_ref().unwrap().loc_pattern.region,
+                            expr_region,
+                        };
+
+                        entries.push(entry);
                     }
 
                     // Sort them by line number to make the report more helpful.
@@ -1035,7 +1048,7 @@ pub(crate) fn sort_can_defs(
                 // for each symbol in this group
                 for symbol in &groups[*group_id] {
                     // find its successors
-                    for succ in def_ids.successors_without_self(*symbol) {
+                    for succ in def_ordering.successors_without_self(*symbol) {
                         // and add its group to the result
                         match symbol_to_group_index.get(&succ) {
                             Some(index) => {
@@ -1059,7 +1072,7 @@ pub(crate) fn sort_can_defs(
                             let group = &groups[*group_id];
 
                             group_to_declaration(
-                                &def_ids,
+                                &def_ordering,
                                 group,
                                 &env.closures,
                                 &mut defs,
