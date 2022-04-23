@@ -749,8 +749,8 @@ impl DefOrdering {
         references: &[(References, Region)],
         capacity: usize,
     ) -> Self {
-        // because of `Pair a b = someDef` patterns, we can have more symbols than defs
-        debug_assert!(symbol_to_id.len() >= capacity);
+        // NOTE: because of `Pair a b = someDef` patterns, we can have more symbols than defs
+        // but because `_ = someDef` we can also have more defs than symbols
 
         let mut this = Self {
             home: env.home,
@@ -1103,7 +1103,6 @@ fn group_to_declaration(
     for cycle in sccs {
         if cycle.len() == 1 {
             let def_id = cycle[0];
-            let symbol = def_ids.get_symbol(def_id).unwrap();
 
             match defs[def_id as usize].take() {
                 Some(mut new_def) => {
@@ -1132,23 +1131,28 @@ fn group_to_declaration(
                         }
                     }
                 }
-                None => roc_error_macros::internal_error!("def not available {:?}", symbol),
+                None => {
+                    // NOTE: a `_ = someDef` can mean we don't have a symbol here
+                    let symbol = def_ids.get_symbol(def_id);
+
+                    roc_error_macros::internal_error!("def not available {:?}", symbol)
+                }
             }
         } else {
             let mut can_defs = Vec::new();
 
             // Topological sort gives us the reverse of the sorting we want!
             for def_id in cycle.into_iter().rev() {
-                let symbol = def_ids.get_symbol(def_id).unwrap();
                 match defs[def_id as usize].take() {
                     Some(mut new_def) => {
                         // Determine recursivity of closures that are not tail-recursive
                         if let Closure(ClosureData {
                             recursive: recursive @ Recursive::NotRecursive,
+                            name,
                             ..
                         }) = &mut new_def.loc_expr.value
                         {
-                            *recursive = closure_recursivity(symbol, closures);
+                            *recursive = closure_recursivity(*name, closures);
                         }
 
                         if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
@@ -1157,7 +1161,12 @@ fn group_to_declaration(
                             can_defs.push(new_def);
                         }
                     }
-                    None => roc_error_macros::internal_error!("def not available {:?}", symbol),
+                    None => {
+                        // NOTE: a `_ = someDef` can mean we don't have a symbol here
+                        let symbol = def_ids.get_symbol(def_id);
+
+                        roc_error_macros::internal_error!("def not available {:?}", symbol)
+                    }
                 }
             }
 
