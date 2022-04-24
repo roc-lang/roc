@@ -167,11 +167,13 @@ fn build_effect_always(
         })
     };
 
+    let mut introduced_variables = IntroducedVariables::default();
+
     // \value -> $Effect \{} -> value
     let (function_var, always_closure) = {
         // `$Effect \{} -> value`
         let (specialized_def_type, type_arguments, lambda_set_variables) =
-            build_fresh_opaque_variables(var_store);
+            build_fresh_opaque_variables(var_store, &mut introduced_variables);
         let body = Expr::OpaqueRef {
             opaque_var: var_store.fresh(),
             name: effect_symbol,
@@ -201,8 +203,6 @@ fn build_effect_always(
 
         (function_var, closure)
     };
-
-    let mut introduced_variables = IntroducedVariables::default();
 
     let signature = {
         // Effect.always : a -> Effect a
@@ -327,6 +327,8 @@ fn build_effect_map(
             .unwrap()
     };
 
+    let mut introduced_variables = IntroducedVariables::default();
+
     // \{} -> mapper (thunk {})
     let inner_closure = {
         let arguments = vec![(
@@ -352,7 +354,7 @@ fn build_effect_map(
 
     // \$Effect thunk, mapper
     let (specialized_def_type, type_arguments, lambda_set_variables) =
-        build_fresh_opaque_variables(var_store);
+        build_fresh_opaque_variables(var_store, &mut introduced_variables);
     let arguments = vec![
         (
             var_store.fresh(),
@@ -376,7 +378,7 @@ fn build_effect_map(
 
     // `$Effect \{} -> (mapper (thunk {}))`
     let (specialized_def_type, type_arguments, lambda_set_variables) =
-        build_fresh_opaque_variables(var_store);
+        build_fresh_opaque_variables(var_store, &mut introduced_variables);
     let body = Expr::OpaqueRef {
         opaque_var: var_store.fresh(),
         name: effect_symbol,
@@ -398,8 +400,6 @@ fn build_effect_map(
         arguments,
         loc_body: Box::new(Loc::at_zero(body)),
     });
-
-    let mut introduced_variables = IntroducedVariables::default();
 
     let signature = {
         // Effect.map : Effect a, (a -> b) -> Effect b
@@ -534,8 +534,10 @@ fn build_effect_after(
         Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
     };
 
+    let mut introduced_variables = IntroducedVariables::default();
+
     let (specialized_def_type, type_arguments, lambda_set_variables) =
-        build_fresh_opaque_variables(var_store);
+        build_fresh_opaque_variables(var_store, &mut introduced_variables);
 
     let arguments = vec![
         (
@@ -570,8 +572,6 @@ fn build_effect_after(
         arguments,
         loc_body: Box::new(Loc::at_zero(to_effect_call)),
     });
-
-    let mut introduced_variables = IntroducedVariables::default();
 
     let signature = {
         let var_a = var_store.fresh();
@@ -643,6 +643,7 @@ fn wrap_in_effect_thunk(
     closure_name: Symbol,
     captured_symbols: Vec<Symbol>,
     var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
 ) -> Expr {
     let captured_symbols: Vec<_> = captured_symbols
         .into_iter()
@@ -672,7 +673,7 @@ fn wrap_in_effect_thunk(
 
     // `$Effect \{} -> value`
     let (specialized_def_type, type_arguments, lambda_set_variables) =
-        build_fresh_opaque_variables(var_store);
+        build_fresh_opaque_variables(var_store, introduced_variables);
     Expr::OpaqueRef {
         opaque_var: var_store.fresh(),
         name: effect_symbol,
@@ -689,13 +690,14 @@ fn force_effect(
     effect_symbol: Symbol,
     thunk_symbol: Symbol,
     var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
 ) -> Expr {
     let whole_var = var_store.fresh();
 
     let thunk_var = var_store.fresh();
 
     let (specialized_def_type, type_arguments, lambda_set_variables) =
-        build_fresh_opaque_variables(var_store);
+        build_fresh_opaque_variables(var_store, introduced_variables);
     let pattern = Pattern::UnwrappedOpaque {
         whole_var,
         opaque: effect_symbol,
@@ -811,8 +813,17 @@ fn build_effect_forever(
             .unwrap()
     };
 
-    let body =
-        build_effect_forever_body(env, scope, effect_symbol, forever_symbol, effect, var_store);
+    let mut introduced_variables = IntroducedVariables::default();
+
+    let body = build_effect_forever_body(
+        env,
+        scope,
+        effect_symbol,
+        forever_symbol,
+        effect,
+        var_store,
+        &mut introduced_variables,
+    );
 
     let arguments = vec![(var_store.fresh(), Loc::at_zero(Pattern::Identifier(effect)))];
 
@@ -828,8 +839,6 @@ fn build_effect_forever(
         arguments,
         loc_body: Box::new(Loc::at_zero(body)),
     });
-
-    let mut introduced_variables = IntroducedVariables::default();
 
     let signature = {
         let var_a = var_store.fresh();
@@ -894,6 +903,7 @@ fn build_effect_forever_body(
     forever_symbol: Symbol,
     effect: Symbol,
     var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
 ) -> Expr {
     let closure_name = {
         scope
@@ -913,6 +923,7 @@ fn build_effect_forever_body(
         forever_symbol,
         effect,
         var_store,
+        introduced_variables,
     );
 
     let captured_symbols = vec![effect];
@@ -922,6 +933,7 @@ fn build_effect_forever_body(
         closure_name,
         captured_symbols,
         var_store,
+        introduced_variables,
     )
 }
 
@@ -932,6 +944,7 @@ fn build_effect_forever_inner_body(
     forever_symbol: Symbol,
     effect: Symbol,
     var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
 ) -> Expr {
     let thunk1_symbol = {
         scope
@@ -962,7 +975,7 @@ fn build_effect_forever_inner_body(
         let thunk_var = var_store.fresh();
 
         let (specialized_def_type, type_arguments, lambda_set_variables) =
-            build_fresh_opaque_variables(var_store);
+            build_fresh_opaque_variables(var_store, introduced_variables);
         let pattern = Pattern::UnwrappedOpaque {
             whole_var,
             opaque: effect,
@@ -1030,6 +1043,7 @@ fn build_effect_forever_inner_body(
         effect_symbol,
         thunk2_symbol,
         var_store,
+        introduced_variables,
     ));
 
     Expr::LetNonRec(
@@ -1053,6 +1067,8 @@ fn build_effect_loop(
     let state_symbol = new_symbol!(scope, env, "state");
     let step_symbol = new_symbol!(scope, env, "step");
 
+    let mut introduced_variables = IntroducedVariables::default();
+
     let body = build_effect_loop_body(
         env,
         scope,
@@ -1061,6 +1077,7 @@ fn build_effect_loop(
         state_symbol,
         step_symbol,
         var_store,
+        &mut introduced_variables,
     );
 
     let arguments = vec![
@@ -1086,8 +1103,6 @@ fn build_effect_loop(
         arguments,
         loc_body: Box::new(Loc::at_zero(body)),
     });
-
-    let mut introduced_variables = IntroducedVariables::default();
 
     let signature = {
         let var_a = var_store.fresh();
@@ -1187,6 +1202,7 @@ fn build_effect_loop_body(
     state_symbol: Symbol,
     step_symbol: Symbol,
     var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
 ) -> Expr {
     let closure_name = {
         scope
@@ -1207,6 +1223,7 @@ fn build_effect_loop_body(
         state_symbol,
         step_symbol,
         var_store,
+        introduced_variables,
     );
 
     let captured_symbols = vec![state_symbol, step_symbol];
@@ -1216,6 +1233,7 @@ fn build_effect_loop_body(
         closure_name,
         captured_symbols,
         var_store,
+        introduced_variables,
     )
 }
 
@@ -1249,6 +1267,7 @@ fn build_effect_loop_inner_body(
     state_symbol: Symbol,
     step_symbol: Symbol,
     var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
 ) -> Expr {
     let thunk1_symbol = new_symbol!(scope, env, "thunk3");
     let thunk2_symbol = new_symbol!(scope, env, "thunk4");
@@ -1263,7 +1282,7 @@ fn build_effect_loop_inner_body(
         let thunk_var = var_store.fresh();
 
         let (specialized_def_type, type_arguments, lambda_set_variables) =
-            build_fresh_opaque_variables(var_store);
+            build_fresh_opaque_variables(var_store, introduced_variables);
         let pattern = Pattern::UnwrappedOpaque {
             whole_var,
             opaque: effect_symbol,
@@ -1333,7 +1352,13 @@ fn build_effect_loop_inner_body(
     // $Effect thunk2 = loop effect
     // thunk2 {}
     // ```
-    let force_thunk2 = force_effect(loop_new_state_step, effect_symbol, thunk2_symbol, var_store);
+    let force_thunk2 = force_effect(
+        loop_new_state_step,
+        effect_symbol,
+        thunk2_symbol,
+        var_store,
+        introduced_variables,
+    );
 
     let step_branch = {
         let step_tag_name = TagName::Global("Step".into());
@@ -1552,7 +1577,7 @@ fn build_effect_opaque(
     introduced_variables: &mut IntroducedVariables,
 ) -> Type {
     let closure_var = var_store.fresh();
-    introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
+    introduced_variables.insert_lambda_set(closure_var);
 
     let actual = Type::Function(
         vec![Type::EmptyRec],
@@ -1571,13 +1596,14 @@ fn build_effect_opaque(
 
 fn build_fresh_opaque_variables(
     var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
 ) -> (Box<Type>, Vec<(Lowercase, Type)>, Vec<LambdaSet>) {
+    let a_var = var_store.fresh();
     let closure_var = var_store.fresh();
 
-    // NB: if there are bugs, check whether not introducing variables is a problem!
-    // introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
+    introduced_variables.insert_named("a".into(), Loc::at_zero(a_var));
+    introduced_variables.insert_lambda_set(closure_var);
 
-    let a_var = var_store.fresh();
     let actual = Type::Function(
         vec![Type::EmptyRec],
         Box::new(Type::Variable(closure_var)),
