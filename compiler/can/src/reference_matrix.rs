@@ -1,7 +1,8 @@
 // see if we get better performance with different integer types
-pub(crate) type Element = usize;
-pub(crate) type BitVec = bitvec::vec::BitVec<Element>;
-pub(crate) type BitSlice = bitvec::prelude::BitSlice<Element>;
+type Order = bitvec::order::Lsb0;
+type Element = usize;
+type BitVec = bitvec::vec::BitVec<Element, Order>;
+type BitSlice = bitvec::prelude::BitSlice<Element, Order>;
 
 /// A square boolean matrix used to store relations
 ///
@@ -172,7 +173,12 @@ impl ReferenceMatrix {
                 continue 'outer;
             }
 
-            break params.scc;
+            let mut result = Vec::new();
+            for group in params.scc.components() {
+                result.push(group.map(|v| v as u32).collect());
+            }
+
+            break result;
         }
     }
 }
@@ -202,7 +208,7 @@ struct Params {
     c: usize,
     p: Vec<u32>,
     s: Vec<u32>,
-    scc: Vec<Vec<u32>>,
+    scc: Sccs,
     scca: Vec<u32>,
 }
 
@@ -219,7 +225,10 @@ impl Params {
             c: 0,
             s: Vec::new(),
             p: Vec::new(),
-            scc: Vec::new(),
+            scc: Sccs {
+                matrix: ReferenceMatrix::new(length),
+                components: 0,
+            },
             scca: Vec::new(),
         }
     }
@@ -260,15 +269,44 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
     if params.p.last() == Some(&(v as u32)) {
         params.p.pop();
 
-        let mut component = Vec::new();
         while let Some(node) = params.s.pop() {
-            component.push(node);
+            params
+                .scc
+                .matrix
+                .set_row_col(params.scc.components, node as usize, true);
             params.scca.push(node);
             params.preorders[node as usize] = Preorder::Removed;
             if node as usize == v {
                 break;
             }
         }
-        params.scc.push(component);
+
+        params.scc.components += 1;
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Sccs {
+    components: usize,
+    matrix: ReferenceMatrix,
+}
+
+impl Sccs {
+    fn components(&self) -> impl Iterator<Item = impl Iterator<Item = usize> + '_> + '_ {
+        // work around a panic when requesting a chunk size of 0
+        let length = if self.matrix.length == 0 {
+            // the `.take(self.components)` ensures the resulting iterator will be empty
+            assert!(self.components == 0);
+
+            1
+        } else {
+            self.matrix.length
+        };
+
+        self.matrix
+            .bitvec
+            .chunks(length)
+            .take(self.components)
+            .map(|row| row.iter_ones())
     }
 }

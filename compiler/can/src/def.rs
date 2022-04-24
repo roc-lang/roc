@@ -30,7 +30,6 @@ use roc_types::types::AliasKind;
 use roc_types::types::LambdaSet;
 use roc_types::types::{Alias, Type};
 use std::fmt::Debug;
-use ven_graph::topological_sort;
 
 #[derive(Clone, Debug)]
 pub struct Def {
