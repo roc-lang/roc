@@ -6667,10 +6667,34 @@ fn build_int_binop<'a, 'ctx, 'env>(
             &LLVM_MUL_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
-        NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
-        NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
-        NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
-        NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
+        NumGt => {
+            if int_width.is_signed() {
+                bd.build_int_compare(SGT, lhs, rhs, "gt_int").into()
+            } else {
+                bd.build_int_compare(UGT, lhs, rhs, "gt_uint").into()
+            }
+        }
+        NumGte => {
+            if int_width.is_signed() {
+                bd.build_int_compare(SGE, lhs, rhs, "gte_int").into()
+            } else {
+                bd.build_int_compare(UGE, lhs, rhs, "gte_uint").into()
+            }
+        }
+        NumLt => {
+            if int_width.is_signed() {
+                bd.build_int_compare(SLT, lhs, rhs, "lt_int").into()
+            } else {
+                bd.build_int_compare(ULT, lhs, rhs, "lt_uint").into()
+            }
+        }
+        NumLte => {
+            if int_width.is_signed() {
+                bd.build_int_compare(SLE, lhs, rhs, "lte_int").into()
+            } else {
+                bd.build_int_compare(ULE, lhs, rhs, "lte_uint").into()
+            }
+        }
         NumRemUnchecked => {
             if int_width.is_signed() {
                 bd.build_int_signed_rem(lhs, rhs, "rem_int").into()
