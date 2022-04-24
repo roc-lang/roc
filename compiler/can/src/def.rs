@@ -1943,8 +1943,13 @@ fn correct_mutual_recursive_type_alias<'a>(
 
         // We need to instantiate the alias with any symbols in the currrent module it
         // depends on.
-        // We only need to worry about symbols in this SCC or any prior one, since the SCCs
-        // were sorted topologically, and we've already instantiated aliases coming from other
+        //
+        // the `strongly_connected_components` returns SCCs in a topologically sorted order:
+        // SCC_0 has those aliases that don't rely on any other, SCC_1 has only those that rely on SCC_1, etc.
+        //
+        // Hence, we only need to worry about symbols in the current SCC or any prior one.
+        // It cannot be using any of the others, and we've already instantiated aliases coming from other
+        // modules.
         let mut to_instantiate_bitvec = solved_aliases_bitvec | &pending_aliases_bitvec;
 
         for index in cycle.iter() {
