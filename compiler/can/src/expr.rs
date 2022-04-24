@@ -699,7 +699,9 @@ pub fn canonicalize_expr<'a>(
                 }
             }
 
-            env.register_closure(symbol, output.references.clone());
+            // store the references of this function in the Env. This information is used
+            // when we canonicalize a surrounding def (if it exists)
+            env.closures.insert(symbol, output.references.clone());
 
             let mut captured_symbols: Vec<_> = captured_symbols
                 .into_iter()

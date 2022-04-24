@@ -39,6 +39,31 @@ impl ReferenceMatrix {
     pub fn get(&self, index: usize) -> bool {
         self.bitvec[index]
     }
+
+    pub fn is_recursive(&self, index: usize) -> bool {
+        let mut scheduled = self.row_slice(index).to_bitvec();
+        let mut visited = self.row_slice(index).to_bitvec();
+
+        // yes this is a bit inefficient because rows are visited repeatedly.
+        while scheduled.any() {
+            for one in scheduled.iter_ones() {
+                if one == index {
+                    return true;
+                }
+
+                visited |= self.row_slice(one)
+            }
+
+            // i.e. visited did not change
+            if visited.count_ones() == scheduled.count_ones() {
+                break;
+            }
+
+            scheduled |= &visited;
+        }
+
+        false
+    }
 }
 
 // Topological sort and strongly-connected components

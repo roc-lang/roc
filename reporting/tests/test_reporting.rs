@@ -7092,26 +7092,23 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `f` definition:
-
-                1│  f : a, b, * -> *
-                2│  f = \_, _, x2 ->
+                
+                Something is off with the body of the `inner` definition:
+                
                 3│      inner : * -> *
                 4│      inner = \y -> y
-                5│      inner x2
-                        ^^^^^^^^
-
-                The type annotation on `f` says this `inner` call should have the type:
-
+                                      ^
+                
+                The type annotation on `inner` says this `y` value should have the type:
+                
                     *
-
-                However, the type of this `inner` call is connected to another type in a
+                
+                However, the type of this `y` value is connected to another type in a
                 way that isn't reflected in this annotation.
-
+                
                 Tip: Any connection between types must use a named type variable, not
-                a `*`! Maybe the annotation  on `f` should have a named type variable in
-                place of the `*`?
+                a `*`! Maybe the annotation  on `inner` should have a named type variable
+                in place of the `*`?
                 "#
             ),
         )
@@ -9952,6 +9949,25 @@ I need all branches in an `if` to have the same type!
                     b has Hash
                 "#
             ),
+        )
+    }
+
+    #[test]
+    fn always_function() {
+        // from https://github.com/rtfeldman/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
+        // There was a bug where this reported UnusedArgument("val")
+        // since it was used only in the returned function only.
+        //
+        // we want this to not give any warnings/errors!
+        report_problem_as(
+            indoc!(
+                r#"
+                always = \val -> \_ -> val
+
+                always
+                "#
+            ),
+            "",
         )
     }
 }
