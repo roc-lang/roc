@@ -1,0 +1,17 @@
+   Compiling test_gen_helpers v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/test_gen/helpers)
+warning: unused import: `assert_wasm_evals_to`
+   --> compiler/test_gen/helpers/src/llvm.rs:645:16
+    |
+645 | pub(crate) use assert_wasm_evals_to;
+    |                ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` on by default
+
+warning: `test_gen_helpers` (lib) generated 1 warning
+   Compiling test_gen v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/test_gen/gen)
+    Finished test [unoptimized + debuginfo] target(s) in 16.50s
+     Running src/tests.rs (/Users/hafiz/Code/Roc/roc/target/debug/deps/test_gen-b23688ac1fe4e464)
+error: test failed, to rerun pass '-p test_gen --test test_gen'
+
+Caused by:
+  process didn't exit successfully: `/Users/hafiz/Code/Roc/roc/target/debug/deps/test_gen-b23688ac1fe4e464` (signal: 11, SIGSEGV: invalid memory reference)

@@ -31,7 +31,7 @@ fn zig_executable() -> String {
 
 /// Create an all-in-one object file: platform + builtins + libc
 fn build_wasm_platform_and_builtins(out_dir: &str) {
-    println!("cargo:rerun-if-changed=src/helpers/{}.c", PLATFORM_FILENAME);
+    println!("cargo:rerun-if-changed=src/{}.c", PLATFORM_FILENAME);
 
     // See discussion with Luuk de Gram (Zig contributor)
     // https://github.com/rtfeldman/roc/pull/2181#pullrequestreview-839608063
@@ -43,7 +43,7 @@ fn build_wasm_platform_and_builtins(out_dir: &str) {
         "-lc",
         "-dynamic", // -dynamic ensures libc code goes into the binary
         bitcode::BUILTINS_WASM32_OBJ_PATH,
-        &format!("src/helpers/{}.c", PLATFORM_FILENAME),
+        &format!("src/{}.c", PLATFORM_FILENAME),
         &format!("-femit-bin={}/{}.o", out_dir, PLATFORM_FILENAME),
     ];
 

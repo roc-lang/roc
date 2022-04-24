@@ -1,4 +1,4 @@
-use crate::helpers::from_wasmer_memory::FromWasmerMemory;
+use crate::from_wasmer_memory::FromWasmerMemory;
 use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::module_to_dylib;
@@ -364,7 +364,7 @@ pub fn helper_wasm<'a>(
 
     use std::process::Command;
 
-    Command::new(&crate::helpers::zig_executable())
+    Command::new(&crate::zig_executable())
         .current_dir(dir_path)
         .args(&[
             "wasm-ld",
@@ -463,12 +463,11 @@ where
     let context = inkwell::context::Context::create();
 
     let is_gen_test = true;
-    let instance =
-        crate::helpers::llvm::helper_wasm(&arena, src, is_gen_test, ignore_problems, &context);
+    let instance = crate::llvm::helper_wasm(&arena, src, is_gen_test, ignore_problems, &context);
 
     let memory = instance.exports.get_memory("memory").unwrap();
 
-    crate::helpers::llvm::MEMORY.with(|f| {
+    crate::llvm::MEMORY.with(|f| {
         *f.borrow_mut() = Some(unsafe { std::mem::transmute(memory) });
     });
 
@@ -479,7 +478,7 @@ where
         Ok(result) => {
             let address = result[0].unwrap_i32();
 
-            let output = <T as crate::helpers::llvm::FromWasmerMemory>::decode(
+            let output = <T as crate::llvm::FromWasmerMemory>::decode(
                 memory,
                 // skip the RocCallResult tag id
                 address as u32 + 8,
@@ -493,7 +492,7 @@ where
 #[allow(unused_macros)]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        match $crate::helpers::llvm::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
+        match $crate::llvm::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
             Err(msg) => panic!("Wasm test failed: {:?}", msg),
             Ok(actual) => {
                 #[allow(clippy::bool_assert_comparison)]
@@ -503,21 +502,15 @@ macro_rules! assert_wasm_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::helpers::llvm::assert_wasm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $crate::helpers::llvm::identity,
-            false
-        );
+        $crate::llvm::assert_wasm_evals_to!($src, $expected, $ty, $crate::llvm::identity, false);
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::helpers::llvm::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
+        $crate::llvm::assert_wasm_evals_to!($src, $expected, $ty, $transform, false);
     };
 }
 
-#[allow(unused_macros)]
+#[macro_export]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         use bumpalo::Bump;
@@ -529,7 +522,7 @@ macro_rules! assert_llvm_evals_to {
 
         let is_gen_test = true;
         let (main_fn_name, errors, lib) =
-            $crate::helpers::llvm::helper(&arena, $src, is_gen_test, $ignore_problems, &context);
+            $crate::llvm::helper(&arena, $src, is_gen_test, $ignore_problems, &context);
 
         let transform = |success| {
             let expected = $expected;
@@ -541,24 +534,19 @@ macro_rules! assert_llvm_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $crate::helpers::llvm::identity,
-            false
-        );
+        $crate::llvm::assert_llvm_evals_to!($src, $expected, $ty, $crate::llvm::identity, false);
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+        $crate::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
     };
 }
 
-#[allow(unused_macros)]
+#[cfg(feature = "gen-llvm")]
+#[macro_export]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, $crate::helpers::llvm::identity, false);
+        assert_evals_to!($src, $expected, $ty, $crate::llvm::identity, false);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {{
         // same as above, except with an additional transformation argument.
@@ -567,25 +555,14 @@ macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems: expr) => {{
         // same as above, except with ignore_problems.
         #[cfg(feature = "wasm-cli-run")]
-        $crate::helpers::llvm::assert_wasm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $transform,
-            $ignore_problems
-        );
+        $crate::llvm::assert_wasm_evals_to!($src, $expected, $ty, $transform, $ignore_problems);
 
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $transform,
-            $ignore_problems
-        );
+        $crate::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, $ignore_problems);
     }};
 }
 
-#[allow(unused_macros)]
+#[cfg(feature = "gen-llvm")]
+#[macro_export]
 macro_rules! assert_expect_failed {
     ($src:expr, $expected:expr, $ty:ty) => {
         use bumpalo::Bump;
@@ -597,7 +574,7 @@ macro_rules! assert_expect_failed {
 
         let is_gen_test = true;
         let (main_fn_name, errors, lib) =
-            $crate::helpers::llvm::helper(&arena, $src, is_gen_test, false, &context);
+            $crate::llvm::helper(&arena, $src, is_gen_test, false, &context);
 
         let transform = |success| {
             let expected = $expected;
@@ -608,36 +585,32 @@ macro_rules! assert_expect_failed {
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $crate::helpers::llvm::identity,
-            false
-        );
+        $crate::llvm::assert_llvm_evals_to!($src, $expected, $ty, $crate::llvm::identity, false);
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+        $crate::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
     };
 }
 
+#[cfg(feature = "gen-llvm")]
+#[macro_export]
 macro_rules! expect_runtime_error_panic {
     ($src:expr) => {{
         #[cfg(feature = "wasm-cli-run")]
-        $crate::helpers::llvm::assert_wasm_evals_to!(
+        $crate::llvm::assert_wasm_evals_to!(
             $src,
             false, // fake value/type for eval
             bool,
-            $crate::helpers::llvm::identity,
+            $crate::llvm::identity,
             true // ignore problems
         );
 
-        $crate::helpers::llvm::assert_llvm_evals_to!(
+        $crate::llvm::assert_llvm_evals_to!(
             $src,
             false, // fake value/type for eval
             bool,
-            $crate::helpers::llvm::identity,
+            $crate::llvm::identity,
             true // ignore problems
         );
     }};
@@ -648,36 +621,32 @@ pub fn identity<T>(value: T) -> T {
     value
 }
 
-#[allow(unused_macros)]
+#[cfg(feature = "gen-llvm")]
+#[macro_export]
 macro_rules! assert_non_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $crate::helpers::llvm::identity
-        );
+        $crate::llvm::assert_llvm_evals_to!($src, $expected, $ty, $crate::llvm::identity);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform);
+            $crate::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform);
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {{
-        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform);
+        $crate::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform);
     }};
 }
 
-#[allow(unused_imports)]
-pub(crate) use assert_evals_to;
-#[allow(unused_imports)]
-pub(crate) use assert_expect_failed;
-#[allow(unused_imports)]
-pub(crate) use assert_llvm_evals_to;
-#[allow(unused_imports)]
-pub(crate) use assert_non_opt_evals_to;
-#[allow(unused_imports)]
+#[allow(unused)]
+pub use assert_evals_to;
+#[allow(unused)]
+pub use assert_expect_failed;
+#[allow(unused)]
+pub use assert_llvm_evals_to;
+#[allow(unused)]
+pub use assert_non_opt_evals_to;
+#[allow(unused)]
 pub(crate) use assert_wasm_evals_to;
-#[allow(unused_imports)]
-pub(crate) use expect_runtime_error_panic;
+#[allow(unused)]
+pub use expect_runtime_error_panic;

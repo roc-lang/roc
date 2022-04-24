@@ -215,7 +215,8 @@ pub fn helper(
     (main_fn_name, delayed_errors, lib)
 }
 
-#[allow(unused_macros)]
+#[cfg(feature = "gen-dev")]
+#[macro_export]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
         assert_evals_to!($src, $expected, $ty, (|val| val));

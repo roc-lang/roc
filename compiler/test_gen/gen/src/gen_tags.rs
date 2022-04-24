@@ -1,11 +1,4 @@
-#[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::assert_evals_to;
-
-#[cfg(feature = "gen-dev")]
-use crate::helpers::dev::assert_evals_to;
-
-#[cfg(feature = "gen-wasm")]
-use crate::helpers::wasm::assert_evals_to;
+use test_gen_helpers::assert_evals_to;
 
 // use crate::assert_wasm_evals_to as assert_evals_to;
 #[allow(unused_imports)]

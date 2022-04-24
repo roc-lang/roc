@@ -333,7 +333,8 @@ pub fn debug_memory_hex(memory: &Memory, address: i32, size: usize) {
     println!();
 }
 
-#[allow(unused_macros)]
+#[cfg(feature = "gen-wasm")]
+#[macro_export]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {
         $crate::helpers::wasm::assert_evals_to!(
@@ -361,7 +362,8 @@ macro_rules! assert_evals_to {
     }};
 }
 
-#[allow(unused_macros)]
+#[cfg(feature = "gen-wasm")]
+#[macro_export]
 macro_rules! expect_runtime_error_panic {
     ($src:expr) => {{
         $crate::helpers::wasm::assert_evals_to!(

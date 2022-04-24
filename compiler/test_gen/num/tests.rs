@@ -1,11 +1,49 @@
-#[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::assert_evals_to;
+use test_gen_helpers::assert_evals_to;
 
-#[cfg(feature = "gen-dev")]
-use crate::helpers::dev::assert_evals_to;
+use core::ffi::c_void;
+#[no_mangle]
+pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+    libc::malloc(size)
+}
 
-#[cfg(feature = "gen-wasm")]
-use crate::helpers::wasm::assert_evals_to;
+#[no_mangle]
+pub unsafe fn roc_memcpy(dest: *mut c_void, src: *const c_void, bytes: usize) -> *mut c_void {
+    libc::memcpy(dest, src, bytes)
+}
+
+#[no_mangle]
+pub unsafe fn roc_realloc(
+    c_ptr: *mut c_void,
+    new_size: usize,
+    _old_size: usize,
+    _alignment: u32,
+) -> *mut c_void {
+    libc::realloc(c_ptr, new_size)
+}
+
+#[no_mangle]
+pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+    libc::free(c_ptr)
+}
+
+#[no_mangle]
+pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+    use roc_gen_llvm::llvm::build::PanicTagId;
+
+    use std::convert::TryFrom;
+    use std::ffi::CStr;
+    use std::os::raw::c_char;
+
+    match PanicTagId::try_from(tag_id) {
+        Ok(PanicTagId::NullTerminatedString) => {
+            let slice = CStr::from_ptr(c_ptr as *const c_char);
+            let string = slice.to_str().unwrap();
+            eprintln!("Roc hit a panic: {}", string);
+            std::process::exit(1);
+        }
+        Err(_) => unreachable!(),
+    }
+}
 
 // use crate::assert_wasm_evals_to as assert_evals_to;
 #[allow(unused_imports)]
