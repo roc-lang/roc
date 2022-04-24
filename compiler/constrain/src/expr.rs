@@ -652,17 +652,14 @@ pub fn constrain_expr(
             let mut branch_cons = Vec::with_capacity(branches.len());
 
             for (index, when_branch) in branches.iter().enumerate() {
-                let pattern_region =
-                    Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
-
-                let expected_pattern = |sub_pattern| {
+                let expected_pattern = |sub_pattern, sub_region| {
                     PExpected::ForReason(
                         PReason::WhenMatch {
                             index: HumanIndex::zero_based(index),
                             sub_pattern,
                         },
                         cond_type.clone(),
-                        pattern_region,
+                        sub_region,
                     )
                 };
 
@@ -702,9 +699,6 @@ pub fn constrain_expr(
             //
             // The return type of each branch must equal the return type of
             // the entire when-expression.
-            // branch_cons.extend(pattern_cons);
-            // branch_constraints.push(constraints.and_constraint(pattern_cons));
-            let mut total_cons = Vec::with_capacity(2);
 
             // After solving the condition variable with what's expected from the branch patterns,
             // check it against the condition expression.
@@ -731,15 +725,11 @@ pub fn constrain_expr(
                 pattern_constraints,
                 body_constraints,
             );
-            total_cons.push(when_body_con);
 
-            total_cons.push(constraints.equal_types_var(
-                branch_var,
-                expected,
-                Category::When,
-                region,
-            ));
+            let result_con =
+                constraints.equal_types_var(branch_var, expected, Category::When, region);
 
+            let total_cons = [when_body_con, result_con];
             let branch_constraints = constraints.and_constraint(total_cons);
 
             // exhautiveness checking happens when converting to mono::Expr
@@ -1141,7 +1131,7 @@ fn constrain_when_branch_help(
     env: &Env,
     region: Region,
     when_branch: &WhenBranch,
-    pattern_expected: impl Fn(HumanIndex) -> PExpected<Type>,
+    pattern_expected: impl Fn(HumanIndex, Region) -> PExpected<Type>,
     expr_expected: Expected<Type>,
 ) -> (
     Vec<Variable>,
@@ -1167,7 +1157,7 @@ fn constrain_when_branch_help(
     // TODO investigate for error messages, is it better to unify all branches with a variable,
     // then unify that variable with the expectation?
     for (i, loc_pattern) in when_branch.patterns.iter().enumerate() {
-        let pattern_expected = pattern_expected(HumanIndex::zero_based(i));
+        let pattern_expected = pattern_expected(HumanIndex::zero_based(i), loc_pattern.region);
 
         constrain_pattern(
             constraints,
