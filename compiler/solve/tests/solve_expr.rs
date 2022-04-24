@@ -5759,13 +5759,13 @@ mod solve_expr {
                 r#"
                 app "test" provides [ effectAlways ] to "./platform"
 
-                Effect a : [ @Effect ({} -> a) ]
+                Effect a := {} -> a
 
                 effectAlways : a -> Effect a
                 effectAlways = \x ->
                     inner = \{} -> x
 
-                    @Effect inner
+                    $Effect inner
                 "#
             ),
             r#"a -> Effect a"#,
@@ -6210,5 +6210,24 @@ mod solve_expr {
             ),
             indoc!(r#"Expr -> Expr"#),
         )
+    }
+
+    #[test]
+    fn opaque_and_alias_unify() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ always ] to "./platform"
+
+                Effect a := {} -> a
+
+                Task a err : Effect (Result a err)
+
+                always : a -> Task a *
+                always = \x -> $Effect (\{} -> Ok x)
+                "#
+            ),
+            "a -> Task a *",
+        );
     }
 }
