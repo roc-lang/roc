@@ -11,6 +11,7 @@ blockBorder = 0.025 # border of a block, as a % of its width
 ballSize = 55
 numRows = 4
 numCols = 8
+numBlocks = numRows * numCols
 
 Model : {
     # Screen height and width
