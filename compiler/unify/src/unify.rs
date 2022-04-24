@@ -452,6 +452,7 @@ fn check_valid_range(
 }
 
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 fn unify_two_aliases(
     subs: &mut Subs,
     pool: &mut Pool,
