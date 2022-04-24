@@ -187,13 +187,12 @@ fn sort_type_defs_before_introduction(
 
     // find the strongly connected components and their relations
     let nodes: Vec<_> = (0..capacity as u32).collect();
-    let sccs = matrix.strongly_connected_components(&nodes);
 
     let mut output = Vec::with_capacity(capacity);
 
-    for group in sccs {
-        for index in group {
-            output.push(symbols[index as usize])
+    for group in matrix.strongly_connected_components_prim(&nodes).rows() {
+        for index in group.iter_ones() {
+            output.push(symbols[index])
         }
     }
 
@@ -855,9 +854,9 @@ pub(crate) fn sort_can_defs(
 
             let sccs = def_ordering
                 .references
-                .strongly_connected_components(&nodes_in_cycle);
+                .strongly_connected_components_prim(&nodes_in_cycle);
 
-            for cycle in sccs {
+            for cycle in sccs.rows() {
                 // check whether the cycle is faulty, which is when it has
                 // a direct successor in the current cycle. This catches things like:
                 //
@@ -867,11 +866,11 @@ pub(crate) fn sort_can_defs(
                 //
                 // p = q
                 // q = p
-                let is_invalid_cycle = match cycle.get(0) {
+                let is_invalid_cycle = match cycle.iter_ones().next() {
                     Some(def_id) => def_ordering
                         .direct_references
-                        .references_for(*def_id as usize)
-                        .any(|key| cycle.contains(&(key as u32))),
+                        .references_for(def_id)
+                        .any(|key| cycle[key]),
                     None => false,
                 };
 
@@ -879,11 +878,11 @@ pub(crate) fn sort_can_defs(
                     // We want to show the entire cycle in the error message, so expand it out.
                     let mut entries = Vec::new();
 
-                    for def_id in &cycle {
-                        let symbol = def_ordering.get_symbol(*def_id).unwrap();
-                        let def = &defs[*def_id as usize];
+                    for def_id in cycle.iter_ones() {
+                        let symbol = def_ordering.get_symbol(def_id as u32).unwrap();
+                        let def = &defs[def_id];
 
-                        let expr_region = defs[*def_id as usize].as_ref().unwrap().loc_expr.region;
+                        let expr_region = defs[def_id].as_ref().unwrap().loc_expr.region;
 
                         let entry = CycleEntry {
                             symbol,
@@ -909,6 +908,7 @@ pub(crate) fn sort_can_defs(
                 //
                 // if it's not an invalid cycle, this is slightly inefficient,
                 // because we know this becomes exactly one DeclareRec already
+                let cycle = cycle.iter_ones().map(|v| v as u32).collect();
                 groups.push(cycle);
             }
 
