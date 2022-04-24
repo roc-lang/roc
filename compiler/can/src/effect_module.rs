@@ -978,7 +978,7 @@ fn build_effect_forever_inner_body(
             build_fresh_opaque_variables(var_store, introduced_variables);
         let pattern = Pattern::UnwrappedOpaque {
             whole_var,
-            opaque: effect,
+            opaque: effect_symbol,
             argument: Box::new((thunk_var, Loc::at_zero(Pattern::Identifier(thunk1_symbol)))),
             specialized_def_type,
             type_arguments,
@@ -1405,7 +1405,7 @@ pub fn build_host_exposed_def(
     scope: &mut Scope,
     symbol: Symbol,
     ident: &str,
-    effect_tag_name: TagName,
+    effect_symbol: Symbol,
     var_store: &mut VarStore,
     annotation: crate::annotation::Annotation,
 ) -> Def {
@@ -1418,8 +1418,15 @@ pub fn build_host_exposed_def(
     let mut linked_symbol_arguments: Vec<(Variable, Expr)> = Vec::new();
     let mut captured_symbols: Vec<(Symbol, Variable)> = Vec::new();
 
+    let crate::annotation::Annotation {
+        mut introduced_variables,
+        typ,
+        aliases,
+        ..
+    } = annotation;
+
     let def_body = {
-        match annotation.typ.shallow_dealias() {
+        match typ.shallow_dealias() {
             Type::Function(args, _, _) => {
                 for i in 0..args.len() {
                     let name = format!("closure_arg_{}_{}", ident, i);
@@ -1480,11 +1487,15 @@ pub fn build_host_exposed_def(
                     loc_body: Box::new(Loc::at_zero(low_level_call)),
                 });
 
-                let body = Expr::Tag {
-                    variant_var: var_store.fresh(),
-                    ext_var: var_store.fresh(),
-                    name: effect_tag_name,
-                    arguments: vec![(var_store.fresh(), Loc::at_zero(effect_closure))],
+                let (specialized_def_type, type_arguments, lambda_set_variables) =
+                    build_fresh_opaque_variables(var_store, &mut introduced_variables);
+                let body = Expr::OpaqueRef {
+                    opaque_var: var_store.fresh(),
+                    name: effect_symbol,
+                    argument: Box::new((var_store.fresh(), Loc::at_zero(effect_closure))),
+                    specialized_def_type,
+                    type_arguments,
+                    lambda_set_variables,
                 };
 
                 Expr::Closure(ClosureData {
@@ -1541,20 +1552,24 @@ pub fn build_host_exposed_def(
                     loc_body: Box::new(Loc::at_zero(low_level_call)),
                 });
 
-                Expr::Tag {
-                    variant_var: var_store.fresh(),
-                    ext_var: var_store.fresh(),
-                    name: effect_tag_name,
-                    arguments: vec![(var_store.fresh(), Loc::at_zero(effect_closure))],
+                let (specialized_def_type, type_arguments, lambda_set_variables) =
+                    build_fresh_opaque_variables(var_store, &mut introduced_variables);
+                Expr::OpaqueRef {
+                    opaque_var: var_store.fresh(),
+                    name: effect_symbol,
+                    argument: Box::new((var_store.fresh(), Loc::at_zero(effect_closure))),
+                    specialized_def_type,
+                    type_arguments,
+                    lambda_set_variables,
                 }
             }
         }
     };
 
     let def_annotation = crate::def::Annotation {
-        signature: annotation.typ,
-        introduced_variables: annotation.introduced_variables,
-        aliases: annotation.aliases,
+        signature: typ,
+        introduced_variables,
+        aliases,
         region: Region::zero(),
     };
 
@@ -1565,6 +1580,16 @@ pub fn build_host_exposed_def(
         pattern_vars,
         annotation: Some(def_annotation),
     }
+}
+
+pub fn build_effect_actual(effect_symbol: Symbol, a_type: Type, var_store: &mut VarStore) -> Type {
+    let closure_var = var_store.fresh();
+
+    Type::Function(
+        vec![Type::EmptyRec],
+        Box::new(Type::Variable(closure_var)),
+        Box::new(a_type),
+    )
 }
 
 /// Effect a := {} -> a
@@ -1613,26 +1638,6 @@ fn build_fresh_opaque_variables(
     let lambda_set_variables = vec![roc_types::types::LambdaSet(Type::Variable(closure_var))];
 
     (Box::new(actual), type_arguments, lambda_set_variables)
-}
-
-pub fn build_effect_actual(
-    effect_tag_name: TagName,
-    a_type: Type,
-    var_store: &mut VarStore,
-) -> Type {
-    let closure_var = var_store.fresh();
-
-    Type::TagUnion(
-        vec![(
-            effect_tag_name,
-            vec![Type::Function(
-                vec![Type::EmptyRec],
-                Box::new(Type::Variable(closure_var)),
-                Box::new(a_type),
-            )],
-        )],
-        TypeExtension::Closed,
-    )
 }
 
 #[inline(always)]
