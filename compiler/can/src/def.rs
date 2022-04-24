@@ -11,7 +11,8 @@ use crate::reference_matrix::ReferenceMatrix;
 use crate::reference_matrix::TopologicalSort;
 use crate::scope::create_alias;
 use crate::scope::Scope;
-use roc_collections::{ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::VecMap;
+use roc_collections::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::IdentId;
 use roc_module::symbol::ModuleId;
@@ -53,7 +54,7 @@ pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
     def_ordering: DefOrdering,
 
-    aliases: SendMap<Symbol, Alias>,
+    aliases: VecMap<Symbol, Alias>,
 }
 
 /// A Def that has had patterns and type annnotations canonicalized,
@@ -351,7 +352,7 @@ pub(crate) fn canonicalize_defs<'a>(
     }
 
     let sorted = sort_type_defs_before_introduction(referenced_type_symbols);
-    let mut aliases = SendMap::default();
+    let mut aliases = VecMap::default();
     let mut abilities = MutMap::default();
 
     for type_name in sorted {
@@ -571,7 +572,7 @@ pub(crate) fn canonicalize_defs<'a>(
             defs,
             def_ordering,
             // The result needs a thread-safe `SendMap`
-            aliases: aliases.into_iter().collect(),
+            aliases,
         },
         scope,
         output,
@@ -1179,16 +1180,11 @@ fn single_can_def(
 
 fn add_annotation_aliases(
     type_annotation: &crate::annotation::Annotation,
-    aliases: &mut ImMap<Symbol, Alias>,
+    aliases: &mut VecMap<Symbol, Alias>,
 ) {
     for (name, alias) in type_annotation.aliases.iter() {
-        match aliases.entry(*name) {
-            ImEntry::Occupied(_) => {
-                // do nothing
-            }
-            ImEntry::Vacant(vacant) => {
-                vacant.insert(alias.clone());
-            }
+        if !aliases.contains(name) {
+            aliases.insert(*name, alias.clone());
         }
     }
 }
@@ -1222,7 +1218,7 @@ fn canonicalize_pending_value_def<'a>(
     mut output: Output,
     scope: &mut Scope,
     var_store: &mut VarStore,
-    aliases: &mut ImMap<Symbol, Alias>,
+    aliases: &mut VecMap<Symbol, Alias>,
     abilities_in_scope: &[Symbol],
 ) -> TempOutput {
     use PendingValueDef::*;
@@ -1903,13 +1899,13 @@ fn to_pending_value_def<'a>(
 /// Make aliases recursive
 fn correct_mutual_recursive_type_alias<'a>(
     env: &mut Env<'a>,
-    original_aliases: SendMap<Symbol, Alias>,
+    original_aliases: VecMap<Symbol, Alias>,
     var_store: &mut VarStore,
-) -> ImMap<Symbol, Alias> {
+) -> VecMap<Symbol, Alias> {
     let capacity = original_aliases.len();
     let mut matrix = ReferenceMatrix::new(capacity);
 
-    let (symbols_introduced, mut aliases): (Vec<_>, Vec<_>) = original_aliases.into_iter().unzip();
+    let (symbols_introduced, mut aliases) = original_aliases.unzip();
 
     for (index, alias) in aliases.iter().enumerate() {
         for referenced in alias.typ.symbols() {
@@ -2044,10 +2040,8 @@ fn correct_mutual_recursive_type_alias<'a>(
         solved_aliases_bitvec = to_instantiate_bitvec;
     }
 
-    symbols_introduced
-        .into_iter()
-        .zip(aliases.into_iter())
-        .collect()
+    // Safety: both vectors are equal lenght and there are no duplicates
+    unsafe { VecMap::zip(symbols_introduced, aliases) }
 }
 
 fn make_tag_union_of_alias_recursive<'a>(
