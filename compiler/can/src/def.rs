@@ -1717,15 +1717,7 @@ fn correct_mutual_recursive_type_alias<'a>(
     let capacity = original_aliases.len();
     let mut matrix = ReferenceMatrix::new(capacity);
 
-    // It is important that we instantiate with the aliases as they occur in the source.
-    // We must not instantiate A into B, then use the updated B to instantiate into C
-    //
-    // That is because B could be used different places. We don't want one place
-    // to mess with another.
-    let (symbols_introduced, uninstantiated_aliases) = original_aliases.unzip();
-
-    // the aliases that we will instantiate into
-    let mut aliases = uninstantiated_aliases.clone();
+    let (symbols_introduced, mut aliases) = original_aliases.unzip();
 
     for (index, alias) in aliases.iter().enumerate() {
         for referenced in alias.typ.symbols() {
@@ -1739,8 +1731,17 @@ fn correct_mutual_recursive_type_alias<'a>(
     let mut solved_aliases_bitvec = bitvec::vec::BitVec::<usize>::repeat(false, capacity);
 
     let group: Vec<_> = (0u32..capacity as u32).collect();
+    let sccs = matrix.strongly_connected_components(&group);
 
-    for cycle in matrix.strongly_connected_components(&group).groups() {
+    // sometimes we need to temporarily move some aliases somewhere
+    let scratchpad_capacity = sccs
+        .groups()
+        .map(|r| r.count_ones())
+        .max()
+        .unwrap_or_default();
+    let mut scratchpad = Vec::with_capacity(scratchpad_capacity);
+
+    for cycle in sccs.groups() {
         debug_assert!(cycle.count_ones() > 0);
 
         // We need to instantiate the alias with any symbols in the currrent module it
@@ -1761,21 +1762,34 @@ fn correct_mutual_recursive_type_alias<'a>(
             // Don't try to instantiate the alias itself in its definition.
             to_instantiate_bitvec.set(index, false);
 
+            // Within a recursive group, we must instantiate all aliases like how they came to the
+            // loop. So we cannot instantiate A into B, then the updated B into C in the same
+            // iteration. Hence, if we have more than one alias we sadly must clone and store
+            // the alias off to the side somewhere. After processing the group, we put the
+            // updated alias into the main `aliases` vector again, because for future groups
+            // we do need to use the instantiated version.
+            let alias = if cycle.count_ones() > 1 {
+                scratchpad.push((index, aliases[index].clone()));
+
+                &mut scratchpad.last_mut().unwrap().1
+            } else {
+                &mut aliases[index]
+            };
+
             // we run into a problem here where we want to modify an element in the aliases array,
             // but also reference the other elements. The borrow checker, correctly, says no to that.
             //
             // So we get creative: we swap out the element we want to modify with a dummy. We can
             // then freely modify the type we moved out, and the `to_instantiate_bitvec` mask
             // prevents our dummy from being used.
-            let alias_region = aliases[index].region;
+
+            let alias_region = alias.region;
             let mut alias_type = Type::EmptyRec;
 
-            std::mem::swap(&mut alias_type, &mut aliases[index].typ);
+            std::mem::swap(&mut alias_type, &mut alias.typ);
 
             let can_instantiate_symbol = |s| match symbols_introduced.iter().position(|i| *i == s) {
-                Some(s_index) if to_instantiate_bitvec[s_index] => {
-                    uninstantiated_aliases.get(s_index)
-                }
+                Some(s_index) if to_instantiate_bitvec[s_index] => aliases.get(s_index),
                 _ => None,
             };
 
@@ -1787,14 +1801,20 @@ fn correct_mutual_recursive_type_alias<'a>(
                 &mut new_lambda_sets,
             );
 
+            let alias = if cycle.count_ones() > 1 {
+                &mut scratchpad.last_mut().unwrap().1
+            } else {
+                &mut aliases[index]
+            };
+
             // swap the type back
-            std::mem::swap(&mut alias_type, &mut aliases[index].typ);
+            std::mem::swap(&mut alias_type, &mut alias.typ);
 
             // We can instantiate this alias in future iterations
             to_instantiate_bitvec.set(index, true);
 
             // add any lambda sets that the instantiation created to the current alias
-            aliases[index].lambda_set_variables.extend(
+            alias.lambda_set_variables.extend(
                 new_lambda_sets
                     .iter()
                     .map(|var| LambdaSet(Type::Variable(*var))),
@@ -1809,12 +1829,16 @@ fn correct_mutual_recursive_type_alias<'a>(
                 let _made_recursive = make_tag_union_of_alias_recursive(
                     env,
                     rec,
-                    &mut aliases[index],
+                    alias,
                     vec![],
                     var_store,
                     &mut can_still_report_error,
                 );
             }
+        }
+
+        for (index, alias) in scratchpad.drain(..) {
+            aliases[index] = alias;
         }
 
         // The cycle we just instantiated and marked recursive may still be an illegal cycle, if
