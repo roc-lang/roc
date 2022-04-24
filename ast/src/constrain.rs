@@ -678,19 +678,18 @@ pub fn constrain_expr<'a>(
                     for (index, when_branch_id) in branches.iter_node_ids().enumerate() {
                         let when_branch = env.pool.get(when_branch_id);
 
-                        let pattern_region = region;
                         // let pattern_region = Region::across_all(
                         //     when_branch.patterns.iter(env.pool).map(|v| &v.region),
                         // );
 
-                        let patten_expected = |sub_pattern| {
+                        let pattern_expected = |sub_pattern, sub_region| {
                             PExpected::ForReason(
                                 PReason::WhenMatch {
                                     index: HumanIndex::zero_based(index),
                                     sub_pattern,
                                 },
                                 cond_type.shallow_clone(),
-                                pattern_region,
+                                sub_region,
                             )
                         };
 
@@ -700,7 +699,7 @@ pub fn constrain_expr<'a>(
                             // TODO: when_branch.value.region,
                             region,
                             when_branch,
-                            patten_expected,
+                            pattern_expected,
                             Expected::FromAnnotation(
                                 name.clone(),
                                 *arity,
@@ -727,18 +726,17 @@ pub fn constrain_expr<'a>(
                     for (index, when_branch_id) in branches.iter_node_ids().enumerate() {
                         let when_branch = env.pool.get(when_branch_id);
 
-                        let pattern_region = region;
                         // let pattern_region =
                         //     Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
 
-                        let patten_expected = |sub_pattern| {
+                        let pattern_expected = |sub_pattern, sub_region| {
                             PExpected::ForReason(
                                 PReason::WhenMatch {
                                     index: HumanIndex::zero_based(index),
                                     sub_pattern,
                                 },
                                 cond_type.shallow_clone(),
-                                pattern_region,
+                                sub_region,
                             )
                         };
 
@@ -747,7 +745,7 @@ pub fn constrain_expr<'a>(
                             env,
                             region,
                             when_branch,
-                            patten_expected,
+                            pattern_expected,
                             Expected::ForReason(
                                 Reason::WhenBranch {
                                     index: HumanIndex::zero_based(index),
@@ -1306,7 +1304,7 @@ fn constrain_when_branch<'a>(
     env: &mut Env,
     region: Region,
     when_branch: &WhenBranch,
-    pattern_expected: impl Fn(HumanIndex) -> PExpected<Type2>,
+    pattern_expected: impl Fn(HumanIndex, Region) -> PExpected<Type2>,
     expr_expected: Expected<Type2>,
 ) -> Constraint<'a> {
     let when_expr = env.pool.get(when_branch.body);
@@ -1324,7 +1322,11 @@ fn constrain_when_branch<'a>(
     for (sub_pattern, pattern_id) in when_branch.patterns.iter_node_ids().enumerate() {
         let pattern = env.pool.get(pattern_id);
 
-        let pattern_expected = pattern_expected(HumanIndex::zero_based(sub_pattern));
+        let pattern_expected = pattern_expected(
+            HumanIndex::zero_based(sub_pattern),
+            // TODO: use the proper subpattern region. Not available to us right now.
+            region,
+        );
 
         constrain_pattern(
             arena,
