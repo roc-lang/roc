@@ -170,66 +170,35 @@ impl Declaration {
 
 /// Returns a topologically sorted sequence of alias/opaque names
 fn sort_type_defs_before_introduction(
-    mut referenced_symbols: MutMap<Symbol, Vec<Symbol>>,
+    referenced_symbols: VecMap<Symbol, Vec<Symbol>>,
 ) -> Vec<Symbol> {
-    let defined_symbols: Vec<Symbol> = referenced_symbols.keys().copied().collect();
+    let capacity = referenced_symbols.len();
+    let mut matrix = ReferenceMatrix::new(capacity);
 
-    // find the strongly connected components and their relations
-    let sccs = {
-        // only retain symbols from the current set of defined symbols; the rest come from other modules
-        for v in referenced_symbols.iter_mut() {
-            v.1.retain(|x| defined_symbols.iter().any(|s| s == x));
-        }
+    let (symbols, referenced) = referenced_symbols.unzip();
 
-        let all_successors_with_self = |symbol: &Symbol| referenced_symbols[symbol].iter().copied();
-
-        ven_graph::strongly_connected_components(&defined_symbols, all_successors_with_self)
-    };
-
-    // then sort the strongly connected components
-    let groups: Vec<_> = (0..sccs.len()).collect();
-    let mut group_symbols: Vec<Vec<Symbol>> = vec![Vec::new(); groups.len()];
-
-    let mut symbol_to_group_index = MutMap::default();
-    let mut group_to_groups = vec![Vec::new(); groups.len()];
-
-    for (index, group) in sccs.iter().enumerate() {
-        for s in group {
-            symbol_to_group_index.insert(*s, index);
-        }
-    }
-
-    for (index, group) in sccs.iter().enumerate() {
-        for s in group {
-            let reachable = &referenced_symbols[s];
-            for r in reachable {
-                let new_index = symbol_to_group_index[r];
-
-                if new_index != index {
-                    group_to_groups[index].push(new_index);
-                }
+    for (index, references) in referenced.iter().enumerate() {
+        for referenced in references {
+            match symbols.iter().position(|k| k == referenced) {
+                None => { /* not defined in this scope */ }
+                Some(ref_index) => matrix.set_row_col(index, ref_index, true),
             }
         }
     }
 
-    for v in group_symbols.iter_mut() {
-        v.sort();
-        v.dedup();
+    // find the strongly connected components and their relations
+    let nodes: Vec<_> = (0..capacity as u32).collect();
+    let sccs = matrix.strongly_connected_components(&nodes);
+
+    let mut output = Vec::with_capacity(capacity);
+
+    for group in sccs {
+        for index in group {
+            output.push(symbols[index as usize])
+        }
     }
 
-    let all_successors_with_self = |group: &usize| group_to_groups[*group].iter().copied();
-
-    // split into self-recursive and mutually recursive
-    match topological_sort(&groups, all_successors_with_self) {
-        Ok(result) => result
-            .iter()
-            .rev()
-            .flat_map(|group_index| sccs[*group_index].iter())
-            .copied()
-            .collect(),
-
-        Err(_loop_detected) => unreachable!("the groups cannot recurse"),
-    }
+    output
 }
 
 #[inline(always)]
@@ -299,7 +268,7 @@ pub(crate) fn canonicalize_defs<'a>(
     let mut type_defs = MutMap::default();
     let mut abilities_in_scope = Vec::new();
 
-    let mut referenced_type_symbols = MutMap::default();
+    let mut referenced_type_symbols = VecMap::default();
 
     // Determine which idents we introduced in the course of this process.
     let mut symbols_introduced = MutMap::default();
@@ -454,7 +423,8 @@ pub(crate) fn canonicalize_defs<'a>(
                     can_ann.typ.clone(),
                     kind,
                 );
-                aliases.insert(symbol, alias.clone());
+
+                aliases.insert(symbol, alias);
             }
 
             TypeDef::Ability(name, members) => {

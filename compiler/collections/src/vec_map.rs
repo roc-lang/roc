@@ -77,6 +77,10 @@ impl<K: PartialEq, V> VecMap<K, V> {
         self.values.iter()
     }
 
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.keys.iter()
+    }
+
     pub fn unzip(self) -> (Vec<K>, Vec<V>) {
         (self.keys, self.values)
     }
