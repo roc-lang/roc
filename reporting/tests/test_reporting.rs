@@ -3646,8 +3646,8 @@ mod test_reporting {
                 This `ACons` global tag application has the type:
 
                     [ ACons (Num (Integer Signed64)) [
-                    BCons (Num (Integer Signed64)) [ ACons Str [
-                    BCons I64 (AList I64 I64), BNil ] as a, ANil ], BNil ], ANil ]
+                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 a, BNil ],
+                    ANil ], BNil ], ANil ]
 
                 But the type annotation on `x` says it should be:
 
