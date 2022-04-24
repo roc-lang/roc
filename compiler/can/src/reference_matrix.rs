@@ -159,31 +159,7 @@ impl ReferenceMatrix {
     }
 
     /// Get the strongly-connected components of the set of input nodes.
-    pub fn strongly_connected_components(&self, nodes: &[u32]) -> Vec<Vec<u32>> {
-        let mut params = Params::new(self.length, nodes);
-
-        'outer: loop {
-            for (node, value) in params.preorders.iter().enumerate() {
-                if let Preorder::Removed = value {
-                    continue;
-                }
-
-                recurse_onto(self.length, &self.bitvec, node, &mut params);
-
-                continue 'outer;
-            }
-
-            let mut result = Vec::new();
-            for group in params.scc.components() {
-                result.push(group.map(|v| v as u32).collect());
-            }
-
-            break result;
-        }
-    }
-
-    /// Get the strongly-connected components of the set of input nodes.
-    pub fn strongly_connected_components_prim(&self, nodes: &[u32]) -> Sccs {
+    pub fn strongly_connected_components(&self, nodes: &[u32]) -> Sccs {
         let mut params = Params::new(self.length, nodes);
 
         'outer: loop {
@@ -311,25 +287,14 @@ pub(crate) struct Sccs {
 }
 
 impl Sccs {
-    pub fn components(&self) -> impl Iterator<Item = impl Iterator<Item = usize> + '_> + '_ {
-        // work around a panic when requesting a chunk size of 0
-        let length = if self.matrix.length == 0 {
-            // the `.take(self.components)` ensures the resulting iterator will be empty
-            assert!(self.components == 0);
-
-            1
-        } else {
-            self.matrix.length
-        };
-
-        self.matrix
-            .bitvec
-            .chunks(length)
-            .take(self.components)
-            .map(|row| row.iter_ones())
-    }
-
-    pub fn rows(&self) -> std::iter::Take<bitvec::slice::Chunks<'_, Element, Order>> {
+    /// Iterate over the individual components. Each component is represented as a bit vector where
+    /// a one indicates that the node is part of the group and a zero that it is not.
+    ///
+    /// A good way to get the actual nodes is the `.iter_ones()` method.
+    ///
+    /// It is guaranteed that a group is non-empty, and that flattening the groups gives a valid
+    /// topological ordering.
+    pub fn groups(&self) -> std::iter::Take<bitvec::slice::Chunks<'_, Element, Order>> {
         // work around a panic when requesting a chunk size of 0
         let length = if self.matrix.length == 0 {
             // the `.take(self.components)` ensures the resulting iterator will be empty

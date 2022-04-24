@@ -190,7 +190,7 @@ fn sort_type_defs_before_introduction(
 
     let mut output = Vec::with_capacity(capacity);
 
-    for group in matrix.strongly_connected_components_prim(&nodes).rows() {
+    for group in matrix.strongly_connected_components(&nodes).groups() {
         for index in group.iter_ones() {
             output.push(symbols[index])
         }
@@ -854,9 +854,9 @@ pub(crate) fn sort_can_defs(
 
             let sccs = def_ordering
                 .references
-                .strongly_connected_components_prim(&nodes_in_cycle);
+                .strongly_connected_components(&nodes_in_cycle);
 
-            for cycle in sccs.rows() {
+            for cycle in sccs.groups() {
                 // check whether the cycle is faulty, which is when it has
                 // a direct successor in the current cycle. This catches things like:
                 //
@@ -995,16 +995,16 @@ fn group_to_declaration(
 
     let sccs = def_ordering.references.strongly_connected_components(group);
 
-    for cycle in sccs {
-        if cycle.len() == 1 {
-            let def_id = cycle[0];
+    for cycle in sccs.groups() {
+        if cycle.count_ones() == 1 {
+            let def_id = cycle.iter_ones().next().unwrap();
 
-            match defs[def_id as usize].take() {
+            match defs[def_id].take() {
                 Some(mut new_def) => {
                     // there is only one definition in this cycle, so we only have
                     // to check whether it recurses with itself; there is nobody else
                     // to recurse with, or they would also be in this cycle.
-                    let is_self_recursive = def_ordering.is_self_recursive(def_id);
+                    let is_self_recursive = def_ordering.is_self_recursive(def_id as u32);
 
                     if let Closure(ClosureData {
                         recursive: recursive @ Recursive::NotRecursive,
@@ -1028,7 +1028,7 @@ fn group_to_declaration(
                 }
                 None => {
                     // NOTE: a `_ = someDef` can mean we don't have a symbol here
-                    let symbol = def_ordering.get_symbol(def_id);
+                    let symbol = def_ordering.get_symbol(def_id as u32);
 
                     roc_error_macros::internal_error!("def not available {:?}", symbol)
                 }
@@ -1037,7 +1037,7 @@ fn group_to_declaration(
             let mut can_defs = Vec::new();
 
             // Topological sort gives us the reverse of the sorting we want!
-            for def_id in cycle.into_iter().rev() {
+            for def_id in cycle.iter_ones().rev() {
                 match defs[def_id as usize].take() {
                     Some(mut new_def) => {
                         // Determine recursivity of closures that are not tail-recursive
@@ -1046,7 +1046,7 @@ fn group_to_declaration(
                             ..
                         }) = &mut new_def.loc_expr.value
                         {
-                            if def_ordering.references.is_recursive(def_id as usize) {
+                            if def_ordering.references.is_recursive(def_id) {
                                 *recursive = Recursive::Recursive
                             }
                         }
@@ -1059,7 +1059,7 @@ fn group_to_declaration(
                     }
                     None => {
                         // NOTE: a `_ = someDef` can mean we don't have a symbol here
-                        let symbol = def_ordering.get_symbol(def_id);
+                        let symbol = def_ordering.get_symbol(def_id as u32);
 
                         roc_error_macros::internal_error!("def not available {:?}", symbol)
                     }
@@ -1889,7 +1889,7 @@ fn correct_mutual_recursive_type_alias<'a>(
 
     let group: Vec<_> = (0u32..capacity as u32).collect();
 
-    for cycle in matrix.strongly_connected_components_prim(&group).rows() {
+    for cycle in matrix.strongly_connected_components(&group).groups() {
         debug_assert!(cycle.count_ones() > 0);
 
         // We need to instantiate the alias with any symbols in the currrent module it
