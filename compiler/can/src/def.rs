@@ -1953,10 +1953,12 @@ fn correct_mutual_recursive_type_alias<'a>(
             // Don't try to instantiate the alias itself in its definition.
             to_instantiate_bitvec.set(index, false);
 
-            // now we do something sneaky. In `can_instantiate_symbol` we want to be able to
-            // take a reference to an `Alias` in the `aliases` vec. That would not work if
-            // we also had a mutable reference to an alias in that vec. So we swap out the
-            // type.
+            // we run into a problem here where we want to modify an element in the aliases array,
+            // but also reference the other elements. The borrow checker, correctly, says no to that.
+            //
+            // So we get creative: we swap out the element we want to modify with a dummy. We can
+            // then freely modify the type we moved out, and the `to_instantiate_bitvec` mask
+            // prevents our dummy from being used.
             let alias_region = aliases[index].region;
             let mut alias_type = Type::EmptyRec;
 
@@ -1981,13 +1983,12 @@ fn correct_mutual_recursive_type_alias<'a>(
             // We can instantiate this alias in future iterations
             to_instantiate_bitvec.set(index, true);
 
-            let alias = &mut aliases[index];
-
-            for lambda_set_var in new_lambda_sets {
-                alias
-                    .lambda_set_variables
-                    .push(LambdaSet(Type::Variable(lambda_set_var)));
-            }
+            // add any lambda sets that the instantiation created to the current alias
+            aliases[index].lambda_set_variables.extend(
+                new_lambda_sets
+                    .iter()
+                    .map(|var| LambdaSet(Type::Variable(*var))),
+            );
 
             // Now mark the alias recursive, if it needs to be.
             let rec = symbols_introduced[index];
@@ -1998,7 +1999,7 @@ fn correct_mutual_recursive_type_alias<'a>(
                 let _made_recursive = make_tag_union_of_alias_recursive(
                     env,
                     rec,
-                    alias,
+                    &mut aliases[index],
                     vec![],
                     var_store,
                     &mut can_still_report_error,
