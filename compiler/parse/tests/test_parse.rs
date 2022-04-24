@@ -321,7 +321,7 @@ mod test_parse {
                 panic!(
                     "Error opening test output file {}:\n\
                         {:?}
-                        Suppsing the file is missing, consider running the tests with:\n\
+                        Supposing the file is missing, consider running the tests with:\n\
                         `env ROC_PARSER_SNAPSHOT_TEST_OVERWRITE=1 cargo test ...`\n\
                         and committing the file that creates.",
                     result_path.display(),
