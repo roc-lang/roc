@@ -10036,7 +10036,7 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
-  
+
     #[test]
     fn always_function() {
         // from https://github.com/rtfeldman/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
