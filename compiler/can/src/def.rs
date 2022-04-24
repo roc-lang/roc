@@ -1921,7 +1921,6 @@ fn correct_mutual_recursive_type_alias<'a>(
     }
 
     let mut solved_aliases_bitvec = bitvec::vec::BitVec::<usize>::repeat(false, capacity);
-    let mut pending_aliases_bitvec = bitvec::vec::BitVec::repeat(false, capacity);
 
     let group: Vec<_> = (0u32..capacity as u32).collect();
 
@@ -1930,17 +1929,6 @@ fn correct_mutual_recursive_type_alias<'a>(
     for cycle in cycles {
         debug_assert!(!cycle.is_empty());
 
-        // zero out all the bits
-        pending_aliases_bitvec.set_elements(0);
-
-        for index in cycle.iter() {
-            pending_aliases_bitvec.set(*index as usize, true);
-        }
-
-        // Make sure we report only one error for the cycle, not an error for every
-        // alias in the cycle.
-        let mut can_still_report_error = true;
-
         // We need to instantiate the alias with any symbols in the currrent module it
         // depends on.
         //
@@ -1948,9 +1936,16 @@ fn correct_mutual_recursive_type_alias<'a>(
         // SCC_0 has those aliases that don't rely on any other, SCC_1 has only those that rely on SCC_1, etc.
         //
         // Hence, we only need to worry about symbols in the current SCC or any prior one.
-        // It cannot be using any of the others, and we've already instantiated aliases coming from other
-        // modules.
-        let mut to_instantiate_bitvec = solved_aliases_bitvec | &pending_aliases_bitvec;
+        // It cannot be using any of the others, and we've already instantiated aliases coming from other modules.
+        let mut to_instantiate_bitvec = solved_aliases_bitvec;
+
+        for index in cycle.iter() {
+            to_instantiate_bitvec.set(*index as usize, true);
+        }
+
+        // Make sure we report only one error for the cycle, not an error for every
+        // alias in the cycle.
+        let mut can_still_report_error = true;
 
         for index in cycle.iter() {
             let index = *index as usize;
