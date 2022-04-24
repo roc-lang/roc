@@ -845,16 +845,9 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                 for var in slice {
                     write!(
                         f,
-                        "<{:?}>{} ",
+                        "<{:?}>{:?} ",
                         var,
-                        if var.index() == 304 {
-                            format!("{}", "*304")
-                        } else {
-                            format!(
-                                "{:?}",
-                                SubsFmtContent(subs.get_content_without_compacting(*var), subs)
-                            )
-                        }
+                        SubsFmtContent(subs.get_content_without_compacting(*var), subs)
                     )?;
                 }
                 write!(f, ", ")?;
