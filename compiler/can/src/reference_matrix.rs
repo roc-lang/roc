@@ -37,38 +37,8 @@ impl ReferenceMatrix {
     }
 
     #[inline(always)]
-    pub fn get(&self, index: usize) -> bool {
-        self.bitvec[index]
-    }
-
-    #[inline(always)]
     pub fn get_row_col(&self, row: usize, col: usize) -> bool {
         self.bitvec[row * self.length + col]
-    }
-
-    pub fn is_recursive(&self, index: usize) -> bool {
-        let mut scheduled = self.row_slice(index).to_bitvec();
-        let mut visited = self.row_slice(index).to_bitvec();
-
-        // yes this is a bit inefficient because rows are visited repeatedly.
-        while scheduled.any() {
-            for one in scheduled.iter_ones() {
-                if one == index {
-                    return true;
-                }
-
-                visited |= self.row_slice(one)
-            }
-
-            // i.e. visited did not change
-            if visited.count_ones() == scheduled.count_ones() {
-                break;
-            }
-
-            scheduled |= &visited;
-        }
-
-        false
     }
 }
 
@@ -81,6 +51,7 @@ impl ReferenceMatrix {
 //
 // Thank you, Samuel!
 impl ReferenceMatrix {
+    #[allow(dead_code)]
     pub fn topological_sort_into_groups(&self) -> TopologicalSort {
         if self.length == 0 {
             return TopologicalSort::Groups { groups: Vec::new() };
@@ -178,6 +149,7 @@ impl ReferenceMatrix {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) enum TopologicalSort {
     /// There were no cycles, all nodes have been partitioned into groups
     Groups { groups: Vec<Vec<u32>> },

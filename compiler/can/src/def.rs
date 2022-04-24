@@ -703,8 +703,6 @@ struct DefOrdering {
     // references without looking into closure bodies.
     // Used to spot definitely-wrong recursion
     direct_references: ReferenceMatrix,
-
-    length: u32,
 }
 
 impl DefOrdering {
@@ -721,7 +719,6 @@ impl DefOrdering {
             symbol_to_id,
             references: ReferenceMatrix::new(capacity),
             direct_references: ReferenceMatrix::new(capacity),
-            length: capacity as u32,
         }
     }
 
@@ -780,28 +777,6 @@ impl DefOrdering {
         }
 
         None
-    }
-
-    fn is_self_recursive(&self, id: usize) -> bool {
-        let length = self.length as usize;
-        debug_assert!(id < length);
-
-        // id'th row, id'th column
-        let index = (id * length) + id;
-
-        self.references.get(index)
-    }
-
-    #[inline(always)]
-    fn successors(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
-        self.references
-            .references_for(id as usize)
-            .map(|x| x as u32)
-    }
-
-    #[inline(always)]
-    fn successors_without_self(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
-        self.successors(id).filter(move |x| *x != id)
     }
 }
 
@@ -959,101 +934,6 @@ pub(crate) fn sort_can_defs(
     }
 
     (Ok(declarations), output)
-}
-
-fn group_to_declaration(
-    def_ordering: &DefOrdering,
-    group: &[u32],
-    defs: &mut [Option<Def>],
-    declarations: &mut Vec<Declaration>,
-) {
-    use Declaration::*;
-
-    // Patterns like
-    //
-    // { x, y } = someDef
-    //
-    // Can bind multiple symbols. When not incorrectly recursive (which is guaranteed in this function),
-    // normally `someDef` would be inserted twice. We use the region of the pattern as a unique key
-    // for a definition, so every definition is only inserted (thus typechecked and emitted) once
-    let mut seen_pattern_regions: Vec<Region> = Vec::with_capacity(2);
-
-    let sccs = def_ordering.references.strongly_connected_components(group);
-
-    for cycle in sccs.groups() {
-        if cycle.count_ones() == 1 {
-            let def_id = cycle.iter_ones().next().unwrap();
-
-            match defs[def_id].take() {
-                Some(mut new_def) => {
-                    // there is only one definition in this cycle, so we only have
-                    // to check whether it recurses with itself; there is nobody else
-                    // to recurse with, or they would also be in this cycle.
-                    let is_self_recursive = def_ordering.is_self_recursive(def_id);
-
-                    if let Closure(ClosureData {
-                        recursive: recursive @ Recursive::NotRecursive,
-                        ..
-                    }) = &mut new_def.loc_expr.value
-                    {
-                        if is_self_recursive {
-                            *recursive = Recursive::Recursive
-                        }
-                    }
-
-                    if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
-                        seen_pattern_regions.push(new_def.loc_pattern.region);
-
-                        if is_self_recursive {
-                            declarations.push(DeclareRec(vec![new_def]));
-                        } else {
-                            declarations.push(Declare(new_def));
-                        }
-                    }
-                }
-                None => {
-                    // NOTE: a `_ = someDef` can mean we don't have a symbol here
-                    let symbol = def_ordering.get_symbol(def_id);
-
-                    roc_error_macros::internal_error!("def not available {:?}", symbol)
-                }
-            }
-        } else {
-            let mut can_defs = Vec::new();
-
-            // Topological sort gives us the reverse of the sorting we want!
-            for def_id in cycle.iter_ones().rev() {
-                match defs[def_id as usize].take() {
-                    Some(mut new_def) => {
-                        // Determine recursivity of closures that are not tail-recursive
-                        if let Closure(ClosureData {
-                            recursive: recursive @ Recursive::NotRecursive,
-                            ..
-                        }) = &mut new_def.loc_expr.value
-                        {
-                            if def_ordering.references.is_recursive(def_id) {
-                                *recursive = Recursive::Recursive
-                            }
-                        }
-
-                        if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
-                            seen_pattern_regions.push(new_def.loc_pattern.region);
-
-                            can_defs.push(new_def);
-                        }
-                    }
-                    None => {
-                        // NOTE: a `_ = someDef` can mean we don't have a symbol here
-                        let symbol = def_ordering.get_symbol(def_id);
-
-                        roc_error_macros::internal_error!("def not available {:?}", symbol)
-                    }
-                }
-            }
-
-            declarations.push(DeclareRec(can_defs));
-        }
-    }
 }
 
 fn pattern_to_vars_by_symbol(
