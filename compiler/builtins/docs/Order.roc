@@ -2,7 +2,7 @@ interface Order
     exposes [ Order, Ordering, before, after, same, compare, reverse ]
     imports []
 
-Order := U8
+Order := I8
 
 # -1 = Before
 #  0 = Same
