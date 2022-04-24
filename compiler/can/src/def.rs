@@ -8,11 +8,10 @@ use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{bindings_from_patterns, canonicalize_def_header_pattern, Pattern};
 use crate::procedure::References;
 use crate::reference_matrix::ReferenceMatrix;
-use crate::reference_matrix::TopologicalSort;
 use crate::scope::create_alias;
 use crate::scope::Scope;
 use roc_collections::VecMap;
-use roc_collections::{ImSet, MutMap, MutSet, SendMap};
+use roc_collections::{ImSet, MutMap, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::IdentId;
 use roc_module::symbol::ModuleId;
@@ -822,159 +821,144 @@ pub(crate) fn sort_can_defs(
         output.aliases.insert(symbol, alias);
     }
 
-    // TODO also do the same `addDirects` check elm/compiler does, so we can
-    // report an error if a recursive definition can't possibly terminate!
-    match def_ordering.references.topological_sort_into_groups() {
-        TopologicalSort::Groups { groups } => {
-            let mut declarations = Vec::new();
+    let nodes: Vec<_> = (0..defs.len() as u32).collect();
+    let sccs = def_ordering
+        .references
+        .strongly_connected_components(&nodes);
 
-            // groups are in reversed order
-            for group in groups.into_iter().rev() {
-                group_to_declaration(&def_ordering, &group, &mut defs, &mut declarations);
-            }
+    let mut declarations = Vec::new();
+    let mut problems = Vec::new();
 
-            (Ok(declarations), output)
-        }
-        TopologicalSort::HasCycles {
-            mut groups,
-            nodes_in_cycle,
-        } => {
-            let mut declarations = Vec::new();
-            let mut problems = Vec::new();
+    for group in sccs.groups() {
+        if group.count_ones() == 1 {
+            // a group with a single Def, nice and simple
+            let index = group.iter_ones().next().unwrap();
 
-            // nodes_in_cycle are symbols that form a syntactic cycle. That isn't always a problem,
-            // and in general it's impossible to decide whether it is. So we use a crude heuristic:
-            //
-            // Definitions where the cycle occurs behind a lambda are OK
-            //
-            // boom = \_ -> boom {}
-            //
-            // But otherwise we report an error, e.g.
-            //
-            // foo = if b then foo else bar
+            let def = match defs[index].take() {
+                Some(def) => def,
+                None => {
+                    // NOTE: a `_ = someDef` can mean we don't have a symbol here
+                    let symbol = def_ordering.get_symbol(index);
 
-            let sccs = def_ordering
-                .references
-                .strongly_connected_components(&nodes_in_cycle);
-
-            for cycle in sccs.groups() {
-                // check whether the cycle is faulty, which is when it has
-                // a direct successor in the current cycle. This catches things like:
-                //
-                // x = x
-                //
-                // or
-                //
-                // p = q
-                // q = p
-                let is_invalid_cycle = match cycle.iter_ones().next() {
-                    Some(def_id) => def_ordering
-                        .direct_references
-                        .references_for(def_id)
-                        .any(|key| cycle[key]),
-                    None => false,
-                };
-
-                if is_invalid_cycle {
-                    // We want to show the entire cycle in the error message, so expand it out.
-                    let mut entries = Vec::new();
-
-                    for def_id in cycle.iter_ones() {
-                        let symbol = def_ordering.get_symbol(def_id).unwrap();
-                        let def = &defs[def_id];
-
-                        let expr_region = defs[def_id].as_ref().unwrap().loc_expr.region;
-
-                        let entry = CycleEntry {
-                            symbol,
-                            symbol_region: def.as_ref().unwrap().loc_pattern.region,
-                            expr_region,
-                        };
-
-                        entries.push(entry);
-                    }
-
-                    // Sort them by line number to make the report more helpful.
-                    entries.sort_by_key(|entry| entry.symbol_region);
-
-                    problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
-                        entries.clone(),
-                    )));
-
-                    declarations.push(Declaration::InvalidCycle(entries));
+                    roc_error_macros::internal_error!("def not available {:?}", symbol)
                 }
-
-                // if it's an invalid cycle, other groups may depend on the
-                // symbols defined here, so also push this cycle onto the groups
-                //
-                // if it's not an invalid cycle, this is slightly inefficient,
-                // because we know this becomes exactly one DeclareRec already
-                let cycle = cycle.iter_ones().map(|v| v as u32).collect();
-                groups.push(cycle);
-            }
-
-            // now we have a collection of groups whose dependencies are not cyclic.
-            // They are however not yet topologically sorted. Here we have to get a bit
-            // creative to get all the definitions in the correct sorted order.
-
-            let mut group_ids = Vec::with_capacity(groups.len());
-            let mut symbol_to_group_index = MutMap::default();
-            for (i, group) in groups.iter().enumerate() {
-                for symbol in group {
-                    symbol_to_group_index.insert(*symbol, i);
-                }
-
-                group_ids.push(i);
-            }
-
-            let successors_of_group = |group_id: &usize| {
-                let mut result = MutSet::default();
-
-                // for each symbol in this group
-                for symbol in &groups[*group_id] {
-                    // find its successors
-                    for succ in def_ordering.successors_without_self(*symbol) {
-                        // and add its group to the result
-                        match symbol_to_group_index.get(&succ) {
-                            Some(index) => {
-                                result.insert(*index);
-                            }
-                            None => unreachable!("no index for symbol {:?}", succ),
-                        }
-                    }
-                }
-
-                // don't introduce any cycles to self
-                result.remove(group_id);
-
-                result
             };
 
-            match ven_graph::topological_sort_into_groups(&group_ids, successors_of_group) {
-                Ok(sorted_group_ids) => {
-                    for sorted_group in sorted_group_ids.iter().rev() {
-                        for group_id in sorted_group.iter().rev() {
-                            let group = &groups[*group_id];
+            let declaration = if def_ordering.direct_references.get_row_col(index, index) {
+                // This value references itself in an invalid way, e.g.:
+                //
+                // x = x
 
-                            group_to_declaration(
-                                &def_ordering,
-                                group,
-                                &mut defs,
-                                &mut declarations,
-                            );
-                        }
-                    }
+                let symbol = def_ordering.get_symbol(index).unwrap();
+
+                let entry = CycleEntry {
+                    symbol,
+                    symbol_region: def.loc_pattern.region,
+                    expr_region: def.loc_expr.region,
+                };
+
+                let entries = vec![entry];
+
+                problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
+                    entries.clone(),
+                )));
+
+                Declaration::InvalidCycle(entries)
+            } else if def_ordering.references.get_row_col(index, index) {
+                // this function calls itself, and must be typechecked as a recursive def
+
+                let mut def = def;
+
+                if let Closure(ClosureData {
+                    recursive: recursive @ Recursive::NotRecursive,
+                    ..
+                }) = &mut def.loc_expr.value
+                {
+                    *recursive = Recursive::Recursive
                 }
-                Err(_) => unreachable!("there should be no cycles now!"),
-            }
 
-            for problem in problems {
-                env.problem(problem);
-            }
+                Declaration::DeclareRec(vec![def])
+            } else {
+                Declaration::Declare(def)
+            };
 
-            (Ok(declarations), output)
+            declarations.push(declaration);
+        } else {
+            let nodes: Vec<_> = group.iter_ones().map(|v| v as u32).collect();
+            let direct_sccs = def_ordering
+                .direct_references
+                .strongly_connected_components(&nodes);
+
+            let declaration = if direct_sccs.groups().count() == 1 {
+                // all defs are part of the same direct cycle. That's invalid
+                let mut entries = Vec::with_capacity(group.count_ones());
+
+                for index in group.iter_ones() {
+                    let def = match defs[index].take() {
+                        Some(def) => def,
+                        None => {
+                            // NOTE: a `_ = someDef` can mean we don't have a symbol here
+                            let symbol = def_ordering.get_symbol(index);
+
+                            roc_error_macros::internal_error!("def not available {:?}", symbol)
+                        }
+                    };
+
+                    let symbol = def_ordering.get_symbol(index).unwrap();
+
+                    let entry = CycleEntry {
+                        symbol,
+                        symbol_region: def.loc_pattern.region,
+                        expr_region: def.loc_expr.region,
+                    };
+
+                    entries.push(entry)
+                }
+
+                problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
+                    entries.clone(),
+                )));
+
+                Declaration::InvalidCycle(entries)
+            } else {
+                let mut rec_defs = Vec::with_capacity(group.count_ones());
+
+                for index in group.iter_ones() {
+                    let def = match defs[index].take() {
+                        Some(def) => def,
+                        None => {
+                            // NOTE: a `_ = someDef` can mean we don't have a symbol here
+                            let symbol = def_ordering.get_symbol(index);
+
+                            roc_error_macros::internal_error!("def not available {:?}", symbol)
+                        }
+                    };
+
+                    let mut def = def;
+
+                    if let Closure(ClosureData {
+                        recursive: recursive @ Recursive::NotRecursive,
+                        ..
+                    }) = &mut def.loc_expr.value
+                    {
+                        *recursive = Recursive::Recursive
+                    }
+
+                    rec_defs.push(def);
+                }
+
+                Declaration::DeclareRec(rec_defs)
+            };
+
+            declarations.push(declaration);
         }
     }
+
+    for problem in problems {
+        env.problem(problem);
+    }
+
+    (Ok(declarations), output)
 }
 
 fn group_to_declaration(
