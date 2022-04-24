@@ -119,11 +119,8 @@ impl GeneratedInfo {
                 {
                     let a_var = var_store.fresh();
 
-                    let actual = crate::effect_module::build_effect_actual(
-                        effect_symbol,
-                        Type::Variable(a_var),
-                        var_store,
-                    );
+                    let actual =
+                        crate::effect_module::build_effect_actual(Type::Variable(a_var), var_store);
 
                     scope.add_alias(
                         effect_symbol,

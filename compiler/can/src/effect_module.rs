@@ -1394,14 +1394,14 @@ pub fn build_host_exposed_def(
     let mut captured_symbols: Vec<(Symbol, Variable)> = Vec::new();
 
     let crate::annotation::Annotation {
-        mut introduced_variables,
+        introduced_variables,
         typ,
         aliases,
         ..
     } = annotation;
 
     let def_body = {
-        match typ.shallow_dealias() {
+        match typ.shallow_structural_dealias() {
             Type::Function(args, _, _) => {
                 for i in 0..args.len() {
                     let name = format!("closure_arg_{}_{}", ident, i);
@@ -1463,7 +1463,7 @@ pub fn build_host_exposed_def(
                 });
 
                 let (specialized_def_type, type_arguments, lambda_set_variables) =
-                    build_fresh_opaque_variables(var_store, &mut introduced_variables);
+                    build_fresh_opaque_variables(var_store);
                 let body = Expr::OpaqueRef {
                     opaque_var: var_store.fresh(),
                     name: effect_symbol,
@@ -1528,7 +1528,7 @@ pub fn build_host_exposed_def(
                 });
 
                 let (specialized_def_type, type_arguments, lambda_set_variables) =
-                    build_fresh_opaque_variables(var_store, &mut introduced_variables);
+                    build_fresh_opaque_variables(var_store);
                 Expr::OpaqueRef {
                     opaque_var: var_store.fresh(),
                     name: effect_symbol,
@@ -1557,7 +1557,7 @@ pub fn build_host_exposed_def(
     }
 }
 
-pub fn build_effect_actual(effect_symbol: Symbol, a_type: Type, var_store: &mut VarStore) -> Type {
+pub fn build_effect_actual(a_type: Type, var_store: &mut VarStore) -> Type {
     let closure_var = var_store.fresh();
 
     Type::Function(
