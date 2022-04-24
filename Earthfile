@@ -88,10 +88,10 @@ test-rust:
         cargo test --locked --release --features with_sound --workspace && sccache --show-stats
     # test the dev and wasm backend: they require an explicit feature flag.
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
+        cargo test --locked --release --package "test_gen*" --no-default-features --features gen-dev && sccache --show-stats
     # gen-wasm has some multithreading problems to do with the wasmer runtime. Run it single-threaded as a separate job
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
+        cargo test --locked --release --package "test_gen*" --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
     # repl_test: build the compiler for wasm target, then run the tests on native target
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         repl_test/test_wasm.sh && sccache --show-stats
