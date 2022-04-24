@@ -1203,7 +1203,7 @@ enum DefReferences {
     AnnotationWithoutBody,
 }
 
-struct TempOutput {
+struct DefOutput {
     output: Output,
     def: Def,
     references: DefReferences,
@@ -1220,7 +1220,7 @@ fn canonicalize_pending_value_def<'a>(
     var_store: &mut VarStore,
     aliases: &mut VecMap<Symbol, Alias>,
     abilities_in_scope: &[Symbol],
-) -> TempOutput {
+) -> DefOutput {
     use PendingValueDef::*;
 
     // Make types for the body expr, even if we won't end up having a body.
@@ -1321,7 +1321,7 @@ fn canonicalize_pending_value_def<'a>(
                 vars_by_symbol.clone(),
             );
 
-            TempOutput {
+            DefOutput {
                 output,
                 references: DefReferences::AnnotationWithoutBody,
                 def,
@@ -1434,7 +1434,7 @@ fn canonicalize_pending_value_def<'a>(
 
                     output.union(can_output);
 
-                    TempOutput {
+                    DefOutput {
                         output,
                         references: DefReferences::Function(closure_references),
                         def,
@@ -1453,7 +1453,7 @@ fn canonicalize_pending_value_def<'a>(
 
                     output.union(can_output);
 
-                    TempOutput {
+                    DefOutput {
                         output,
                         references: DefReferences::Value(refs),
                         def,
@@ -1548,7 +1548,7 @@ fn canonicalize_pending_value_def<'a>(
 
                     output.union(can_output);
 
-                    TempOutput {
+                    DefOutput {
                         output,
                         references: DefReferences::Function(closure_references),
                         def,
@@ -1567,7 +1567,7 @@ fn canonicalize_pending_value_def<'a>(
 
                     output.union(can_output);
 
-                    TempOutput {
+                    DefOutput {
                         output,
                         references: DefReferences::Value(refs),
                         def,
