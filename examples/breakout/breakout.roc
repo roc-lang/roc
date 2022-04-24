@@ -100,7 +100,6 @@ render = \model ->
         \index ->
             col =
                 Num.rem index numCols
-                    |> Result.withDefault 0
                     |> Num.toF32
 
             row =
