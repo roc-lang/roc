@@ -12,13 +12,12 @@ Model position :
     }
 
 initialModel : position -> Model position
-initialModel = \start ->
-    {
-        evaluated: Set.empty,
-        openSet: Set.single start,
-        costs: Dict.single start 0,
-        cameFrom: Dict.empty,
-    }
+initialModel = \start -> {
+    evaluated: Set.empty,
+    openSet: Set.single start,
+    costs: Dict.single start 0,
+    cameFrom: Dict.empty,
+}
 
 cheapestOpen : (position -> F64), Model position -> Result position {}
 cheapestOpen = \costFn, model ->

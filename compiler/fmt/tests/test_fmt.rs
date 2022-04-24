@@ -627,6 +627,392 @@ mod test_fmt {
     }
 
     #[test]
+    fn lambda_returns_record() {
+        expr_formats_same(indoc!(
+            r#"
+                toRecord = \_ -> {
+                    x: 1,
+                    y: 2,
+                    z: 3,
+                }
+
+                toRecord
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                    func = \_ ->
+                        { x: 1, y: 2, z: 3 }
+
+                    func
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                toRecord = \_ ->
+                    val = 0
+
+                    {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                toRecord
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    toRecord = \_ ->
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    toRecord
+                "#
+            ),
+            indoc!(
+                r#"
+                    toRecord = \_ -> {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    toRecord
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn lambda_returns_list() {
+        expr_formats_same(indoc!(
+            r#"
+                toList = \_ -> [
+                    1,
+                    2,
+                    3,
+                ]
+
+                toList 
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                    func = \_ ->
+                        [ 1, 2, 3 ]
+
+                    func
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                toList = \_ ->
+                    val = 0
+
+                    [
+                        1,
+                        2,
+                        3,
+                    ]
+
+                toList
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    toList = \_ ->
+                        [
+                            1,
+                            2,
+                            3,
+                        ]
+
+                    toList
+                "#
+            ),
+            indoc!(
+                r#"
+                    toList = \_ -> [
+                        1,
+                        2,
+                        3,
+                    ]
+
+                    toList
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn multiline_list_func_arg() {
+        expr_formats_same(indoc!(
+            r#"
+                    result = func arg [
+                        1,
+                        2,
+                        3,
+                    ]
+
+                    result
+                "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg
+                        [ 1, 2, 3 ]
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func
+                        arg
+                        [ 1, 2, 3 ]
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg [
+                            1,
+                            2,
+                            3,
+                        ]
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func arg [
+                        1,
+                        2,
+                        3,
+                    ]
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func [
+                            1,
+                            2,
+                            3,
+                        ]
+                        arg
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func
+                        [
+                            1,
+                            2,
+                            3,
+                        ]
+                        arg
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg
+                        [
+                            1,
+                            2,
+                            3,
+                        ]
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func arg [
+                        1,
+                        2,
+                        3,
+                    ]
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+                    result = func
+                        arg
+                        [
+                            1,
+                            2,
+                            3,
+                        ]
+
+                    result
+                "#
+        ));
+    }
+
+    #[test]
+    fn multiline_record_func_arg() {
+        expr_formats_same(indoc!(
+            r#"
+                    result = func arg {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    result
+                "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg
+                        { x: 1, y: 2, z: 3 }
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func
+                        arg
+                        { x: 1, y: 2, z: 3 }
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func arg {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+                        arg
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+                        arg
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func arg {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+                    result = func
+                        arg
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    result
+                "#
+        ));
+    }
+
+    #[test]
     fn record_updating() {
         expr_formats_same(indoc!(
             r#"
@@ -1301,6 +1687,27 @@ mod test_fmt {
     fn multi_line_list_def() {
         expr_formats_same(indoc!(
             r#"
+                l = [
+                    1,
+                    2,
+                ]
+
+                l
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                l =
+                    [ 1, 2 ]
+
+                l
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
                 l =
                     [
                         1,
@@ -1308,8 +1715,19 @@ mod test_fmt {
                     ]
 
                 l
-            "#
-        ));
+                "#
+            ),
+            indoc!(
+                r#"
+                l = [
+                    1,
+                    2,
+                ]
+
+                l
+                "#
+            ),
+        );
 
         expr_formats_to(
             indoc!(
@@ -1324,11 +1742,10 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                results =
-                    [
-                        Ok 4,
-                        Ok 5,
-                    ]
+                results = [
+                    Ok 4,
+                    Ok 5,
+                ]
 
                 allOks results
                 "#
@@ -1419,16 +1836,67 @@ mod test_fmt {
     fn multi_line_record_def() {
         expr_formats_same(indoc!(
             r#"
+                pos = {
+                    x: 4,
+                    y: 11,
+                    z: 16,
+                }
+
+                pos
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
                 pos =
+                    { x: 4, y: 11, z: 16 }
+
+                pos
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                myDef =
+                    list = [
+                        a,
+                        b,
+                    ]
+
                     {
+                        c,
+                        d,
+                    }
+
+                myDef
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    pos =
+                        {
+                            x: 4,
+                            y: 11,
+                            z: 16,
+                        }
+
+                    pos
+                "#
+            ),
+            indoc!(
+                r#"
+                    pos = {
                         x: 4,
                         y: 11,
                         z: 16,
                     }
 
-                pos
-            "#
-        ));
+                    pos
+                "#
+            ),
+        );
 
         expr_formats_to(
             indoc!(
@@ -1443,11 +1911,10 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                pos =
-                    {
-                        x: 5,
-                        y: 10,
-                    }
+                pos = {
+                    x: 5,
+                    y: 10,
+                }
 
                 pos
                 "#
