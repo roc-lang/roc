@@ -773,9 +773,9 @@ impl DefOrdering {
         None
     }
 
-    fn get_symbol(&self, id: u32) -> Option<Symbol> {
+    fn get_symbol(&self, id: usize) -> Option<Symbol> {
         for (ident_id, def_id) in self.symbol_to_id.iter() {
-            if id == *def_id {
+            if id as u32 == *def_id {
                 return Some(Symbol::new(self.home, *ident_id));
             }
         }
@@ -783,13 +783,14 @@ impl DefOrdering {
         None
     }
 
-    fn is_self_recursive(&self, id: u32) -> bool {
-        debug_assert!(id < self.length);
+    fn is_self_recursive(&self, id: usize) -> bool {
+        let length = self.length as usize;
+        debug_assert!(id < length);
 
         // id'th row, id'th column
-        let index = (id * self.length) + id;
+        let index = (id * length) + id;
 
-        self.references.get(index as usize)
+        self.references.get(index)
     }
 
     #[inline(always)]
@@ -879,7 +880,7 @@ pub(crate) fn sort_can_defs(
                     let mut entries = Vec::new();
 
                     for def_id in cycle.iter_ones() {
-                        let symbol = def_ordering.get_symbol(def_id as u32).unwrap();
+                        let symbol = def_ordering.get_symbol(def_id).unwrap();
                         let def = &defs[def_id];
 
                         let expr_region = defs[def_id].as_ref().unwrap().loc_expr.region;
@@ -1004,7 +1005,7 @@ fn group_to_declaration(
                     // there is only one definition in this cycle, so we only have
                     // to check whether it recurses with itself; there is nobody else
                     // to recurse with, or they would also be in this cycle.
-                    let is_self_recursive = def_ordering.is_self_recursive(def_id as u32);
+                    let is_self_recursive = def_ordering.is_self_recursive(def_id);
 
                     if let Closure(ClosureData {
                         recursive: recursive @ Recursive::NotRecursive,
@@ -1028,7 +1029,7 @@ fn group_to_declaration(
                 }
                 None => {
                     // NOTE: a `_ = someDef` can mean we don't have a symbol here
-                    let symbol = def_ordering.get_symbol(def_id as u32);
+                    let symbol = def_ordering.get_symbol(def_id);
 
                     roc_error_macros::internal_error!("def not available {:?}", symbol)
                 }
@@ -1059,7 +1060,7 @@ fn group_to_declaration(
                     }
                     None => {
                         // NOTE: a `_ = someDef` can mean we don't have a symbol here
-                        let symbol = def_ordering.get_symbol(def_id as u32);
+                        let symbol = def_ordering.get_symbol(def_id);
 
                         roc_error_macros::internal_error!("def not available {:?}", symbol)
                     }
