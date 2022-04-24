@@ -796,131 +796,93 @@ pub(crate) fn sort_can_defs(
         output.aliases.insert(symbol, alias);
     }
 
+    macro_rules! take_def {
+        ($index:expr) => {
+            match defs[$index].take() {
+                Some(def) => def,
+                None => {
+                    // NOTE: a `_ = someDef` can mean we don't have a symbol here
+                    let symbol = def_ordering.get_symbol($index);
+
+                    roc_error_macros::internal_error!("def not available {:?}", symbol)
+                }
+            }
+        };
+    }
+
     let nodes: Vec<_> = (0..defs.len() as u32).collect();
+
+    // We first perform SCC based on any reference, both variable usage and calls
+    // considering both value definitions and function bodies. This will spot any
+    // recursive relations between any 2 definitions.
     let sccs = def_ordering
         .references
         .strongly_connected_components(&nodes);
 
     let mut declarations = Vec::new();
-    let mut problems = Vec::new();
 
     for group in sccs.groups() {
         if group.count_ones() == 1 {
             // a group with a single Def, nice and simple
             let index = group.iter_ones().next().unwrap();
 
-            let def = match defs[index].take() {
-                Some(def) => def,
-                None => {
-                    // NOTE: a `_ = someDef` can mean we don't have a symbol here
-                    let symbol = def_ordering.get_symbol(index);
-
-                    roc_error_macros::internal_error!("def not available {:?}", symbol)
-                }
-            };
+            let def = take_def!(index);
 
             let declaration = if def_ordering.direct_references.get_row_col(index, index) {
-                // This value references itself in an invalid way, e.g.:
-                //
-                // x = x
-
+                // a definition like `x = x + 1`, which is invalid in roc
                 let symbol = def_ordering.get_symbol(index).unwrap();
 
-                let entry = CycleEntry {
-                    symbol,
-                    symbol_region: def.loc_pattern.region,
-                    expr_region: def.loc_expr.region,
-                };
+                let entries = vec![make_cycle_entry(symbol, &def)];
 
-                let entries = vec![entry];
-
-                problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
-                    entries.clone(),
-                )));
+                let problem = Problem::RuntimeError(RuntimeError::CircularDef(entries.clone()));
+                env.problem(problem);
 
                 Declaration::InvalidCycle(entries)
             } else if def_ordering.references.get_row_col(index, index) {
                 // this function calls itself, and must be typechecked as a recursive def
-
-                let mut def = def;
-
-                if let Closure(ClosureData {
-                    recursive: recursive @ Recursive::NotRecursive,
-                    ..
-                }) = &mut def.loc_expr.value
-                {
-                    *recursive = Recursive::Recursive
-                }
-
-                Declaration::DeclareRec(vec![def])
+                Declaration::DeclareRec(vec![mark_def_recursive(def)])
             } else {
                 Declaration::Declare(def)
             };
 
             declarations.push(declaration);
         } else {
+            // There is something recursive going on between the Defs of this group.
+            // Now we use the direct_references to see if it is clearly invalid recursion, e.g.
+            //
+            // x = y
+            // y = x
+            //
+            // We allow indirect recursion (behind a lambda), e.g.
+            //
+            // boom = \{} -> boom {}
+            //
+            // In general we cannot spot faulty recursion (halting problem) so this is our best attempt
             let nodes: Vec<_> = group.iter_ones().map(|v| v as u32).collect();
             let direct_sccs = def_ordering
                 .direct_references
                 .strongly_connected_components(&nodes);
 
             let declaration = if direct_sccs.groups().count() == 1 {
-                // all defs are part of the same direct cycle. That's invalid
+                // all defs are part of the same direct cycle, that is invalid!
                 let mut entries = Vec::with_capacity(group.count_ones());
 
                 for index in group.iter_ones() {
-                    let def = match defs[index].take() {
-                        Some(def) => def,
-                        None => {
-                            // NOTE: a `_ = someDef` can mean we don't have a symbol here
-                            let symbol = def_ordering.get_symbol(index);
-
-                            roc_error_macros::internal_error!("def not available {:?}", symbol)
-                        }
-                    };
-
+                    let def = take_def!(index);
                     let symbol = def_ordering.get_symbol(index).unwrap();
 
-                    let entry = CycleEntry {
-                        symbol,
-                        symbol_region: def.loc_pattern.region,
-                        expr_region: def.loc_expr.region,
-                    };
-
-                    entries.push(entry)
+                    entries.push(make_cycle_entry(symbol, &def))
                 }
 
-                problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
-                    entries.clone(),
-                )));
+                let problem = Problem::RuntimeError(RuntimeError::CircularDef(entries.clone()));
+                env.problem(problem);
 
                 Declaration::InvalidCycle(entries)
             } else {
-                let mut rec_defs = Vec::with_capacity(group.count_ones());
-
-                for index in group.iter_ones() {
-                    let def = match defs[index].take() {
-                        Some(def) => def,
-                        None => {
-                            // NOTE: a `_ = someDef` can mean we don't have a symbol here
-                            let symbol = def_ordering.get_symbol(index);
-
-                            roc_error_macros::internal_error!("def not available {:?}", symbol)
-                        }
-                    };
-
-                    let mut def = def;
-
-                    if let Closure(ClosureData {
-                        recursive: recursive @ Recursive::NotRecursive,
-                        ..
-                    }) = &mut def.loc_expr.value
-                    {
-                        *recursive = Recursive::Recursive
-                    }
-
-                    rec_defs.push(def);
-                }
+                let rec_defs = group
+                    .iter_ones()
+                    .map(|index| mark_def_recursive(take_def!(index)))
+                    .collect();
 
                 Declaration::DeclareRec(rec_defs)
             };
@@ -929,11 +891,27 @@ pub(crate) fn sort_can_defs(
         }
     }
 
-    for problem in problems {
-        env.problem(problem);
+    (Ok(declarations), output)
+}
+
+fn mark_def_recursive(mut def: Def) -> Def {
+    if let Closure(ClosureData {
+        recursive: recursive @ Recursive::NotRecursive,
+        ..
+    }) = &mut def.loc_expr.value
+    {
+        *recursive = Recursive::Recursive
     }
 
-    (Ok(declarations), output)
+    def
+}
+
+fn make_cycle_entry(symbol: Symbol, def: &Def) -> CycleEntry {
+    CycleEntry {
+        symbol,
+        symbol_region: def.loc_pattern.region,
+        expr_region: def.loc_expr.region,
+    }
 }
 
 fn pattern_to_vars_by_symbol(
