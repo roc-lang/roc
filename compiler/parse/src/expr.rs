@@ -196,6 +196,7 @@ fn parse_loc_term_or_underscore<'a>(
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(min_indent),
+        loc!(specialize(EExpr::If, if_expr_help(min_indent, options))),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
@@ -1509,8 +1510,8 @@ fn parse_expr_operator<'a>(
                     }
                 }
             }
-            Err((NoProgress, _, _)) => {
-                todo!()
+            Err((NoProgress, expr, e)) => {
+                todo!("{:?} {:?}", expr, e)
             }
         },
     }

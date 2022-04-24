@@ -122,6 +122,7 @@ mod test_parse {
     snapshot_tests! {
         fail/type_argument_no_arrow.expr,
         fail/type_double_comma.expr,
+        pass/plus_if.expr,
         pass/list_closing_indent_not_enough.expr,
         pass/ability_single_line.expr,
         pass/ability_multi_line.expr,
@@ -316,7 +317,17 @@ mod test_parse {
         if std::env::var("ROC_PARSER_SNAPSHOT_TEST_OVERWRITE").is_ok() {
             std::fs::write(&result_path, actual_result).unwrap();
         } else {
-            let expected_result = std::fs::read_to_string(&result_path).unwrap();
+            let expected_result = std::fs::read_to_string(&result_path).unwrap_or_else(|e| {
+                panic!(
+                    "Error opening test output file {}:\n\
+                        {:?}
+                        Supposing the file is missing, consider running the tests with:\n\
+                        `env ROC_PARSER_SNAPSHOT_TEST_OVERWRITE=1 cargo test ...`\n\
+                        and committing the file that creates.",
+                    result_path.display(),
+                    e
+                );
+            });
 
             assert_multiline_str_eq!(expected_result, actual_result);
         }
