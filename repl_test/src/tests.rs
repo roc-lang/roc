@@ -56,7 +56,7 @@ fn float_addition() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_rem() {
-    expect_success("299 % 10", "Ok 9 : Result (Int *) [ DivByZero ]*");
+    expect_success("299 % 10", "9 : Int *");
 }
 
 #[cfg(not(feature = "wasm"))]
