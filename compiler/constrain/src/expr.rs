@@ -596,7 +596,7 @@ pub fn constrain_expr(
                 Region::span_across(
                     &loc_cond.region,
                     // &branches.first().unwrap().region(),
-                    &branches.last().unwrap().region(),
+                    &branches.last().unwrap().pattern_region(),
                 )
             };
 

@@ -294,12 +294,18 @@ pub struct WhenBranch {
 }
 
 impl WhenBranch {
-    pub fn region(&self) -> Region {
-        Region::across_all(
-            self.patterns
-                .iter()
-                .map(|p| &p.region)
-                .chain([self.value.region].iter()),
+    pub fn pattern_region(&self) -> Region {
+        Region::span_across(
+            &self
+                .patterns
+                .first()
+                .expect("when branch has no pattern?")
+                .region,
+            &self
+                .patterns
+                .last()
+                .expect("when branch has no pattern?")
+                .region,
         )
     }
 }
