@@ -425,7 +425,6 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         Slash => (ModuleName::NUM, "div"),
         DoubleSlash => (ModuleName::NUM, "divTrunc"),
         Percent => (ModuleName::NUM, "rem"),
-        DoublePercent => (ModuleName::NUM, "mod"),
         Plus => (ModuleName::NUM, "add"),
         Minus => (ModuleName::NUM, "sub"),
         Equals => (ModuleName::BOOL, "isEq"),
