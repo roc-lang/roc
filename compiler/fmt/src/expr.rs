@@ -206,7 +206,7 @@ impl<'a> Formattable for Expr<'a> {
                                         }
                                         _ => false,
                                     },
-                                    Record { .. } | List { .. } => {
+                                    Record { .. } | List { .. } | Closure { .. } => {
                                         !found_multiline_expr && loc_arg.is_multiline()
                                     }
                                     _ => false,
