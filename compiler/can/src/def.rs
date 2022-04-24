@@ -1889,10 +1889,8 @@ fn correct_mutual_recursive_type_alias<'a>(
 
     let group: Vec<_> = (0u32..capacity as u32).collect();
 
-    let cycles = matrix.strongly_connected_components(&group);
-
-    for cycle in cycles {
-        debug_assert!(!cycle.is_empty());
+    for cycle in matrix.strongly_connected_components_prim(&group).rows() {
+        debug_assert!(cycle.count_ones() > 0);
 
         // We need to instantiate the alias with any symbols in the currrent module it
         // depends on.
@@ -1902,19 +1900,13 @@ fn correct_mutual_recursive_type_alias<'a>(
         //
         // Hence, we only need to worry about symbols in the current SCC or any prior one.
         // It cannot be using any of the others, and we've already instantiated aliases coming from other modules.
-        let mut to_instantiate_bitvec = solved_aliases_bitvec;
-
-        for index in cycle.iter() {
-            to_instantiate_bitvec.set(*index as usize, true);
-        }
+        let mut to_instantiate_bitvec = solved_aliases_bitvec | cycle;
 
         // Make sure we report only one error for the cycle, not an error for every
         // alias in the cycle.
         let mut can_still_report_error = true;
 
-        for index in cycle.iter() {
-            let index = *index as usize;
-
+        for index in cycle.iter_ones() {
             // Don't try to instantiate the alias itself in its definition.
             to_instantiate_bitvec.set(index, false);
 
@@ -1957,8 +1949,8 @@ fn correct_mutual_recursive_type_alias<'a>(
 
             // Now mark the alias recursive, if it needs to be.
             let rec = symbols_introduced[index];
-            let is_self_recursive = cycle.len() == 1 && matrix.get_row_col(index, index);
-            let is_mutually_recursive = cycle.len() > 1;
+            let is_self_recursive = cycle.count_ones() == 1 && matrix.get_row_col(index, index);
+            let is_mutually_recursive = cycle.count_ones() > 1;
 
             if is_self_recursive || is_mutually_recursive {
                 let _made_recursive = make_tag_union_of_alias_recursive(
@@ -1975,22 +1967,17 @@ fn correct_mutual_recursive_type_alias<'a>(
         // The cycle we just instantiated and marked recursive may still be an illegal cycle, if
         // all the types in the cycle are narrow newtypes. We can't figure this out until now,
         // because we need all the types to be deeply instantiated.
-        let all_are_narrow = cycle.iter().all(|index| {
-            let index = *index as usize;
+        let all_are_narrow = cycle.iter_ones().all(|index| {
             let typ = &aliases[index].typ;
             matches!(typ, Type::RecursiveTagUnion(..)) && typ.is_narrow()
         });
 
         if all_are_narrow {
             // This cycle is illegal!
+            let mut indices = cycle.iter_ones();
+            let first_index = indices.next().unwrap();
 
-            let mut cycle = cycle;
-            let first_index = cycle.pop().unwrap() as usize;
-
-            let rest: Vec<Symbol> = cycle
-                .into_iter()
-                .map(|i| symbols_introduced[i as usize])
-                .collect();
+            let rest: Vec<Symbol> = indices.map(|i| symbols_introduced[i]).collect();
 
             let alias_name = symbols_introduced[first_index];
             let alias = aliases.get_mut(first_index).unwrap();

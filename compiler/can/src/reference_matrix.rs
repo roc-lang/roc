@@ -181,6 +181,25 @@ impl ReferenceMatrix {
             break result;
         }
     }
+
+    /// Get the strongly-connected components of the set of input nodes.
+    pub fn strongly_connected_components_prim(&self, nodes: &[u32]) -> Sccs {
+        let mut params = Params::new(self.length, nodes);
+
+        'outer: loop {
+            for (node, value) in params.preorders.iter().enumerate() {
+                if let Preorder::Removed = value {
+                    continue;
+                }
+
+                recurse_onto(self.length, &self.bitvec, node, &mut params);
+
+                continue 'outer;
+            }
+
+            break params.scc;
+        }
+    }
 }
 
 pub(crate) enum TopologicalSort {
