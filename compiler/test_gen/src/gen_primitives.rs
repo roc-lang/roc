@@ -1939,7 +1939,7 @@ fn alias_of_alias_with_type_arguments() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a := {} -> a
+            Effect a := a
 
             Task a err : Effect (Result a err)
 
