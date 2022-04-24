@@ -1849,7 +1849,7 @@ fn correct_mutual_recursive_type_alias<'a>(
         solved_aliases_bitvec = to_instantiate_bitvec;
     }
 
-    // Safety: both vectors are equal lenght and there are no duplicates
+    // Safety: both vectors are equal length and there are no duplicates
     unsafe { VecMap::zip(symbols_introduced, aliases) }
 }
 
