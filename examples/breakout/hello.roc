@@ -11,7 +11,6 @@ init = \_ -> { text: "Hello, World!" }
 update : Model, Event -> Model
 update = \model, _ -> model
 
-
 render : Model -> List Elem
 render = \model -> [ Text model.text ]
 
