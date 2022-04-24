@@ -256,8 +256,8 @@ mod cli_run {
                                 return;
                             }
                         }
-                        "hello-gui" => {
-                            // Since this one requires opening a window, we do `roc build` on it but don't run it.
+                        "hello-gui" | "breakout" => {
+                            // Since these require opening a window, we do `roc build` on them but don't run them.
                             build_example(&file_name, &["--optimize"]);
 
                             return;
@@ -389,6 +389,14 @@ mod cli_run {
         gui:"gui" => Example {
             filename: "Hello.roc",
             executable_filename: "hello-gui",
+            stdin: &[],
+            input_file: None,
+            expected_ending: "",
+            use_valgrind: false,
+        },
+        breakout:"breakout" => Example {
+            filename: "breakout.roc",
+            executable_filename: "breakout",
             stdin: &[],
             input_file: None,
             expected_ending: "",

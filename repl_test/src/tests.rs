@@ -56,7 +56,7 @@ fn float_addition() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_rem() {
-    expect_success("299 % 10", "Ok 9 : Result (Int *) [ DivByZero ]*");
+    expect_success("299 % 10", "9 : Int *");
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -1143,5 +1143,44 @@ fn issue_2818() {
             "#
         ),
         r"<function> : {} -> List Str",
+    )
+}
+
+#[test]
+fn issue_2810_recursive_layout_inside_nonrecursive() {
+    expect_success(
+        indoc!(
+            r#"
+            Command : [ Command Tool ]
+
+            Job : [ Job Command ]
+
+            Tool : [ SystemTool, FromJob Job ]
+
+            a : Job
+            a = Job (Command (FromJob (Job (Command SystemTool))))
+            a
+            "#
+        ),
+        "Job (Command (FromJob (Job (Command SystemTool)))) : Job",
+    )
+}
+
+#[test]
+fn render_nullable_unwrapped_passing_through_alias() {
+    expect_success(
+        indoc!(
+            r#"
+            Deep : [ L DeepList ]
+            
+            DeepList : [ Nil, Cons Deep ]
+            
+            v : DeepList 
+            v = (Cons (L (Cons (L (Cons (L Nil))))))
+            
+            v
+            "#
+        ),
+        "Cons (L (Cons (L (Cons (L Nil))))) : DeepList",
     )
 }

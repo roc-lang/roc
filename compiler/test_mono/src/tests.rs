@@ -1284,6 +1284,23 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
 }
 
 #[mono_test]
+fn issue_2810() {
+    indoc!(
+        r#"
+        Command : [ Command Tool ]
+
+        Job : [ Job Command ]
+
+        Tool : [ SystemTool, FromJob Job ]
+
+        a : Job
+        a = Job (Command (FromJob (Job (Command SystemTool))))
+        a
+        "#
+    )
+}
+
+#[mono_test]
 fn issue_2811() {
     indoc!(
         r#"
@@ -1309,6 +1326,23 @@ fn specialize_ability_call() {
         hash = \$Id n -> n
 
         main = hash ($Id 1234)
+        "#
+    )
+}
+
+#[mono_test]
+fn opaque_assign_to_symbol() {
+    indoc!(
+        r#"
+        app "test" provides [ out ] to "./platform"
+
+        Variable := U8
+
+        fromUtf8 : U8 -> Result Variable [ InvalidVariableUtf8 ]
+        fromUtf8 = \char ->
+            Ok ($Variable char)
+
+        out = fromUtf8 98
         "#
     )
 }

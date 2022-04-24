@@ -66,10 +66,13 @@ interface Num
             isPositive,
             isNegative,
             rem,
+            remChecked,
             div,
             divChecked,
             sqrt,
+            sqrtChecked,
             log,
+            logChecked,
             round,
             ceiling,
             floor,
@@ -239,19 +242,22 @@ asin : Float a -> Float a
 acos : Float a -> Float a
 atan : Float a -> Float a
 
-sqrt : Float a -> Result (Float a) [ SqrtOfNegative ]*
-log : Float a -> Result (Float a) [ LogNeedsPositive ]*
+sqrt : Float a -> Float a
+sqrtChecked : Float a -> Result (Float a) [ SqrtOfNegative ]*
+log : Float a -> Float a
+logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
+
 div : Float a, Float a -> Float a
 divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
-
 divCeil : Int a, Int a -> Int a
 divCeilChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+
 divTrunc : Int a, Int a -> Int a
 divTruncChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
-# mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
-rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
-# mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
+rem : Int a, Int a -> Int a
+remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+
 isMultipleOf : Int a, Int a -> Bool
 
 bitwiseAnd : Int a, Int a -> Int a

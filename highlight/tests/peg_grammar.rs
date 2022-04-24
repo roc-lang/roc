@@ -368,7 +368,6 @@ mod test_peg_grammar {
               / [T::OpSlash]
               / [T::OpDoubleSlash]
               / [T::OpPercent]
-              / [T::OpDoublePercent]
             rule mul_level_expr() =
               unary_expr() (mul_level_op() unary_expr())*
 

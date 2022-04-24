@@ -393,16 +393,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(int_type(flex(TVAR2)))
     );
 
-    // rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // rem : Int a, Int a -> Int a
     add_top_level_function_type!(
         Symbol::NUM_REM,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
-        Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
+        Box::new(int_type(flex(TVAR1))),
     );
 
-    // mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_top_level_function_type!(
-        Symbol::NUM_MOD_INT,
+        Symbol::NUM_REM_CHECKED,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
@@ -680,36 +680,43 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::NUM_DIV_FLOAT_CHECKED,
         vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
-        Box::new(result_type(float_type(flex(TVAR1)), div_by_zero.clone())),
-    );
-
-    // mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
-    add_top_level_function_type!(
-        Symbol::NUM_MOD_FLOAT,
-        vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
         Box::new(result_type(float_type(flex(TVAR1)), div_by_zero)),
     );
 
     // sqrt : Float a -> Float a
+    add_top_level_function_type!(
+        Symbol::NUM_SQRT,
+        vec![float_type(flex(TVAR1))],
+        Box::new(float_type(flex(TVAR1))),
+    );
+
+    // sqrtChecked : Float a -> Result (Float a) [ SqrtOfNegative ]*
     let sqrt_of_negative = SolvedType::TagUnion(
         vec![(TagName::Global("SqrtOfNegative".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
     add_top_level_function_type!(
-        Symbol::NUM_SQRT,
+        Symbol::NUM_SQRT_CHECKED,
         vec![float_type(flex(TVAR1))],
         Box::new(result_type(float_type(flex(TVAR1)), sqrt_of_negative)),
     );
 
     // log : Float a -> Float a
+    add_top_level_function_type!(
+        Symbol::NUM_LOG,
+        vec![float_type(flex(TVAR1))],
+        Box::new(float_type(flex(TVAR1))),
+    );
+
+    // logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
     let log_needs_positive = SolvedType::TagUnion(
         vec![(TagName::Global("LogNeedsPositive".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
     add_top_level_function_type!(
-        Symbol::NUM_LOG,
+        Symbol::NUM_LOG_CHECKED,
         vec![float_type(flex(TVAR1))],
         Box::new(result_type(float_type(flex(TVAR1)), log_needs_positive)),
     );

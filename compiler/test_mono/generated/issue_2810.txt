@@ -1,0 +1,6 @@
+procedure Test.0 ():
+    let Test.16 : [C TODO, C ] = SystemTool ;
+    let Test.14 : TODO = Job Test.16;
+    let Test.13 : [C TODO, C ] = FromJob Test.14;
+    let Test.4 : TODO = Job Test.13;
+    ret Test.4;

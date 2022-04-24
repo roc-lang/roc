@@ -450,7 +450,9 @@ fn write_content<'a>(
                     }
 
                     // useful for debugging
-                    if false {
+                    if cfg!(debug_assertions)
+                        && std::env::var("ROC_PRETTY_PRINT_ALIAS_CONTENTS").is_ok()
+                    {
                         buf.push_str("[[ but really ");
                         let content = subs.get_content_without_compacting(*_actual);
                         write_content(env, ctx, content, subs, buf, parens);
