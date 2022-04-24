@@ -125,7 +125,7 @@ impl IntroducedVariables {
         self.inferred.push(var);
     }
 
-    pub fn insert_lambda_set(&mut self, var: Variable) {
+    fn insert_lambda_set(&mut self, var: Variable) {
         self.debug_assert_not_already_present(var);
         self.lambda_sets.push(var);
     }
