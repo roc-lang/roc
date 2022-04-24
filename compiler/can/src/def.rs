@@ -467,6 +467,7 @@ pub(crate) fn canonicalize_defs<'a>(
     // Now that we know the alias dependency graph, we can try to insert recursion variables
     // where aliases are recursive tag unions, or detect illegal recursions.
     let mut aliases = correct_mutual_recursive_type_alias(env, aliases, var_store);
+
     for (symbol, alias) in aliases.iter() {
         scope.add_alias(
             *symbol,
@@ -1908,19 +1909,10 @@ fn correct_mutual_recursive_type_alias<'a>(
     let capacity = original_aliases.len();
     let mut matrix = ReferenceMatrix::new(capacity);
 
-    let (symbols_introduced, mut aliases): (Vec<_>, Vec<_>) = original_aliases
-        .into_iter()
-        .map(|(k, v)| (k, Some(v)))
-        .unzip();
+    let (symbols_introduced, mut aliases): (Vec<_>, Vec<_>) = original_aliases.into_iter().unzip();
 
     for (index, alias) in aliases.iter().enumerate() {
-        let it = alias
-            .as_ref()
-            .map(|a| a.typ.symbols().into_iter())
-            .into_iter()
-            .flatten();
-
-        for referenced in it {
+        for referenced in alias.typ.symbols() {
             match symbols_introduced.iter().position(|k| referenced == *k) {
                 None => { /* ignore */ }
                 Some(ref_id) => matrix.set_row_col(index, ref_id, true),
@@ -1928,7 +1920,8 @@ fn correct_mutual_recursive_type_alias<'a>(
         }
     }
 
-    let mut solved_aliases = ImMap::default();
+    let mut solved_aliases_bitvec = bitvec::vec::BitVec::<usize>::repeat(false, capacity);
+    let mut pending_aliases_bitvec = bitvec::vec::BitVec::repeat(false, capacity);
 
     let group: Vec<_> = (0u32..capacity as u32).collect();
 
@@ -1937,15 +1930,12 @@ fn correct_mutual_recursive_type_alias<'a>(
     for cycle in cycles {
         debug_assert!(!cycle.is_empty());
 
-        let mut pending_aliases: ImMap<_, _> = cycle
-            .iter()
-            .map(|index| {
-                (
-                    symbols_introduced[*index as usize],
-                    aliases[*index as usize].take().unwrap(),
-                )
-            })
-            .collect();
+        // zero out all the bits
+        pending_aliases_bitvec.set_elements(0);
+
+        for index in cycle.iter() {
+            pending_aliases_bitvec.set(*index as usize, true);
+        }
 
         // Make sure we report only one error for the cycle, not an error for every
         // alias in the cycle.
@@ -1955,23 +1945,43 @@ fn correct_mutual_recursive_type_alias<'a>(
         // depends on.
         // We only need to worry about symbols in this SCC or any prior one, since the SCCs
         // were sorted topologically, and we've already instantiated aliases coming from other
-        // modules.
-        // NB: ImMap::clone is O(1): https://docs.rs/im/latest/src/im/hash/map.rs.html#1527-1544
-        let mut to_instantiate = solved_aliases.clone().union(pending_aliases.clone());
+        let mut to_instantiate_bitvec = solved_aliases_bitvec | &pending_aliases_bitvec;
 
         for index in cycle.iter() {
-            let rec = symbols_introduced[*index as usize];
+            let index = *index as usize;
 
-            let alias = pending_aliases.get_mut(&rec).unwrap();
             // Don't try to instantiate the alias itself in its definition.
-            let original_alias_def = to_instantiate.remove(&rec).unwrap();
+            to_instantiate_bitvec.set(index, false);
 
-            let helper = |s| to_instantiate.get(&s);
+            // now we do something sneaky. In `can_instantiate_symbol` we want to be able to
+            // take a reference to an `Alias` in the `aliases` vec. That would not work if
+            // we also had a mutable reference to an alias in that vec. So we swap out the
+            // type.
+            let alias_region = aliases[index].region;
+            let mut alias_type = Type::EmptyRec;
+
+            std::mem::swap(&mut alias_type, &mut aliases[index].typ);
+
+            let can_instantiate_symbol = |s| match symbols_introduced.iter().position(|i| *i == s) {
+                Some(s_index) if to_instantiate_bitvec[s_index] => aliases.get(s_index),
+                _ => None,
+            };
 
             let mut new_lambda_sets = ImSet::default();
-            alias
-                .typ
-                .instantiate_aliases(alias.region, &helper, var_store, &mut new_lambda_sets);
+            alias_type.instantiate_aliases(
+                alias_region,
+                &can_instantiate_symbol,
+                var_store,
+                &mut new_lambda_sets,
+            );
+
+            // swap the type back
+            std::mem::swap(&mut alias_type, &mut aliases[index].typ);
+
+            // We can instantiate this alias in future iterations
+            to_instantiate_bitvec.set(index, true);
+
+            let alias = &mut aliases[index];
 
             for lambda_set_var in new_lambda_sets {
                 alias
@@ -1979,10 +1989,9 @@ fn correct_mutual_recursive_type_alias<'a>(
                     .push(LambdaSet(Type::Variable(lambda_set_var)));
             }
 
-            to_instantiate.insert(rec, original_alias_def);
-
             // Now mark the alias recursive, if it needs to be.
-            let is_self_recursive = alias.typ.contains_symbol(rec);
+            let rec = symbols_introduced[index];
+            let is_self_recursive = cycle.len() == 1 && matrix.get_row_col(index, index);
             let is_mutually_recursive = cycle.len() > 1;
 
             if is_self_recursive || is_mutually_recursive {
@@ -2001,20 +2010,24 @@ fn correct_mutual_recursive_type_alias<'a>(
         // all the types in the cycle are narrow newtypes. We can't figure this out until now,
         // because we need all the types to be deeply instantiated.
         let all_are_narrow = cycle.iter().all(|index| {
-            let sym = &symbols_introduced[*index as usize];
-            let typ = &pending_aliases.get(sym).unwrap().typ;
+            let index = *index as usize;
+            let typ = &aliases[index].typ;
             matches!(typ, Type::RecursiveTagUnion(..)) && typ.is_narrow()
         });
 
         if all_are_narrow {
             // This cycle is illegal!
-            let mut rest: Vec<Symbol> = cycle
+
+            let mut cycle = cycle;
+            let first_index = cycle.pop().unwrap() as usize;
+
+            let rest: Vec<Symbol> = cycle
                 .into_iter()
                 .map(|i| symbols_introduced[i as usize])
                 .collect();
-            let alias_name = rest.pop().unwrap();
 
-            let alias = pending_aliases.get_mut(&alias_name).unwrap();
+            let alias_name = symbols_introduced[first_index];
+            let alias = aliases.get_mut(first_index).unwrap();
 
             mark_cyclic_alias(
                 env,
@@ -2026,11 +2039,14 @@ fn correct_mutual_recursive_type_alias<'a>(
             )
         }
 
-        // Now, promote all resolved aliases in this cycle as solved.
-        solved_aliases.extend(pending_aliases);
+        // We've instantiated all we could, so all instantiatable aliases are solved now
+        solved_aliases_bitvec = to_instantiate_bitvec;
     }
 
-    solved_aliases
+    symbols_introduced
+        .into_iter()
+        .zip(aliases.into_iter())
+        .collect()
 }
 
 fn make_tag_union_of_alias_recursive<'a>(

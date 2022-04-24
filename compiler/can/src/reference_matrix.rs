@@ -40,6 +40,11 @@ impl ReferenceMatrix {
         self.bitvec[index]
     }
 
+    #[inline(always)]
+    pub fn get_row_col(&self, row: usize, col: usize) -> bool {
+        self.bitvec[row * self.length + col]
+    }
+
     pub fn is_recursive(&self, index: usize) -> bool {
         let mut scheduled = self.row_slice(index).to_bitvec();
         let mut visited = self.row_slice(index).to_bitvec();
