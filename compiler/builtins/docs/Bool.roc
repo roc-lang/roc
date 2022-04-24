@@ -3,8 +3,6 @@ interface Bool
     imports []
 
 Equating is
-    # TODO: removed `'` from signature because parser does not support it yet
-    # Original signature: `isEq : 'val, 'val -> Bool`
     ## Returns `True` if the two values are *structurally equal*, and `False` otherwise.
     ##
     ## `a == b` is shorthand for `Bool.isEq a b`
@@ -21,8 +19,6 @@ Equating is
     ## accept arguments whose types contain functions.
     isEq : a, a -> Bool | a supports Equating
 
-    # TODO: removed `'` from signature because parser does not support it yet
-    # Original signature: `isNotEq : 'val, 'val -> Bool`
     ## Calls [isEq] on the given values, then calls [not] on the result.
     ##
     ## `a != b` is shorthand for `Bool.isNotEq a b`
