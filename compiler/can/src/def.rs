@@ -1717,7 +1717,15 @@ fn correct_mutual_recursive_type_alias<'a>(
     let capacity = original_aliases.len();
     let mut matrix = ReferenceMatrix::new(capacity);
 
-    let (symbols_introduced, mut aliases) = original_aliases.unzip();
+    // It is important that we instantiate with the aliases as they occur in the source.
+    // We must not instantiate A into B, then use the updated B to instantiate into C
+    //
+    // That is because B could be used different places. We don't want one place
+    // to mess with another.
+    let (symbols_introduced, uninstantiated_aliases) = original_aliases.unzip();
+
+    // the aliases that we will instantiate into
+    let mut aliases = uninstantiated_aliases.clone();
 
     for (index, alias) in aliases.iter().enumerate() {
         for referenced in alias.typ.symbols() {
@@ -1765,7 +1773,9 @@ fn correct_mutual_recursive_type_alias<'a>(
             std::mem::swap(&mut alias_type, &mut aliases[index].typ);
 
             let can_instantiate_symbol = |s| match symbols_introduced.iter().position(|i| *i == s) {
-                Some(s_index) if to_instantiate_bitvec[s_index] => aliases.get(s_index),
+                Some(s_index) if to_instantiate_bitvec[s_index] => {
+                    uninstantiated_aliases.get(s_index)
+                }
                 _ => None,
             };
 

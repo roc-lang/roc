@@ -5297,7 +5297,24 @@ mod solve_expr {
 
     #[test]
     fn issue_2458() {
-        // TODO: the order of the alias definitions matters
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Foo a : [ Blah (Result (Bar a) { val: a }) ]
+                Bar a : Foo a
+
+                v : Bar U8
+                v = Blah (Ok (Blah (Err { val: 1 })))
+
+                v
+                "#
+            ),
+            "Bar U8",
+        )
+    }
+
+    #[test]
+    fn issue_2458_swapped_order() {
         infer_eq_without_problem(
             indoc!(
                 r#"
