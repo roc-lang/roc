@@ -29,20 +29,19 @@ Model : {
     }
 
 init : Bounds -> Model
-init = \{ width, height } ->
-    {
-        # Screen height and width
-        width,
-        height,
-        # Paddle X-coordinate
-        paddleX: (width * 0.5) - (paddleWidth * width * 0.5),
-        # Ball coordinates
-        ballX: width * 0.5,
-        ballY: height * 0.4,
-        # Delta - how much ball moves in each tick
-        dBallX: 4,
-        dBallY: 4,
-    }
+init = \{ width, height } -> {
+    # Screen height and width
+    width,
+    height,
+    # Paddle X-coordinate
+    paddleX: (width * 0.5) - (paddleWidth * width * 0.5),
+    # Ball coordinates
+    ballX: width * 0.5,
+    ballY: height * 0.4,
+    # Delta - how much ball moves in each tick
+    dBallX: 4,
+    dBallY: 4,
+}
 
 update : Model, Event -> Model
 update = \model, event ->
@@ -125,23 +124,21 @@ render = \model ->
                 top = Num.toF32 (row * blockHeight)
                 border = blockBorder * blockWidth
 
-                outer = Rect
-                    {
-                        left,
-                        top,
-                        width: blockWidth,
-                        height: blockHeight,
-                        color: { r: color.r * 0.8, g: color.g * 0.8, b: color.b * 0.8, a: 1 },
-                    }
+                outer = Rect {
+                    left,
+                    top,
+                    width: blockWidth,
+                    height: blockHeight,
+                    color: { r: color.r * 0.8, g: color.g * 0.8, b: color.b * 0.8, a: 1 },
+                }
 
-                inner = Rect
-                    {
-                        left: left + border,
-                        top: top + border,
-                        width: blockWidth - (border * 2),
-                        height: blockHeight - (border * 2),
-                        color,
-                    }
+                inner = Rect {
+                    left: left + border,
+                    top: top + border,
+                    width: blockWidth - (border * 2),
+                    height: blockHeight - (border * 2),
+                    color,
+                }
 
                 [ outer, inner ]
 

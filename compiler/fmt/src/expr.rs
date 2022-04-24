@@ -186,13 +186,74 @@ impl<'a> Formattable for Expr<'a> {
                 loc_expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
 
                 let multiline_args = loc_args.iter().any(|loc_arg| loc_arg.is_multiline());
+                let last_arg_index = loc_args.len() - 1;
 
-                if multiline_args {
+                let should_outdent_last_arg =
+                    loc_args
+                        .iter()
+                        .enumerate()
+                        .fold(false, |found_multiline_expr, val| {
+                            let (index, loc_arg) = val;
+                            if index == last_arg_index {
+                                match loc_arg.value {
+                                    SpaceBefore(sub_expr, spaces) => match sub_expr {
+                                        Record { .. } | List { .. } => {
+                                            let is_only_newlines =
+                                                spaces.iter().all(|s| s.is_newline());
+                                            is_only_newlines
+                                                && !found_multiline_expr
+                                                && sub_expr.is_multiline()
+                                        }
+                                        _ => false,
+                                    },
+                                    Record { .. } | List { .. } => {
+                                        !found_multiline_expr && loc_arg.is_multiline()
+                                    }
+                                    _ => false,
+                                }
+                            } else {
+                                loc_arg.is_multiline()
+                            }
+                        });
+
+                if multiline_args && !should_outdent_last_arg {
                     let arg_indent = indent + INDENT;
 
                     for loc_arg in loc_args.iter() {
                         buf.newline();
                         loc_arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
+                    }
+                } else if multiline_args && should_outdent_last_arg {
+                    for (index, loc_arg) in loc_args.iter().enumerate() {
+                        buf.spaces(1);
+
+                        if index == last_arg_index {
+                            match loc_arg.value {
+                                SpaceBefore(sub_expr, _) => {
+                                    sub_expr.format_with_options(
+                                        buf,
+                                        Parens::InApply,
+                                        Newlines::Yes,
+                                        indent,
+                                    );
+                                }
+                                _ => {
+                                    loc_arg.format_with_options(
+                                        buf,
+                                        Parens::InApply,
+                                        Newlines::Yes,
+                                        indent,
+                                    );
+                                }
+                            }
+                        } else {
+                            loc_arg.format_with_options(
+                                buf,
+                                Parens::InApply,
+                                Newlines::Yes,
+                                indent,
+                            );
+                        }
                     }
                 } else {
                     for loc_arg in loc_args.iter() {
@@ -846,7 +907,34 @@ fn fmt_closure<'a, 'buf>(
         }
     };
 
-    loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
+    if is_multiline {
+        match &loc_ret.value {
+            SpaceBefore(sub_expr, spaces) => {
+                let should_outdent = match sub_expr {
+                    Record { .. } | List { .. } => {
+                        let is_only_newlines = spaces.iter().all(|s| s.is_newline());
+                        is_only_newlines && sub_expr.is_multiline()
+                    }
+                    _ => false,
+                };
+
+                if should_outdent {
+                    buf.spaces(1);
+                    sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                } else {
+                    loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
+                }
+            }
+            Record { .. } | List { .. } => {
+                loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+            }
+            _ => {
+                loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
+            }
+        }
+    } else {
+        loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
+    }
 }
 
 fn fmt_backpassing<'a, 'buf>(
