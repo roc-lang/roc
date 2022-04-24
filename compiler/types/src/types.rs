@@ -1670,6 +1670,7 @@ pub enum PReason {
     },
     WhenMatch {
         index: HumanIndex,
+        sub_pattern: HumanIndex,
     },
     TagArg {
         tag_name: TagName,
@@ -1727,6 +1728,7 @@ pub enum Reason {
     IntLiteral,
     NumLiteral,
     StrInterpolation,
+    WhenBranches,
     WhenBranch {
         index: HumanIndex,
     },

@@ -82,6 +82,31 @@ pub enum Pattern {
     MalformedPattern(MalformedPatternProblem, Region),
 }
 
+impl Pattern {
+    pub fn opt_var(&self) -> Option<Variable> {
+        use Pattern::*;
+        match self {
+            Identifier(_) => None,
+
+            AppliedTag { whole_var, .. } => Some(*whole_var),
+            UnwrappedOpaque { whole_var, .. } => Some(*whole_var),
+            RecordDestructure { whole_var, .. } => Some(*whole_var),
+            NumLiteral(var, ..) => Some(*var),
+            IntLiteral(var, ..) => Some(*var),
+            FloatLiteral(var, ..) => Some(*var),
+            StrLiteral(_) => None,
+            SingleQuote(_) => None,
+            Underscore => None,
+
+            AbilityMemberSpecialization { .. } => None,
+
+            Shadowed(..) | OpaqueNotInScope(..) | UnsupportedPattern(..) | MalformedPattern(..) => {
+                None
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RecordDestruct {
     pub var: Variable,

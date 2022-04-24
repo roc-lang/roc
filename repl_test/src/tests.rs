@@ -901,7 +901,7 @@ fn parse_problem() {
 
 #[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
-fn mono_problem() {
+fn exhaustiveness_problem() {
     expect_failure(
         r#"
             t : [A, B, C]
@@ -912,22 +912,29 @@ fn mono_problem() {
             "#,
         indoc!(
             r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+            ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This when does not cover all the possibilities:
+            The branches of this when expression don't match the condition:
 
-                7│>                  when t is
-                8│>                      A -> "a"
+            7│>                  when t is
+            8│                       A -> "a"
 
-                Other possibilities include:
+            This t value is a:
 
-                    B
-                    C
+                [ A, B, C ]
+            
+            But the branch patterns have type:
+            
+                [ A ]
 
-                I would have to crash if I saw one of those! Add branches for them!
-
-
-                Enter an expression, or :help, or :exit/:q."#
+            The branches must be cases of the when condition's type!
+            
+            Tip: Looks like the branches are missing coverage of the C and B tags.
+            
+            Tip: Maybe you need to add a catch-all branch, like _?
+            
+            
+            Enter an expression, or :help, or :exit/:q."#
         ),
     );
 }

@@ -293,6 +293,23 @@ pub struct WhenBranch {
     pub guard: Option<Loc<Expr>>,
 }
 
+impl WhenBranch {
+    pub fn pattern_region(&self) -> Region {
+        Region::span_across(
+            &self
+                .patterns
+                .first()
+                .expect("when branch has no pattern?")
+                .region,
+            &self
+                .patterns
+                .last()
+                .expect("when branch has no pattern?")
+                .region,
+        )
+    }
+}
+
 pub fn canonicalize_expr<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,

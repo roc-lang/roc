@@ -66,6 +66,14 @@ macro_rules! assert_sizeof_all {
     };
 }
 
+/// Assert that a type has `Copy`
+#[macro_export]
+macro_rules! assert_copyable {
+    ($t: ty) => {
+        static_assertions::assert_impl_all!($t: Copy);
+    };
+}
+
 // LARGE SCALE PROJECTS
 //
 // This section is for "todo!"-style macros enabled in sections where large-scale changes to the
