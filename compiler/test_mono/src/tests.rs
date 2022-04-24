@@ -80,8 +80,6 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let arena = &Bump::new();
 
-    // let stdlib = roc_builtins::unique::uniq_stdlib();
-    let stdlib = roc_builtins::std::standard_stdlib();
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -96,26 +94,26 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         module_src = &temp;
     }
 
-    let loaded = roc_load::file::load_and_monomorphize_from_str(
+    let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
-        &stdlib,
         src_dir,
         Default::default(),
         TARGET_INFO,
+        roc_reporting::report::RenderTarget::Generic,
     );
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
+        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
             println!("{}", report);
             panic!();
         }
         Err(e) => panic!("{:?}", e),
     };
 
-    use roc_load::file::MonomorphizedModule;
+    use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         module_id: home,
         procedures,
@@ -131,7 +129,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         println!("Ignoring {} canonicalization problems", can_problems.len());
     }
 
-    assert_eq!(type_problems, Vec::new());
+    assert!(type_problems.is_empty());
     assert_eq!(mono_problems, Vec::new());
 
     debug_assert_eq!(exposed_to_host.values.len(), 1);
@@ -277,7 +275,7 @@ fn ir_round() {
 #[mono_test]
 fn ir_when_idiv() {
     r#"
-    when 1000 // 10 is
+    when Num.divTruncChecked 1000 10 is
         Ok val -> val
         Err _ -> -1
     "#
@@ -1261,6 +1259,90 @@ fn issue_2535_polymorphic_fields_referenced_in_list() {
                 alpha.a,
                 alpha.b,
             ]
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_2725_alias_polymorphic_lambda() {
+    indoc!(
+        r#"
+        wrap = \value -> Tag value
+        wrapIt = wrap
+        wrapIt 42
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_2583_specialize_errors_behind_unified_branches() {
+    indoc!(
+        r#"
+        if True then List.first [] else Str.toI64 ""
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_2810() {
+    indoc!(
+        r#"
+        Command : [ Command Tool ]
+
+        Job : [ Job Command ]
+
+        Tool : [ SystemTool, FromJob Job ]
+
+        a : Job
+        a = Job (Command (FromJob (Job (Command SystemTool))))
+        a
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_2811() {
+    indoc!(
+        r#"
+        x = Command { tool: "bash" }
+        Command c = x
+        c.tool
+        "#
+    )
+}
+
+#[mono_test]
+fn specialize_ability_call() {
+    indoc!(
+        r#"
+        app "test" provides [ main ] to "./platform"
+
+        Hash has
+            hash : a -> U64 | a has Hash
+
+        Id := U64
+
+        hash : Id -> U64
+        hash = \$Id n -> n
+
+        main = hash ($Id 1234)
+        "#
+    )
+}
+
+#[mono_test]
+fn opaque_assign_to_symbol() {
+    indoc!(
+        r#"
+        app "test" provides [ out ] to "./platform"
+
+        Variable := U8
+
+        fromUtf8 : U8 -> Result Variable [ InvalidVariableUtf8 ]
+        fromUtf8 = \char ->
+            Ok ($Variable char)
+
+        out = fromUtf8 98
         "#
     )
 }

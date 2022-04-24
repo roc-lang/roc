@@ -24,10 +24,11 @@ const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed() RocStr;
 
-
 extern fn malloc(size: usize) callconv(.C) ?*c_void;
 extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
+extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
+extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     return malloc(size);
@@ -39,6 +40,14 @@ export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignmen
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
+}
+
+export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void {
+    return memcpy(dst, src, size);
+}
+
+export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
+    return memset(dst, value, size);
 }
 
 export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {

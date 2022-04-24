@@ -12,7 +12,7 @@ use roc_error_macros::todo_opaques;
 use roc_module::symbol::{Interns, Symbol};
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
-use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
+use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::Region;
 use roc_types::subs::Variable;
 
@@ -161,6 +161,7 @@ pub fn to_pattern2<'a>(
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                     original_region,
                     shadow: shadow.clone(),
+                    kind: ShadowKind::Variable,
                 }));
 
                 let name: &str = shadow.value.as_ref();
@@ -187,7 +188,7 @@ pub fn to_pattern2<'a>(
                     let problem = MalformedPatternProblem::MalformedFloat;
                     malformed_pattern(env, problem, region)
                 }
-                Ok((float, _bound)) => Pattern2::FloatLiteral(FloatVal::F64(float)),
+                Ok((_, float, _bound)) => Pattern2::FloatLiteral(FloatVal::F64(float)),
             },
             ptype => unsupported_pattern(env, ptype, region),
         },
@@ -364,6 +365,7 @@ pub fn to_pattern2<'a>(
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
+                                    kind: ShadowKind::Variable,
                                 }));
 
                                 // let shadowed = Pattern2::Shadowed {
@@ -443,6 +445,7 @@ pub fn to_pattern2<'a>(
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
+                                    kind: ShadowKind::Variable,
                                 }));
 
                                 // No matter what the other patterns

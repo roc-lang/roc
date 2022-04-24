@@ -53,11 +53,11 @@ section.history {
 .history-item .output {
   margin: 0;
 }
-.history-item .output-ok {
-  color: #0f8;
+.panic {
+  color: red;
 }
-.history-item .output-error {
-  color: #f00;
+.input-line-prefix {
+  color: cyan;
 }
 .code {
   font-family: "Courier New", Courier, monospace;

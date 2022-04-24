@@ -16,6 +16,8 @@ use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
+#[cfg(feature = "gen-wasm")]
+use crate::helpers::wasm::assert_evals_to as assert_non_opt_evals_to;
 // #[cfg(feature = "gen-wasm")]
 // use crate::helpers::dev::assert_expect_failed;
 // #[cfg(feature = "gen-wasm")]
@@ -790,7 +792,7 @@ fn linked_list_sum_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_map() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1072,7 +1074,7 @@ fn closure_in_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn specialize_closure() {
     use roc_std::RocList;
 
@@ -1910,6 +1912,35 @@ fn wildcard_rigid() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn alias_of_alias_with_type_arguments() {
+    assert_non_opt_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            Effect a : [ @Effect a ]
+
+            Task a err : Effect (Result a err)
+
+            always : a -> Task a *
+            always = \x ->
+                inner = (Ok x)
+
+                @Effect inner
+
+
+            main : Task {} (Float *)
+            main = always {}
+            "#
+        ),
+        0,
+        i64,
+        |_| 0
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 #[ignore]
 fn todo_bad_error_message() {
     assert_non_opt_evals_to!(
@@ -2629,7 +2660,7 @@ fn pattern_match_unit_tag() {
 // see for why this is disabled on wasm32 https://github.com/rtfeldman/roc/issues/1687
 #[cfg(not(feature = "wasm-cli-run"))]
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mirror_llvm_alignment_padding() {
     // see https://github.com/rtfeldman/roc/issues/1569
     assert_evals_to!(
@@ -2652,7 +2683,7 @@ fn mirror_llvm_alignment_padding() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_set_bool() {
     assert_evals_to!(
         indoc!(
@@ -2677,7 +2708,7 @@ fn lambda_set_bool() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_set_byte() {
     assert_evals_to!(
         indoc!(
@@ -2731,7 +2762,7 @@ fn lambda_set_struct_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_set_enum_byte_byte() {
     assert_evals_to!(
         indoc!(
@@ -3235,12 +3266,59 @@ fn box_and_unbox_string() {
     assert_evals_to!(
         indoc!(
             r#"
-            Box.unbox (Box.box (Str.concat "Leverage " "agile frameworks to provide a robust synopsis for high level overviews"))
+            Str.concat "Leverage " "agile frameworks to provide a robust synopsis for high level overviews"
+                |> Box.box
+                |> Box.unbox
             "#
         ),
         RocStr::from(
             "Leverage agile frameworks to provide a robust synopsis for high level overviews"
         ),
         RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn box_and_unbox_num() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box (123u8))
+            "#
+        ),
+        123,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn box_and_unbox_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box { a: 15u8, b: 27u8 })
+            "#
+        ),
+        (15, 27),
+        (u8, u8)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn box_and_unbox_tag_union() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            v : [ A U8, B U8 ] # usually stack allocated
+            v = B 27u8
+
+            Box.unbox (Box.box v)
+            "#
+        ),
+        (27, 1),
+        (u8, u8)
     )
 }

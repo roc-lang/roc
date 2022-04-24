@@ -1,12 +1,14 @@
 use bitflags::bitflags;
+use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
-    RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    RecordFields, Subs, SubsFmtContent, SubsIndex, SubsSlice, UnionTags, Variable,
+    VariableSubsSlice,
 };
-use roc_types::types::{AliasKind, ErrorType, Mismatch, RecordField};
+use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField};
 
 macro_rules! mismatch {
     () => {{
@@ -19,7 +21,10 @@ macro_rules! mismatch {
             );
         }
 
-        vec![Mismatch::TypeMismatch]
+        Outcome {
+            mismatches: vec![Mismatch::TypeMismatch],
+            ..Outcome::default()
+        }
     }};
     ($msg:expr) => {{
         if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
@@ -34,7 +39,10 @@ macro_rules! mismatch {
         }
 
 
-        vec![Mismatch::TypeMismatch]
+        Outcome {
+            mismatches: vec![Mismatch::TypeMismatch],
+            ..Outcome::default()
+        }
     }};
     ($msg:expr,) => {{
         mismatch!($msg)
@@ -51,8 +59,28 @@ macro_rules! mismatch {
             println!("");
         }
 
-        vec![Mismatch::TypeMismatch]
+        Outcome {
+            mismatches: vec![Mismatch::TypeMismatch],
+            ..Outcome::default()
+        }
     }};
+    (%not_able, $var:expr, $ability:expr, $msg:expr, $($arg:tt)*) => {{
+        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+            println!($msg, $($arg)*);
+            println!("");
+        }
+
+        Outcome {
+            mismatches: vec![Mismatch::TypeMismatch, Mismatch::DoesNotImplementAbiity($var, $ability)],
+            ..Outcome::default()
+        }
+    }}
 }
 
 type Pool = Vec<Variable>;
@@ -105,20 +133,91 @@ pub struct Context {
 
 #[derive(Debug)]
 pub enum Unified {
-    Success(Pool),
-    Failure(Pool, ErrorType, ErrorType),
+    Success {
+        vars: Pool,
+        must_implement_ability: MustImplementConstraints,
+    },
+    Failure(Pool, ErrorType, ErrorType, DoesNotImplementAbility),
     BadType(Pool, roc_types::types::Problem),
 }
 
-type Outcome = Vec<Mismatch>;
+impl Unified {
+    pub fn expect_success(self, err_msg: &'static str) -> (Pool, MustImplementConstraints) {
+        match self {
+            Unified::Success {
+                vars,
+                must_implement_ability,
+            } => (vars, must_implement_ability),
+            _ => internal_error!("{}", err_msg),
+        }
+    }
+}
+
+/// Specifies that `type` must implement the ability `ability`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MustImplementAbility {
+    // This only points to opaque type names currently.
+    // TODO(abilities) support structural types in general
+    pub typ: Symbol,
+    pub ability: Symbol,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MustImplementConstraints(Vec<MustImplementAbility>);
+
+impl MustImplementConstraints {
+    pub fn push(&mut self, must_implement: MustImplementAbility) {
+        self.0.push(must_implement)
+    }
+
+    pub fn extend(&mut self, other: Self) {
+        self.0.extend(other.0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn get_unique(mut self) -> Vec<MustImplementAbility> {
+        self.0.sort();
+        self.0.dedup();
+        self.0
+    }
+
+    pub fn iter_for_ability(&self, ability: Symbol) -> impl Iterator<Item = &MustImplementAbility> {
+        self.0.iter().filter(move |mia| mia.ability == ability)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Outcome {
+    mismatches: Vec<Mismatch>,
+    /// We defer these checks until the end of a solving phase.
+    /// NOTE: this vector is almost always empty!
+    must_implement_ability: MustImplementConstraints,
+}
+
+impl Outcome {
+    fn union(&mut self, other: Self) {
+        self.mismatches.extend(other.mismatches);
+        self.must_implement_ability
+            .extend(other.must_implement_ability);
+    }
+}
 
 #[inline(always)]
 pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Unified {
     let mut vars = Vec::new();
-    let mismatches = unify_pool(subs, &mut vars, var1, var2, mode);
+    let Outcome {
+        mismatches,
+        must_implement_ability,
+    } = unify_pool(subs, &mut vars, var1, var2, mode);
 
     if mismatches.is_empty() {
-        Unified::Success(vars)
+        Unified::Success {
+            vars,
+            must_implement_ability,
+        }
     } else {
         let error_context = if mismatches.contains(&Mismatch::TypeNotInRange) {
             ErrorTypeContext::ExpandRanges
@@ -136,7 +235,19 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Uni
         if !problems.is_empty() {
             Unified::BadType(vars, problems.remove(0))
         } else {
-            Unified::Failure(vars, type1, type2)
+            let do_not_implement_ability = mismatches
+                .into_iter()
+                .filter_map(|mismatch| match mismatch {
+                    Mismatch::DoesNotImplementAbiity(var, ab) => {
+                        let (err_type, _new_problems) =
+                            subs.var_to_error_type_contextual(var, error_context);
+                        Some((err_type, ab))
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            Unified::Failure(vars, type1, type2, do_not_implement_ability)
         }
     }
 }
@@ -150,7 +261,7 @@ pub fn unify_pool(
     mode: Mode,
 ) -> Outcome {
     if subs.equivalent(var1, var2) {
-        Vec::new()
+        Outcome::default()
     } else {
         let ctx = Context {
             first: var1,
@@ -164,10 +275,28 @@ pub fn unify_pool(
     }
 }
 
-fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    if false {
-        // if true, print the types that are unified.
-        //
+/// Set `ROC_PRINT_UNIFICATIONS` in debug runs to print unifications as they start and complete as
+/// a tree to stderr.
+/// NOTE: Only run this on individual tests! Run on multiple threads, this would clobber each others' output.
+#[cfg(debug_assertions)]
+fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option<&Outcome>) {
+    static mut UNIFICATION_DEPTH: usize = 0;
+
+    if std::env::var("ROC_PRINT_UNIFICATIONS").is_ok() {
+        let prefix = match opt_outcome {
+            None => "❔",
+            Some(outcome) if outcome.mismatches.is_empty() => "✅",
+            Some(_) => "❌",
+        };
+
+        let depth = unsafe { UNIFICATION_DEPTH };
+        let indent = 2;
+        let (use_depth, new_depth) = if opt_outcome.is_none() {
+            (depth, depth + indent)
+        } else {
+            (depth - indent, depth - indent)
+        };
+
         // NOTE: names are generated here (when creating an error type) and that modifies names
         // generated by pretty_print.rs. So many test will fail with changes in variable names when
         // this block runs.
@@ -181,17 +310,36 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         let content_1 = subs.get(ctx.first).content;
         let content_2 = subs.get(ctx.second).content;
         let mode = if ctx.mode.is_eq() { "~" } else { "+=" };
-        println!(
-            "{:?} {:?} {} {:?} {:?}",
+        eprintln!(
+            "{}{}({:?}-{:?}): {:?} {:?} {} {:?} {:?}",
+            " ".repeat(use_depth),
+            prefix,
             ctx.first,
-            roc_types::subs::SubsFmtContent(&content_1, subs),
+            ctx.second,
+            ctx.first,
+            SubsFmtContent(&content_1, subs),
             mode,
             ctx.second,
-            roc_types::subs::SubsFmtContent(&content_2, subs),
+            SubsFmtContent(&content_2, subs),
         );
+
+        unsafe { UNIFICATION_DEPTH = new_depth };
     }
-    match &ctx.first_desc.content {
-        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
+}
+
+fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
+    #[cfg(debug_assertions)]
+    debug_print_unified_types(subs, &ctx, None);
+
+    let result = match &ctx.first_desc.content {
+        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, None, &ctx.second_desc.content),
+        FlexAbleVar(opt_name, ability) => unify_flex(
+            subs,
+            &ctx,
+            opt_name,
+            Some(*ability),
+            &ctx.second_desc.content,
+        ),
         RecursionVar {
             opt_name,
             structure,
@@ -203,7 +351,10 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
             *structure,
             &ctx.second_desc.content,
         ),
-        RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
+        RigidVar(name) => unify_rigid(subs, &ctx, name, None, &ctx.second_desc.content),
+        RigidAbleVar(name, ability) => {
+            unify_rigid(subs, &ctx, name, Some(*ability), &ctx.second_desc.content)
+        }
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
         }
@@ -215,7 +366,12 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
         }
-    }
+    };
+
+    #[cfg(debug_assertions)]
+    debug_print_unified_types(subs, &ctx, Some(&result));
+
+    result
 }
 
 #[inline(always)]
@@ -233,12 +389,15 @@ fn unify_ranged_number(
             // Ranged number wins
             merge(subs, ctx, RangedNumber(real_var, range_vars))
         }
-        RecursionVar { .. } | RigidVar(..) | Alias(..) | Structure(..) => {
-            unify_pool(subs, pool, real_var, ctx.second, ctx.mode)
-        }
+        RecursionVar { .. }
+        | RigidVar(..)
+        | Alias(..)
+        | Structure(..)
+        | RigidAbleVar(..)
+        | FlexAbleVar(..) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
         &RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, real_var, other_real_var, ctx.mode);
-            if outcome.is_empty() {
+            if outcome.mismatches.is_empty() {
                 check_valid_range(subs, pool, ctx.first, other_range_vars, ctx.mode)
             } else {
                 outcome
@@ -248,7 +407,7 @@ fn unify_ranged_number(
         Error => merge(subs, ctx, Error),
     };
 
-    if !outcome.is_empty() {
+    if !outcome.mismatches.is_empty() {
         return outcome;
     }
 
@@ -262,22 +421,18 @@ fn check_valid_range(
     range: VariableSubsSlice,
     mode: Mode,
 ) -> Outcome {
-    let slice = subs
-        .get_subs_slice(range)
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
+    let slice = subs.get_subs_slice(range).to_vec();
 
     let mut it = slice.iter().peekable();
     while let Some(&possible_var) = it.next() {
         let snapshot = subs.snapshot();
         let old_pool = pool.clone();
         let outcome = unify_pool(subs, pool, var, possible_var, mode | Mode::RIGID_AS_FLEX);
-        if outcome.is_empty() {
+        if outcome.mismatches.is_empty() {
             // Okay, we matched some type in the range.
             subs.rollback_to(snapshot);
             *pool = old_pool;
-            return vec![];
+            return Outcome::default();
         } else if it.peek().is_some() {
             // We failed to match something in the range, but there are still things we can try.
             subs.rollback_to(snapshot);
@@ -287,7 +442,10 @@ fn check_valid_range(
         }
     }
 
-    return vec![Mismatch::TypeNotInRange];
+    Outcome {
+        mismatches: vec![Mismatch::TypeNotInRange],
+        ..Outcome::default()
+    }
 }
 
 #[inline(always)]
@@ -313,38 +471,47 @@ fn unify_alias(
         RecursionVar { structure, .. } if !either_is_opaque => {
             unify_pool(subs, pool, real_var, *structure, ctx.mode)
         }
-        RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        RigidVar(_) | RigidAbleVar(..) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        FlexAbleVar(_, ability) if kind == AliasKind::Opaque && args.is_empty() => {
+            // Opaque type wins
+            let mut outcome = merge(subs, ctx, Alias(symbol, args, real_var, kind));
+            outcome.must_implement_ability.push(MustImplementAbility { typ: symbol, ability: *ability });
+            outcome
+        }
         Alias(other_symbol, other_args, other_real_var, _)
             // Opaques types are only equal if the opaque symbols are equal!
             if !either_is_opaque || symbol == *other_symbol =>
         {
             if symbol == *other_symbol {
                 if args.len() == other_args.len() {
-                    let mut problems = Vec::new();
+                    let mut outcome = Outcome::default();
                     let it = args
-                        .variables()
+                        .all_variables()
                         .into_iter()
-                        .zip(other_args.variables().into_iter());
+                        .zip(other_args.all_variables().into_iter());
+
+                    let args_unification_snapshot = subs.snapshot();
 
                     for (l, r) in it {
                         let l_var = subs[l];
                         let r_var = subs[r];
-                        problems.extend(unify_pool(subs, pool, l_var, r_var, ctx.mode));
+                        outcome.union(unify_pool(subs, pool, l_var, r_var, ctx.mode));
                     }
 
-                    if problems.is_empty() {
-                        problems.extend(merge(subs, ctx, *other_content));
+                    if outcome.mismatches.is_empty() {
+                        outcome.union(merge(subs, ctx, *other_content));
                     }
 
-                    // THEORY: if two aliases or opaques have the same name and arguments, their
-                    // real_var is the same and we don't need to check it.
-                    // See https://github.com/rtfeldman/roc/pull/1510
-                    //
-                    // if problems.is_empty() && either_is_opaque {
-                    //     problems.extend(unify_pool(subs, pool, real_var, *other_real_var, ctx.mode));
-                    // }
+                    let args_unification_had_changes = !subs.vars_since_snapshot(&args_unification_snapshot).is_empty();
+                    subs.commit_snapshot(args_unification_snapshot);
 
-                    problems
+                    if !args.is_empty() && args_unification_had_changes && outcome.mismatches.is_empty() {
+                        // We need to unify the real vars because unification of type variables
+                        // may have made them larger, which then needs to be reflected in the `real_var`.
+                        outcome.union(unify_pool(subs, pool, real_var, *other_real_var, ctx.mode));
+                    }
+
+                    outcome
                 } else {
                     dbg!(args.len(), other_args.len());
                     mismatch!("{:?}", symbol)
@@ -356,7 +523,7 @@ fn unify_alias(
         Structure(_) if !either_is_opaque => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
         RangedNumber(other_real_var, other_range_vars) if !either_is_opaque => {
             let outcome = unify_pool(subs, pool, real_var, *other_real_var, ctx.mode);
-            if outcome.is_empty() {
+            if outcome.mismatches.is_empty() {
                 check_valid_range(subs, pool, real_var, *other_range_vars, ctx.mode)
             } else {
                 outcome
@@ -389,13 +556,13 @@ fn unify_structure(
             match (ctx.mode.is_present(), flat_type) {
                 (true, FlatType::TagUnion(tags, _ext)) => {
                     let new_ext = subs.fresh_unnamed_flex_var();
-                    let mut new_desc = ctx.first_desc.clone();
+                    let mut new_desc = ctx.first_desc;
                     new_desc.content = Structure(FlatType::TagUnion(*tags, new_ext));
                     subs.set(ctx.first, new_desc);
                 }
                 (true, FlatType::FunctionOrTagUnion(tn, sym, _ext)) => {
                     let new_ext = subs.fresh_unnamed_flex_var();
-                    let mut new_desc = ctx.first_desc.clone();
+                    let mut new_desc = ctx.first_desc;
                     new_desc.content = Structure(FlatType::FunctionOrTagUnion(*tn, *sym, new_ext));
                     subs.set(ctx.first, new_desc);
                 }
@@ -410,7 +577,15 @@ fn unify_structure(
         RecursionVar { structure, .. } => match flat_type {
             FlatType::TagUnion(_, _) => {
                 // unify the structure with this unrecursive tag union
-                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
+                let mut outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
+
+                if outcome.mismatches.is_empty() {
+                    outcome.union(fix_tag_union_recursion_variable(
+                        subs, ctx, ctx.first, other,
+                    ));
+                }
+
+                outcome
             }
             FlatType::RecursiveTagUnion(rec, _, _) => {
                 debug_assert!(is_recursion_var(subs, *rec));
@@ -419,7 +594,15 @@ fn unify_structure(
             }
             FlatType::FunctionOrTagUnion(_, _, _) => {
                 // unify the structure with this unrecursive tag union
-                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
+                let mut outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
+
+                if outcome.mismatches.is_empty() {
+                    outcome.union(fix_tag_union_recursion_variable(
+                        subs, ctx, ctx.first, other,
+                    ));
+                }
+
+                outcome
             }
             // Only tag unions can be recursive; everything else is an error.
             _ => mismatch!(
@@ -449,13 +632,82 @@ fn unify_structure(
         },
         RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
-            if outcome.is_empty() {
+            if outcome.mismatches.is_empty() {
                 check_valid_range(subs, pool, ctx.first, *other_range_vars, ctx.mode)
             } else {
                 outcome
             }
         }
         Error => merge(subs, ctx, Error),
+
+        FlexAbleVar(_, ability) => {
+            // TODO(abilities) support structural types in ability bounds
+            mismatch!(
+                %not_able, ctx.first, *ability,
+                "trying to unify {:?} with FlexAble {:?}",
+                &flat_type,
+                &other
+            )
+        }
+        RigidAbleVar(_, ability) => {
+            mismatch!(
+                %not_able, ctx.first, *ability,
+                "trying to unify {:?} with RigidAble {:?}",
+                &flat_type,
+                &other
+            )
+        }
+    }
+}
+
+/// Ensures that a non-recursive tag union, when unified with a recursion var to become a recursive
+/// tag union, properly contains a recursion variable that recurses on itself.
+//
+// When might this not be the case? For example, in the code
+//
+//   Indirect : [ Indirect ConsList ]
+//
+//   ConsList : [ Nil, Cons Indirect ]
+//
+//   l : ConsList
+//   l = Cons (Indirect (Cons (Indirect Nil)))
+//   #   ^^^^^^^^^^^^^^^~~~~~~~~~~~~~~~~~~~~~^ region-a
+//   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
+//   l
+//
+// Suppose `ConsList` has the expanded type `[ Nil, Cons [ Indirect <rec> ] ] as <rec>`.
+// After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
+// the tentative total-type of the application annotated "region-a" would be
+// `<v> = [ Nil, Cons [ Indirect <v> ] ] as <rec>`. That is, the type of the recursive tag union
+// would be inlined at the site "v", rather than passing through the correct recursion variable
+// "rec" first.
+//
+// This is not incorrect from a type perspective, but causes problems later on for e.g. layout
+// determination, which expects recursion variables to be placed correctly. Attempting to detect
+// this during layout generation does not work so well because it may be that there *are* recursive
+// tag unions that should be inlined, and not pass through recursion variables. So instead, try to
+// resolve these cases here.
+//
+// See tests labeled "issue_2810" for more examples.
+fn fix_tag_union_recursion_variable(
+    subs: &mut Subs,
+    ctx: &Context,
+    tag_union_promoted_to_recursive: Variable,
+    recursion_var: &Content,
+) -> Outcome {
+    debug_assert!(matches!(
+        subs.get_content_without_compacting(tag_union_promoted_to_recursive),
+        Structure(FlatType::RecursiveTagUnion(..))
+    ));
+
+    let has_recursing_recursive_variable = subs
+        .occurs_including_recursion_vars(tag_union_promoted_to_recursive)
+        .is_err();
+
+    if !has_recursing_recursive_variable {
+        merge(subs, ctx, *recursion_var)
+    } else {
+        Outcome::default()
     }
 }
 
@@ -475,29 +727,29 @@ fn unify_record(
     if separate.only_in_1.is_empty() {
         if separate.only_in_2.is_empty() {
             // these variable will be the empty record, but we must still unify them
-            let ext_problems = unify_pool(subs, pool, ext1, ext2, ctx.mode);
+            let ext_outcome = unify_pool(subs, pool, ext1, ext2, ctx.mode);
 
-            if !ext_problems.is_empty() {
-                return ext_problems;
+            if !ext_outcome.mismatches.is_empty() {
+                return ext_outcome;
             }
 
-            let mut field_problems =
+            let mut field_outcome =
                 unify_shared_fields(subs, pool, ctx, shared_fields, OtherFields::None, ext1);
 
-            field_problems.extend(ext_problems);
+            field_outcome.union(ext_outcome);
 
-            field_problems
+            field_outcome
         } else {
             let only_in_2 = RecordFields::insert_into_subs(subs, separate.only_in_2);
             let flat_type = FlatType::Record(only_in_2, ext2);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
-            let ext_problems = unify_pool(subs, pool, ext1, sub_record, ctx.mode);
+            let ext_outcome = unify_pool(subs, pool, ext1, sub_record, ctx.mode);
 
-            if !ext_problems.is_empty() {
-                return ext_problems;
+            if !ext_outcome.mismatches.is_empty() {
+                return ext_outcome;
             }
 
-            let mut field_problems = unify_shared_fields(
+            let mut field_outcome = unify_shared_fields(
                 subs,
                 pool,
                 ctx,
@@ -506,21 +758,21 @@ fn unify_record(
                 sub_record,
             );
 
-            field_problems.extend(ext_problems);
+            field_outcome.union(ext_outcome);
 
-            field_problems
+            field_outcome
         }
     } else if separate.only_in_2.is_empty() {
         let only_in_1 = RecordFields::insert_into_subs(subs, separate.only_in_1);
         let flat_type = FlatType::Record(only_in_1, ext1);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
-        let ext_problems = unify_pool(subs, pool, sub_record, ext2, ctx.mode);
+        let ext_outcome = unify_pool(subs, pool, sub_record, ext2, ctx.mode);
 
-        if !ext_problems.is_empty() {
-            return ext_problems;
+        if !ext_outcome.mismatches.is_empty() {
+            return ext_outcome;
         }
 
-        let mut field_problems = unify_shared_fields(
+        let mut field_outcome = unify_shared_fields(
             subs,
             pool,
             ctx,
@@ -529,9 +781,9 @@ fn unify_record(
             sub_record,
         );
 
-        field_problems.extend(ext_problems);
+        field_outcome.union(ext_outcome);
 
-        field_problems
+        field_outcome
     } else {
         let only_in_1 = RecordFields::insert_into_subs(subs, separate.only_in_1);
         let only_in_2 = RecordFields::insert_into_subs(subs, separate.only_in_2);
@@ -545,24 +797,26 @@ fn unify_record(
         let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
-        let rec1_problems = unify_pool(subs, pool, ext1, sub2, ctx.mode);
-        if !rec1_problems.is_empty() {
-            return rec1_problems;
+        let rec1_outcome = unify_pool(subs, pool, ext1, sub2, ctx.mode);
+        if !rec1_outcome.mismatches.is_empty() {
+            return rec1_outcome;
         }
 
-        let rec2_problems = unify_pool(subs, pool, sub1, ext2, ctx.mode);
-        if !rec2_problems.is_empty() {
-            return rec2_problems;
+        let rec2_outcome = unify_pool(subs, pool, sub1, ext2, ctx.mode);
+        if !rec2_outcome.mismatches.is_empty() {
+            return rec2_outcome;
         }
 
-        let mut field_problems =
+        let mut field_outcome =
             unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, ext);
 
-        field_problems.reserve(rec1_problems.len() + rec2_problems.len());
-        field_problems.extend(rec1_problems);
-        field_problems.extend(rec2_problems);
+        field_outcome
+            .mismatches
+            .reserve(rec1_outcome.mismatches.len() + rec2_outcome.mismatches.len());
+        field_outcome.union(rec1_outcome);
+        field_outcome.union(rec2_outcome);
 
-        field_problems
+        field_outcome
     }
 }
 
@@ -585,7 +839,7 @@ fn unify_shared_fields(
     let num_shared_fields = shared_fields.len();
 
     for (name, (actual, expected)) in shared_fields {
-        let local_problems = unify_pool(
+        let local_outcome = unify_pool(
             subs,
             pool,
             actual.into_inner(),
@@ -593,7 +847,7 @@ fn unify_shared_fields(
             ctx.mode,
         );
 
-        if local_problems.is_empty() {
+        if local_outcome.mismatches.is_empty() {
             use RecordField::*;
 
             // Unification of optional fields
@@ -847,7 +1101,7 @@ fn unify_tag_union_new(
             // the top level extension variable for that!
             let new_ext = fresh(subs, pool, ctx, Content::FlexVar(None));
             let new_union = Structure(FlatType::TagUnion(tags1, new_ext));
-            let mut new_desc = ctx.first_desc.clone();
+            let mut new_desc = ctx.first_desc;
             new_desc.content = new_union;
             subs.set(ctx.first, new_desc);
 
@@ -857,18 +1111,18 @@ fn unify_tag_union_new(
 
     if separate.only_in_1.is_empty() {
         if separate.only_in_2.is_empty() {
-            let ext_problems = if ctx.mode.is_eq() {
+            let ext_outcome = if ctx.mode.is_eq() {
                 unify_pool(subs, pool, ext1, ext2, ctx.mode)
             } else {
                 // In a presence context, we don't care about ext2 being equal to ext1
-                vec![]
+                Outcome::default()
             };
 
-            if !ext_problems.is_empty() {
-                return ext_problems;
+            if !ext_outcome.mismatches.is_empty() {
+                return ext_outcome;
             }
 
-            let mut tag_problems = unify_shared_tags_new(
+            let mut shared_tags_outcome = unify_shared_tags_new(
                 subs,
                 pool,
                 ctx,
@@ -878,20 +1132,20 @@ fn unify_tag_union_new(
                 recursion_var,
             );
 
-            tag_problems.extend(ext_problems);
+            shared_tags_outcome.union(ext_outcome);
 
-            tag_problems
+            shared_tags_outcome
         } else {
             let unique_tags2 = UnionTags::insert_slices_into_subs(subs, separate.only_in_2);
             let flat_type = FlatType::TagUnion(unique_tags2, ext2);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
-            let ext_problems = unify_pool(subs, pool, ext1, sub_record, ctx.mode);
+            let ext_outcome = unify_pool(subs, pool, ext1, sub_record, ctx.mode);
 
-            if !ext_problems.is_empty() {
-                return ext_problems;
+            if !ext_outcome.mismatches.is_empty() {
+                return ext_outcome;
             }
 
-            let mut tag_problems = unify_shared_tags_new(
+            let mut shared_tags_outcome = unify_shared_tags_new(
                 subs,
                 pool,
                 ctx,
@@ -901,9 +1155,9 @@ fn unify_tag_union_new(
                 recursion_var,
             );
 
-            tag_problems.extend(ext_problems);
+            shared_tags_outcome.union(ext_outcome);
 
-            tag_problems
+            shared_tags_outcome
         }
     } else if separate.only_in_2.is_empty() {
         let unique_tags1 = UnionTags::insert_slices_into_subs(subs, separate.only_in_1);
@@ -912,10 +1166,10 @@ fn unify_tag_union_new(
 
         // In a presence context, we don't care about ext2 being equal to tags1
         if ctx.mode.is_eq() {
-            let ext_problems = unify_pool(subs, pool, sub_record, ext2, ctx.mode);
+            let ext_outcome = unify_pool(subs, pool, sub_record, ext2, ctx.mode);
 
-            if !ext_problems.is_empty() {
-                return ext_problems;
+            if !ext_outcome.mismatches.is_empty() {
+                return ext_outcome;
             }
         }
 
@@ -962,17 +1216,17 @@ fn unify_tag_union_new(
 
         let snapshot = subs.snapshot();
 
-        let ext1_problems = unify_pool(subs, pool, ext1, sub2, ctx.mode);
-        if !ext1_problems.is_empty() {
+        let ext1_outcome = unify_pool(subs, pool, ext1, sub2, ctx.mode);
+        if !ext1_outcome.mismatches.is_empty() {
             subs.rollback_to(snapshot);
-            return ext1_problems;
+            return ext1_outcome;
         }
 
         if ctx.mode.is_eq() {
-            let ext2_problems = unify_pool(subs, pool, sub1, ext2, ctx.mode);
-            if !ext2_problems.is_empty() {
+            let ext2_outcome = unify_pool(subs, pool, sub1, ext2, ctx.mode);
+            if !ext2_outcome.mismatches.is_empty() {
                 subs.rollback_to(snapshot);
-                return ext2_problems;
+                return ext2_outcome;
             }
         }
 
@@ -1064,17 +1318,17 @@ fn unify_shared_tags_new(
             maybe_mark_tag_union_recursive(subs, actual);
             maybe_mark_tag_union_recursive(subs, expected);
 
-            let mut problems = Vec::new();
+            let mut outcome = Outcome::default();
 
-            problems.extend(unify_pool(subs, pool, actual, expected, ctx.mode));
+            outcome.union(unify_pool(subs, pool, actual, expected, ctx.mode));
 
             // clearly, this is very suspicious: these variables have just been unified. And yet,
             // not doing this leads to stack overflows
             if let Rec::Right(_) = recursion_var {
-                if problems.is_empty() {
+                if outcome.mismatches.is_empty() {
                     matching_vars.push(expected);
                 }
-            } else if problems.is_empty() {
+            } else if outcome.mismatches.is_empty() {
                 matching_vars.push(actual);
             }
         }
@@ -1216,39 +1470,43 @@ fn unify_flat_type(
             debug_assert!(is_recursion_var(subs, *rec2));
 
             let rec = Rec::Both(*rec1, *rec2);
-            let mut problems =
+            let mut outcome =
                 unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec);
-            problems.extend(unify_pool(subs, pool, *rec1, *rec2, ctx.mode));
+            outcome.union(unify_pool(subs, pool, *rec1, *rec2, ctx.mode));
 
-            problems
+            outcome
         }
 
         (Apply(l_symbol, l_args), Apply(r_symbol, r_args)) if l_symbol == r_symbol => {
-            let problems = unify_zip_slices(subs, pool, *l_args, *r_args);
+            let mut outcome = unify_zip_slices(subs, pool, *l_args, *r_args);
 
-            if problems.is_empty() {
-                merge(subs, ctx, Structure(Apply(*r_symbol, *r_args)))
-            } else {
-                problems
+            if outcome.mismatches.is_empty() {
+                outcome.union(merge(subs, ctx, Structure(Apply(*r_symbol, *r_args))));
             }
+
+            outcome
         }
         (Func(l_args, l_closure, l_ret), Func(r_args, r_closure, r_ret))
             if l_args.len() == r_args.len() =>
         {
-            let arg_problems = unify_zip_slices(subs, pool, *l_args, *r_args);
-            let ret_problems = unify_pool(subs, pool, *l_ret, *r_ret, ctx.mode);
-            let closure_problems = unify_pool(subs, pool, *l_closure, *r_closure, ctx.mode);
+            let arg_outcome = unify_zip_slices(subs, pool, *l_args, *r_args);
+            let ret_outcome = unify_pool(subs, pool, *l_ret, *r_ret, ctx.mode);
+            let closure_outcome = unify_pool(subs, pool, *l_closure, *r_closure, ctx.mode);
 
-            if arg_problems.is_empty() && closure_problems.is_empty() && ret_problems.is_empty() {
-                merge(subs, ctx, Structure(Func(*r_args, *r_closure, *r_ret)))
-            } else {
-                let mut problems = ret_problems;
+            let mut outcome = ret_outcome;
 
-                problems.extend(closure_problems);
-                problems.extend(arg_problems);
+            outcome.union(closure_outcome);
+            outcome.union(arg_outcome);
 
-                problems
+            if outcome.mismatches.is_empty() {
+                outcome.union(merge(
+                    subs,
+                    ctx,
+                    Structure(Func(*r_args, *r_closure, *r_ret)),
+                ));
             }
+
+            outcome
         }
         (FunctionOrTagUnion(tag_name, tag_symbol, ext), Func(args, closure, ret)) => {
             unify_function_or_tag_union_and_func(
@@ -1283,12 +1541,12 @@ fn unify_flat_type(
             let tag_name_2_ref = &subs[*tag_name_2];
 
             if tag_name_1_ref == tag_name_2_ref {
-                let problems = unify_pool(subs, pool, *ext1, *ext2, ctx.mode);
-                if problems.is_empty() {
+                let outcome = unify_pool(subs, pool, *ext1, *ext2, ctx.mode);
+                if outcome.mismatches.is_empty() {
                     let content = *subs.get_content_without_compacting(ctx.second);
                     merge(subs, ctx, content)
                 } else {
-                    problems
+                    outcome
                 }
             } else {
                 let tags1 = UnionTags::from_tag_name_index(*tag_name_1);
@@ -1344,7 +1602,7 @@ fn unify_zip_slices(
     left: SubsSlice<Variable>,
     right: SubsSlice<Variable>,
 ) -> Outcome {
-    let mut problems = Vec::new();
+    let mut outcome = Outcome::default();
 
     let it = left.into_iter().zip(right.into_iter());
 
@@ -1352,10 +1610,10 @@ fn unify_zip_slices(
         let l_var = subs[l_index];
         let r_var = subs[r_index];
 
-        problems.extend(unify_pool(subs, pool, l_var, r_var, Mode::EQ));
+        outcome.union(unify_pool(subs, pool, l_var, r_var, Mode::EQ));
     }
 
-    problems
+    outcome
 }
 
 #[inline(always)]
@@ -1363,6 +1621,7 @@ fn unify_rigid(
     subs: &mut Subs,
     ctx: &Context,
     name: &SubsIndex<Lowercase>,
+    opt_able_bound: Option<Symbol>,
     other: &Content,
 ) -> Outcome {
     match other {
@@ -1370,16 +1629,76 @@ fn unify_rigid(
             // If the other is flex, rigid wins!
             merge(subs, ctx, RigidVar(*name))
         }
-        RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _, _) | RangedNumber(..) => {
-            if !ctx.mode.contains(Mode::RIGID_AS_FLEX) {
-                // Type mismatch! Rigid can only unify with flex, even if the
-                // rigid names are the same.
-                mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
-            } else {
-                // We are treating rigid vars as flex vars; admit this
-                merge(subs, ctx, *other)
+        FlexAbleVar(_, other_ability) => {
+            match opt_able_bound {
+                Some(ability) => {
+                    if ability == *other_ability {
+                        // The ability bounds are the same, so rigid wins!
+                        merge(subs, ctx, RigidAbleVar(*name, ability))
+                    } else {
+                        // Mismatch for now.
+                        // TODO check ability hierarchies.
+                        mismatch!(
+                            %not_able, ctx.second, ability,
+                            "RigidAble {:?} with ability {:?} not compatible with ability {:?}",
+                            ctx.first,
+                            ability,
+                            other_ability
+                        )
+                    }
+                }
+                None => {
+                    // Mismatch - Rigid can unify with FlexAble only when the Rigid has an ability
+                    // bound as well, otherwise the user failed to correctly annotate the bound.
+                    mismatch!(
+                        %not_able, ctx.first, *other_ability,
+                        "Rigid {:?} with FlexAble {:?}", ctx.first, other
+                    )
+                }
             }
         }
+
+        RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _, _) | RangedNumber(..)
+            if ctx.mode.contains(Mode::RIGID_AS_FLEX) =>
+        {
+            // Usually rigids can only unify with flex, but the mode indicates we are treating
+            // rigid vars as flex, so admit this.
+            match (opt_able_bound, other) {
+                (None, other) => merge(subs, ctx, *other),
+                (Some(ability), Alias(opaque_name, vars, _real_var, AliasKind::Opaque))
+                    if vars.is_empty() =>
+                {
+                    let mut output = merge(subs, ctx, *other);
+                    let must_implement_ability = MustImplementAbility {
+                        typ: *opaque_name,
+                        ability,
+                    };
+                    output.must_implement_ability.push(must_implement_ability);
+                    output
+                }
+                (Some(ability), other) => {
+                    // For now, only allow opaque types with no type variables to implement abilities.
+                    mismatch!(
+                        %not_able, ctx.second, ability,
+                        "RigidAble {:?} with non-opaque or opaque with type variables {:?}",
+                        ctx.first,
+                        &other
+                    )
+                }
+            }
+        }
+
+        RigidVar(_)
+        | RigidAbleVar(..)
+        | RecursionVar { .. }
+        | Structure(_)
+        | Alias(..)
+        | RangedNumber(..) => {
+            // Type mismatch! Rigid can only unify with flex, even if the
+            // rigid names are the same.
+            mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
+        }
+
         Error => {
             // Error propagates.
             merge(subs, ctx, Error)
@@ -1392,16 +1711,49 @@ fn unify_flex(
     subs: &mut Subs,
     ctx: &Context,
     opt_name: &Option<SubsIndex<Lowercase>>,
+    opt_able_bound: Option<Symbol>,
     other: &Content,
 ) -> Outcome {
     match other {
         FlexVar(None) => {
             // If both are flex, and only left has a name, keep the name around.
-            merge(subs, ctx, FlexVar(*opt_name))
+            match opt_able_bound {
+                Some(ability) => merge(subs, ctx, FlexAbleVar(*opt_name, ability)),
+                None => merge(subs, ctx, FlexVar(*opt_name)),
+            }
+        }
+
+        FlexAbleVar(opt_other_name, other_ability) => {
+            // Prefer the right's name when possible.
+            let opt_name = (opt_other_name).or(*opt_name);
+
+            match opt_able_bound {
+                Some(ability) => {
+                    if ability == *other_ability {
+                        // The ability bounds are the same! Keep the name around if it exists.
+                        merge(subs, ctx, FlexAbleVar(opt_name, ability))
+                    } else {
+                        // Ability names differ; mismatch for now.
+                        // TODO check ability hierarchies.
+                        mismatch!(
+                            %not_able, ctx.second, ability,
+                            "FlexAble {:?} with ability {:?} not compatible with ability {:?}",
+                            ctx.first,
+                            ability,
+                            other_ability
+                        )
+                    }
+                }
+                None => {
+                    // Right has an ability bound, but left might have the name. Combine them.
+                    merge(subs, ctx, FlexAbleVar(opt_name, *other_ability))
+                }
+            }
         }
 
         FlexVar(Some(_))
         | RigidVar(_)
+        | RigidAbleVar(_, _)
         | RecursionVar { .. }
         | Structure(_)
         | Alias(_, _, _, _)
@@ -1432,7 +1784,7 @@ fn unify_recursion(
         } => {
             // NOTE: structure and other_structure may not be unified yet, but will be
             // we should not do that here, it would create an infinite loop!
-            let name = (*opt_name).or_else(|| *other_opt_name);
+            let name = (*opt_name).or(*other_opt_name);
             merge(
                 subs,
                 ctx,
@@ -1447,7 +1799,13 @@ fn unify_recursion(
             // unify the structure variable with this Structure
             unify_pool(subs, pool, structure, ctx.second, ctx.mode)
         }
-        RigidVar(_) => mismatch!("RecursionVar {:?} with rigid {:?}", ctx.first, &other),
+        RigidVar(_) => {
+            mismatch!("RecursionVar {:?} with rigid {:?}", ctx.first, &other)
+        }
+
+        FlexAbleVar(..) | RigidAbleVar(..) => {
+            mismatch!("RecursionVar {:?} with able var {:?}", ctx.first, &other)
+        }
 
         FlexVar(_) => merge(
             subs,
@@ -1493,7 +1851,7 @@ pub fn merge(subs: &mut Subs, ctx: &Context, content: Content) -> Outcome {
 
     subs.union(ctx.first, ctx.second, desc);
 
-    Vec::new()
+    Outcome::default()
 }
 
 fn register(subs: &mut Subs, desc: Descriptor, pool: &mut Pool) -> Variable {
@@ -1544,7 +1902,7 @@ fn unify_function_or_tag_union_and_func(
 
     let new_tag_union_var = fresh(subs, pool, ctx, content);
 
-    let mut problems = if left {
+    let mut outcome = if left {
         unify_pool(subs, pool, new_tag_union_var, function_return, ctx.mode)
     } else {
         unify_pool(subs, pool, function_return, new_tag_union_var, ctx.mode)
@@ -1568,16 +1926,16 @@ fn unify_function_or_tag_union_and_func(
             pool,
         );
 
-        let closure_problems = if left {
+        let closure_outcome = if left {
             unify_pool(subs, pool, tag_lambda_set, function_lambda_set, ctx.mode)
         } else {
             unify_pool(subs, pool, function_lambda_set, tag_lambda_set, ctx.mode)
         };
 
-        problems.extend(closure_problems);
+        outcome.union(closure_outcome);
     }
 
-    if problems.is_empty() {
+    if outcome.mismatches.is_empty() {
         let desc = if left {
             subs.get(ctx.second)
         } else {
@@ -1587,5 +1945,5 @@ fn unify_function_or_tag_union_and_func(
         subs.union(ctx.first, ctx.second, desc);
     }
 
-    problems
+    outcome
 }

@@ -2,7 +2,15 @@
 
 ## Using Nix
 
-### Install
+### On NixOS
+
+[For NixOS only Linux x86_64 is supported for now](https://github.com/rtfeldman/roc/issues/2734).
+
+NixOS users should make use of the nix flake by [enabling nix flakes](https://nixos.wiki/wiki/Flakes). Shell creation can be done by executing `nix develop` from the root of the repo. NixOS users that do not make use of this flake will get stuck on issue #1846.
+
+### On Linux/MacOS x86_64/aarch64
+
+#### Install
 
 Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.
 
@@ -16,7 +24,7 @@ Install nix:
 
 You will need to start a fresh terminal session to use nix.
 
-### Usage
+#### Usage
 
 Now with nix installed, you just need to run one command:
 
@@ -31,7 +39,9 @@ Use `cargo run help` to see all subcommands.
 To use the `repl` subcommand, execute `cargo run repl`.
 Use `cargo build` to build the whole project.
 
-### Extra tips
+> When using `nix-shell`, make sure that if you start `nix-shell` and then run `echo "$PATH" | tr ':' '\n'`, you see the `usr/bin` path listed after all the `/nix/…` paths. Otherwise you might get some nasty rust compilation errors!
+
+#### Extra tips
 
 If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependencies into your current shell, so you never have to run nix-shell directly!
 
@@ -97,9 +107,9 @@ To run the test suite (via `cargo test`), you additionally need to install:
 * [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
 Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specific_tests` to skip over the valgrind failures & tests.
 
-For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal developtment you should be fine without it.
+For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal development you should be fine without it.
 
-### libcxb libraries
+### libxcb libraries
 
 You may see an error like this during builds:
 

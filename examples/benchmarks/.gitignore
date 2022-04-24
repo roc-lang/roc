@@ -9,3 +9,4 @@ rbtree-del
 rbtree-insert
 test-astar
 test-base64
+*.wasm

@@ -2,7 +2,7 @@
 use roc_gen_llvm::llvm::build::module_from_builtins;
 #[cfg(feature = "llvm")]
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
-use roc_load::file::{LoadedModule, MonomorphizedModule};
+use roc_load::{LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
@@ -28,7 +28,7 @@ const LLVM_VERSION: &str = "12";
 // them after type checking (like Elm does) so we can complete the entire
 // `roc check` process without needing to monomorphize.
 /// Returns the number of problems reported.
-pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> usize {
+pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Problems {
     report_problems_help(
         loaded.total_problems(),
         &loaded.sources,
@@ -39,7 +39,7 @@ pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> usize 
     )
 }
 
-pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> usize {
+pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> Problems {
     report_problems_help(
         loaded.total_problems(),
         &loaded.sources,
@@ -50,6 +50,23 @@ pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> usize {
     )
 }
 
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Problems {
+    pub errors: usize,
+    pub warnings: usize,
+}
+
+impl Problems {
+    pub fn exit_code(&self) -> i32 {
+        // 0 means no problems, 1 means errors, 2 means warnings
+        if self.errors > 0 {
+            1
+        } else {
+            self.warnings.min(1) as i32
+        }
+    }
+}
+
 fn report_problems_help(
     total_problems: usize,
     sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -57,7 +74,7 @@ fn report_problems_help(
     can_problems: &mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: &mut MutMap<ModuleId, Vec<roc_solve::solve::TypeError>>,
     mono_problems: &mut MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
-) -> usize {
+) -> Problems {
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, Report, RocDocAllocator, Severity::*,
         DEFAULT_PALETTE,
@@ -144,13 +161,13 @@ fn report_problems_help(
     if errors.is_empty() {
         problems_reported = warnings.len();
 
-        for warning in warnings {
+        for warning in warnings.iter() {
             println!("\n{}\n", warning);
         }
     } else {
         problems_reported = errors.len();
 
-        for error in errors {
+        for error in errors.iter() {
             println!("\n{}\n", error);
         }
     }
@@ -165,7 +182,10 @@ fn report_problems_help(
         println!("{}\u{001B}[0m\n", Report::horizontal_rule(&palette));
     }
 
-    problems_reported
+    Problems {
+        errors: errors.len(),
+        warnings: warnings.len(),
+    }
 }
 
 #[cfg(not(feature = "llvm"))]
@@ -266,6 +286,7 @@ pub fn gen_from_mono_module_llvm(
             || name.starts_with("roc_builtins.dec")
             || name.starts_with("list.RocList")
             || name.starts_with("dict.RocDict")
+            || name.contains("incref")
             || name.contains("decref")
         {
             function.add_attribute(AttributeLoc::Function, enum_attr);

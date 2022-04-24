@@ -22,11 +22,11 @@ roc_gen_wasm = {path = "../compiler/gen_wasm"}
 roc_load = {path = "../compiler/load"}
 roc_parse = {path = "../compiler/parse"}
 roc_repl_eval = {path = "../repl_eval"}
+roc_reporting = {path = "../reporting"}
 roc_target = {path = "../compiler/roc_target"}
 roc_types = {path = "../compiler/types"}
 
 [features]
-default = ["console_error_panic_hook"]
 wasmer = ["futures"]
 
 [package.metadata.wasm-pack.profile.profiling]

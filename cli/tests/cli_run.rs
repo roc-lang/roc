@@ -2,12 +2,10 @@
 extern crate pretty_assertions;
 
 extern crate bumpalo;
+extern crate indoc;
 extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
-
-#[macro_use]
-extern crate indoc;
 
 #[cfg(test)]
 mod cli_run {
@@ -16,6 +14,7 @@ mod cli_run {
         known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
         ValgrindErrorXWhat,
     };
+    use indoc::indoc;
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::path::{Path, PathBuf};
@@ -23,12 +22,13 @@ mod cli_run {
     #[cfg(not(debug_assertions))]
     use roc_collections::all::MutMap;
 
-    #[cfg(target_os = "linux")]
-    const TEST_SURGICAL_LINKER: bool = true;
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const TEST_LEGACY_LINKER: bool = true;
 
-    // Surgical linker currently only supports linux.
-    #[cfg(not(target_os = "linux"))]
-    const TEST_SURGICAL_LINKER: bool = false;
+    // Surgical linker currently only supports linux x86_64,
+    // so we're always testing the legacy linker on other targets.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    const TEST_LEGACY_LINKER: bool = false;
 
     #[cfg(not(target_os = "macos"))]
     const ALLOW_VALGRIND: bool = true;
@@ -50,30 +50,35 @@ mod cli_run {
     }
 
     fn strip_colors(str: &str) -> String {
-        use roc_reporting::report::*;
-        str.replace(RED_CODE, "")
-            .replace(WHITE_CODE, "")
-            .replace(BLUE_CODE, "")
-            .replace(YELLOW_CODE, "")
-            .replace(GREEN_CODE, "")
-            .replace(CYAN_CODE, "")
-            .replace(MAGENTA_CODE, "")
-            .replace(RESET_CODE, "")
-            .replace(BOLD_CODE, "")
-            .replace(UNDERLINE_CODE, "")
+        use roc_reporting::report::ANSI_STYLE_CODES;
+        str.replace(ANSI_STYLE_CODES.red, "")
+            .replace(ANSI_STYLE_CODES.green, "")
+            .replace(ANSI_STYLE_CODES.yellow, "")
+            .replace(ANSI_STYLE_CODES.blue, "")
+            .replace(ANSI_STYLE_CODES.magenta, "")
+            .replace(ANSI_STYLE_CODES.cyan, "")
+            .replace(ANSI_STYLE_CODES.white, "")
+            .replace(ANSI_STYLE_CODES.bold, "")
+            .replace(ANSI_STYLE_CODES.underline, "")
+            .replace(ANSI_STYLE_CODES.reset, "")
+            .replace(ANSI_STYLE_CODES.color_reset, "")
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
         let compile_out = run_roc(&[&["check", file.to_str().unwrap()], flags].concat());
         let err = compile_out.stdout.trim();
         let err = strip_colors(err);
-        assert_multiline_str_eq!(err, expected.into());
+
+        // e.g. "1 error and 0 warnings found in 123 ms."
+        let (before_first_digit, _) = err.split_at(err.rfind("found in ").unwrap());
+        let err = format!("{}found in <ignored for test> ms.", before_first_digit);
+
+        assert_multiline_str_eq!(err.as_str(), expected.into());
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
         let flags = &["--check"];
         let out = run_roc(&[&["format", file.to_str().unwrap()], &flags[..]].concat());
-
         if expects_success_exit_code {
             assert!(out.status.success());
         } else {
@@ -176,8 +181,8 @@ mod cli_run {
         };
         if !&out.stdout.ends_with(expected_ending) {
             panic!(
-                "expected output to end with {:?} but instead got {:#?}",
-                expected_ending, out.stdout
+                "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
+                expected_ending, out.stdout, out.stderr
             );
         }
         assert!(out.status.success());
@@ -228,6 +233,7 @@ mod cli_run {
         ($($test_name:ident:$name:expr => $example:expr,)+) => {
             $(
                 #[test]
+                #[allow(non_snake_case)]
                 fn $test_name() {
                     let dir_name = $name;
                     let example = $example;
@@ -239,20 +245,20 @@ mod cli_run {
                             eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
                             return;
                         }
+                        "form" => {
+                            // test is skipped until we upgrate to zig 0.9 / llvm 13
+                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
+                            return;
+                        }
                         "helloSwift" => {
                             if cfg!(not(target_os = "macos")) {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
                                 return;
                             }
                         }
-                        "hello-gui" => {
-                            // Since this one requires opening a window, we do `roc build` on it but don't run it.
-                            if cfg!(target_os = "linux") {
-                                // The surgical linker can successfully link this on Linux, but the legacy linker errors!
-                                build_example(&file_name, &["--optimize", "--roc-linker"]);
-                            } else {
-                                build_example(&file_name, &["--optimize"]);
-                            }
+                        "hello-gui" | "breakout" => {
+                            // Since these require opening a window, we do `roc build` on them but don't run them.
+                            build_example(&file_name, &["--optimize"]);
 
                             return;
                         }
@@ -283,14 +289,14 @@ mod cli_run {
                         example.use_valgrind,
                     );
 
-                    // Also check with the surgical linker.
+                    // Also check with the legacy linker.
 
-                    if TEST_SURGICAL_LINKER {
+                    if TEST_LEGACY_LINKER {
                         check_output_with_stdin(
                             &file_name,
                             example.stdin,
                             example.executable_filename,
-                            &["--roc-linker"],
+                            &["--linker", "legacy"],
                             example.input_file.and_then(|file| Some(example_file(dir_name, file))),
                             example.expected_ending,
                             example.use_valgrind,
@@ -388,6 +394,14 @@ mod cli_run {
             expected_ending: "",
             use_valgrind: false,
         },
+        breakout:"breakout" => Example {
+            filename: "breakout.roc",
+            executable_filename: "breakout",
+            stdin: &[],
+            input_file: None,
+            expected_ending: "",
+            use_valgrind: false,
+        },
         quicksort:"algorithms" => Example {
             filename: "quicksort.roc",
             executable_filename: "quicksort",
@@ -426,7 +440,7 @@ mod cli_run {
             stdin: &["Giovanni\n", "Giorgio\n"],
             input_file: None,
             expected_ending: "Hi, Giovanni Giorgio! 👋\n",
-            use_valgrind: true,
+            use_valgrind: false,
         },
         tui:"interactive" => Example {
             filename: "tui.roc",
@@ -459,7 +473,7 @@ mod cli_run {
                 stdin: &[],
                 input_file: Some("examples/hello.false"),
                 expected_ending:"Hello, World!\n",
-                use_valgrind: true,
+                use_valgrind: false,
             }
         },
     }
@@ -844,7 +858,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
 
                 I cannot find a `d` value
 
@@ -858,7 +872,9 @@ mod cli_run {
                     I8
                     F64
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }
@@ -870,14 +886,16 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── MISSING DEFINITION ──────────────────────────────────────────────────────────
+                ── MISSING DEFINITION ────────────────── tests/known_bad/ExposedNotDefined.roc ─
 
                 bar is listed as exposed, but it isn't defined in this module.
 
                 You can fix this by adding a definition for bar, or by removing it
                 from exposes.
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }
@@ -889,7 +907,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNUSED IMPORT ───────────────────────────────────────────────────────────────
+                ── UNUSED IMPORT ──────────────────────────── tests/known_bad/UnusedImport.roc ─
 
                 Nothing from Symbol is used in this module.
 
@@ -898,7 +916,9 @@ mod cli_run {
 
                 Since Symbol isn't used, you don't need to import it.
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                0 errors and 1 warning found in <ignored for test> ms."#
             ),
         );
     }
@@ -910,7 +930,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNKNOWN GENERATES FUNCTION ──────────────────────────────────────────────────
+                ── UNKNOWN GENERATES FUNCTION ─────── tests/known_bad/UnknownGeneratesWith.roc ─
 
                 I don't know how to generate the foobar function.
 
@@ -920,7 +940,9 @@ mod cli_run {
                 Only specific functions like `after` and `map` can be generated.Learn
                 more about hosted modules at TODO.
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }
@@ -940,7 +962,7 @@ mod cli_run {
         // This fails, because "NotFormatted.roc" is present in this folder
         check_format_check_as_expected(&fixtures_dir("format"), false);
 
-        // This doesn't fail, since only "Formatted.roc" is present in this folder
+        // This doesn't fail, since only "Formatted.roc" and non-roc files are present in this folder
         check_format_check_as_expected(&fixtures_dir("format/formatted_directory"), true);
     }
 }

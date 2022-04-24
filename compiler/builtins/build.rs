@@ -7,6 +7,9 @@ use std::path::Path;
 use std::process::Command;
 use std::str;
 
+/// To debug the zig code with debug prints, we need to disable the wasm code gen
+const DEBUG: bool = false;
+
 fn zig_executable() -> String {
     match std::env::var("ROC_ZIG") {
         Ok(path) => path,
@@ -35,18 +38,27 @@ fn main() {
 
     generate_bc_file(&bitcode_path, &build_script_dir_path, "ir", "builtins-host");
 
-    generate_bc_file(
-        &bitcode_path,
-        &build_script_dir_path,
-        "ir-wasm32",
-        "builtins-wasm32",
-    );
+    if !DEBUG {
+        generate_bc_file(
+            &bitcode_path,
+            &build_script_dir_path,
+            "ir-wasm32",
+            "builtins-wasm32",
+        );
+    }
 
     generate_bc_file(
         &bitcode_path,
         &build_script_dir_path,
         "ir-i386",
         "builtins-i386",
+    );
+
+    generate_bc_file(
+        &bitcode_path,
+        &build_script_dir_path,
+        "ir-x86_64",
+        "builtins-x86_64",
     );
 
     // OBJECT FILES
@@ -100,16 +112,23 @@ fn generate_object_file(
 
     println!("Compiling zig object `{}` to: {}", zig_object, src_obj);
 
-    run_command(
-        &bitcode_path,
-        &zig_executable(),
-        &["build", zig_object, "-Drelease=true"],
-    );
+    if !DEBUG {
+        run_command(
+            &bitcode_path,
+            &zig_executable(),
+            &["build", zig_object, "-Drelease=true"],
+        );
 
-    println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
+        println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
 
-    // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
-    fs::copy(src_obj, dest_obj).expect("Failed to copy object file.");
+        // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
+        fs::copy(src_obj, dest_obj).unwrap_or_else(|err| {
+            panic!(
+                "Failed to copy object file {} to {}: {:?}",
+                src_obj, dest_obj, err
+            );
+        });
+    }
 }
 
 fn generate_bc_file(

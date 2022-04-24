@@ -9,7 +9,9 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
-use roc_types::types::{AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type};
+use roc_types::types::{
+    AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type, TypeExtension,
+};
 
 #[derive(Default)]
 pub struct PatternState {
@@ -48,7 +50,13 @@ fn headers_from_annotation_help(
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> bool {
     match pattern {
-        Identifier(symbol) | Shadowed(_, _, symbol) => {
+        Identifier(symbol)
+        | Shadowed(_, _, symbol)
+        // TODO(abilities): handle linking the member def to the specialization ident
+        | AbilityMemberSpecialization {
+            ident: symbol,
+            specializes: _,
+        } => {
             let typ = Loc::at(annotation.region, annotation.value.clone());
             headers.insert(*symbol, typ);
             true
@@ -170,18 +178,42 @@ pub fn constrain_pattern(
             //     A -> ""
             //     _ -> ""
             // so, we know that "x" (in this case, a tag union) must be open.
-            state
-                .constraints
-                .push(constraints.is_open_type(expected.get_type()));
+            if could_be_a_tag_union(expected.get_type_ref()) {
+                state
+                    .constraints
+                    .push(constraints.is_open_type(expected.get_type()));
+            }
         }
         UnsupportedPattern(_) | MalformedPattern(_, _) | OpaqueNotInScope(..) => {
             // Erroneous patterns don't add any constraints.
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            state
-                .constraints
-                .push(constraints.is_open_type(expected.get_type_ref().clone()));
+            if could_be_a_tag_union(expected.get_type_ref()) {
+                state
+                    .constraints
+                    .push(constraints.is_open_type(expected.get_type_ref().clone()));
+            }
+
+            state.headers.insert(
+                *symbol,
+                Loc {
+                    region,
+                    value: expected.get_type(),
+                },
+            );
+        }
+
+        AbilityMemberSpecialization {
+            ident: symbol,
+            specializes: _,
+        } => {
+            if could_be_a_tag_union(expected.get_type_ref()) {
+                state
+                    .constraints
+                    .push(constraints.is_open_type(expected.get_type_ref().clone()));
+            }
+
             state.headers.insert(
                 *symbol,
                 Loc {
@@ -391,7 +423,7 @@ pub fn constrain_pattern(
                 state.vars.push(*var);
             }
 
-            let record_type = Type::Record(field_types, Box::new(ext_type));
+            let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
 
             let whole_con = constraints.equal_types(
                 Type::Variable(*whole_var),
@@ -549,4 +581,8 @@ pub fn constrain_pattern(
             ]);
         }
     }
+}
+
+fn could_be_a_tag_union(typ: &Type) -> bool {
+    !matches!(typ, Type::Apply(..) | Type::Function(..) | Type::Record(..))
 }

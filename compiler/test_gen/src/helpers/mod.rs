@@ -56,6 +56,7 @@ where
     run_test()
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RefCount {
     Live(u32),

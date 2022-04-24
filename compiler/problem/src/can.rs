@@ -5,6 +5,7 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
+use roc_types::types::AliasKind;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CycleEntry {
@@ -17,6 +18,14 @@ pub struct CycleEntry {
 pub enum BadPattern {
     UnderscoreInDef,
     Unsupported(PatternType),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShadowKind {
+    Variable,
+    Alias,
+    Opaque,
+    Ability,
 }
 
 /// Problems that can occur in the course of canonicalization.
@@ -32,9 +41,10 @@ pub enum Problem {
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(BadPattern, Region),
-    ShadowingInAnnotation {
+    Shadowing {
         original_region: Region,
         shadow: Loc<Ident>,
+        kind: ShadowKind,
     },
     CyclicAlias(Symbol, Region, Vec<Symbol>),
     BadRecursion(Vec<CycleEntry>),
@@ -42,6 +52,12 @@ pub enum Problem {
         typ: Symbol,
         variable_region: Region,
         variable_name: Lowercase,
+    },
+    UnboundTypeVariable {
+        typ: Symbol,
+        num_unbound: usize,
+        one_occurrence: Region,
+        kind: AliasKind,
     },
     DuplicateRecordFieldValue {
         field_name: Lowercase,
@@ -88,6 +104,41 @@ pub enum Problem {
         region: Region,
         kind: ExtensionTypeKind,
     },
+    AbilityHasTypeVariables {
+        name: Symbol,
+        variables_region: Region,
+    },
+    HasClauseIsNotAbility {
+        region: Region,
+    },
+    IllegalHasClause {
+        region: Region,
+    },
+    AbilityMemberMissingHasClause {
+        member: Symbol,
+        ability: Symbol,
+        region: Region,
+    },
+    AbilityMemberMultipleBoundVars {
+        member: Symbol,
+        ability: Symbol,
+        span_has_clauses: Region,
+        bound_var_names: Vec<Lowercase>,
+    },
+    // TODO(abilities): remove me when ability hierarchies are supported
+    AbilityMemberBindsExternalAbility {
+        member: Symbol,
+        ability: Symbol,
+        region: Region,
+    },
+    AliasUsesAbility {
+        loc_name: Loc<Symbol>,
+        ability: Symbol,
+    },
+    AbilityNotOnToplevel {
+        region: Region,
+    },
+    AbilityUsedAsType(Lowercase, Symbol, Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,6 +201,7 @@ pub enum RuntimeError {
     Shadowing {
         original_region: Region,
         shadow: Loc<Ident>,
+        kind: ShadowKind,
     },
     InvalidOptionalValue {
         field_name: Lowercase,

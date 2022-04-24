@@ -1,80 +1,191 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
-use roc_error_macros::todo_abilities;
+use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_parse::ast::{AssignedField, Pattern, Tag, TypeAnnotation, TypeHeader};
+use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
+use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, AliasKind, LambdaSet, Problem, RecordField, Type};
+use roc_types::types::{
+    name_type_var, Alias, AliasCommon, AliasKind, LambdaSet, Problem, RecordField, Type,
+    TypeExtension,
+};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Annotation {
     pub typ: Type,
     pub introduced_variables: IntroducedVariables,
-    pub references: MutSet<Symbol>,
+    pub references: VecSet<Symbol>,
     pub aliases: SendMap<Symbol, Alias>,
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NamedOrAbleVariable<'a> {
+    Named(&'a NamedVariable),
+    Able(&'a AbleVariable),
+}
+
+impl<'a> NamedOrAbleVariable<'a> {
+    pub fn first_seen(&self) -> Region {
+        match self {
+            NamedOrAbleVariable::Named(nv) => nv.first_seen,
+            NamedOrAbleVariable::Able(av) => av.first_seen,
+        }
+    }
+
+    pub fn name(&self) -> &Lowercase {
+        match self {
+            NamedOrAbleVariable::Named(nv) => &nv.name,
+            NamedOrAbleVariable::Able(av) => &av.name,
+        }
+    }
+
+    pub fn variable(&self) -> Variable {
+        match self {
+            NamedOrAbleVariable::Named(nv) => nv.variable,
+            NamedOrAbleVariable::Able(av) => av.variable,
+        }
+    }
+}
+
+/// A named type variable, not bound to an ability.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NamedVariable {
+    pub variable: Variable,
+    pub name: Lowercase,
+    // NB: there may be multiple occurrences of a variable
+    pub first_seen: Region,
+}
+
+/// A type variable bound to an ability, like "a has Hash".
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AbleVariable {
+    pub variable: Variable,
+    pub name: Lowercase,
+    pub ability: Symbol,
+    // NB: there may be multiple occurrences of a variable
+    pub first_seen: Region,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct IntroducedVariables {
-    // NOTE on rigids
-    //
-    // Rigids must be unique within a type annotation.
-    // E.g. in `identity : a -> a`, there should only be one
-    // variable (a rigid one, with name "a").
-    // Hence `rigids : ImMap<Lowercase, Variable>`
-    //
-    // But then between annotations, the same name can occur multiple times,
-    // but a variable can only have one name. Therefore
-    // `ftv : SendMap<Variable, Lowercase>`.
-    pub wildcards: Vec<Variable>,
+    pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,
-    pub inferred: Vec<Variable>,
-    pub var_by_name: SendMap<Lowercase, Variable>,
-    pub name_by_var: SendMap<Variable, Lowercase>,
-    pub host_exposed_aliases: MutMap<Symbol, Variable>,
+    pub inferred: Vec<Loc<Variable>>,
+    pub named: VecSet<NamedVariable>,
+    pub able: VecSet<AbleVariable>,
+    pub host_exposed_aliases: VecMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {
-    pub fn insert_named(&mut self, name: Lowercase, var: Variable) {
-        self.var_by_name.insert(name.clone(), var);
-        self.name_by_var.insert(var, name);
+    #[inline(always)]
+    fn debug_assert_not_already_present(&self, var: Variable) {
+        debug_assert!((self.wildcards.iter().map(|v| &v.value))
+            .chain(self.lambda_sets.iter())
+            .chain(self.inferred.iter().map(|v| &v.value))
+            .chain(self.named.iter().map(|nv| &nv.variable))
+            .chain(self.able.iter().map(|av| &av.variable))
+            .chain(self.host_exposed_aliases.values())
+            .all(|&v| v != var));
     }
 
-    pub fn insert_wildcard(&mut self, var: Variable) {
+    pub fn insert_named(&mut self, name: Lowercase, var: Loc<Variable>) {
+        self.debug_assert_not_already_present(var.value);
+
+        let named_variable = NamedVariable {
+            name,
+            variable: var.value,
+            first_seen: var.region,
+        };
+
+        self.named.insert(named_variable);
+    }
+
+    pub fn insert_able(&mut self, name: Lowercase, var: Loc<Variable>, ability: Symbol) {
+        self.debug_assert_not_already_present(var.value);
+
+        let able_variable = AbleVariable {
+            name,
+            ability,
+            variable: var.value,
+            first_seen: var.region,
+        };
+
+        self.able.insert(able_variable);
+    }
+
+    pub fn insert_wildcard(&mut self, var: Loc<Variable>) {
+        self.debug_assert_not_already_present(var.value);
         self.wildcards.push(var);
     }
 
-    pub fn insert_inferred(&mut self, var: Variable) {
+    pub fn insert_inferred(&mut self, var: Loc<Variable>) {
+        self.debug_assert_not_already_present(var.value);
         self.inferred.push(var);
     }
 
     fn insert_lambda_set(&mut self, var: Variable) {
+        self.debug_assert_not_already_present(var);
         self.lambda_sets.push(var);
     }
 
     pub fn insert_host_exposed_alias(&mut self, symbol: Symbol, var: Variable) {
+        self.debug_assert_not_already_present(var);
         self.host_exposed_aliases.insert(symbol, var);
     }
 
     pub fn union(&mut self, other: &Self) {
-        self.wildcards.extend(other.wildcards.iter().cloned());
-        self.lambda_sets.extend(other.lambda_sets.iter().cloned());
-        self.inferred.extend(other.inferred.iter().cloned());
-        self.var_by_name.extend(other.var_by_name.clone());
-        self.name_by_var.extend(other.name_by_var.clone());
+        self.wildcards.extend(other.wildcards.iter().copied());
+        self.lambda_sets.extend(other.lambda_sets.iter().copied());
+        self.inferred.extend(other.inferred.iter().copied());
         self.host_exposed_aliases
-            .extend(other.host_exposed_aliases.clone());
+            .extend(other.host_exposed_aliases.iter().map(|(k, v)| (*k, *v)));
+
+        self.named.extend(other.named.iter().cloned());
+        self.able.extend(other.able.iter().cloned());
     }
 
-    pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {
-        self.var_by_name.get(name)
+    pub fn union_owned(&mut self, other: Self) {
+        self.wildcards.extend(other.wildcards);
+        self.lambda_sets.extend(other.lambda_sets);
+        self.inferred.extend(other.inferred);
+        self.host_exposed_aliases.extend(other.host_exposed_aliases);
+
+        self.named.extend(other.named);
+        self.able.extend(other.able.iter().cloned());
     }
 
-    pub fn name_by_var(&self, var: Variable) -> Option<&Lowercase> {
-        self.name_by_var.get(&var)
+    pub fn var_by_name(&self, name: &Lowercase) -> Option<Variable> {
+        (self.named.iter().map(|nv| (&nv.name, nv.variable)))
+            .chain(self.able.iter().map(|av| (&av.name, av.variable)))
+            .find(|(cand, _)| cand == &name)
+            .map(|(_, var)| var)
+    }
+
+    pub fn iter_named(&self) -> impl Iterator<Item = NamedOrAbleVariable> {
+        (self.named.iter().map(NamedOrAbleVariable::Named))
+            .chain(self.able.iter().map(NamedOrAbleVariable::Able))
+    }
+
+    pub fn named_var_by_name(&self, name: &Lowercase) -> Option<NamedOrAbleVariable> {
+        self.iter_named().find(|v| v.name() == name)
+    }
+
+    pub fn collect_able(&self) -> Vec<Variable> {
+        self.able.iter().map(|av| av.variable).collect()
+    }
+
+    pub fn collect_rigid(&self) -> Vec<Variable> {
+        (self.named.iter().map(|nv| nv.variable))
+            .chain(self.wildcards.iter().map(|wc| wc.value))
+            // For our purposes, lambda set vars are treated like rigids
+            .chain(self.lambda_sets.iter().copied())
+            .collect()
+    }
+
+    pub fn collect_flex(&self) -> Vec<Variable> {
+        self.inferred.iter().map(|iv| iv.value).collect()
     }
 }
 
@@ -85,16 +196,46 @@ fn malformed(env: &mut Env, region: Region, name: &str) {
     env.problem(roc_problem::can::Problem::RuntimeError(problem));
 }
 
+/// Canonicalizes a top-level type annotation.
 pub fn canonicalize_annotation(
     env: &mut Env,
     scope: &mut Scope,
-    annotation: &roc_parse::ast::TypeAnnotation,
+    annotation: &TypeAnnotation,
     region: Region,
     var_store: &mut VarStore,
+    abilities_in_scope: &[Symbol],
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
-    let mut references = MutSet::default();
+    let mut references = VecSet::default();
     let mut aliases = SendMap::default();
+
+    let (annotation, region) = match annotation {
+        TypeAnnotation::Where(annotation, clauses) => {
+            // Add each "has" clause. The association of a variable to an ability will be saved on
+            // `introduced_variables`, which we'll process later.
+            for clause in clauses.iter() {
+                let opt_err = canonicalize_has_clause(
+                    env,
+                    scope,
+                    var_store,
+                    &mut introduced_variables,
+                    clause,
+                    abilities_in_scope,
+                    &mut references,
+                );
+                if let Err(err_type) = opt_err {
+                    return Annotation {
+                        typ: err_type,
+                        introduced_variables,
+                        references,
+                        aliases,
+                    };
+                }
+            }
+            (&annotation.value, annotation.region)
+        }
+        annot => (annot, region),
+    };
 
     let typ = can_annotation_help(
         env,
@@ -243,12 +384,25 @@ pub fn find_type_def_symbols(
             SpaceBefore(inner, _) | SpaceAfter(inner, _) => {
                 stack.push(inner);
             }
-            Where(..) => todo_abilities!(),
+            Where(annotation, clauses) => {
+                stack.push(&annotation.value);
+
+                for has_clause in clauses.iter() {
+                    stack.push(&has_clause.value.ability.value);
+                }
+            }
             Inferred | Wildcard | Malformed(_) => {}
         }
     }
 
     result
+}
+
+fn find_fresh_var_name(introduced_variables: &IntroducedVariables) -> Lowercase {
+    name_type_var(0, &mut introduced_variables.iter_named(), |var, str| {
+        var.name().as_str() == str
+    })
+    .0
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -260,7 +414,7 @@ fn can_annotation_help(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut MutSet<Symbol>,
+    references: &mut VecSet<Symbol>,
 ) -> Type {
     use roc_parse::ast::TypeAnnotation::*;
 
@@ -272,7 +426,7 @@ fn can_annotation_help(
                 let arg_ann = can_annotation_help(
                     env,
                     &arg.value,
-                    region,
+                    arg.region,
                     scope,
                     var_store,
                     introduced_variables,
@@ -286,7 +440,7 @@ fn can_annotation_help(
             let ret = can_annotation_help(
                 env,
                 &return_type.value,
-                region,
+                return_type.region,
                 scope,
                 var_store,
                 introduced_variables,
@@ -310,11 +464,26 @@ fn can_annotation_help(
 
             references.insert(symbol);
 
+            if scope.abilities_store.is_ability(symbol) {
+                let fresh_ty_var = find_fresh_var_name(introduced_variables);
+
+                env.problem(roc_problem::can::Problem::AbilityUsedAsType(
+                    fresh_ty_var.clone(),
+                    symbol,
+                    region,
+                ));
+
+                // Generate an variable bound to the ability so we can keep compiling.
+                let var = var_store.fresh();
+                introduced_variables.insert_able(fresh_ty_var, Loc::at(region, var), symbol);
+                return Type::Variable(var);
+            }
+
             for arg in *type_arguments {
                 let arg_ann = can_annotation_help(
                     env,
                     &arg.value,
-                    region,
+                    arg.region,
                     scope,
                     var_store,
                     introduced_variables,
@@ -339,22 +508,50 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    let (type_arguments, lambda_set_variables, actual) =
-                        instantiate_and_freshen_alias_type(
-                            var_store,
-                            introduced_variables,
-                            &alias.type_variables,
-                            args,
-                            &alias.lambda_set_variables,
-                            alias.typ.clone(),
-                        );
+                    let is_structural = alias.kind == AliasKind::Structural;
+                    if is_structural {
+                        let mut type_var_to_arg = Vec::new();
 
-                    Type::Alias {
-                        symbol,
-                        type_arguments,
-                        lambda_set_variables,
-                        actual: Box::new(actual),
-                        kind: alias.kind,
+                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
+                            let name = loc_var.value.0.clone();
+
+                            type_var_to_arg.push((name, arg_ann));
+                        }
+
+                        let mut lambda_set_variables =
+                            Vec::with_capacity(alias.lambda_set_variables.len());
+
+                        for _ in 0..alias.lambda_set_variables.len() {
+                            let lvar = var_store.fresh();
+
+                            introduced_variables.insert_lambda_set(lvar);
+
+                            lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
+                        }
+
+                        Type::DelayedAlias(AliasCommon {
+                            symbol,
+                            type_arguments: type_var_to_arg,
+                            lambda_set_variables,
+                        })
+                    } else {
+                        let (type_arguments, lambda_set_variables, actual) =
+                            instantiate_and_freshen_alias_type(
+                                var_store,
+                                introduced_variables,
+                                &alias.type_variables,
+                                args,
+                                &alias.lambda_set_variables,
+                                alias.typ.clone(),
+                            );
+
+                        Type::Alias {
+                            symbol,
+                            type_arguments,
+                            lambda_set_variables,
+                            actual: Box::new(actual),
+                            kind: alias.kind,
+                        }
                     }
                 }
                 None => Type::Apply(symbol, args, region),
@@ -364,11 +561,11 @@ fn can_annotation_help(
             let name = Lowercase::from(*v);
 
             match introduced_variables.var_by_name(&name) {
-                Some(var) => Type::Variable(*var),
+                Some(var) => Type::Variable(var),
                 None => {
                     let var = var_store.fresh();
 
-                    introduced_variables.insert_named(name, var);
+                    introduced_variables.insert_named(name, Loc::at(region, var));
 
                     Type::Variable(var)
                 }
@@ -393,9 +590,10 @@ fn can_annotation_help(
                 Err((original_region, shadow, _new_symbol)) => {
                     let problem = Problem::Shadowed(original_region, shadow.clone());
 
-                    env.problem(roc_problem::can::Problem::ShadowingInAnnotation {
+                    env.problem(roc_problem::can::Problem::Shadowing {
                         original_region,
                         shadow,
+                        kind: ShadowKind::Variable,
                     });
 
                     return Type::Erroneous(problem);
@@ -427,12 +625,13 @@ fn can_annotation_help(
                 let var_name = Lowercase::from(var);
 
                 if let Some(var) = introduced_variables.var_by_name(&var_name) {
-                    vars.push((var_name.clone(), Type::Variable(*var)));
-                    lowercase_vars.push(Loc::at(loc_var.region, (var_name, *var)));
+                    vars.push((var_name.clone(), Type::Variable(var)));
+                    lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
                 } else {
                     let var = var_store.fresh();
 
-                    introduced_variables.insert_named(var_name.clone(), var);
+                    introduced_variables
+                        .insert_named(var_name.clone(), Loc::at(loc_var.region, var));
                     vars.push((var_name.clone(), Type::Variable(var)));
 
                     lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
@@ -539,7 +738,7 @@ fn can_annotation_help(
                         // just `a` does not mean the same as `{}a`, so even
                         // if there are no fields, still make this a `Record`,
                         // not an EmptyRec
-                        Type::Record(Default::default(), Box::new(ext_type))
+                        Type::Record(Default::default(), TypeExtension::from_type(ext_type))
                     }
 
                     None => Type::EmptyRec,
@@ -556,7 +755,7 @@ fn can_annotation_help(
                     references,
                 );
 
-                Type::Record(field_types, Box::new(ext_type))
+                Type::Record(field_types, TypeExtension::from_type(ext_type))
             }
         }
         TagUnion { tags, ext, .. } => {
@@ -577,7 +776,7 @@ fn can_annotation_help(
                         // just `a` does not mean the same as `{}a`, so even
                         // if there are no fields, still make this a `Record`,
                         // not an EmptyRec
-                        Type::TagUnion(Default::default(), Box::new(ext_type))
+                        Type::TagUnion(Default::default(), TypeExtension::from_type(ext_type))
                     }
 
                     None => Type::EmptyTagUnion,
@@ -599,7 +798,7 @@ fn can_annotation_help(
                 // in theory we save a lot of time by sorting once here
                 insertion_sort_by(&mut tag_types, |a, b| a.0.cmp(&b.0));
 
-                Type::TagUnion(tag_types, Box::new(ext_type))
+                Type::TagUnion(tag_types, TypeExtension::from_type(ext_type))
             }
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_annotation_help(
@@ -615,7 +814,7 @@ fn can_annotation_help(
         Wildcard => {
             let var = var_store.fresh();
 
-            introduced_variables.insert_wildcard(var);
+            introduced_variables.insert_wildcard(Loc::at(region, var));
 
             Type::Variable(var)
         }
@@ -624,21 +823,92 @@ fn can_annotation_help(
             // make a fresh unconstrained variable, and let the type solver fill it in for us 🤠
             let var = var_store.fresh();
 
-            introduced_variables.insert_inferred(var);
+            introduced_variables.insert_inferred(Loc::at(region, var));
 
             Type::Variable(var)
         }
-        Where(..) => todo_abilities!(),
+        Where(_annotation, clauses) => {
+            debug_assert!(!clauses.is_empty());
+
+            // Has clauses are allowed only on the top level of a signature, which we handle elsewhere.
+            env.problem(roc_problem::can::Problem::IllegalHasClause {
+                region: Region::across_all(clauses.iter().map(|clause| &clause.region)),
+            });
+
+            Type::Erroneous(Problem::CanonicalizationProblem)
+        }
         Malformed(string) => {
             malformed(env, region, string);
 
             let var = var_store.fresh();
 
-            introduced_variables.insert_wildcard(var);
+            introduced_variables.insert_wildcard(Loc::at(region, var));
 
             Type::Variable(var)
         }
     }
+}
+
+fn canonicalize_has_clause(
+    env: &mut Env,
+    scope: &mut Scope,
+    var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
+    clause: &Loc<roc_parse::ast::HasClause<'_>>,
+    abilities_in_scope: &[Symbol],
+    references: &mut VecSet<Symbol>,
+) -> Result<(), Type> {
+    let Loc {
+        region,
+        value: roc_parse::ast::HasClause { var, ability },
+    } = clause;
+    let region = *region;
+
+    let var_name = var.extract_spaces().item;
+    debug_assert!(
+        var_name.starts_with(char::is_lowercase),
+        "Vars should have been parsed as lowercase"
+    );
+    let var_name = Lowercase::from(var_name);
+
+    let ability = match ability.value {
+        TypeAnnotation::Apply(module_name, ident, _type_arguments) => {
+            let symbol = make_apply_symbol(env, ability.region, scope, module_name, ident)?;
+            if !abilities_in_scope.contains(&symbol) {
+                let region = ability.region;
+                env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
+                return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));
+            }
+            symbol
+        }
+        _ => {
+            let region = ability.region;
+            env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
+            return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));
+        }
+    };
+
+    references.insert(ability);
+
+    if let Some(shadowing) = introduced_variables.named_var_by_name(&var_name) {
+        let var_name_ident = var_name.to_string().into();
+        let shadow = Loc::at(region, var_name_ident);
+        env.problem(roc_problem::can::Problem::Shadowing {
+            original_region: shadowing.first_seen(),
+            shadow: shadow.clone(),
+            kind: ShadowKind::Variable,
+        });
+        return Err(Type::Erroneous(Problem::Shadowed(
+            shadowing.first_seen(),
+            shadow,
+        )));
+    }
+
+    let var = var_store.fresh();
+
+    introduced_variables.insert_able(var_name, Loc::at(region, var), ability);
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -648,7 +918,7 @@ fn can_extension_type<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut MutSet<Symbol>,
+    references: &mut VecSet<Symbol>,
     opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
 ) -> Type {
@@ -685,7 +955,7 @@ fn can_extension_type<'a>(
                 local_aliases,
                 references,
             );
-            if valid_extension_type(ext_type.shallow_dealias()) {
+            if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
                 ext_type
             } else {
                 // Report an error but mark the extension variable to be inferred
@@ -700,13 +970,36 @@ fn can_extension_type<'a>(
 
                 let var = var_store.fresh();
 
-                introduced_variables.insert_inferred(var);
+                introduced_variables.insert_inferred(Loc::at_zero(var));
 
                 Type::Variable(var)
             }
         }
         None => empty_ext_type,
     }
+}
+
+/// a shallow dealias, continue until the first constructor is not an alias.
+fn shallow_dealias_with_scope<'a>(scope: &'a mut Scope, typ: &'a Type) -> &'a Type {
+    let mut result = typ;
+    loop {
+        match result {
+            Type::Alias { actual, .. } => {
+                // another loop
+                result = actual;
+            }
+            Type::DelayedAlias(AliasCommon { symbol, .. }) => match scope.lookup_alias(*symbol) {
+                None => unreachable!(),
+                Some(alias) => {
+                    result = &alias.typ;
+                }
+            },
+
+            _ => break,
+        }
+    }
+
+    result
 }
 
 pub fn instantiate_and_freshen_alias_type(
@@ -807,7 +1100,7 @@ fn can_assigned_fields<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut MutSet<Symbol>,
+    references: &mut VecSet<Symbol>,
 ) -> SendMap<Lowercase, RecordField<Type>> {
     use roc_parse::ast::AssignedField::*;
     use roc_types::types::RecordField::*;
@@ -866,10 +1159,13 @@ fn can_assigned_fields<'a>(
                     let field_name = Lowercase::from(loc_field_name.value);
                     let field_type = {
                         if let Some(var) = introduced_variables.var_by_name(&field_name) {
-                            Type::Variable(*var)
+                            Type::Variable(var)
                         } else {
                             let field_var = var_store.fresh();
-                            introduced_variables.insert_named(field_name.clone(), field_var);
+                            introduced_variables.insert_named(
+                                field_name.clone(),
+                                Loc::at(loc_field_name.region, field_var),
+                            );
                             Type::Variable(field_var)
                         }
                     };
@@ -917,7 +1213,7 @@ fn can_tags<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    references: &mut MutSet<Symbol>,
+    references: &mut VecSet<Symbol>,
 ) -> Vec<(TagName, Vec<Type>)> {
     let mut tag_types = Vec::with_capacity(tags.len());
 

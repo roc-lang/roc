@@ -1,0 +1,43 @@
+Defs(
+    [
+        @0-17 Value(
+            Body(
+                @0-1 Identifier(
+                    "a",
+                ),
+                @4-17 List(
+                    Collection {
+                        items: [
+                            @8-9 SpaceBefore(
+                                Num(
+                                    "1",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @11-12 Num(
+                                "2",
+                            ),
+                            @14-15 Num(
+                                "3",
+                            ),
+                        ],
+                        final_comments: [
+                            Newline,
+                        ],
+                    },
+                ),
+            ),
+        ),
+    ],
+    @18-19 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "a",
+        },
+        [
+            Newline,
+        ],
+    ),
+)

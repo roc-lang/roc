@@ -9,6 +9,7 @@ use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::{LineInsertionFailed, OutOfBounds, UIResult};
 use crate::ui::util::{slice_get, slice_get_mut};
 use roc_ast::lang::core::ast::ASTNodeId;
+use roc_code_markup::markup::mark_id_ast_id_map::MarkIdAstIdMap;
 use roc_code_markup::markup::nodes::get_root_mark_node_id;
 use roc_code_markup::slow_pool::MarkNodeId;
 use roc_code_markup::slow_pool::SlowPool;
@@ -210,18 +211,23 @@ impl GridNodeMap {
         ed_model: &EdModel,
     ) -> EdResult<(TextPos, TextPos, ASTNodeId, MarkNodeId)> {
         let line = slice_get(caret_pos.line, &self.lines)?;
-        let node_id = slice_get(caret_pos.column, line)?;
-        let node = ed_model.mark_node_pool.get(*node_id);
+        let node_id = *slice_get(caret_pos.column, line)?;
+        let node = ed_model.mark_node_pool.get(node_id);
 
         if node.is_nested() {
-            let (start_pos, end_pos) = self.get_nested_start_end_pos(*node_id, ed_model)?;
+            let (start_pos, end_pos) = self.get_nested_start_end_pos(node_id, ed_model)?;
 
-            Ok((start_pos, end_pos, node.get_ast_node_id(), *node_id))
+            Ok((
+                start_pos,
+                end_pos,
+                ed_model.mark_id_ast_id_map.get(node_id)?,
+                node_id,
+            ))
         } else {
-            let (first_node_index, last_node_index) = first_last_index_of(*node_id, line)?;
+            let (first_node_index, last_node_index) = first_last_index_of(node_id, line)?;
 
-            let curr_node_id = slice_get(first_node_index, line)?;
-            let curr_ast_node_id = ed_model.mark_node_pool.get(*curr_node_id).get_ast_node_id();
+            let curr_node_id = *slice_get(first_node_index, line)?;
+            let curr_ast_node_id = ed_model.mark_id_ast_id_map.get(curr_node_id)?;
 
             let mut expr_start_index = first_node_index;
             let mut expr_end_index = last_node_index;
@@ -230,11 +236,8 @@ impl GridNodeMap {
             let mut pos_extra_subtract = 0;
 
             for i in (0..first_node_index).rev() {
-                let prev_pos_node_id = slice_get(i, line)?;
-                let prev_ast_node_id = ed_model
-                    .mark_node_pool
-                    .get(*prev_pos_node_id)
-                    .get_ast_node_id();
+                let prev_pos_node_id = *slice_get(i, line)?;
+                let prev_ast_node_id = ed_model.mark_id_ast_id_map.get(prev_pos_node_id)?;
 
                 if prev_ast_node_id == curr_ast_node_id {
                     if pos_extra_subtract > 0 {
@@ -253,10 +256,7 @@ impl GridNodeMap {
 
             for i in last_node_index..line.len() {
                 let next_pos_node_id = slice_get(i, line)?;
-                let next_ast_node_id = ed_model
-                    .mark_node_pool
-                    .get(*next_pos_node_id)
-                    .get_ast_node_id();
+                let next_ast_node_id = ed_model.mark_id_ast_id_map.get(*next_pos_node_id)?;
 
                 if next_ast_node_id == curr_ast_node_id {
                     if pos_extra_add > 0 {
@@ -270,8 +270,11 @@ impl GridNodeMap {
                 }
             }
 
-            let correct_mark_node_id =
-                GridNodeMap::get_top_node_with_expr_id(*curr_node_id, &ed_model.mark_node_pool);
+            let correct_mark_node_id = GridNodeMap::get_top_node_with_expr_id(
+                curr_node_id,
+                &ed_model.mark_node_pool,
+                &ed_model.mark_id_ast_id_map,
+            )?;
 
             Ok((
                 TextPos {
@@ -293,19 +296,18 @@ impl GridNodeMap {
     fn get_top_node_with_expr_id(
         curr_node_id: MarkNodeId,
         mark_node_pool: &SlowPool,
-    ) -> MarkNodeId {
+        mark_id_ast_id_map: &MarkIdAstIdMap,
+    ) -> EdResult<MarkNodeId> {
         let curr_node = mark_node_pool.get(curr_node_id);
 
         if let Some(parent_id) = curr_node.get_parent_id_opt() {
-            let parent = mark_node_pool.get(parent_id);
-
-            if parent.get_ast_node_id() == curr_node.get_ast_node_id() {
-                parent_id
+            if mark_id_ast_id_map.get(parent_id)? == mark_id_ast_id_map.get(curr_node_id)? {
+                Ok(parent_id)
             } else {
-                curr_node_id
+                Ok(curr_node_id)
             }
         } else {
-            curr_node_id
+            Ok(curr_node_id)
         }
     }
 
@@ -388,6 +390,7 @@ impl GridNodeMap {
         &self,
         line_nr: usize,
         mark_node_pool: &SlowPool,
+        mark_id_ast_id_map: &MarkIdAstIdMap,
     ) -> EdResult<MarkNodeId> {
         for curr_line_nr in (0..line_nr).rev() {
             let first_col_pos = TextPos {
@@ -399,7 +402,7 @@ impl GridNodeMap {
                 let mark_node_id = self.get_id_at_row_col(first_col_pos)?;
                 let root_mark_node_id = get_root_mark_node_id(mark_node_id, mark_node_pool);
 
-                let ast_node_id = mark_node_pool.get(root_mark_node_id).get_ast_node_id();
+                let ast_node_id = mark_id_ast_id_map.get(root_mark_node_id)?;
 
                 if let ASTNodeId::ADefId(_) = ast_node_id {
                     return Ok(root_mark_node_id);

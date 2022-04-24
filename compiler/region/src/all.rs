@@ -279,16 +279,16 @@ pub struct Loc<T> {
 }
 
 impl<T> Loc<T> {
-    pub fn new(start: u32, end: u32, value: T) -> Loc<T> {
+    pub const fn new(start: u32, end: u32, value: T) -> Loc<T> {
         let region = Region::new(Position::new(start), Position::new(end));
         Loc { region, value }
     }
 
-    pub fn at(region: Region, value: T) -> Loc<T> {
+    pub const fn at(region: Region, value: T) -> Loc<T> {
         Loc { region, value }
     }
 
-    pub fn at_zero(value: T) -> Loc<T> {
+    pub const fn at_zero(value: T) -> Loc<T> {
         let region = Region::zero();
         Loc { region, value }
     }

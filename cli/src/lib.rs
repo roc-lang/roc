@@ -1,12 +1,12 @@
 #[macro_use]
 extern crate const_format;
 
-use build::{BuildOutcome, BuiltFile};
+use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{App, AppSettings, Arg, ArgMatches};
 use roc_build::link::LinkType;
 use roc_error_macros::user_error;
-use roc_load::file::LoadingProblem;
+use roc_load::LoadingProblem;
 use roc_mono::ir::OptLevel;
 use std::env;
 use std::io;
@@ -15,13 +15,16 @@ use std::path::PathBuf;
 use std::process;
 use std::process::Command;
 use target_lexicon::BinaryFormat;
-use target_lexicon::{Architecture, OperatingSystem, Triple, X86_32Architecture};
+use target_lexicon::{
+    Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
+};
 
 pub mod build;
 mod format;
 pub use format::format;
 
 pub const CMD_BUILD: &str = "build";
+pub const CMD_RUN: &str = "run";
 pub const CMD_REPL: &str = "repl";
 pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
@@ -34,9 +37,11 @@ pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_OPT_SIZE: &str = "opt-size";
 pub const FLAG_LIB: &str = "lib";
+pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINK: &str = "roc-linker";
+pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const FLAG_VALGRIND: &str = "valgrind";
 pub const FLAG_CHECK: &str = "check";
@@ -45,10 +50,12 @@ pub const ROC_DIR: &str = "ROC_DIR";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
+const VERSION: &str = include_str!("../../version.txt");
+
 pub fn build_app<'a>() -> App<'a> {
     let app = App::new("roc")
-        .version(concatcp!(include_str!("../../version.txt"), "\n"))
-        .about("Runs the given .roc file. Use one of the SUBCOMMANDS below to do something else!")
+        .version(concatcp!(VERSION, "\n"))
+        .about("Runs the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
         .subcommand(App::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(
@@ -78,7 +85,7 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
                     .about("Choose a different target")
-                .default_value(Target::default().as_str())
+                    .default_value(Target::default().as_str())
                     .possible_values(Target::OPTIONS)
                     .required(false),
             )
@@ -86,6 +93,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::new(FLAG_LIB)
                     .long(FLAG_LIB)
                     .about("Build a C library instead of an executable.")
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_NO_LINK)
+                    .long(FLAG_NO_LINK)
+                    .about("Does not link. Instead just outputs the `.o` file")
                     .required(false),
             )
             .arg(
@@ -103,13 +116,21 @@ pub fn build_app<'a>() -> App<'a> {
             .arg(
                 Arg::new(FLAG_LINK)
                     .long(FLAG_LINK)
-                    .about("Uses the roc linker instead of the system linker.")
+                    .about("Deprecated in favor of --linker")
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_LINKER)
+                    .long(FLAG_LINKER)
+                    .about("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+                    .possible_values(["surgical", "legacy"])
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_PRECOMPILED)
                     .long(FLAG_PRECOMPILED)
-                    .about("Assumes the host has been precompiled and skips recompiling the host.")
+                    .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using a --target other than `--target host`)")
+                    .possible_values(["true", "false"])
                     .required(false),
             )
             .arg(
@@ -122,8 +143,16 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
+        .subcommand(App::new(CMD_RUN)
+            .about("Run a .roc file even if it has build errors")
+            .arg(
+                Arg::new(ROC_FILE)
+                    .about("The .roc file of an app to run")
+                    .required(true),
+            )
+        )
         .subcommand(App::new(CMD_FORMAT)
-            .about("Format Roc code")
+            .about("Format a .roc file using standard Roc formatting")
             .arg(
                 Arg::new(DIRECTORY_OR_FILES)
                     .index(1)
@@ -137,10 +166,9 @@ pub fn build_app<'a>() -> App<'a> {
             )
         )
         .subcommand(App::new(CMD_VERSION)
-            .about("Print version information")
-        )
+            .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
         .subcommand(App::new(CMD_CHECK)
-            .about("When developing, it's recommended to run `check` before `build`. It may provide a useful error message in cases where `build` panics")
+            .about("Check the code for problems, but doesn’t build or run it")
             .arg(
                 Arg::new(FLAG_TIME)
                     .long(FLAG_TIME)
@@ -149,7 +177,7 @@ pub fn build_app<'a>() -> App<'a> {
             )
             .arg(
                 Arg::new(ROC_FILE)
-                    .about("The .roc file of an app to run")
+                    .about("The .roc file of an app to check")
                     .required(true),
             )
             )
@@ -175,19 +203,19 @@ pub fn build_app<'a>() -> App<'a> {
         .arg(
             Arg::new(FLAG_OPT_SIZE)
                 .long(FLAG_OPT_SIZE)
-                .about("Optimize your compiled Roc program to have a small binary size. (Optimization takes time to complete.)")
+                .about("Optimize the compiled program to have a small binary size. (Optimization takes time to complete.)")
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_DEV)
                 .long(FLAG_DEV)
-                .about("Make compilation as fast as possible. (Runtime performance may suffer)")
+                .about("Make compilation finish as soon as possible, at the expense of runtime performance.")
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_DEBUG)
                 .long(FLAG_DEBUG)
-                .about("Store LLVM debug information in the generated program")
+                .about("Store LLVM debug information in the generated program.")
                 .requires(ROC_FILE)
                 .required(false),
         )
@@ -200,21 +228,21 @@ pub fn build_app<'a>() -> App<'a> {
         .arg(
             Arg::new(FLAG_LINK)
                 .long(FLAG_LINK)
-                .about("Uses the roc linker instead of the system linker.")
+                .about("Deprecated in favor of --linker")
+                .required(false),
+        )
+        .arg(
+            Arg::new(FLAG_LINKER)
+                .long(FLAG_LINKER)
+                .about("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+                .possible_values(["surgical", "legacy"])
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_PRECOMPILED)
                 .long(FLAG_PRECOMPILED)
-                .about("Assumes the host has been precompiled and skips recompiling the host.")
-                .required(false),
-        )
-        .arg(
-            Arg::new(FLAG_TARGET)
-                .long(FLAG_TARGET)
-                .about("Choose a different target")
-                .default_value(Target::default().as_str())
-                .possible_values(Target::OPTIONS)
+                .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using `roc build` with a --target other than `--target host`)")
+                .possible_values(["true", "false"])
                 .required(false),
         )
         .arg(
@@ -247,17 +275,14 @@ pub fn build_app<'a>() -> App<'a> {
 }
 
 pub fn docs(files: Vec<PathBuf>) {
-    roc_docs::generate_docs_html(
-        files,
-        roc_builtins::std::standard_stdlib(),
-        Path::new("./generated-docs"),
-    )
+    roc_docs::generate_docs_html(files, Path::new("./generated-docs"))
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum BuildConfig {
     BuildOnly,
     BuildAndRun { roc_file_arg_index: usize },
+    BuildAndRunIfNoErrors { roc_file_arg_index: usize },
 }
 
 pub enum FormatMode {
@@ -295,21 +320,36 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
 
-    let link_type = if matches.is_present(FLAG_LIB) {
-        LinkType::Dylib
-    } else {
-        LinkType::Executable
+    let link_type = match (
+        matches.is_present(FLAG_LIB),
+        matches.is_present(FLAG_NO_LINK),
+    ) {
+        (true, false) => LinkType::Dylib,
+        (true, true) => user_error!("build can only be one of `--lib` or `--no-link`"),
+        (false, true) => LinkType::None,
+        (false, false) => LinkType::Executable,
     };
-    let surgically_link = matches.is_present(FLAG_LINK);
-    let precompiled = matches.is_present(FLAG_PRECOMPILED);
 
-    if surgically_link && !roc_linker::supported(&link_type, &triple) {
-        panic!(
-            "Link type, {:?}, with target, {}, not supported by roc linker",
-            link_type, triple
-        );
+    // TODO remove FLAG_LINK from the code base anytime after the end of May 2022
+    if matches.is_present(FLAG_LINK) {
+        eprintln!("ERROR: The --roc-linker flag has been deprecated because the roc linker is now used automatically where it's supported. (Currently that's only x64 Linux.) No need to use --roc-linker anymore, but you can use the --linker flag to switch linkers.");
+        process::exit(1);
     }
 
+    // Use surgical linking when supported, or when explicitly requested with --linker surgical
+    let surgically_link = if matches.is_present(FLAG_LINKER) {
+        matches.value_of(FLAG_LINKER) == Some("surgical")
+    } else {
+        roc_linker::supported(&link_type, &triple)
+    };
+
+    let precompiled = if matches.is_present(FLAG_PRECOMPILED) {
+        matches.value_of(FLAG_PRECOMPILED) == Some("true")
+    } else {
+        // When compiling for a different target, default to assuming a precompiled host.
+        // Otherwise compilation would most likely fail!
+        target != Target::System
+    };
     let path = Path::new(filename);
 
     // Spawn the root task
@@ -350,7 +390,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     match res_binary_path {
         Ok(BuiltFile {
             binary_path,
-            outcome,
+            problems,
             total_time,
         }) => {
             match config {
@@ -365,56 +405,128 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                     std::mem::forget(arena);
 
                     println!(
-                        "🎉 Built {} in {} ms",
-                        generated_filename.to_str().unwrap(),
-                        total_time.as_millis()
+                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms while successfully building:\n\n    {}",
+                        if problems.errors == 0 {
+                            32 // green
+                        } else {
+                            33 // yellow
+                        },
+                        problems.errors,
+                        if problems.errors == 1 {
+                            "error"
+                        } else {
+                            "errors"
+                        },
+                        if problems.warnings == 0 {
+                            32 // green
+                        } else {
+                            33 // yellow
+                        },
+                        problems.warnings,
+                        if problems.warnings == 1 {
+                            "warning"
+                        } else {
+                            "warnings"
+                        },
+                        total_time.as_millis(),
+                        generated_filename.to_str().unwrap()
                     );
 
                     // Return a nonzero exit code if there were problems
-                    Ok(outcome.status_code())
+                    Ok(problems.exit_code())
                 }
                 BuildAndRun { roc_file_arg_index } => {
-                    let mut cmd = match triple.architecture {
-                        Architecture::Wasm32 => {
-                            // If possible, report the generated executable name relative to the current dir.
-                            let generated_filename = binary_path
-                                .strip_prefix(env::current_dir().unwrap())
-                                .unwrap_or(&binary_path);
-
-                            // No need to waste time freeing this memory,
-                            // since the process is about to exit anyway.
-                            std::mem::forget(arena);
-
-                            let args = std::env::args()
-                                .skip(roc_file_arg_index)
-                                .collect::<Vec<_>>();
-
-                            run_with_wasmer(generated_filename, &args);
-                            return Ok(0);
-                        }
-                        _ => Command::new(&binary_path),
-                    };
-
-                    if let Architecture::Wasm32 = triple.architecture {
-                        cmd.arg(binary_path);
+                    if problems.errors > 0 || problems.warnings > 0 {
+                        println!(
+                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
+                            if problems.errors == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.errors,
+                            if problems.errors == 1 {
+                                "error"
+                            } else {
+                                "errors"
+                            },
+                            if problems.warnings == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.warnings,
+                            if problems.warnings == 1 {
+                                "warning"
+                            } else {
+                                "warnings"
+                            },
+                            total_time.as_millis(),
+                            "─".repeat(80)
+                        );
                     }
 
-                    // Forward all the arguments after the .roc file argument
-                    // to the new process. This way, you can do things like:
-                    //
-                    // roc app.roc foo bar baz
-                    //
-                    // ...and have it so that app.roc will receive only `foo`,
-                    // `bar`, and `baz` as its arguments.
-                    for (index, arg) in std::env::args().enumerate() {
-                        if index > roc_file_arg_index {
-                            cmd.arg(arg);
+                    roc_run(
+                        arena,
+                        &original_cwd,
+                        triple,
+                        roc_file_arg_index,
+                        &binary_path,
+                    )
+                }
+                BuildAndRunIfNoErrors { roc_file_arg_index } => {
+                    if problems.errors == 0 {
+                        if problems.warnings > 0 {
+                            println!(
+                                "\x1B[32m0\x1B[39m errors and \x1B[33m{}\x1B[39m {} found in {} ms.\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
+                                problems.warnings,
+                                if problems.warnings == 1 {
+                                    "warning"
+                                } else {
+                                    "warnings"
+                                },
+                                total_time.as_millis(),
+                                "─".repeat(80)
+                            );
                         }
-                    }
 
-                    match outcome {
-                        BuildOutcome::Errors => Ok(outcome.status_code()),
-                        _ => roc_run(cmd.current_dir(original_cwd)),
+                        roc_run(
+                            arena,
+                            &original_cwd,
+                            triple,
+                            roc_file_arg_index,
+                            &binary_path,
+                        )
+                    } else {
+                        println!(
+                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with: \x1B[32mroc run {}\x1B[39m",
+                            if problems.errors == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.errors,
+                            if problems.errors == 1 {
+                                "error"
+                            } else {
+                                "errors"
+                            },
+                            if problems.warnings == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.warnings,
+                            if problems.warnings == 1 {
+                                "warning"
+                            } else {
+                                "warnings"
+                            },
+                            total_time.as_millis(),
+                            filename
+                        );
+
+                        Ok(problems.exit_code())
                     }
                 }
             }
@@ -431,11 +543,55 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
 }
 
 #[cfg(target_family = "unix")]
-fn roc_run(cmd: &mut Command) -> io::Result<i32> {
+fn roc_run(
+    arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    cwd: &Path,
+    triple: Triple,
+    roc_file_arg_index: usize,
+    binary_path: &Path,
+) -> io::Result<i32> {
     use std::os::unix::process::CommandExt;
 
+    let mut cmd = match triple.architecture {
+        Architecture::Wasm32 => {
+            // If possible, report the generated executable name relative to the current dir.
+            let generated_filename = binary_path
+                .strip_prefix(env::current_dir().unwrap())
+                .unwrap_or(binary_path);
+
+            // No need to waste time freeing this memory,
+            // since the process is about to exit anyway.
+            std::mem::forget(arena);
+
+            let args = std::env::args()
+                .skip(roc_file_arg_index)
+                .collect::<Vec<_>>();
+
+            run_with_wasmer(generated_filename, &args);
+            return Ok(0);
+        }
+        _ => Command::new(&binary_path),
+    };
+
+    if let Architecture::Wasm32 = triple.architecture {
+        cmd.arg(binary_path);
+    }
+
+    // Forward all the arguments after the .roc file argument
+    // to the new process. This way, you can do things like:
+    //
+    // roc app.roc foo bar baz
+    //
+    // ...and have it so that app.roc will receive only `foo`,
+    // `bar`, and `baz` as its arguments.
+    for (index, arg) in std::env::args().enumerate() {
+        if index > roc_file_arg_index {
+            cmd.arg(arg);
+        }
+    }
+
     // This is much faster than spawning a subprocess if we're on a UNIX system!
-    let err = cmd.exec();
+    let err = cmd.current_dir(cwd).exec();
 
     // If exec actually returned, it was definitely an error! (Otherwise,
     // this process would have been replaced by the other one, and we'd
@@ -500,64 +656,73 @@ fn run_with_wasmer(_wasm_path: &std::path::Path, _args: &[String]) {
     println!("Running wasm files not support");
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Target {
-    Host,
-    X86_32,
-    X86_64,
+    System,
+    Linux32,
+    Linux64,
     Wasm32,
 }
 
 impl Default for Target {
     fn default() -> Self {
-        Target::Host
+        Target::System
     }
 }
 
 impl Target {
     const fn as_str(&self) -> &'static str {
+        use Target::*;
+
         match self {
-            Target::Host => "host",
-            Target::X86_32 => "x86_32",
-            Target::X86_64 => "x86_64",
-            Target::Wasm32 => "wasm32",
+            System => "system",
+            Linux32 => "linux32",
+            Linux64 => "linux64",
+            Wasm32 => "wasm32",
         }
     }
 
     /// NOTE keep up to date!
     const OPTIONS: &'static [&'static str] = &[
-        Target::Host.as_str(),
-        Target::X86_32.as_str(),
-        Target::X86_64.as_str(),
+        Target::System.as_str(),
+        Target::Linux32.as_str(),
+        Target::Linux64.as_str(),
         Target::Wasm32.as_str(),
     ];
 
-    fn to_triple(&self) -> Triple {
-        let mut triple = Triple::unknown();
+    fn to_triple(self) -> Triple {
+        use Target::*;
 
         match self {
-            Target::Host => Triple::host(),
-            Target::X86_32 => {
-                triple.architecture = Architecture::X86_32(X86_32Architecture::I386);
-                triple.binary_format = BinaryFormat::Elf;
-
-                // TODO make this user-specified?
-                triple.operating_system = OperatingSystem::Linux;
-
-                triple
-            }
-            Target::X86_64 => {
-                triple.architecture = Architecture::X86_64;
-                triple.binary_format = BinaryFormat::Elf;
-
-                triple
-            }
-            Target::Wasm32 => {
-                triple.architecture = Architecture::Wasm32;
-                triple.binary_format = BinaryFormat::Wasm;
-
-                triple
-            }
+            System => Triple::host(),
+            Linux32 => Triple {
+                architecture: Architecture::X86_32(X86_32Architecture::I386),
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Linux,
+                environment: Environment::Musl,
+                binary_format: BinaryFormat::Elf,
+            },
+            Linux64 => Triple {
+                architecture: Architecture::X86_64,
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Linux,
+                environment: Environment::Musl,
+                binary_format: BinaryFormat::Elf,
+            },
+            Wasm32 => Triple {
+                architecture: Architecture::Wasm32,
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Unknown,
+                environment: Environment::Unknown,
+                binary_format: BinaryFormat::Wasm,
+            },
         }
+    }
+}
+
+impl From<&Target> for Triple {
+    fn from(target: &Target) -> Self {
+        target.to_triple()
     }
 }
 
@@ -572,9 +737,9 @@ impl std::str::FromStr for Target {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "host" => Ok(Target::Host),
-            "x86_32" => Ok(Target::X86_32),
-            "x86_64" => Ok(Target::X86_64),
+            "system" => Ok(Target::System),
+            "linux32" => Ok(Target::Linux32),
+            "linux64" => Ok(Target::Linux64),
             "wasm32" => Ok(Target::Wasm32),
             _ => Err(()),
         }

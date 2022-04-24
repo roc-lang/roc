@@ -90,6 +90,7 @@ impl ModuleName {
     pub const DICT: &'static str = "Dict";
     pub const SET: &'static str = "Set";
     pub const RESULT: &'static str = "Result";
+    pub const BOX: &'static str = "Box";
 
     pub fn as_str(&self) -> &str {
         self.0.as_str()
@@ -200,6 +201,12 @@ impl Lowercase {
 impl<'a> From<&'a str> for Lowercase {
     fn from(string: &'a str) -> Self {
         Self(string.into())
+    }
+}
+
+impl<'a> From<&'a Lowercase> for &'a str {
+    fn from(lowercase: &'a Lowercase) -> Self {
+        lowercase.as_str()
     }
 }
 

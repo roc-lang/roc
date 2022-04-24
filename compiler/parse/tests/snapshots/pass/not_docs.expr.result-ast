@@ -1,12 +1,14 @@
 SpaceBefore(
     Defs(
         [
-            @46-51 Body(
-                @46-47 Identifier(
-                    "x",
-                ),
-                @50-51 Num(
-                    "5",
+            @46-51 Value(
+                Body(
+                    @46-47 Identifier(
+                        "x",
+                    ),
+                    @50-51 Num(
+                        "5",
+                    ),
                 ),
             ),
         ],

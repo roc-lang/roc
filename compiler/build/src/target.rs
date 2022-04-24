@@ -5,7 +5,7 @@ use inkwell::{
 };
 #[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
-use target_lexicon::{Architecture, OperatingSystem, Triple};
+use target_lexicon::{Architecture, Environment, OperatingSystem, Triple};
 
 pub fn target_triple_str(target: &Triple) -> &'static str {
     // Best guide I've found on how to determine these magic strings:
@@ -46,6 +46,54 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             operating_system: OperatingSystem::Windows,
             ..
         } => "x86_64-pc-windows-gnu",
+        _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
+    }
+}
+
+pub fn target_zig_str(target: &Triple) -> &'static str {
+    // Zig has its own architecture mappings, defined here:
+    // https://github.com/ziglang/zig/blob/master/tools/process_headers.zig
+    //
+    // and an open proposal to unify them with the more typical "target triples":
+    // https://github.com/ziglang/zig/issues/4911
+    match target {
+        Triple {
+            architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Linux,
+            environment: Environment::Musl,
+            ..
+        } => "x86_64-linux-musl",
+        Triple {
+            architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "x86_64-linux-gnu",
+        Triple {
+            architecture: Architecture::X86_32(target_lexicon::X86_32Architecture::I386),
+            operating_system: OperatingSystem::Linux,
+            environment: Environment::Musl,
+            ..
+        } => "i386-linux-musl",
+        Triple {
+            architecture: Architecture::X86_32(target_lexicon::X86_32Architecture::I386),
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "i386-linux-gnu",
+        Triple {
+            architecture: Architecture::Aarch64(_),
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "aarch64-linux-gnu",
+        Triple {
+            architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Darwin,
+            ..
+        } => "x86_64-apple-darwin",
+        Triple {
+            architecture: Architecture::Aarch64(_),
+            operating_system: OperatingSystem::Darwin,
+            ..
+        } => "aarch64-apple-darwin",
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }

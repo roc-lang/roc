@@ -16,6 +16,7 @@ const HasTagId = fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, da
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,
+    capacity: usize,
 
     pub fn len(self: RocList) usize {
         return self.length;
@@ -26,7 +27,7 @@ pub const RocList = extern struct {
     }
 
     pub fn empty() RocList {
-        return RocList{ .bytes = null, .length = 0 };
+        return RocList{ .bytes = null, .length = 0, .capacity = 0 };
     }
 
     pub fn isUnique(self: RocList) bool {
@@ -50,6 +51,7 @@ pub const RocList = extern struct {
         return RocList{
             .bytes = utils.allocateWithRefcount(data_bytes, alignment),
             .length = length,
+            .capacity = length,
         };
     }
 
@@ -96,7 +98,7 @@ pub const RocList = extern struct {
             if (self.isUnique()) {
                 const new_source = utils.unsafeReallocate(source_ptr, alignment, self.len(), new_length, element_width);
 
-                return RocList{ .bytes = new_source, .length = new_length };
+                return RocList{ .bytes = new_source, .length = new_length, .capacity = new_length };
             }
         }
 
@@ -128,6 +130,7 @@ pub const RocList = extern struct {
         const result = RocList{
             .bytes = first_slot,
             .length = new_length,
+            .capacity = new_length,
         };
 
         utils.decref(self.bytes, old_length * element_width, alignment);
@@ -1246,7 +1249,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
                 @memcpy(new_source + list_a.len() * element_width, source_b, list_b.len() * element_width);
             }
 
-            return RocList{ .bytes = new_source, .length = total_length };
+            return RocList{ .bytes = new_source, .length = total_length, .capacity = total_length };
         }
     }
     const total_length: usize = list_a.len() + list_b.len();

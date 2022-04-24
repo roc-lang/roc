@@ -171,6 +171,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         SET_DIFFERENCE => set_difference,
         SET_TO_LIST => set_to_list,
         SET_FROM_LIST => set_from_list,
+        SET_TO_DICT=> set_to_dict,
         SET_INSERT => set_insert,
         SET_REMOVE => set_remove,
         SET_CONTAINS => set_contains,
@@ -195,14 +196,20 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_COS => num_cos,
         NUM_TAN => num_tan,
         NUM_DIV_FLOAT => num_div_float,
-        NUM_DIV_INT => num_div_int,
+        NUM_DIV_FLOAT_CHECKED => num_div_float_checked,
+        NUM_DIV_TRUNC => num_div_trunc,
+        NUM_DIV_TRUNC_CHECKED => num_div_trunc_checked,
         NUM_DIV_CEIL => num_div_ceil,
+        NUM_DIV_CEIL_CHECKED => num_div_ceil_checked,
         NUM_ABS => num_abs,
         NUM_NEG => num_neg,
         NUM_REM => num_rem,
+        NUM_REM_CHECKED => num_rem_checked,
         NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         NUM_SQRT => num_sqrt,
+        NUM_SQRT_CHECKED => num_sqrt_checked,
         NUM_LOG => num_log,
+        NUM_LOG_CHECKED => num_log_checked,
         NUM_ROUND => num_round,
         NUM_IS_ODD => num_is_odd,
         NUM_IS_EVEN => num_is_even,
@@ -226,24 +233,6 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SHIFT_RIGHT => num_shift_right_by,
         NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
         NUM_INT_CAST=> num_int_cast,
-        NUM_MIN_I8=> num_min_i8,
-        NUM_MAX_I8=> num_max_i8,
-        NUM_MIN_U8=> num_min_u8,
-        NUM_MAX_U8=> num_max_u8,
-        NUM_MIN_I16=> num_min_i16,
-        NUM_MAX_I16=> num_max_i16,
-        NUM_MIN_U16=> num_min_u16,
-        NUM_MAX_U16=> num_max_u16,
-        NUM_MIN_I32=> num_min_i32,
-        NUM_MAX_I32=> num_max_i32,
-        NUM_MIN_U32=> num_min_u32,
-        NUM_MAX_U32=> num_max_u32,
-        NUM_MIN_I64=> num_min_i64,
-        NUM_MAX_I64=> num_max_i64,
-        NUM_MIN_U64=> num_min_u64,
-        NUM_MAX_U64=> num_max_u64,
-        NUM_MIN_I128=> num_min_i128,
-        NUM_MAX_I128=> num_max_i128,
         NUM_TO_I8 => num_to_i8,
         NUM_TO_I8_CHECKED => num_to_i8_checked,
         NUM_TO_I16 => num_to_i16,
@@ -266,6 +255,10 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_TO_U128_CHECKED => num_to_u128_checked,
         NUM_TO_NAT => num_to_nat,
         NUM_TO_NAT_CHECKED => num_to_nat_checked,
+        NUM_TO_F32 => num_to_f32,
+        NUM_TO_F32_CHECKED => num_to_f32_checked,
+        NUM_TO_F64 => num_to_f64,
+        NUM_TO_F64_CHECKED => num_to_f64_checked,
         NUM_TO_STR => num_to_str,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
@@ -482,6 +475,18 @@ fn num_to_nat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
 }
 
+// Num.toF32 : Num * -> F32
+fn num_to_f32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to NumToFloatCast
+    lowlevel_1(symbol, LowLevel::NumToFloatCast, var_store)
+}
+
+// Num.toF64 : Num * -> F64
+fn num_to_f64(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    // Defer to NumToFloatCast
+    lowlevel_1(symbol, LowLevel::NumToFloatCast, var_store)
+}
+
 fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) -> Def {
     let bool_var = var_store.fresh();
     let num_var_1 = var_store.fresh();
@@ -589,6 +594,8 @@ num_to_checked! {
     num_to_u64_checked
     num_to_u128_checked
     num_to_nat_checked
+    num_to_f32_checked
+    num_to_f64_checked
 }
 
 // Num.toStr : Num a -> Str
@@ -706,6 +713,23 @@ fn bool_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         bool_var,
+    )
+}
+
+fn num_unaryop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
+    let num_var = var_store.fresh();
+    let body = RunLowLevel {
+        op,
+        args: vec![(num_var, Var(Symbol::ARG_1))],
+        ret_var: num_var,
+    };
+
+    defn(
+        symbol,
+        vec![(num_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        num_var,
     )
 }
 
@@ -1148,8 +1172,13 @@ fn num_to_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.sqrt : Float -> Result Float [ SqrtOfNegative ]*
+/// Num.sqrt : Float a -> Float a
 fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_unaryop(symbol, var_store, LowLevel::NumSqrtUnchecked)
+}
+
+/// Num.sqrtChecked : Float a -> Result (Float a) [ SqrtOfNegative ]*
+fn num_sqrt_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let float_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
@@ -1197,8 +1226,13 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.log : Float -> Result Float [ LogNeedsPositive ]*
+/// Num.log : Float a -> Float a
 fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_unaryop(symbol, var_store, LowLevel::NumLogUnchecked)
+}
+
+/// Num.logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
+fn num_log_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let float_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
@@ -1450,106 +1484,6 @@ fn num_shift_right_zf_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.intCast: Int a -> Int b
 fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
-}
-
-/// Num.minI8: I8
-fn num_min_i8(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i8>(symbol, var_store, i8::MIN, IntBound::Exact(IntWidth::I8))
-}
-
-/// Num.maxI8: I8
-fn num_max_i8(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i8>(symbol, var_store, i8::MAX, IntBound::Exact(IntWidth::I8))
-}
-
-/// Num.minU8: U8
-fn num_min_u8(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u8>(symbol, var_store, u8::MIN, IntBound::Exact(IntWidth::U8))
-}
-
-/// Num.maxU8: U8
-fn num_max_u8(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u8>(symbol, var_store, u8::MAX, IntBound::Exact(IntWidth::U8))
-}
-
-/// Num.minI16: I16
-fn num_min_i16(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i16>(symbol, var_store, i16::MIN, IntBound::Exact(IntWidth::I16))
-}
-
-/// Num.maxI16: I16
-fn num_max_i16(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i16>(symbol, var_store, i16::MAX, IntBound::Exact(IntWidth::I16))
-}
-
-/// Num.minU16: U16
-fn num_min_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u16>(symbol, var_store, u16::MIN, IntBound::Exact(IntWidth::U16))
-}
-
-/// Num.maxU16: U16
-fn num_max_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u16>(symbol, var_store, u16::MAX, IntBound::Exact(IntWidth::U16))
-}
-
-/// Num.minI32: I32
-fn num_min_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i32>(symbol, var_store, i32::MIN, IntBound::Exact(IntWidth::I32))
-}
-
-/// Num.maxI32: I32
-fn num_max_i32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i32>(symbol, var_store, i32::MAX, IntBound::Exact(IntWidth::I32))
-}
-
-/// Num.minU32: U32
-fn num_min_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u32>(symbol, var_store, u32::MIN, IntBound::Exact(IntWidth::U32))
-}
-
-/// Num.maxU32: U32
-fn num_max_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u32>(symbol, var_store, u32::MAX, IntBound::Exact(IntWidth::U32))
-}
-
-/// Num.minI64: I64
-fn num_min_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i64>(symbol, var_store, i64::MIN, IntBound::Exact(IntWidth::I64))
-}
-
-/// Num.maxI64: I64
-fn num_max_i64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i64>(symbol, var_store, i64::MAX, IntBound::Exact(IntWidth::I64))
-}
-
-/// Num.minU64: U64
-fn num_min_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u64>(symbol, var_store, u64::MIN, IntBound::Exact(IntWidth::U64))
-}
-
-/// Num.maxU64: U64
-fn num_max_u64(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<u64>(symbol, var_store, u64::MAX, IntBound::Exact(IntWidth::U64))
-}
-
-/// Num.minI128: I128
-fn num_min_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i128>(
-        symbol,
-        var_store,
-        i128::MIN,
-        IntBound::Exact(IntWidth::I128),
-    )
-}
-
-/// Num.maxI128: I128
-fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    int_min_or_max::<i128>(
-        symbol,
-        var_store,
-        i128::MAX,
-        IntBound::Exact(IntWidth::I128),
-    )
 }
 
 /// List.isEmpty : List * -> Bool
@@ -4077,6 +4011,11 @@ fn set_from_list(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::SetFromList, var_store)
 }
 
+/// Set.toDict : Set k -> Dict k {}
+fn set_to_dict(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::SetToDict, var_store)
+}
+
 /// Set.insert : Set k, k -> Set k
 fn set_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let dict_var = var_store.fresh();
@@ -4175,8 +4114,13 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
+/// Num.rem : Int a, Int a -> Int a
 fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumRemUnchecked)
+}
+
+/// Num.remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+fn num_rem_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -4277,8 +4221,13 @@ fn num_abs(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.div : Float, Float -> Result Float [ DivByZero ]*
+/// Num.div : Float, Float -> Float
 fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumDivUnchecked)
+}
+
+/// Num.divChecked : Float, Float -> Result Float [ DivByZero ]*
+fn num_div_float_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
@@ -4343,8 +4292,13 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.div : Int a , Int a -> Result (Int a) [ DivByZero ]*
-fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Num.divTrunc : Int a, Int a -> Int a
+fn num_div_trunc(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumDivUnchecked)
+}
+
+/// Num.divTruncChecked : Int a , Int a -> Result (Int a) [ DivByZero ]*
+fn num_div_trunc_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
@@ -4414,8 +4368,13 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.divCeil : Int a , Int a -> Result (Int a) [ DivByZero ]*
+/// Num.divCeil : Int a, Int a -> Int a
 fn num_div_ceil(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumDivCeilUnchecked)
+}
+
+/// Num.divCeilChecked : Int a , Int a -> Result (Int a) [ DivByZero ]*
+fn num_div_ceil_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
@@ -5373,36 +5332,6 @@ fn defn_help(
         arguments: closure_args,
         loc_body: Box::new(no_region(body)),
     })
-}
-
-#[inline(always)]
-fn int_min_or_max<I128>(symbol: Symbol, var_store: &mut VarStore, i: I128, bound: IntBound) -> Def
-where
-    I128: Into<i128>,
-{
-    let int_var = var_store.fresh();
-    let int_precision_var = var_store.fresh();
-    let body = int::<I128>(int_var, int_precision_var, i, bound);
-
-    let std = roc_builtins::std::types();
-    let solved = std.get(&symbol).unwrap();
-    let mut free_vars = roc_types::solved_types::FreeVars::default();
-    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
-
-    let annotation = crate::def::Annotation {
-        signature,
-        introduced_variables: Default::default(),
-        region: Region::zero(),
-        aliases: Default::default(),
-    };
-
-    Def {
-        annotation: Some(annotation),
-        expr_var: int_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
 }
 
 fn num_no_bound() -> NumericBound {

@@ -1,6 +1,7 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
+use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::env::Env;
 use roc_can::expected::Expected;
@@ -14,7 +15,7 @@ use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::parser::{SourceError, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::Loc;
-use roc_solve::solve;
+use roc_solve::solve::{self, Aliases};
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
@@ -30,10 +31,20 @@ pub fn infer_expr(
     problems: &mut Vec<solve::TypeError>,
     constraints: &Constraints,
     constraint: &Constraint,
+    aliases: &mut Aliases,
+    abilities_store: &mut AbilitiesStore,
     expr_var: Variable,
 ) -> (Content, Subs) {
     let env = solve::Env::default();
-    let (solved, _) = solve::run(constraints, &env, problems, subs, constraint);
+    let (solved, _) = solve::run(
+        constraints,
+        &env,
+        problems,
+        subs,
+        aliases,
+        constraint,
+        abilities_store,
+    );
 
     let content = *solved.inner().get_content_without_compacting(expr_var);
 
@@ -140,7 +151,7 @@ pub fn can_expr_with<'a>(
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
-    let mut scope = Scope::new(home, &mut var_store);
+    let mut scope = Scope::new_with_aliases(home, &mut var_store);
     let dep_idents = IdentIds::exposed_builtins(0);
     let mut env = Env::new(home, &dep_idents, &module_ids, IdentIds::default());
     let (loc_expr, output) = canonicalize_expr(

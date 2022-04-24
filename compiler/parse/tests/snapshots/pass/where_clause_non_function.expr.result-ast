@@ -1,23 +1,25 @@
 Defs(
     [
-        @0-15 Annotation(
-            @0-1 Identifier(
-                "f",
-            ),
-            @4-15 Where(
-                @4-5 BoundVariable(
-                    "a",
+        @0-15 Value(
+            Annotation(
+                @0-1 Identifier(
+                    "f",
                 ),
-                [
-                    @8-15 HasClause {
-                        var: @8-9 "a",
-                        ability: @14-15 Apply(
-                            "",
-                            "A",
-                            [],
-                        ),
-                    },
-                ],
+                @4-15 Where(
+                    @4-5 BoundVariable(
+                        "a",
+                    ),
+                    [
+                        @8-15 HasClause {
+                            var: @8-9 "a",
+                            ability: @14-15 Apply(
+                                "",
+                                "A",
+                                [],
+                            ),
+                        },
+                    ],
+                ),
             ),
         ),
     ],

@@ -1,17 +1,19 @@
 Defs(
     [
-        @0-10 Annotation(
-            @0-1 Identifier(
-                "f",
-            ),
-            @8-10 SpaceBefore(
-                Record {
-                    fields: [],
-                    ext: None,
-                },
-                [
-                    Newline,
-                ],
+        @0-10 Value(
+            Annotation(
+                @0-1 Identifier(
+                    "f",
+                ),
+                @8-10 SpaceBefore(
+                    Record {
+                        fields: [],
+                        ext: None,
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
             ),
         ),
     ],

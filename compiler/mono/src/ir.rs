@@ -7,13 +7,14 @@ use crate::layout::{
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_exhaustive::{Ctor, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_problem::can::RuntimeError;
+use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
@@ -107,10 +108,15 @@ pub struct EntryPoint<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct PartialProcId(usize);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PartialProcs<'a> {
     /// maps a function name (symbol) to an index
     symbols: Vec<'a, Symbol>,
+
+    /// An entry (a, b) means `a` directly references the lambda value of `b`,
+    /// i.e. this came from a `let a = b in ...` where `b` was defined as a
+    /// lambda earlier.
+    references: Vec<'a, (Symbol, Symbol)>,
 
     partial_procs: Vec<'a, PartialProc<'a>>,
 }
@@ -119,6 +125,7 @@ impl<'a> PartialProcs<'a> {
     fn new_in(arena: &'a Bump) -> Self {
         Self {
             symbols: Vec::new_in(arena),
+            references: Vec::new_in(arena),
             partial_procs: Vec::new_in(arena),
         }
     }
@@ -126,7 +133,16 @@ impl<'a> PartialProcs<'a> {
         self.symbol_to_id(symbol).is_some()
     }
 
-    fn symbol_to_id(&self, symbol: Symbol) -> Option<PartialProcId> {
+    fn symbol_to_id(&self, mut symbol: Symbol) -> Option<PartialProcId> {
+        while let Some(real_symbol) = self
+            .references
+            .iter()
+            .find(|(alias, _)| *alias == symbol)
+            .map(|(_, real)| real)
+        {
+            symbol = *real_symbol;
+        }
+
         self.symbols
             .iter()
             .position(|s| *s == symbol)
@@ -157,14 +173,30 @@ impl<'a> PartialProcs<'a> {
 
         id
     }
+
+    pub fn insert_alias(&mut self, alias: Symbol, real_symbol: Symbol) {
+        debug_assert!(
+            !self.contains_key(alias),
+            "{:?} is inserted as a partial proc twice: that's a bug!",
+            alias,
+        );
+        debug_assert!(
+            self.contains_key(real_symbol),
+            "{:?} is not a partial proc or another alias: that's a bug!",
+            real_symbol,
+        );
+
+        self.references.push((alias, real_symbol));
+    }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
     pub pattern_symbols: &'a [Symbol],
     pub captured_symbols: CapturedSymbols<'a>,
     pub body: roc_can::expr::Expr,
+    pub body_var: Variable,
     pub is_self_recursive: bool,
 }
 
@@ -194,6 +226,7 @@ impl<'a> PartialProc<'a> {
                     pattern_symbols,
                     captured_symbols,
                     body: body.value,
+                    body_var: ret_var,
                     is_self_recursive,
                 }
             }
@@ -210,6 +243,7 @@ impl<'a> PartialProc<'a> {
                     pattern_symbols: pattern_symbols.into_bump_slice(),
                     captured_symbols: CapturedSymbols::None,
                     body: roc_can::expr::Expr::RuntimeError(error.value),
+                    body_var: ret_var,
                     is_self_recursive: false,
                 }
             }
@@ -218,9 +252,20 @@ impl<'a> PartialProc<'a> {
 }
 
 #[derive(Clone, Debug)]
-enum PartialExprLink {
-    Aliases(Symbol),
+enum PolymorphicExpr {
+    /// A root ability member, which must be specialized at a call site, for example
+    /// "hash" which must be specialized to an exact symbol implementing "hash" for a type.
+    AbilityMember(Symbol),
+    /// A polymorphic expression we inline at the usage site.
     Expr(roc_can::expr::Expr, Variable),
+}
+
+#[derive(Clone, Debug)]
+enum PartialExprLink {
+    /// The root polymorphic expression
+    Sink(PolymorphicExpr),
+    /// A hop in a partial expression alias chain
+    Aliases(Symbol),
 }
 
 /// A table of symbols to polymorphic expressions. For example, in the program
@@ -248,8 +293,8 @@ impl PartialExprs {
         Self(BumpMap::new_in(arena))
     }
 
-    fn insert(&mut self, symbol: Symbol, expr: roc_can::expr::Expr, expr_var: Variable) {
-        self.0.insert(symbol, PartialExprLink::Expr(expr, expr_var));
+    fn insert(&mut self, symbol: Symbol, expr: PolymorphicExpr) {
+        self.0.insert(symbol, PartialExprLink::Sink(expr));
     }
 
     fn insert_alias(&mut self, symbol: Symbol, aliases: Symbol) {
@@ -260,7 +305,7 @@ impl PartialExprs {
         self.0.contains_key(&symbol)
     }
 
-    fn get(&mut self, mut symbol: Symbol) -> Option<(&roc_can::expr::Expr, Variable)> {
+    fn get(&mut self, mut symbol: Symbol) -> Option<&PolymorphicExpr> {
         // In practice the alias chain is very short
         loop {
             match self.0.get(&symbol) {
@@ -270,8 +315,8 @@ impl PartialExprs {
                 Some(&PartialExprLink::Aliases(real_symbol)) => {
                     symbol = real_symbol;
                 }
-                Some(PartialExprLink::Expr(expr, var)) => {
-                    return Some((expr, *var));
+                Some(PartialExprLink::Sink(expr)) => {
+                    return Some(expr);
                 }
             }
         }
@@ -872,6 +917,7 @@ impl<'a> Procs<'a> {
                                         pattern_symbols,
                                         captured_symbols,
                                         body: body.value,
+                                        body_var: ret_var,
                                         is_self_recursive,
                                     };
 
@@ -909,6 +955,7 @@ impl<'a> Procs<'a> {
                                     pattern_symbols,
                                     captured_symbols,
                                     body: body.value,
+                                    body_var: ret_var,
                                     is_self_recursive,
                                 };
 
@@ -1084,6 +1131,7 @@ pub struct Env<'a, 'i> {
     pub target_info: TargetInfo,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
+    pub abilities_store: &'i AbilitiesStore,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -1108,7 +1156,7 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
-        symbol.module_id() != self.home && !symbol.is_builtin()
+        symbol.module_id() != self.home
     }
 }
 
@@ -2007,6 +2055,7 @@ fn pattern_to_when<'a>(
             let error = roc_problem::can::RuntimeError::Shadowing {
                 original_region: *region,
                 shadow: loc_ident.clone(),
+                kind: ShadowKind::Variable,
             };
             (*new_symbol, Loc::at_zero(RuntimeError(error)))
         }
@@ -2057,6 +2106,13 @@ fn pattern_to_when<'a>(
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
+        }
+
+        AbilityMemberSpecialization { .. } => {
+            unreachable!(
+                "Ability member specialization {:?} should never appear in a when!",
+                pattern.value
+            )
         }
     }
 }
@@ -2438,7 +2494,7 @@ fn specialize_external<'a>(
     };
 
     let body = partial_proc.body.clone();
-    let mut specialized_body = from_can(env, fn_var, body, procs, layout_cache);
+    let mut specialized_body = from_can(env, partial_proc.body_var, body, procs, layout_cache);
 
     match specialized {
         SpecializedLayout::FunctionPointerBody {
@@ -3023,7 +3079,7 @@ fn specialize_naked_symbol<'a>(
     let opt_fn_var = Some(variable);
 
     // if this is a function symbol, ensure that it's properly specialized!
-    reuse_function_symbol(
+    specialize_symbol(
         env,
         procs,
         layout_cache,
@@ -3402,7 +3458,6 @@ pub fn with_hole<'a>(
         ZeroArgumentTag {
             variant_var,
             name: tag_name,
-            arguments: args,
             ext_var,
             closure_name,
         } => {
@@ -3436,7 +3491,7 @@ pub fn with_hole<'a>(
                     tag_name,
                     procs,
                     layout_cache,
-                    args,
+                    std::vec::Vec::new(),
                     arena,
                 )
             }
@@ -3444,15 +3499,24 @@ pub fn with_hole<'a>(
 
         OpaqueRef { argument, .. } => {
             let (arg_var, loc_arg_expr) = *argument;
-            with_hole(
-                env,
-                loc_arg_expr.value,
-                arg_var,
-                procs,
-                layout_cache,
-                assigned,
-                hole,
-            )
+
+            match can_reuse_symbol(env, procs, &loc_arg_expr.value) {
+                // Opaques decay to their argument.
+                ReuseSymbol::Value(real_name) => {
+                    let mut result = hole.clone();
+                    substitute_in_exprs(arena, &mut result, assigned, real_name);
+                    result
+                }
+                _ => with_hole(
+                    env,
+                    loc_arg_expr.value,
+                    arg_var,
+                    procs,
+                    layout_cache,
+                    assigned,
+                    hole,
+                ),
+            }
         }
 
         Record {
@@ -3528,7 +3592,7 @@ pub fn with_hole<'a>(
                         // this symbol is already defined; nothing to do
                     }
                     Field::Function(symbol, variable) => {
-                        stmt = reuse_function_symbol(
+                        stmt = specialize_symbol(
                             env,
                             procs,
                             layout_cache,
@@ -4084,7 +4148,7 @@ pub fn with_hole<'a>(
                                 Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
 
                             if record_needs_specialization {
-                                stmt = reuse_function_symbol(
+                                stmt = specialize_symbol(
                                     env,
                                     procs,
                                     layout_cache,
@@ -4176,10 +4240,14 @@ pub fn with_hole<'a>(
                 // a proc in this module, or an imported symbol
                 procs.partial_procs.contains_key(key)
                     || (env.is_imported_symbol(key) && !procs.is_imported_module_thunk(key))
+                    || env.abilities_store.is_ability_member_name(key)
             };
 
             match loc_expr.value {
                 roc_can::expr::Expr::Var(proc_name) if is_known(proc_name) => {
+                    // This might be an ability member - if so, use the appropriate specialization.
+                    let proc_name = get_specialization(env, fn_var, proc_name).unwrap_or(proc_name);
+
                     // a call by a known name
                     call_by_name(
                         env,
@@ -4288,47 +4356,68 @@ pub fn with_hole<'a>(
                                 unreachable!("calling a non-closure layout")
                             }
                         },
-                        UnspecializedExpr(symbol) => match full_layout {
-                            RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
-                                let closure_data_symbol = env.unique_symbol();
+                        UnspecializedExpr(symbol) => match procs.partial_exprs.get(symbol).unwrap()
+                        {
+                            &PolymorphicExpr::AbilityMember(member) => {
+                                let proc_name = get_specialization(env, fn_var, member).expect("Recorded as an ability member, but it doesn't have a specialization");
 
-                                result = match_on_lambda_set(
+                                // a call by a known name
+                                return call_by_name(
                                     env,
-                                    lambda_set,
-                                    closure_data_symbol,
-                                    arg_symbols,
-                                    arg_layouts,
-                                    ret_layout,
+                                    procs,
+                                    fn_var,
+                                    proc_name,
+                                    loc_args,
+                                    layout_cache,
                                     assigned,
                                     hole,
                                 );
-
-                                let (lambda_expr, lambda_expr_var) =
-                                    procs.partial_exprs.get(symbol).unwrap();
-
-                                let snapshot = env.subs.snapshot();
-                                let cache_snapshot = layout_cache.snapshot();
-                                let _unified = roc_unify::unify::unify(
-                                    env.subs,
-                                    fn_var,
-                                    lambda_expr_var,
-                                    roc_unify::unify::Mode::EQ,
-                                );
-
-                                result = with_hole(
-                                    env,
-                                    lambda_expr.clone(),
-                                    fn_var,
-                                    procs,
-                                    layout_cache,
-                                    closure_data_symbol,
-                                    env.arena.alloc(result),
-                                );
-                                env.subs.rollback_to(snapshot);
-                                layout_cache.rollback_to(cache_snapshot);
                             }
-                            RawFunctionLayout::ZeroArgumentThunk(_) => {
-                                unreachable!("calling a non-closure layout")
+                            PolymorphicExpr::Expr(lambda_expr, lambda_expr_var) => {
+                                match full_layout {
+                                    RawFunctionLayout::Function(
+                                        arg_layouts,
+                                        lambda_set,
+                                        ret_layout,
+                                    ) => {
+                                        let closure_data_symbol = env.unique_symbol();
+
+                                        result = match_on_lambda_set(
+                                            env,
+                                            lambda_set,
+                                            closure_data_symbol,
+                                            arg_symbols,
+                                            arg_layouts,
+                                            ret_layout,
+                                            assigned,
+                                            hole,
+                                        );
+
+                                        let snapshot = env.subs.snapshot();
+                                        let cache_snapshot = layout_cache.snapshot();
+                                        let _unified = roc_unify::unify::unify(
+                                            env.subs,
+                                            fn_var,
+                                            *lambda_expr_var,
+                                            roc_unify::unify::Mode::EQ,
+                                        );
+
+                                        result = with_hole(
+                                            env,
+                                            lambda_expr.clone(),
+                                            fn_var,
+                                            procs,
+                                            layout_cache,
+                                            closure_data_symbol,
+                                            env.arena.alloc(result),
+                                        );
+                                        env.subs.rollback_to(snapshot);
+                                        layout_cache.rollback_to(cache_snapshot);
+                                    }
+                                    RawFunctionLayout::ZeroArgumentThunk(_) => {
+                                        unreachable!("calling a non-closure layout")
+                                    }
+                                }
                             }
                         },
                         NotASymbol => {
@@ -4663,6 +4752,45 @@ pub fn with_hole<'a>(
     }
 }
 
+#[inline(always)]
+fn get_specialization<'a>(
+    env: &mut Env<'a, '_>,
+    symbol_var: Variable,
+    symbol: Symbol,
+) -> Option<Symbol> {
+    use roc_solve::ability::type_implementing_member;
+    use roc_solve::solve::instantiate_rigids;
+    use roc_unify::unify::unify;
+
+    match env.abilities_store.member_def(symbol) {
+        None => {
+            // This is not an ability member, it doesn't need specialization.
+            None
+        }
+        Some(member) => {
+            let snapshot = env.subs.snapshot();
+            instantiate_rigids(env.subs, member.signature_var);
+            let (_, must_implement_ability) = unify(
+                env.subs,
+                symbol_var,
+                member.signature_var,
+                roc_unify::unify::Mode::EQ,
+            )
+            .expect_success("This typechecked previously");
+            env.subs.rollback_to(snapshot);
+            let specializing_type =
+                type_implementing_member(&must_implement_ability, member.parent_ability);
+
+            let specialization = env
+                .abilities_store
+                .get_specialization(symbol, specializing_type)
+                .expect("No specialization is recorded - I thought there would only be a type error here.");
+
+            Some(specialization.symbol)
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn construct_closure_data<'a>(
     env: &mut Env<'a, '_>,
@@ -4774,8 +4902,7 @@ fn construct_closure_data<'a>(
     // symbols to be inlined when specializing the closure body elsewhere.
     for &&(symbol, var) in symbols {
         if procs.partial_exprs.contains(symbol) {
-            result =
-                reuse_function_symbol(env, procs, layout_cache, Some(var), symbol, result, symbol);
+            result = specialize_symbol(env, procs, layout_cache, Some(var), symbol, result, symbol);
         }
     }
 
@@ -5580,9 +5707,10 @@ pub fn from_can<'a>(
                         // At the definition site `n = 1` we only know `1` to have the type `[Int *]`,
                         // which won't be refined until the call `asU8 n`. Add it as a partial expression
                         // that will be specialized at each concrete usage site.
-                        procs
-                            .partial_exprs
-                            .insert(*symbol, def.loc_expr.value, def.expr_var);
+                        procs.partial_exprs.insert(
+                            *symbol,
+                            PolymorphicExpr::Expr(def.loc_expr.value, def.expr_var),
+                        );
 
                         let result = from_can(env, variable, cont.value, procs, layout_cache);
 
@@ -5941,7 +6069,7 @@ fn substitute_in_stmt_help<'a>(
 
             if opt_remainder.is_some() || opt_continuation.is_some() {
                 let remainder = opt_remainder.unwrap_or(remainder);
-                let continuation = opt_continuation.unwrap_or_else(|| *continuation);
+                let continuation = opt_continuation.unwrap_or(*continuation);
 
                 Some(arena.alloc(Join {
                     id: *id,
@@ -6288,6 +6416,20 @@ fn store_pattern_help<'a>(
 
     match can_pat {
         Identifier(symbol) => {
+            if let Some(&PolymorphicExpr::Expr(_, var)) = procs.partial_exprs.get(outer_symbol) {
+                // It might be the case that symbol we're storing hasn't been reified to a value
+                // yet, if it's polymorphic. Do that now.
+                stmt = specialize_symbol(
+                    env,
+                    procs,
+                    layout_cache,
+                    Some(var),
+                    *symbol,
+                    stmt,
+                    outer_symbol,
+                );
+            }
+
             substitute_in_exprs(env.arena, &mut stmt, *symbol, outer_symbol);
         }
         Underscore => {
@@ -6635,7 +6777,19 @@ fn can_reuse_symbol<'a>(
     if let roc_can::expr::Expr::Var(symbol) = expr {
         let symbol = *symbol;
 
-        if env.is_imported_symbol(symbol) {
+        let arguments = [
+            Symbol::ARG_1,
+            Symbol::ARG_2,
+            Symbol::ARG_3,
+            Symbol::ARG_4,
+            Symbol::ARG_5,
+            Symbol::ARG_6,
+            Symbol::ARG_7,
+        ];
+
+        if arguments.contains(&symbol) {
+            Value(symbol)
+        } else if env.is_imported_symbol(symbol) {
             Imported(symbol)
         } else if procs.partial_procs.contains_key(symbol) {
             LocalFunction(symbol)
@@ -6672,6 +6826,13 @@ fn handle_variable_aliasing<'a, BuildRest>(
 where
     BuildRest: FnOnce(&mut Env<'a, '_>, &mut Procs<'a>, &mut LayoutCache<'a>) -> Stmt<'a>,
 {
+    if env.abilities_store.is_ability_member_name(right) {
+        procs
+            .partial_exprs
+            .insert(left, PolymorphicExpr::AbilityMember(right));
+        return build_rest(env, procs, layout_cache);
+    }
+
     if procs.partial_exprs.contains(right) {
         // If `right` links to a partial expression, make sure we link `left` to it as well, so
         // that usages of it will be specialized when building the rest of the program.
@@ -6680,10 +6841,10 @@ where
     }
 
     // Otherwise we're dealing with an alias to something that doesn't need to be specialized, or
-    // whose usages will already be specialized in the rest of the program. Let's just build the
-    // rest of the program now to get our hole.
-    let mut result = build_rest(env, procs, layout_cache);
+    // whose usages will already be specialized in the rest of the program.
     if procs.is_imported_module_thunk(right) {
+        let result = build_rest(env, procs, layout_cache);
+
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
         add_needed_external(procs, env, variable, right);
@@ -6693,25 +6854,25 @@ where
 
         force_thunk(env, right, layout, left, env.arena.alloc(result))
     } else if env.is_imported_symbol(right) {
+        let result = build_rest(env, procs, layout_cache);
+
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
         add_needed_external(procs, env, variable, right);
 
         // then we must construct its closure; since imported symbols have no closure, we use the empty struct
         let_empty_struct(left, env.arena.alloc(result))
+    } else if procs.partial_procs.contains_key(right) {
+        // This is an alias to a function defined in this module.
+        // Attach the alias, then build the rest of the module, so that we reference and specialize
+        // the correct proc.
+        procs.partial_procs.insert_alias(left, right);
+        build_rest(env, procs, layout_cache)
     } else {
+        // This should be a fully specialized value. Replace the alias with the original symbol.
+        let mut result = build_rest(env, procs, layout_cache);
         substitute_in_exprs(env.arena, &mut result, left, right);
-
-        // if the substituted variable is a function, make sure we specialize it
-        reuse_function_symbol(
-            env,
-            procs,
-            layout_cache,
-            Some(variable),
-            right,
-            result,
-            right,
-        )
+        result
     }
 }
 
@@ -6739,9 +6900,8 @@ fn let_empty_struct<'a>(assigned: Symbol, hole: &'a Stmt<'a>) -> Stmt<'a> {
     Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole)
 }
 
-/// If the symbol is a function, make sure it is properly specialized
-// TODO: rename this now that we handle polymorphic non-function expressions too
-fn reuse_function_symbol<'a>(
+/// If the symbol is a function or polymorphic value, make sure it is properly specialized
+fn specialize_symbol<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
@@ -6750,7 +6910,7 @@ fn reuse_function_symbol<'a>(
     result: Stmt<'a>,
     original: Symbol,
 ) -> Stmt<'a> {
-    if let Some((expr, expr_var)) = procs.partial_exprs.get(original) {
+    if let Some(PolymorphicExpr::Expr(expr, expr_var)) = procs.partial_exprs.get(original) {
         // Specialize the expression type now, based off the `arg_var` we've been given.
         // TODO: cache the specialized result
         let snapshot = env.subs.snapshot();
@@ -6758,14 +6918,14 @@ fn reuse_function_symbol<'a>(
         let _unified = roc_unify::unify::unify(
             env.subs,
             arg_var.unwrap(),
-            expr_var,
+            *expr_var,
             roc_unify::unify::Mode::EQ,
         );
 
         let result = with_hole(
             env,
             expr.clone(),
-            expr_var,
+            *expr_var,
             procs,
             layout_cache,
             symbol,
@@ -6783,9 +6943,10 @@ fn reuse_function_symbol<'a>(
         None => {
             match arg_var {
                 Some(arg_var) if env.is_imported_symbol(original) => {
-                    let raw = layout_cache
-                        .raw_from_var(env.arena, arg_var, env.subs)
-                        .expect("creating layout does not fail");
+                    let raw = match layout_cache.raw_from_var(env.arena, arg_var, env.subs) {
+                        Ok(v) => v,
+                        Err(e) => return_on_layout_error_help!(env, e),
+                    };
 
                     if procs.is_imported_module_thunk(original) {
                         let layout = match raw {
@@ -6950,7 +7111,7 @@ fn assign_to_symbol<'a>(
     match can_reuse_symbol(env, procs, &loc_arg.value) {
         Imported(original) | LocalFunction(original) | UnspecializedExpr(original) => {
             // for functions we must make sure they are specialized correctly
-            reuse_function_symbol(
+            specialize_symbol(
                 env,
                 procs,
                 layout_cache,
@@ -7261,6 +7422,7 @@ fn call_by_name_help<'a>(
         add_needed_external(procs, env, original_fn_var, proc_name);
 
         debug_assert_ne!(proc_name.module_id(), ModuleId::ATTR);
+
         if procs.is_imported_module_thunk(proc_name) {
             force_thunk(
                 env,
@@ -7269,13 +7431,23 @@ fn call_by_name_help<'a>(
                 assigned,
                 hole,
             )
-        } else {
-            debug_assert!(
-                !field_symbols.is_empty(),
-                "{} should be in the list of imported_module_thunks",
-                proc_name
-            );
+        } else if field_symbols.is_empty() {
+            // this is a case like `Str.concat`, an imported standard function, applied to zero arguments
 
+            // imported symbols cannot capture anything
+            let captured = &[];
+
+            construct_closure_data(
+                env,
+                procs,
+                layout_cache,
+                lambda_set,
+                proc_name,
+                captured,
+                assigned,
+                hole,
+            )
+        } else {
             debug_assert_eq!(
                 argument_layouts.len(),
                 field_symbols.len(),
@@ -7430,8 +7602,6 @@ fn call_by_name_module_thunk<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    debug_assert!(!env.is_imported_symbol(proc_name));
-
     let top_level_layout = ProcLayout::new(env.arena, &[], *ret_layout);
 
     let inner_layout = *ret_layout;
@@ -7757,6 +7927,7 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
+        AbilityMemberSpecialization { ident, .. } => Ok(Pattern::Identifier(*ident)),
         IntLiteral(_, precision_var, _, int, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, false) {
                 IntOrFloat::Int(precision) => {
@@ -7800,6 +7971,7 @@ fn from_can_pattern_help<'a>(
         Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
+            kind: ShadowKind::Variable,
         }),
         UnsupportedPattern(region) => Err(RuntimeError::UnsupportedPattern(*region)),
         MalformedPattern(_problem, region) => {
@@ -8446,7 +8618,7 @@ pub fn num_argument_to_int_or_float(
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
-            let var = subs[args.variables().into_iter().next().unwrap()];
+            let var = subs[args.all_variables().into_iter().next().unwrap()];
             num_argument_to_int_or_float(subs, target_info, var, false)
         }
 
@@ -8464,7 +8636,7 @@ pub fn num_argument_to_int_or_float(
                     debug_assert!(args.len() == 1);
 
                     // Recurse on the second argument
-                    let var = subs[args.variables().into_iter().next().unwrap()];
+                    let var = subs[args.all_variables().into_iter().next().unwrap()];
                     num_argument_to_int_or_float(subs, target_info, var, true)
                 }
 

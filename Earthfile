@@ -13,10 +13,15 @@ install-other-libs:
 
 install-zig-llvm-valgrind-clippy-rustfmt:
     FROM +install-other-libs
+    # editor
+    RUN apt -y install libxkbcommon-dev
     # zig
     RUN wget -c https://ziglang.org/download/0.8.0/zig-linux-x86_64-0.8.0.tar.xz --no-check-certificate
     RUN tar -xf zig-linux-x86_64-0.8.0.tar.xz
     RUN ln -s /earthbuild/zig-linux-x86_64-0.8.0/zig /usr/bin/zig
+    # zig builtins wasm tests
+    RUN apt -y install build-essential
+    RUN cargo install wasmer-cli --features "singlepass"
     # llvm
     RUN apt -y install lsb-release software-properties-common gnupg
     RUN wget https://apt.llvm.org/llvm.sh
@@ -33,14 +38,12 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add clippy
     # rustfmt
     RUN rustup component add rustfmt
-    # wasm repl
-    RUN rustup target add wasm32-unknown-unknown
+    # wasm repl & tests
+    RUN rustup target add wasm32-unknown-unknown wasm32-wasi
     RUN apt -y install libssl-dev
     RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack
     # criterion
     RUN cargo install cargo-criterion
-    # editor
-    RUN apt -y install libxkbcommon-dev
     # sccache
     RUN cargo install sccache
     RUN sccache -V
@@ -50,12 +53,12 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros utils test_utils reporting repl_cli repl_eval repl_test repl_wasm roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
+    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros highlight utils test_utils reporting repl_cli repl_eval repl_test repl_wasm roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     COPY --dir compiler/builtins/bitcode ./
-    RUN cd bitcode && ./run-tests.sh
+    RUN cd bitcode && ./run-tests.sh && ./run-wasm-tests.sh
 
 check-clippy:
     FROM +copy-dirs
@@ -70,7 +73,7 @@ check-rustfmt:
 
 check-typos:
     RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
-    COPY --dir .github ci cli cli_utils compiler docs editor examples ast code_markup utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix version.txt ./
+    COPY --dir .github ci cli cli_utils compiler docs editor examples ast code_markup highlight utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix version.txt ./
     RUN typos
 
 test-rust:
@@ -93,9 +96,10 @@ test-rust:
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         repl_test/test_wasm.sh && sccache --show-stats
     # run i386 (32-bit linux) cli tests
-    RUN echo "4" | cargo run --locked --release --features="target-x86" -- --target=x86_32 examples/benchmarks/NQueens.roc
-    RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
+    # NOTE: disabled until zig 0.9
+    # RUN echo "4" | cargo run --locked --release --features="target-x86" -- --target=x86_32 examples/benchmarks/NQueens.roc
+    # RUN --mount=type=cache,target=$SCCACHE_DIR \
+    #    cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
 
 verify-no-git-changes:
     FROM +test-rust

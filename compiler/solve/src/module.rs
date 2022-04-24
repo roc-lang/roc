@@ -1,9 +1,10 @@
-use crate::solve;
+use crate::solve::{self, Aliases};
+use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::module::RigidVariables;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
-use roc_types::solved_types::{Solved, SolvedType};
+use roc_types::solved_types::Solved;
 use roc_types::subs::{StorageSubs, Subs, Variable};
 use roc_types::types::Alias;
 
@@ -13,7 +14,7 @@ pub struct SolvedModule {
 
     /// all aliases and their definitions. this has to include non-exposed aliases
     /// because exposed aliases can depend on non-exposed ones)
-    pub aliases: MutMap<Symbol, Alias>,
+    pub aliases: MutMap<Symbol, (bool, Alias)>,
 
     /// Used when the goal phase is TypeChecking, and
     /// to create the types for HostExposed. This
@@ -31,11 +32,22 @@ pub fn run_solve(
     constraint: ConstraintSoa,
     rigid_variables: RigidVariables,
     mut subs: Subs,
-) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
+    mut aliases: Aliases,
+    mut abilities_store: AbilitiesStore,
+) -> (
+    Solved<Subs>,
+    solve::Env,
+    Vec<solve::TypeError>,
+    AbilitiesStore,
+) {
     let env = solve::Env::default();
 
     for (var, name) in rigid_variables.named {
         subs.rigid_var(var, name);
+    }
+
+    for (var, (name, ability)) in rigid_variables.able {
+        subs.rigid_able_var(var, name, ability);
     }
 
     for var in rigid_variables.wildcards {
@@ -47,29 +59,17 @@ pub fn run_solve(
     let mut problems = Vec::new();
 
     // Run the solver to populate Subs.
-    let (solved_subs, solved_env) = solve::run(constraints, &env, &mut problems, subs, &constraint);
+    let (solved_subs, solved_env) = solve::run(
+        constraints,
+        &env,
+        &mut problems,
+        subs,
+        &mut aliases,
+        &constraint,
+        &mut abilities_store,
+    );
 
-    (solved_subs, solved_env, problems)
-}
-
-pub fn make_solved_types(
-    solved_subs: &Solved<Subs>,
-    exposed_vars_by_symbol: &[(Symbol, Variable)],
-) -> MutMap<Symbol, SolvedType> {
-    let mut solved_types = MutMap::default();
-
-    // exposed_vars_by_symbol contains the Variables for all the Symbols
-    // this module exposes. We want to convert those into flat SolvedType
-    // annotations which are decoupled from our Subs, because that's how
-    // other modules will generate constraints for imported values
-    // within the context of their own Subs.
-    for (symbol, var) in exposed_vars_by_symbol.iter() {
-        let solved_type = SolvedType::new(solved_subs, *var);
-
-        solved_types.insert(*symbol, solved_type);
-    }
-
-    solved_types
+    (solved_subs, solved_env, problems, abilities_store)
 }
 
 pub fn exposed_types_storage_subs(

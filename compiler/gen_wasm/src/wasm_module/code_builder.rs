@@ -62,7 +62,7 @@ struct VmBlock<'a> {
 
 impl std::fmt::Debug for VmBlock<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{:?}", self.opcode))
+        f.write_fmt(format_args!("{:?} {:?}", self.opcode, self.value_stack))
     }
 }
 
@@ -70,12 +70,29 @@ impl std::fmt::Debug for VmBlock<'_> {
 /// Rust representation matches Wasm encoding.
 /// It's an error to specify alignment higher than the "natural" alignment of the instruction
 #[repr(u8)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub enum Align {
     Bytes1 = 0,
     Bytes2 = 1,
     Bytes4 = 2,
     Bytes8 = 3,
+}
+
+impl Align {
+    /// Calculate the largest possible alignment for a load/store at a given stack frame offset
+    /// Assumes the stack frame is aligned to at least 8 bytes
+    pub fn from_stack_offset(max_align: Align, offset: u32) -> Align {
+        if (max_align == Align::Bytes8) && (offset & 7 == 0) {
+            return Align::Bytes8;
+        }
+        if (max_align >= Align::Bytes4) && (offset & 3 == 0) {
+            return Align::Bytes4;
+        }
+        if (max_align >= Align::Bytes2) && (offset & 1 == 0) {
+            return Align::Bytes2;
+        }
+        Align::Bytes1
+    }
 }
 
 impl From<u32> for Align {
@@ -591,7 +608,7 @@ impl<'a> CodeBuilder<'a> {
         log_instruction!(
             "{:10}\t\t{:?}",
             format!("{:?}", opcode),
-            self.current_stack()
+            self.vm_block_stack
         );
     }
 
@@ -618,7 +635,7 @@ impl<'a> CodeBuilder<'a> {
             "{:10}\t{}\t{:?}",
             format!("{:?}", opcode),
             immediate,
-            self.current_stack()
+            self.vm_block_stack
         );
     }
 
@@ -631,7 +648,7 @@ impl<'a> CodeBuilder<'a> {
             format!("{:?}", opcode),
             align,
             offset,
-            self.current_stack()
+            self.vm_block_stack
         );
     }
 
@@ -735,7 +752,7 @@ impl<'a> CodeBuilder<'a> {
             "{:10}\t{}\t{:?}",
             format!("{:?}", CALL),
             function_index,
-            self.current_stack()
+            self.vm_block_stack
         );
     }
 
@@ -806,7 +823,7 @@ impl<'a> CodeBuilder<'a> {
             "{:10}\t{}\t{:?}",
             format!("{:?}", opcode),
             x,
-            self.current_stack()
+            self.vm_block_stack
         );
     }
     pub fn i32_const(&mut self, x: i32) {

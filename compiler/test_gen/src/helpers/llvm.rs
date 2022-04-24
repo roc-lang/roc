@@ -7,6 +7,7 @@ use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
+use roc_reporting::report::RenderTarget;
 use target_lexicon::Triple;
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -26,7 +27,6 @@ fn promote_expr_to_module(src: &str) -> String {
 fn create_llvm_module<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: &'a roc_builtins::std::StdLib,
     is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
@@ -51,26 +51,26 @@ fn create_llvm_module<'a>(
         module_src = &temp;
     }
 
-    let loaded = roc_load::file::load_and_monomorphize_from_str(
+    let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
-        stdlib,
         src_dir,
         Default::default(),
         target_info,
+        RenderTarget::ColorTerminal,
     );
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
+        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
             println!("{}", report);
             panic!();
         }
         Err(e) => panic!("{:?}", e),
     };
 
-    use roc_load::file::MonomorphizedModule;
+    use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         procedures,
         entry_point,
@@ -106,8 +106,8 @@ fn create_llvm_module<'a>(
 
         use roc_problem::can::Problem::*;
         for problem in can_problems.into_iter() {
-            // Ignore "unused" problems
             match problem {
+                // Ignore "unused" problems
                 UnusedDef(_, _)
                 | UnusedArgument(_, _, _)
                 | UnusedImport(_, _)
@@ -122,6 +122,8 @@ fn create_llvm_module<'a>(
                     delayed_errors.push(buf.clone());
                     lines.push(buf);
                 }
+                // We should be able to compile even when abilities are used as types
+                AbilityUsedAsType(..) => {}
                 _ => {
                     let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
                     let mut buf = String::new();
@@ -260,7 +262,6 @@ fn create_llvm_module<'a>(
 pub fn helper<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: &'a roc_builtins::std::StdLib,
     is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
@@ -276,7 +277,6 @@ pub fn helper<'a>(
     let (main_fn_name, delayed_errors, module) = create_llvm_module(
         arena,
         src,
-        stdlib,
         is_gen_test,
         ignore_problems,
         context,
@@ -305,7 +305,6 @@ fn wasm32_target_tripple() -> Triple {
 pub fn helper_wasm<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    stdlib: &'a roc_builtins::std::StdLib,
     _is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
@@ -322,7 +321,6 @@ pub fn helper_wasm<'a>(
     let (_main_fn_name, _delayed_errors, llvm_module) = create_llvm_module(
         arena,
         src,
-        stdlib,
         is_gen_test,
         ignore_problems,
         context,
@@ -464,18 +462,9 @@ where
     let arena = bumpalo::Bump::new();
     let context = inkwell::context::Context::create();
 
-    // NOTE the stdlib must be in the arena; just taking a reference will segfault
-    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
     let is_gen_test = true;
-    let instance = crate::helpers::llvm::helper_wasm(
-        &arena,
-        src,
-        stdlib,
-        is_gen_test,
-        ignore_problems,
-        &context,
-    );
+    let instance =
+        crate::helpers::llvm::helper_wasm(&arena, src, is_gen_test, ignore_problems, &context);
 
     let memory = instance.exports.get_memory("memory").unwrap();
 
@@ -538,18 +527,9 @@ macro_rules! assert_llvm_evals_to {
         let arena = Bump::new();
         let context = Context::create();
 
-        // NOTE the stdlib must be in the arena; just taking a reference will segfault
-        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
         let is_gen_test = true;
-        let (main_fn_name, errors, lib) = $crate::helpers::llvm::helper(
-            &arena,
-            $src,
-            stdlib,
-            is_gen_test,
-            $ignore_problems,
-            &context,
-        );
+        let (main_fn_name, errors, lib) =
+            $crate::helpers::llvm::helper(&arena, $src, is_gen_test, $ignore_problems, &context);
 
         let transform = |success| {
             let expected = $expected;
@@ -615,12 +595,9 @@ macro_rules! assert_expect_failed {
         let arena = Bump::new();
         let context = Context::create();
 
-        // NOTE the stdlib must be in the arena; just taking a reference will segfault
-        let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
-
         let is_gen_test = true;
         let (main_fn_name, errors, lib) =
-            $crate::helpers::llvm::helper(&arena, $src, stdlib, is_gen_test, false, &context);
+            $crate::helpers::llvm::helper(&arena, $src, is_gen_test, false, &context);
 
         let transform = |success| {
             let expected = $expected;

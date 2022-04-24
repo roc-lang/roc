@@ -316,16 +316,30 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(SolvedType::Wildcard),
     );
 
-    // divInt : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // divTrunc : Int a, Int a -> Int a
     add_top_level_function_type!(
-        Symbol::NUM_DIV_INT,
+        Symbol::NUM_DIV_TRUNC,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(int_type(flex(TVAR1)))
+    );
+
+    // divTruncChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    add_top_level_function_type!(
+        Symbol::NUM_DIV_TRUNC_CHECKED,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
 
-    //divCeil: Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // divCeil : Int a, Int a -> Int a
     add_top_level_function_type!(
         Symbol::NUM_DIV_CEIL,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(int_type(flex(TVAR1)))
+    );
+
+    // divCeilChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    add_top_level_function_type!(
+        Symbol::NUM_DIV_CEIL_CHECKED,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
@@ -379,16 +393,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(int_type(flex(TVAR2)))
     );
 
-    // rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // rem : Int a, Int a -> Int a
     add_top_level_function_type!(
         Symbol::NUM_REM,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
-        Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
+        Box::new(int_type(flex(TVAR1))),
     );
 
-    // mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_top_level_function_type!(
-        Symbol::NUM_MOD_INT,
+        Symbol::NUM_REM_CHECKED,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
@@ -615,7 +629,35 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::NUM_TO_NAT_CHECKED,
         vec![int_type(flex(TVAR1))],
-        Box::new(result_type(nat_type(), out_of_bounds)),
+        Box::new(result_type(nat_type(), out_of_bounds.clone())),
+    );
+
+    // toF32 : Num * -> F32
+    add_top_level_function_type!(
+        Symbol::NUM_TO_F32,
+        vec![num_type(flex(TVAR1))],
+        Box::new(f32_type()),
+    );
+
+    // toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_F32_CHECKED,
+        vec![num_type(flex(TVAR1))],
+        Box::new(result_type(f32_type(), out_of_bounds.clone())),
+    );
+
+    // toF64 : Num * -> F64
+    add_top_level_function_type!(
+        Symbol::NUM_TO_F64,
+        vec![num_type(flex(TVAR1))],
+        Box::new(f64_type()),
+    );
+
+    // toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
+    add_top_level_function_type!(
+        Symbol::NUM_TO_F64_CHECKED,
+        vec![num_type(flex(TVAR1))],
+        Box::new(result_type(f64_type(), out_of_bounds)),
     );
 
     // toStr : Num a -> Str
@@ -631,36 +673,50 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::NUM_DIV_FLOAT,
         vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
-        Box::new(result_type(float_type(flex(TVAR1)), div_by_zero.clone())),
+        Box::new(float_type(flex(TVAR1)))
     );
 
-    // mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
+    // divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
     add_top_level_function_type!(
-        Symbol::NUM_MOD_FLOAT,
+        Symbol::NUM_DIV_FLOAT_CHECKED,
         vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
         Box::new(result_type(float_type(flex(TVAR1)), div_by_zero)),
     );
 
     // sqrt : Float a -> Float a
+    add_top_level_function_type!(
+        Symbol::NUM_SQRT,
+        vec![float_type(flex(TVAR1))],
+        Box::new(float_type(flex(TVAR1))),
+    );
+
+    // sqrtChecked : Float a -> Result (Float a) [ SqrtOfNegative ]*
     let sqrt_of_negative = SolvedType::TagUnion(
         vec![(TagName::Global("SqrtOfNegative".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
     add_top_level_function_type!(
-        Symbol::NUM_SQRT,
+        Symbol::NUM_SQRT_CHECKED,
         vec![float_type(flex(TVAR1))],
         Box::new(result_type(float_type(flex(TVAR1)), sqrt_of_negative)),
     );
 
     // log : Float a -> Float a
+    add_top_level_function_type!(
+        Symbol::NUM_LOG,
+        vec![float_type(flex(TVAR1))],
+        Box::new(float_type(flex(TVAR1))),
+    );
+
+    // logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
     let log_needs_positive = SolvedType::TagUnion(
         vec![(TagName::Global("LogNeedsPositive".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
     add_top_level_function_type!(
-        Symbol::NUM_LOG,
+        Symbol::NUM_LOG_CHECKED,
         vec![float_type(flex(TVAR1))],
         Box::new(result_type(float_type(flex(TVAR1)), log_needs_positive)),
     );
@@ -899,7 +955,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         );
     }
 
-    // fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem, OutOfBounds ]*
+    // fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [ BadUtf8 Utf8Problem, OutOfBounds ]*
     {
         let bad_utf8 = SolvedType::TagUnion(
             vec![

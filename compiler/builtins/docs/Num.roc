@@ -1116,7 +1116,6 @@ div : Frac a, Frac a -> Frac a
 
 ## Raises a [Frac] to the power of another [Frac].
 ##
-## `
 ## For an [Int] alternative to this function, see [Num.raise].
 pow : Frac a, Frac a -> Frac a
 

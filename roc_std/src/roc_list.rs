@@ -13,6 +13,7 @@ where
 {
     elements: Option<NonNull<T>>,
     length: usize,
+    capacity: usize,
 }
 
 impl<T> RocList<T>
@@ -23,6 +24,7 @@ where
         RocList {
             elements: None,
             length: 0,
+            capacity: 0,
         }
     }
 
@@ -34,6 +36,10 @@ where
 
     pub fn len(&self) -> usize {
         self.length
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     pub fn is_empty(&self) -> bool {
@@ -57,7 +63,7 @@ where
         let new_size = elements_offset + core::mem::size_of::<T>() * (self.len() + slice.len());
 
         let new_ptr = if let Some((elements, storage)) = self.elements_and_storage() {
-            // Decrement the lists refence count.
+            // Decrement the list's refence count.
             let mut copy = storage.get();
             let is_unique = copy.decrease();
 
@@ -128,6 +134,8 @@ where
             // a incrementing the reference count panics.
             self.length += 1;
         }
+
+        self.capacity = self.length
     }
 
     fn elements_and_storage(&self) -> Option<(NonNull<T>, &Cell<Storage>)> {
@@ -251,6 +259,7 @@ where
         Self {
             elements: self.elements,
             length: self.length,
+            capacity: self.capacity,
         }
     }
 }
@@ -263,6 +272,15 @@ where
         unsafe {
             Self::decrement(self);
         }
+    }
+}
+
+impl<T> From<&[T]> for RocList<T>
+where
+    T: ReferenceCount,
+{
+    fn from(slice: &[T]) -> Self {
+        Self::from_slice(slice)
     }
 }
 

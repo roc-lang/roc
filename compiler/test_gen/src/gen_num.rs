@@ -19,7 +19,7 @@ fn nat_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                    i : Nat
+                    i : Num.Nat
                     i = 1
 
                     i
@@ -473,7 +473,7 @@ fn f64_sqrt() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.sqrt 100 is
+                    when Num.sqrtChecked 100 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -489,9 +489,7 @@ fn f64_log() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log 7.38905609893 is
-                        Ok val -> val
-                        Err _ -> -1
+                    Num.log 7.38905609893
                 "#
         ),
         1.999999999999912,
@@ -501,11 +499,11 @@ fn f64_log() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn f64_log_one() {
+fn f64_log_checked_one() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log 1 is
+                    when Num.logChecked 1 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -521,7 +519,7 @@ fn f64_sqrt_zero() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.sqrt 0 is
+                    when Num.sqrtChecked 0 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -533,11 +531,11 @@ fn f64_sqrt_zero() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn f64_sqrt_negative() {
+fn f64_sqrt_checked_negative() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.sqrt -1 is
+                    when Num.sqrtChecked -1 is
                         Err _ -> 42
                         Ok val -> val
                 "#
@@ -549,11 +547,11 @@ fn f64_sqrt_negative() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn f64_log_zero() {
+fn f64_log_checked_zero() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log 0 is
+                    when Num.logChecked 0 is
                         Err _ -> 42
                         Ok val -> val
                 "#
@@ -569,13 +567,12 @@ fn f64_log_negative() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log -1 is
-                        Err _ -> 42
-                        Ok val -> val
+                    Num.log -1
                 "#
         ),
-        42.0,
-        f64
+        true,
+        f64,
+        |f: f64| f.is_nan()
     );
 }
 
@@ -723,11 +720,24 @@ fn gen_wrap_add_nums() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_div_f64() {
-    // FIXME this works with normal types, but fails when checking uniqueness types
     assert_evals_to!(
         indoc!(
             r#"
-                    when 48 / 2 is
+                    48 / 2
+                "#
+        ),
+        24.0,
+        f64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when Num.divChecked 48 2 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -736,6 +746,23 @@ fn gen_div_f64() {
         f64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_by_zero_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when Num.divChecked 47 0 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        -1.0,
+        f64
+    );
+}
+
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn gen_div_dec() {
@@ -748,12 +775,53 @@ fn gen_div_dec() {
                     y : Dec
                     y = 3
 
-                    when x / y is
+                    x / y
+                "#
+        ),
+        RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
+        i128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_dec() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x : Dec
+                    x = 10
+
+                    y : Dec
+                    y = 3
+
+                    when Num.divChecked x y is
                         Ok val -> val
                         Err _ -> -1
                 "#
         ),
         RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
+        i128
+    );
+}
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_by_zero_dec() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    x : Dec
+                    x = 10
+
+                    y : Dec
+                    y = 0
+
+                    when Num.divChecked x y is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+        ),
+        RocDec::from_str_to_i128_unsafe("-1"),
         i128
     );
 }
@@ -965,7 +1033,21 @@ fn gen_div_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when 1000 // 10 is
+                    1000 // 10
+                "#
+        ),
+        100,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn gen_div_checked_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when Num.divTruncChecked 1000 10 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -977,11 +1059,11 @@ fn gen_div_i64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn gen_div_by_zero_i64() {
+fn gen_div_checked_by_zero_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when 1000 // 0 is
+                    when Num.divTruncChecked 1000 0 is
                         Err DivByZero -> 99
                         _ -> -24
                 "#
@@ -997,9 +1079,7 @@ fn gen_rem_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.rem 8 3 is
-                        Ok val -> val
-                        Err _ -> -1
+                    Num.rem 8 3
                 "#
         ),
         2,
@@ -1009,11 +1089,11 @@ fn gen_rem_i64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn gen_rem_div_by_zero_i64() {
+fn gen_rem_checked_div_by_zero_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.rem 8 0 is
+                    when Num.remChecked 8 0 is
                         Err DivByZero -> 4
                         Ok _ -> -23
                 "#
@@ -1843,22 +1923,69 @@ fn shift_left_by() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn shift_right_by() {
     // Sign Extended Right Shift
-    assert_evals_to!("Num.shiftRightBy 0 0b0100_0000i8", 0b0001_0000, i8);
-    assert_evals_to!("Num.shiftRightBy 1 0b1110_0000u8", 0b1111_0000u8 as i8, i8);
-    assert_evals_to!("Num.shiftRightBy 2 0b1100_0000u8", 0b1111_0000u8 as i8, i8);
+
+    let is_wasm = cfg!(feature = "gen-wasm");
+    let is_llvm_release_mode = cfg!(feature = "gen-llvm") && !cfg!(debug_assertions);
+
+    // FIXME (Brian) Something funny happening with 8-bit binary literals in tests
+    if !is_wasm {
+        assert_evals_to!(
+            "Num.shiftRightBy 2 (Num.toI8 0b1100_0000u8)",
+            0b1111_0000u8 as i8,
+            i8
+        );
+        assert_evals_to!("Num.shiftRightBy 2 0b0100_0000i8", 0b0001_0000i8, i8);
+        assert_evals_to!("Num.shiftRightBy 1 0b1110_0000u8", 0b1111_0000u8, u8);
+        assert_evals_to!("Num.shiftRightBy 2 0b1100_0000u8", 0b1111_0000u8, u8);
+        assert_evals_to!("Num.shiftRightBy 12 0b0100_0000u8", 0b0000_0000u8, u8);
+
+        // LLVM in release mode returns 0 instead of -1 for some reason
+        if !is_llvm_release_mode {
+            assert_evals_to!("Num.shiftRightBy 12 0b1000_0000u8", 0b1111_1111u8, u8);
+        }
+    }
+    assert_evals_to!("Num.shiftRightBy 0 12", 12, i64);
+    assert_evals_to!("Num.shiftRightBy 1 12", 6, i64);
+    assert_evals_to!("Num.shiftRightBy 1 -12", -6, i64);
+    assert_evals_to!("Num.shiftRightBy 8 12", 0, i64);
+    assert_evals_to!("Num.shiftRightBy 8 -12", -1, i64);
+    assert_evals_to!("Num.shiftRightBy -1 12", 0, i64);
+    assert_evals_to!("Num.shiftRightBy 0 0", 0, i64);
+    assert_evals_to!("Num.shiftRightBy 1 0", 0, i64);
+
+    assert_evals_to!("Num.shiftRightBy 0 12i32", 12, i32);
+    assert_evals_to!("Num.shiftRightBy 1 12i32", 6, i32);
+    assert_evals_to!("Num.shiftRightBy 1 -12i32", -6, i32);
+    assert_evals_to!("Num.shiftRightBy 8 12i32", 0, i32);
+    assert_evals_to!("Num.shiftRightBy 8 -12i32", -1, i32);
+
+    assert_evals_to!("Num.shiftRightBy 0 12i8", 12, i8);
+    assert_evals_to!("Num.shiftRightBy 1 12i8", 6, i8);
+    assert_evals_to!("Num.shiftRightBy 1 -12i8", -6, i8);
+    assert_evals_to!("Num.shiftRightBy 8 12i8", 0, i8);
+
+    if !is_llvm_release_mode {
+        assert_evals_to!("Num.shiftRightBy -1 0", 0, i64);
+        assert_evals_to!("Num.shiftRightBy -1 -12", -1, i64);
+        assert_evals_to!("Num.shiftRightBy 8 -12i8", -1, i8);
+    }
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn shift_right_zf_by() {
     // Logical Right Shift
-    assert_evals_to!("Num.shiftRightBy 1 0b1100_0000u8", 0b0011_0000, i64);
-    assert_evals_to!("Num.shiftRightBy 2 0b0000_0010u8", 0b0000_0001, i64);
-    assert_evals_to!("Num.shiftRightBy 3 0b0000_1100u8", 0b0000_0011, i64);
+    assert_evals_to!(
+        "Num.shiftRightZfBy 2 (Num.toI8 0b1100_0000u8)",
+        0b0011_0000i8,
+        i8
+    );
+    assert_evals_to!("Num.shiftRightZfBy 2 0b1100_0000u8", 0b0011_0000u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 1 0b0000_0010u8", 0b0000_0001u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 2 0b0000_1100u8", 0b0000_0011u8, u8);
+    assert_evals_to!("Num.shiftRightZfBy 12 0b1000_0000u8", 0b0000_0000u8, u8);
 }
 
 #[test]
@@ -2113,7 +2240,7 @@ fn max_u8() {
     );
 }
 
-macro_rules! to_int_tests {
+macro_rules! num_conversion_tests {
     ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr $(, [ $($support_gen:literal),* ])? )*))*) => {$($(
         #[test]
         #[cfg(any(feature = "gen-llvm", $($(feature = $support_gen)*)?))]
@@ -2124,7 +2251,7 @@ macro_rules! to_int_tests {
     )*)*}
 }
 
-to_int_tests! {
+num_conversion_tests! {
     "Num.toI8", i8, (
         to_i8_same_width, "15u8", 15, ["gen-wasm"]
         to_i8_truncate, "115i32", 115, ["gen-wasm"]
@@ -2184,6 +2311,36 @@ to_int_tests! {
         to_nat_extend, "15i8", 15, ["gen-wasm"]
         to_nat_truncate, "115i128", 115
         to_nat_truncate_wraps, "10_000_000_000_000_000_000_000i128", 1864712049423024128
+    )
+    "Num.toF32", f32, (
+        to_f32_from_i8, "15i8", 15.0
+        to_f32_from_i16, "15i16", 15.0
+        to_f32_from_i32, "15i32", 15.0
+        to_f32_from_i64, "15i64", 15.0
+        to_f32_from_i128, "15i128", 15.0
+        to_f32_from_u8, "15u8", 15.0
+        to_f32_from_u16, "15u16", 15.0
+        to_f32_from_u32, "15u32", 15.0
+        to_f32_from_u64, "15u64", 15.0
+        to_f32_from_u128, "15u128", 15.0
+        to_f32_from_nat, "15nat", 15.0
+        to_f32_from_f32, "1.5f32", 1.5
+        to_f32_from_f64, "1.5f64", 1.5
+    )
+    "Num.toF64", f64, (
+        to_f64_from_i8, "15i8", 15.0
+        to_f64_from_i16, "15i16", 15.0
+        to_f64_from_i32, "15i32", 15.0
+        to_f64_from_i64, "15i64", 15.0
+        to_f64_from_i128, "15i128", 15.0
+        to_f64_from_u8, "15u8", 15.0
+        to_f64_from_u16, "15u16", 15.0
+        to_f64_from_u32, "15u32", 15.0
+        to_f64_from_u64, "15u64", 15.0
+        to_f64_from_u128, "15u128", 15.0
+        to_f64_from_nat, "15nat", 15.0
+        to_f64_from_f32, "1.5f32", 1.5
+        to_f64_from_f64, "1.5f64", 1.5
     )
 }
 
@@ -2584,6 +2741,166 @@ fn num_to_str() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_u8() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr 0u8"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1u8"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10u8"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", u8::MAX);
+    assert_evals_to!(r#"Num.toStr Num.maxU8"#, RocStr::from(max.as_str()), RocStr);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_u16() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr 0u16"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1u16"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10u16"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", u16::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxU16"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_u32() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr 0u32"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1u32"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10u32"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", u32::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxU32"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_u64() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr 0u64"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1u64"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10u64"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", u64::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxU64"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_i8() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10i8"#, RocStr::from("-10"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1i8"#, RocStr::from("-1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0i8"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1i8"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10i8"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", i8::MAX);
+    assert_evals_to!(r#"Num.toStr Num.maxI8"#, RocStr::from(max.as_str()), RocStr);
+
+    let max = format!("{}", i8::MIN);
+    assert_evals_to!(r#"Num.toStr Num.minI8"#, RocStr::from(max.as_str()), RocStr);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_i16() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10i16"#, RocStr::from("-10"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1i16"#, RocStr::from("-1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0i16"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1i16"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10i16"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", i16::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxI16"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+
+    let max = format!("{}", i16::MIN);
+    assert_evals_to!(
+        r#"Num.toStr Num.minI16"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_i32() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10i32"#, RocStr::from("-10"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1i32"#, RocStr::from("-1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0i32"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1i32"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10i32"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", i32::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxI32"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+
+    let max = format!("{}", i32::MIN);
+    assert_evals_to!(
+        r#"Num.toStr Num.minI32"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_to_str_i64() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10i64"#, RocStr::from("-10"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1i64"#, RocStr::from("-1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0i64"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1i64"#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10i64"#, RocStr::from("10"), RocStr);
+
+    let max = format!("{}", i64::MAX);
+    assert_evals_to!(
+        r#"Num.toStr Num.maxI64"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+
+    let max = format!("{}", i64::MIN);
+    assert_evals_to!(
+        r#"Num.toStr Num.minI64"#,
+        RocStr::from(max.as_str()),
+        RocStr
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn u8_addition_greater_than_i8() {
     assert_evals_to!(
@@ -2858,4 +3175,18 @@ fn div_of_unsigned() {
         127,
         u8
     )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn dec_float_suffix() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            123.0dec
+            "#
+        ),
+        RocDec::from_str_to_i128_unsafe("123.0"),
+        i128
+    );
 }

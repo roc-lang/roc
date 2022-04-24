@@ -3,6 +3,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, MutMap};
+use roc_error_macros::todo_abilities;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
@@ -10,7 +11,7 @@ use roc_target::{PtrWidth, TargetInfo};
 use roc_types::subs::{
     Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
 };
-use roc_types::types::{gather_fields_unsorted_iter, RecordField};
+use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
 use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -72,6 +73,7 @@ impl<'a> RawFunctionLayout<'a> {
         use roc_types::subs::Content::*;
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
+            FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
@@ -309,6 +311,50 @@ impl<'a> UnionLayout<'a> {
                     .append(alloc.intersperse(tags_doc, ", "))
                     .append(alloc.text("]"))
             }
+            Recursive(tags) => {
+                let tags_doc = tags.iter().map(|fields| {
+                    alloc.text("C ").append(alloc.intersperse(
+                        fields.iter().map(|x| x.to_doc(alloc, Parens::InTypeParam)),
+                        " ",
+                    ))
+                });
+                alloc
+                    .text("[<r>")
+                    .append(alloc.intersperse(tags_doc, ", "))
+                    .append(alloc.text("]"))
+            }
+            NonNullableUnwrapped(fields) => {
+                let fields_doc = alloc.text("C ").append(alloc.intersperse(
+                    fields.iter().map(|x| x.to_doc(alloc, Parens::InTypeParam)),
+                    " ",
+                ));
+                alloc
+                    .text("[<rnnu>")
+                    .append(fields_doc)
+                    .append(alloc.text("]"))
+            }
+            NullableUnwrapped {
+                nullable_id,
+                other_fields,
+            } => {
+                let fields_doc = alloc.text("C ").append(
+                    alloc.intersperse(
+                        other_fields
+                            .iter()
+                            .map(|x| x.to_doc(alloc, Parens::InTypeParam)),
+                        " ",
+                    ),
+                );
+                let tags_doc = if nullable_id {
+                    alloc.concat(vec![alloc.text("<null>, "), fields_doc])
+                } else {
+                    alloc.concat(vec![fields_doc, alloc.text(", <null>")])
+                };
+                alloc
+                    .text("[<rnu>")
+                    .append(tags_doc)
+                    .append(alloc.text("]"))
+            }
             _ => alloc.text("TODO"),
         }
     }
@@ -468,7 +514,7 @@ impl<'a> UnionLayout<'a> {
 
     pub fn allocation_alignment_bytes(&self, target_info: TargetInfo) -> u32 {
         let allocation = match self {
-            UnionLayout::NonRecursive(_) => unreachable!("not heap-allocated"),
+            UnionLayout::NonRecursive(tags) => Self::tags_alignment_bytes(tags, target_info),
             UnionLayout::Recursive(tags) => Self::tags_alignment_bytes(tags, target_info),
             UnionLayout::NonNullableUnwrapped(field_layouts) => {
                 Layout::struct_no_name_order(field_layouts).alignment_bytes(target_info)
@@ -553,6 +599,31 @@ impl<'a> UnionLayout<'a> {
         }
 
         (size, alignment_bytes)
+    }
+
+    /// Very important to use this when doing a memcpy!
+    fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
+        match self {
+            UnionLayout::NonRecursive(tags) => {
+                let id_layout = self.tag_id_layout();
+
+                let mut size = 0;
+
+                for field_layouts in tags.iter() {
+                    let fields = Layout::struct_no_name_order(field_layouts);
+                    let fields_and_id = [fields, id_layout];
+
+                    let data = Layout::struct_no_name_order(&fields_and_id);
+                    size = size.max(data.stack_size_without_alignment(target_info));
+                }
+
+                size
+            }
+            UnionLayout::Recursive(_)
+            | UnionLayout::NonNullableUnwrapped(_)
+            | UnionLayout::NullableWrapped { .. }
+            | UnionLayout::NullableUnwrapped { .. } => target_info.ptr_width() as u32,
+        }
     }
 }
 
@@ -927,6 +998,7 @@ impl<'a> Layout<'a> {
         use roc_types::subs::Content::*;
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
+            FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
@@ -1012,12 +1084,26 @@ impl<'a> Layout<'a> {
         false
     }
 
-    pub fn is_passed_by_reference(&self) -> bool {
+    pub fn is_passed_by_reference(&self, target_info: TargetInfo) -> bool {
         match self {
-            Layout::Union(UnionLayout::NonRecursive(_)) => true,
-            Layout::LambdaSet(lambda_set) => {
-                lambda_set.runtime_representation().is_passed_by_reference()
+            Layout::Builtin(builtin) => {
+                use Builtin::*;
+
+                match target_info.ptr_width() {
+                    PtrWidth::Bytes4 => {
+                        // more things fit into a register
+                        false
+                    }
+                    PtrWidth::Bytes8 => {
+                        // currently, only Str is passed by-reference internally
+                        matches!(builtin, Str)
+                    }
+                }
             }
+            Layout::Union(UnionLayout::NonRecursive(_)) => true,
+            Layout::LambdaSet(lambda_set) => lambda_set
+                .runtime_representation()
+                .is_passed_by_reference(target_info),
             _ => false,
         }
     }
@@ -1037,7 +1123,8 @@ impl<'a> Layout<'a> {
         (size, alignment)
     }
 
-    fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
+    /// Very important to use this when doing a memcpy!
+    pub fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
         use Layout::*;
 
         match self {
@@ -1051,18 +1138,7 @@ impl<'a> Layout<'a> {
 
                 sum
             }
-            Union(variant) => {
-                use UnionLayout::*;
-
-                match variant {
-                    NonRecursive(_) => variant.data_size_and_alignment(target_info).0,
-
-                    Recursive(_)
-                    | NullableWrapped { .. }
-                    | NullableUnwrapped { .. }
-                    | NonNullableUnwrapped(_) => target_info.ptr_width() as u32,
-                }
-            }
+            Union(variant) => variant.stack_size_without_alignment(target_info),
             LambdaSet(lambda_set) => lambda_set
                 .runtime_representation()
                 .stack_size_without_alignment(target_info),
@@ -1121,9 +1197,11 @@ impl<'a> Layout<'a> {
     }
 
     pub fn allocation_alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+        let ptr_width = target_info.ptr_width() as u32;
+
         match self {
             Layout::Builtin(builtin) => builtin.allocation_alignment_bytes(target_info),
-            Layout::Struct { .. } => unreachable!("not heap-allocated"),
+            Layout::Struct { .. } => self.alignment_bytes(target_info).max(ptr_width),
             Layout::Union(union_layout) => union_layout.allocation_alignment_bytes(target_info),
             Layout::LambdaSet(lambda_set) => lambda_set
                 .runtime_representation()
@@ -1165,8 +1243,7 @@ impl<'a> Layout<'a> {
                 match variant {
                     NonRecursive(fields) => fields
                         .iter()
-                        .map(|ls| ls.iter())
-                        .flatten()
+                        .flat_map(|ls| ls.iter())
                         .any(|f| f.contains_refcounted()),
                     Recursive(_)
                     | NullableWrapped { .. }
@@ -1384,17 +1461,15 @@ impl<'a> Builtin<'a> {
     const DECIMAL_SIZE: u32 = std::mem::size_of::<i128>() as u32;
 
     /// Number of machine words in an empty one of these
-    pub const STR_WORDS: u32 = 2;
+    pub const STR_WORDS: u32 = 3;
     pub const DICT_WORDS: u32 = 3;
     pub const SET_WORDS: u32 = Builtin::DICT_WORDS; // Set is an alias for Dict with {} for value
-    pub const LIST_WORDS: u32 = 2;
+    pub const LIST_WORDS: u32 = 3;
 
-    /// Layout of collection wrapper for List and Str - a struct of (pointer, length).
-    ///
-    /// We choose this layout (with pointer first) because it's how
-    /// Rust slices are laid out, meaning we can cast to/from them for free.
+    /// Layout of collection wrapper for List and Str - a struct of (pointer, length, capacity).
     pub const WRAPPER_PTR: u32 = 0;
     pub const WRAPPER_LEN: u32 = 1;
+    pub const WRAPPER_CAPACITY: u32 = 2;
 
     pub fn stack_size(&self, target_info: TargetInfo) -> u32 {
         use Builtin::*;
@@ -1519,9 +1594,6 @@ impl<'a> Builtin<'a> {
         let ptr_width = target_info.ptr_width() as u32;
 
         let allocation = match self {
-            Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
-                unreachable!("not heap-allocated")
-            }
             Builtin::Str => ptr_width,
             Builtin::Dict(k, v) => k
                 .alignment_bytes(target_info)
@@ -1529,6 +1601,11 @@ impl<'a> Builtin<'a> {
                 .max(ptr_width),
             Builtin::Set(k) => k.alignment_bytes(target_info).max(ptr_width),
             Builtin::List(e) => e.alignment_bytes(target_info).max(ptr_width),
+            // The following are usually not heap-allocated, but they might be when inside a Box.
+            Builtin::Int(int_width) => int_width.alignment_bytes(target_info).max(ptr_width),
+            Builtin::Float(float_width) => float_width.alignment_bytes(target_info).max(ptr_width),
+            Builtin::Bool => (core::mem::align_of::<bool>() as u32).max(ptr_width),
+            Builtin::Decimal => IntWidth::I128.alignment_bytes(target_info).max(ptr_width),
         };
 
         allocation.max(ptr_width)
@@ -1653,7 +1730,11 @@ fn layout_from_flat_type<'a>(
             // extract any values from the ext_var
 
             let mut pairs = Vec::with_capacity_in(fields.len(), arena);
-            for (label, field) in fields.unsorted_iterator(subs, ext_var) {
+            let it = match fields.unsorted_iterator(subs, ext_var) {
+                Ok(it) => it,
+                Err(RecordFieldsError) => return Err(LayoutProblem::Erroneous),
+            };
+            for (label, field) in it {
                 // drop optional fields
                 let var = match field {
                     RecordField::Optional(_) => continue,
@@ -1694,7 +1775,7 @@ fn layout_from_flat_type<'a>(
 
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            Ok(layout_from_tag_union(arena, &tags, subs, env.target_info))
+            Ok(layout_from_tag_union(env, &tags))
         }
         FunctionOrTagUnion(tag_name, _, ext_var) => {
             debug_assert!(
@@ -1705,7 +1786,7 @@ fn layout_from_flat_type<'a>(
             let union_tags = UnionTags::from_tag_name_index(tag_name);
             let (tags, _) = union_tags.unsorted_tags_and_ext(subs, ext_var);
 
-            Ok(layout_from_tag_union(arena, &tags, subs, env.target_info))
+            Ok(layout_from_tag_union(env, &tags))
         }
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
@@ -1994,7 +2075,15 @@ pub fn union_sorted_tags<'a>(
 
     let mut tags_vec = std::vec::Vec::new();
     let result = match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
-        Ok(()) | Err((_, Content::FlexVar(_))) | Err((_, Content::RecursionVar { .. })) => {
+        Ok(())
+        // Admit type variables in the extension for now. This may come from things that never got
+        // monomorphized, like in
+        //   x : [ A ]*
+        //   x = A
+        //   x
+        // In such cases it's fine to drop the variable. We may be proven wrong in the future...
+        | Err((_, Content::FlexVar(_) | Content::RigidVar(_)))
+        | Err((_, Content::RecursionVar { .. })) => {
             let opt_rec_var = get_recursion_var(subs, var);
             union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, target_info)
         }
@@ -2026,22 +2115,13 @@ fn is_recursive_tag_union(layout: &Layout) -> bool {
 }
 
 fn union_sorted_tags_help_new<'a>(
-    arena: &'a Bump,
+    env: &mut Env<'a, '_>,
     tags_list: &[(&'_ TagName, &[Variable])],
     opt_rec_var: Option<Variable>,
-    subs: &Subs,
-    target_info: TargetInfo,
 ) -> UnionVariant<'a> {
     // sort up front; make sure the ordering stays intact!
-    let mut tags_list = Vec::from_iter_in(tags_list.iter(), arena);
+    let mut tags_list = Vec::from_iter_in(tags_list.iter(), env.arena);
     tags_list.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-
-    let mut env = Env {
-        arena,
-        subs,
-        seen: Vec::new_in(arena),
-        target_info,
-    };
 
     match tags_list.len() {
         0 => {
@@ -2053,18 +2133,19 @@ fn union_sorted_tags_help_new<'a>(
             let tag_name = tag_name.clone();
 
             // just one tag in the union (but with arguments) can be a struct
-            let mut layouts = Vec::with_capacity_in(tags_list.len(), arena);
+            let mut layouts = Vec::with_capacity_in(tags_list.len(), env.arena);
 
             // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
                 TagName::Private(Symbol::NUM_AT_NUM) => {
                     let var = arguments[0];
-                    layouts
-                        .push(unwrap_num_tag(subs, var, target_info).expect("invalid num layout"));
+                    layouts.push(
+                        unwrap_num_tag(env.subs, var, env.target_info).expect("invalid num layout"),
+                    );
                 }
                 _ => {
                     for &var in arguments {
-                        match Layout::from_var(&mut env, var) {
+                        match Layout::from_var(env, var) {
                             Ok(layout) => {
                                 layouts.push(layout);
                             }
@@ -2084,8 +2165,8 @@ fn union_sorted_tags_help_new<'a>(
             }
 
             layouts.sort_by(|layout1, layout2| {
-                let size1 = layout1.alignment_bytes(target_info);
-                let size2 = layout2.alignment_bytes(target_info);
+                let size1 = layout1.alignment_bytes(env.target_info);
+                let size2 = layout2.alignment_bytes(env.target_info);
 
                 size2.cmp(&size1)
             });
@@ -2106,7 +2187,7 @@ fn union_sorted_tags_help_new<'a>(
         }
         num_tags => {
             // default path
-            let mut answer = Vec::with_capacity_in(tags_list.len(), arena);
+            let mut answer = Vec::with_capacity_in(tags_list.len(), env.arena);
             let mut has_any_arguments = false;
 
             let mut nullable: Option<(TagIdIntType, TagName)> = None;
@@ -2129,17 +2210,19 @@ fn union_sorted_tags_help_new<'a>(
                     continue;
                 }
 
-                let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
+                let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, env.arena);
 
                 for &var in arguments {
-                    match Layout::from_var(&mut env, var) {
+                    match Layout::from_var(env, var) {
                         Ok(layout) => {
                             has_any_arguments = true;
 
                             // make sure to not unroll recursive types!
                             let self_recursion = opt_rec_var.is_some()
-                                && subs.get_root_key_without_compacting(var)
-                                    == subs.get_root_key_without_compacting(opt_rec_var.unwrap())
+                                && env.subs.get_root_key_without_compacting(var)
+                                    == env
+                                        .subs
+                                        .get_root_key_without_compacting(opt_rec_var.unwrap())
                                 && is_recursive_tag_union(&layout);
 
                             if self_recursion {
@@ -2162,8 +2245,8 @@ fn union_sorted_tags_help_new<'a>(
                 }
 
                 arg_layouts.sort_by(|layout1, layout2| {
-                    let size1 = layout1.alignment_bytes(target_info);
-                    let size2 = layout2.alignment_bytes(target_info);
+                    let size1 = layout1.alignment_bytes(env.target_info);
+                    let size2 = layout2.alignment_bytes(env.target_info);
 
                     size2.cmp(&size1)
                 });
@@ -2184,7 +2267,7 @@ fn union_sorted_tags_help_new<'a>(
                 3..=MAX_ENUM_SIZE if !has_any_arguments => {
                     // type can be stored in a byte
                     // needs the sorted tag names to determine the tag_id
-                    let mut tag_names = Vec::with_capacity_in(answer.len(), arena);
+                    let mut tag_names = Vec::with_capacity_in(answer.len(), env.arena);
 
                     for (tag_name, _) in answer {
                         tag_names.push(tag_name);
@@ -2443,27 +2526,15 @@ pub fn union_sorted_tags_help<'a>(
     }
 }
 
-fn layout_from_newtype<'a>(
-    arena: &'a Bump,
-    tags: &UnsortedUnionTags,
-    subs: &Subs,
-    target_info: TargetInfo,
-) -> Layout<'a> {
-    debug_assert!(tags.is_newtype_wrapper(subs));
+fn layout_from_newtype<'a>(env: &mut Env<'a, '_>, tags: &UnsortedUnionTags) -> Layout<'a> {
+    debug_assert!(tags.is_newtype_wrapper(env.subs));
 
-    let (tag_name, var) = tags.get_newtype(subs);
+    let (tag_name, var) = tags.get_newtype(env.subs);
 
     if tag_name == &TagName::Private(Symbol::NUM_AT_NUM) {
-        unwrap_num_tag(subs, var, target_info).expect("invalid Num argument")
+        unwrap_num_tag(env.subs, var, env.target_info).expect("invalid Num argument")
     } else {
-        let mut env = Env {
-            arena,
-            subs,
-            seen: Vec::new_in(arena),
-            target_info,
-        };
-
-        match Layout::from_var(&mut env, var) {
+        match Layout::from_var(env, var) {
             Ok(layout) => layout,
             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                 // If we encounter an unbound type var (e.g. `Ok *`)
@@ -2480,16 +2551,11 @@ fn layout_from_newtype<'a>(
     }
 }
 
-fn layout_from_tag_union<'a>(
-    arena: &'a Bump,
-    tags: &UnsortedUnionTags,
-    subs: &Subs,
-    target_info: TargetInfo,
-) -> Layout<'a> {
+fn layout_from_tag_union<'a>(env: &mut Env<'a, '_>, tags: &UnsortedUnionTags) -> Layout<'a> {
     use UnionVariant::*;
 
-    if tags.is_newtype_wrapper(subs) {
-        return layout_from_newtype(arena, tags, subs, target_info);
+    if tags.is_newtype_wrapper(env.subs) {
+        return layout_from_newtype(env, tags);
     }
 
     let tags_vec = &tags.tags;
@@ -2500,12 +2566,11 @@ fn layout_from_tag_union<'a>(
 
             let &var = arguments.iter().next().unwrap();
 
-            unwrap_num_tag(subs, var, target_info).expect("invalid Num argument")
+            unwrap_num_tag(env.subs, var, env.target_info).expect("invalid Num argument")
         }
         _ => {
             let opt_rec_var = None;
-            let variant =
-                union_sorted_tags_help_new(arena, tags_vec, opt_rec_var, subs, target_info);
+            let variant = union_sorted_tags_help_new(env, tags_vec, opt_rec_var);
 
             match variant {
                 Never => Layout::VOID,
@@ -2531,7 +2596,7 @@ fn layout_from_tag_union<'a>(
                         NonRecursive {
                             sorted_tag_layouts: tags,
                         } => {
-                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
                             tag_layouts.extend(tags.iter().map(|r| r.1));
 
                             Layout::Union(UnionLayout::NonRecursive(tag_layouts.into_bump_slice()))
@@ -2540,7 +2605,7 @@ fn layout_from_tag_union<'a>(
                         Recursive {
                             sorted_tag_layouts: tags,
                         } => {
-                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
                             tag_layouts.extend(tags.iter().map(|r| r.1));
 
                             debug_assert!(tag_layouts.len() > 1);
@@ -2552,7 +2617,7 @@ fn layout_from_tag_union<'a>(
                             nullable_name: _,
                             sorted_tag_layouts: tags,
                         } => {
-                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
                             tag_layouts.extend(tags.iter().map(|r| r.1));
 
                             Layout::Union(UnionLayout::NullableWrapped {
@@ -2592,7 +2657,7 @@ pub fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
     match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => ext_fields.is_empty(),
+        Ok(()) | Err((_, Content::FlexVar(_) | Content::RigidVar(_))) => ext_fields.is_empty(),
         Err(content) => panic!("invalid content in ext_var: {:?}", content),
     }
 }
@@ -2619,6 +2684,7 @@ fn layout_from_num_content<'a>(
             // (e.g. for (5 + 5) assume both 5s are 64-bit integers.)
             Ok(Layout::default_integer())
         }
+        FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
         Structure(Apply(symbol, args)) => match *symbol {
             // Ints
             Symbol::NUM_NAT => Ok(Layout::usize(target_info)),
@@ -2670,7 +2736,7 @@ fn unwrap_num_tag<'a>(
         Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
             debug_assert!(args.len() == 1);
 
-            let precision_var = subs[args.variables().into_iter().next().unwrap()];
+            let precision_var = subs[args.all_variables().into_iter().next().unwrap()];
 
             let precision = subs.get_content_without_compacting(precision_var);
 
@@ -2706,7 +2772,7 @@ fn unwrap_num_tag<'a>(
         Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _, _) => {
             debug_assert!(args.len() == 1);
 
-            let precision_var = subs[args.variables().into_iter().next().unwrap()];
+            let precision_var = subs[args.all_variables().into_iter().next().unwrap()];
 
             let precision = subs.get_content_without_compacting(precision_var);
 
@@ -2938,5 +3004,17 @@ mod test {
         let target_info = TargetInfo::default_x86_64();
         assert_eq!(layout.stack_size(target_info), 1);
         assert_eq!(layout.alignment_bytes(target_info), 1);
+    }
+
+    #[test]
+    fn memcpy_size_result_u32_unit() {
+        let ok_tag = &[Layout::Builtin(Builtin::Int(IntWidth::U32))];
+        let err_tag = &[Layout::UNIT];
+        let tags = [ok_tag as &[_], err_tag as &[_]];
+        let union_layout = UnionLayout::NonRecursive(&tags as &[_]);
+        let layout = Layout::Union(union_layout);
+
+        let target_info = TargetInfo::default_x86_64();
+        assert_eq!(layout.stack_size_without_alignment(target_info), 5);
     }
 }

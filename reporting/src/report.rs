@@ -3,7 +3,7 @@ use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::LineColumnRegion;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
 pub use crate::error::canonicalize::can_problem;
@@ -60,6 +60,46 @@ pub fn cycle<'b>(
         .annotate(Annotation::TypeBlock)
 }
 
+const HEADER_WIDTH: usize = 80;
+
+pub fn pretty_header(title: &str) -> String {
+    let title_width = title.len() + 4;
+    let header = format!("── {} {}", title, "─".repeat(HEADER_WIDTH - title_width));
+    header
+}
+
+pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
+    let cwd = std::env::current_dir().unwrap();
+    let relative_path = match path.strip_prefix(cwd) {
+        Ok(p) => p,
+        _ => path,
+    }
+    .to_str()
+    .unwrap();
+
+    let title_width = title.len() + 4;
+    let relative_path_width = relative_path.len() + 3;
+    let available_path_width = HEADER_WIDTH - title_width - 1;
+
+    // If path is too long to fit in 80 characters with everything else then truncate it
+    let path_width = relative_path_width.min(available_path_width);
+    let path_trim = relative_path_width - path_width;
+    let path = if path_trim > 0 {
+        format!("...{}", &relative_path[(path_trim + 3)..])
+    } else {
+        relative_path.to_string()
+    };
+
+    let header = format!(
+        "── {} {} {} ─",
+        title,
+        "─".repeat(HEADER_WIDTH - (title_width + path_width)),
+        path
+    );
+
+    header
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Severity {
     /// This will cause a runtime error if some code get srun
@@ -72,6 +112,12 @@ pub enum Severity {
     Warning,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum RenderTarget {
+    ColorTerminal,
+    Generic,
+}
+
 /// A textual report.
 pub struct Report<'b> {
     pub title: String,
@@ -81,6 +127,19 @@ pub struct Report<'b> {
 }
 
 impl<'b> Report<'b> {
+    pub fn render(
+        self,
+        target: RenderTarget,
+        buf: &'b mut String,
+        alloc: &'b RocDocAllocator<'b>,
+        palette: &'b Palette,
+    ) {
+        match target {
+            RenderTarget::Generic => self.render_ci(buf, alloc),
+            RenderTarget::ColorTerminal => self.render_color_terminal(buf, alloc, palette),
+        }
+    }
+
     /// Render to CI console output, where no colors are available.
     pub fn render_ci(self, buf: &'b mut String, alloc: &'b RocDocAllocator<'b>) {
         let err_msg = "<buffer is not a utf-8 encoded string>";
@@ -110,16 +169,13 @@ impl<'b> Report<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
-            let header = format!(
-                "── {} {}",
-                self.title,
-                "─".repeat(80 - (self.title.len() + 4))
-            );
+            let header = if self.filename == PathBuf::from("") {
+                crate::report::pretty_header(&self.title)
+            } else {
+                crate::report::pretty_header_with_path(&self.title, &self.filename)
+            };
 
-            alloc.stack(vec![
-                alloc.text(header).annotate(Annotation::Header),
-                self.doc,
-            ])
+            alloc.stack([alloc.text(header).annotate(Annotation::Header), self.doc])
         }
     }
 
@@ -128,59 +184,113 @@ impl<'b> Report<'b> {
     }
 }
 
-pub struct Palette<'a> {
-    pub primary: &'a str,
-    pub code_block: &'a str,
-    pub keyword: &'a str,
-    pub variable: &'a str,
-    pub type_variable: &'a str,
-    pub structure: &'a str,
-    pub alias: &'a str,
-    pub opaque: &'a str,
-    pub error: &'a str,
-    pub line_number: &'a str,
-    pub header: &'a str,
-    pub gutter_bar: &'a str,
-    pub module_name: &'a str,
-    pub binop: &'a str,
-    pub typo: &'a str,
-    pub typo_suggestion: &'a str,
-    pub parser_suggestion: &'a str,
+/// This struct is a combination of several things
+/// 1. A set of StyleCodes suitable for the platform we're running on (web or terminal)
+/// 2. A set of colors we decided to use
+/// 3. A mapping from UI elements to the styles we use for them
+/// Note: This should really be called Theme! Usually a "palette" is just (2).
+pub struct Palette {
+    pub primary: &'static str,
+    pub code_block: &'static str,
+    pub keyword: &'static str,
+    pub variable: &'static str,
+    pub type_variable: &'static str,
+    pub structure: &'static str,
+    pub alias: &'static str,
+    pub opaque: &'static str,
+    pub error: &'static str,
+    pub line_number: &'static str,
+    pub header: &'static str,
+    pub gutter_bar: &'static str,
+    pub module_name: &'static str,
+    pub binop: &'static str,
+    pub typo: &'static str,
+    pub typo_suggestion: &'static str,
+    pub parser_suggestion: &'static str,
+    pub bold: &'static str,
+    pub underline: &'static str,
+    pub reset: &'static str,
 }
 
-pub const DEFAULT_PALETTE: Palette = Palette {
-    primary: WHITE_CODE,
-    code_block: WHITE_CODE,
-    keyword: GREEN_CODE,
-    variable: BLUE_CODE,
-    type_variable: YELLOW_CODE,
-    structure: GREEN_CODE,
-    alias: YELLOW_CODE,
-    opaque: YELLOW_CODE,
-    error: RED_CODE,
-    line_number: CYAN_CODE,
-    header: CYAN_CODE,
-    gutter_bar: CYAN_CODE,
-    module_name: GREEN_CODE,
-    binop: GREEN_CODE,
-    typo: YELLOW_CODE,
-    typo_suggestion: GREEN_CODE,
-    parser_suggestion: YELLOW_CODE,
+/// Set the default styles for various semantic elements,
+/// given a set of StyleCodes for a platform (web or terminal).
+const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
+    Palette {
+        primary: codes.white,
+        code_block: codes.white,
+        keyword: codes.green,
+        variable: codes.blue,
+        type_variable: codes.yellow,
+        structure: codes.green,
+        alias: codes.yellow,
+        opaque: codes.yellow,
+        error: codes.red,
+        line_number: codes.cyan,
+        header: codes.cyan,
+        gutter_bar: codes.cyan,
+        module_name: codes.green,
+        binop: codes.green,
+        typo: codes.yellow,
+        typo_suggestion: codes.yellow,
+        parser_suggestion: codes.yellow,
+        bold: codes.bold,
+        underline: codes.underline,
+        reset: codes.reset,
+    }
+}
+
+pub const DEFAULT_PALETTE: Palette = default_palette_from_style_codes(ANSI_STYLE_CODES);
+
+pub const DEFAULT_PALETTE_HTML: Palette = default_palette_from_style_codes(HTML_STYLE_CODES);
+
+/// A machine-readable format for text styles (colors and other styles)
+pub struct StyleCodes {
+    pub red: &'static str,
+    pub green: &'static str,
+    pub yellow: &'static str,
+    pub blue: &'static str,
+    pub magenta: &'static str,
+    pub cyan: &'static str,
+    pub white: &'static str,
+    pub bold: &'static str,
+    pub underline: &'static str,
+    pub reset: &'static str,
+    pub color_reset: &'static str,
+}
+
+pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
+    red: "\u{001b}[31m",
+    green: "\u{001b}[32m",
+    yellow: "\u{001b}[33m",
+    blue: "\u{001b}[34m",
+    magenta: "\u{001b}[35m",
+    cyan: "\u{001b}[36m",
+    white: "\u{001b}[37m",
+    bold: "\u{001b}[1m",
+    underline: "\u{001b}[4m",
+    reset: "\u{001b}[0m",
+    color_reset: "\u{1b}[39m",
 };
 
-pub const RED_CODE: &str = "\u{001b}[31m";
-pub const GREEN_CODE: &str = "\u{001b}[32m";
-pub const YELLOW_CODE: &str = "\u{001b}[33m";
-pub const BLUE_CODE: &str = "\u{001b}[34m";
-pub const MAGENTA_CODE: &str = "\u{001b}[35m";
-pub const CYAN_CODE: &str = "\u{001b}[36m";
-pub const WHITE_CODE: &str = "\u{001b}[37m";
+macro_rules! html_color {
+    ($name: expr) => {
+        concat!("<span style='color: ", $name, "'>")
+    };
+}
 
-pub const BOLD_CODE: &str = "\u{001b}[1m";
-
-pub const UNDERLINE_CODE: &str = "\u{001b}[4m";
-
-pub const RESET_CODE: &str = "\u{001b}[0m";
+pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
+    red: html_color!("red"),
+    green: html_color!("green"),
+    yellow: html_color!("yellow"),
+    blue: html_color!("blue"),
+    magenta: html_color!("magenta"),
+    cyan: html_color!("cyan"),
+    white: html_color!("white"),
+    bold: "<span style='font-weight: bold'>",
+    underline: "<span style='text-decoration: underline'>",
+    reset: "</span>",
+    color_reset: "</span>",
+};
 
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
 pub struct RocDocAllocator<'a> {
@@ -742,7 +852,7 @@ impl<W> CiWrite<W> {
 /// Render with fancy formatting
 pub struct ColorWrite<'a, W> {
     style_stack: Vec<Annotation>,
-    palette: &'a Palette<'a>,
+    palette: &'a Palette,
     upstream: W,
 }
 
@@ -858,10 +968,10 @@ where
         use Annotation::*;
         match annotation {
             Emphasized => {
-                self.write_str(BOLD_CODE)?;
+                self.write_str(self.palette.bold)?;
             }
             Url | Tip => {
-                self.write_str(UNDERLINE_CODE)?;
+                self.write_str(self.palette.underline)?;
             }
             PlainText => {
                 self.write_str(self.palette.primary)?;
@@ -929,7 +1039,7 @@ where
                 Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | Error | GutterBar
                 | Typo | TypoSuggestion | ParserSuggestion | Structure | CodeBlock | PlainText
                 | LineNumber | Tip | Module | Header | Keyword => {
-                    self.write_str(RESET_CODE)?;
+                    self.write_str(self.palette.reset)?;
                 }
 
                 TypeBlock | GlobalTag | PrivateTag | Opaque | RecordField => { /* nothing yet */ }
