@@ -2055,7 +2055,7 @@ fn make_tag_union_of_alias_recursive<'a>(
     alias: &mut Alias,
     others: Vec<Symbol>,
     var_store: &mut VarStore,
-    can_report_error: &mut bool,
+    can_report_cyclic_error: &mut bool,
 ) -> Result<(), ()> {
     let alias_args = alias
         .type_variables
@@ -2070,7 +2070,7 @@ fn make_tag_union_of_alias_recursive<'a>(
         others,
         &mut alias.typ,
         var_store,
-        can_report_error,
+        can_report_cyclic_error,
     );
 
     match made_recursive {
@@ -2119,22 +2119,25 @@ fn make_tag_union_recursive_help<'a>(
     others: Vec<Symbol>,
     typ: &mut Type,
     var_store: &mut VarStore,
-    can_report_error: &mut bool,
+    can_report_cyclic_error: &mut bool,
 ) -> MakeTagUnionRecursive {
     use MakeTagUnionRecursive::*;
 
-    let Loc {
-        value: (symbol, args),
-        region: alias_region,
-    } = recursive_alias;
-    let vars = args.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
+    let (symbol, args) = recursive_alias.value;
+    let alias_region = recursive_alias.region;
+
     match typ {
         Type::TagUnion(tags, ext) => {
             let recursion_variable = var_store.fresh();
+            let type_arguments = args.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
+
             let mut pending_typ =
                 Type::RecursiveTagUnion(recursion_variable, tags.to_vec(), ext.clone());
-            let substitution_result =
-                pending_typ.substitute_alias(symbol, &vars, &Type::Variable(recursion_variable));
+            let substitution_result = pending_typ.substitute_alias(
+                symbol,
+                &type_arguments,
+                &Type::Variable(recursion_variable),
+            );
             match substitution_result {
                 Ok(()) => {
                     // We can substitute the alias presence for the variable exactly.
@@ -2160,18 +2163,22 @@ fn make_tag_union_recursive_help<'a>(
             actual,
             type_arguments,
             ..
-        } => make_tag_union_recursive_help(
-            env,
-            Loc::at_zero((symbol, type_arguments)),
-            region,
-            others,
-            actual,
-            var_store,
-            can_report_error,
-        ),
+        } => {
+            // try to make `actual` recursive
+            make_tag_union_recursive_help(
+                env,
+                Loc::at_zero((symbol, type_arguments)),
+                region,
+                others,
+                actual,
+                var_store,
+                can_report_cyclic_error,
+            )
+        }
         _ => {
-            mark_cyclic_alias(env, typ, symbol, region, others, *can_report_error);
-            *can_report_error = false;
+            // take care to report a cyclic alias only once (not once for each alias in the cycle)
+            mark_cyclic_alias(env, typ, symbol, region, others, *can_report_cyclic_error);
+            *can_report_cyclic_error = false;
 
             Cyclic
         }
