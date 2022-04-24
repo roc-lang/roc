@@ -292,7 +292,7 @@ pub(crate) struct Sccs {
 }
 
 impl Sccs {
-    fn components(&self) -> impl Iterator<Item = impl Iterator<Item = usize> + '_> + '_ {
+    pub fn components(&self) -> impl Iterator<Item = impl Iterator<Item = usize> + '_> + '_ {
         // work around a panic when requesting a chunk size of 0
         let length = if self.matrix.length == 0 {
             // the `.take(self.components)` ensures the resulting iterator will be empty
@@ -308,5 +308,19 @@ impl Sccs {
             .chunks(length)
             .take(self.components)
             .map(|row| row.iter_ones())
+    }
+
+    pub fn rows(&self) -> std::iter::Take<bitvec::slice::Chunks<'_, Element, Order>> {
+        // work around a panic when requesting a chunk size of 0
+        let length = if self.matrix.length == 0 {
+            // the `.take(self.components)` ensures the resulting iterator will be empty
+            assert!(self.components == 0);
+
+            1
+        } else {
+            self.matrix.length
+        };
+
+        self.matrix.bitvec.chunks(length).take(self.components)
     }
 }
