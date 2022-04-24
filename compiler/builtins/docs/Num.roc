@@ -16,6 +16,7 @@ interface Num
             I64,
             I128,
             Int,
+            Integer,
             Nat,
             Natural,
             Signed8,
@@ -46,7 +47,7 @@ interface Num
             compare,
             cos,
             div,
-            divFloor,
+            divTrunc,
             floor,
             intCast,
             isEven,
@@ -60,6 +61,8 @@ interface Num
             isPositive,
             isZero,
             log,
+            logChecked,
+            maxFloat,
             maxI8,
             maxU8,
             maxI16,
@@ -69,6 +72,7 @@ interface Num
             maxI64,
             maxU64,
             maxI128,
+            minFloat,
             minI8,
             minU8,
             minI16,
@@ -85,6 +89,7 @@ interface Num
             pow,
             powInt,
             rem,
+            remChecked,
             round,
             shiftLeftBy,
             shiftRightBy,
@@ -94,6 +99,7 @@ interface Num
             subChecked,
             subWrap,
             sqrt,
+            sqrtChecked,
             tan,
             toI8,
             toI8Checked,
@@ -117,6 +123,7 @@ interface Num
             toU128Checked,
             toNat,
             toNatChecked,
+            toFrac,
             toStr
         ]
     imports []
@@ -125,7 +132,7 @@ interface Num
 
 ## Represents a number that could be either an [Int] or a [Frac].
 ##
-## This is useful for functions that can work on either, for example #Num.add, whose type is:
+## This is useful for functions that can work on either, for example [Num.add], whose type is:
 ##
 ## ```
 ## add : Num a, Num a -> Num a
@@ -182,25 +189,7 @@ interface Num
 ##
 ## In practice, these are rarely needed. It's most common to write
 ## number literals without any suffix.
-Num a : a supports Arithmetic, Calculation
-
-# Design note: Num needs to support Arithmetic so that it can work with infix operators.
-#
-# The separate ability (Calculation) is for operations that are reserved for actual
-# numbers in the Roc language. It's important to keep these separate, so that we can
-# add to them in the future without breaking every custom numeric type which just wants
-# infix operators.
-#
-# In this way, someone can make a third-party `BigNum` type (for example) which implements `Arithmetic`
-# so that infix operators like + and * and so on all work. However, since it wouldn't implement
-# Calculation, you couldn't call things like `Num.abs` on a `BigNum` - you'd have to call `BigNum.abs` instead.
-# This benefits `BigNum`! It means that if we ever add new `Num` features in the future (which would entail
-# adding them to the Calculation ability) ), `BugNum` won't break, because `BigNum` doesn't claim to support
-# `Calculation`, only `Arithmetic`.
-
-## This must never be implemented in userspace. It's for the `Num` builtin only; it shouldn't even be exposed!
-Calculation is
-    impossible : []
+Num a : [ @Num a ]
 
 ## A decimal number.
 ##
@@ -234,11 +223,40 @@ Calculation is
 ## [Dec] typically takes slightly less time than [F64] to perform addition and
 ## subtraction, but 10-20 times longer to perform multiplication and division.
 ## [sqrt] and trigonometry are massively slower with [Dec] than with [F64].
-Dec := {} supports FractionArithmetic, Equating, Ordering, Hashing
+Dec : Float [ @Decimal128 ]
 
-## Either [F32] or [F64], both of which are [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754) binary floating-point numbers.
+## A fixed-size number with a fractional component.
 ##
-## These numbers have three values which are not ordinary [finite numbers](https://en.wikipedia.org/wiki/Finite_number).
+## Roc fractions come in two flavors: fixed-point base-10 and floating-point base-2.
+##
+## * [Dec] is a 128-bit [fixed-point](https://en.wikipedia.org/wiki/Fixed-point_arithmetic) base-10 number. It's a great default choice, especially when precision is important - for example when representing currency. With [Dec], 0.1 + 0.2 returns 0.3.
+## * [F64] and [F32] are [floating-point](https://en.wikipedia.org/wiki/Floating-point_arithmetic) base-2 numbers. They sacrifice precision for lower memory usage and improved performance on some operations. This makes them a good fit for representing graphical coordinates. With [F64], 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125.
+##
+## If you don't specify a type, Roc will default to using [Dec] because it's
+## the least error-prone overall. For example, suppose you write this:
+##
+##     wasItPrecise = 0.1 + 0.2 == 0.3
+##
+## The value of `wasItPrecise` here will be `True`, because Roc uses [Dec]
+## by default when there are no types specified.
+##
+## In contrast, suppose we use `f32` or `f64` for one of these numbers:
+##
+##     wasItPrecise = 0.1f64 + 0.2 == 0.3
+##
+## This is actually a build-time error, because the `==` operator does not support [F32] or [F64]!
+## This example illustrates one reason why it doesn’t support them: adding the [Float]
+## values 0.1 and 0.2 does not return the float value 0.3. Floats also sometimes lose
+## precision when used in calculations, making `==` give unexpected answers with them.
+##
+## Instead of `==`, you can use [isApproxEq] or [isWithin] to compare floats. For example:
+##
+##     answer = Num.isApproxEq (0.1f64 + 0.2) 0.3
+##
+## Here, `answer` will be `True`.
+##
+## The floating-point numbers ([F32] and [F64]) also have three values which
+## are not ordinary [finite numbers](https://en.wikipedia.org/wiki/Finite_number).
 ## They are:
 ## * ∞ ([infinity](https://en.wikipedia.org/wiki/Infinity))
 ## * -∞ (negative infinity)
@@ -250,28 +268,34 @@ Dec := {} supports FractionArithmetic, Equating, Ordering, Hashing
 ## * Dividing a negative [F64] by `0.0` returns -∞.
 ## * Dividing a [F64] of `0.0` by `0.0` returns [*NaN*](Num.isNaN).
 ##
-## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+## All of these rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ## floating point standard. Because almost all modern processors are built to
 ## this standard, deviating from these rules has a significant performance
 ## cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
-## access to hardware-accelerated performance, Roc follows these rules exactly - with one
-## exception:
+## access to hardware-accelerated performance, Roc follows these rules exactly.
 ##
-## In Roc, *NaN* is defined to be equal to itself, whereas IEEE-754 defines *NaN* to be unequal
-## to itself. This means that in Roc, `(0 / 0) == (0 / 0)` evaluates to `True`, when the
-## standard says it should be `False`. You can get the IEEE-754 behavior by using [Num.isFloatEq]
-## instead of the usual `==` operator (or [Bool.isEq]), but the default is to treat *NaN* values as
-## equal.
+## There's no literal syntax for these error values, but you can check to see if
+## you ended up with one of them by using [isNaN], [isFinite], and [isInfinite].
+## Whenever a function in this module could return one of these values, that
+## possibility is noted in the function's documentation.
 ##
-## The reason for this change is that if *NaN* is unequal to itself, then it can cause serious problems
-## for sorting, for [Dict], for [Set], and for tests which
+## Note that all basic floating point arithmetic operations (addition, subtraction,
+## multiplication, division) can produce *NaN*. All of the following return *NaN*
+## according to the IEEE-754 specification:
+## *  ∞ + -∞
+## * -∞ + ∞
+## *  ∞ - ∞
+## * -∞ - -∞
+## * ±∞ * ±0
+## * ±0 / ±0
 ##
 ## ## Negative Zero
 ##
 ## Floats have a concept of `-0`, per the IEEE-754 specification. The spec also calls for `-0` to be
-## equal to `0`, but
-##
-## TODO: TALK ABOUT -0 EDGE CASES like atan2
+## equal to `0`, but they have different bit patterns in memory. This means that if you write a `-0`
+## to a file in binary, and do the same with `0` in another file, the files will be diffeernt.
+## Also, some floating-point operations are defined by IEEE-754 to return different answers when
+## given `0` compared to `-0`, such as [atan2].
 ##
 ## ## Performance Notes
 ##
@@ -293,45 +317,7 @@ Dec := {} supports FractionArithmetic, Equating, Ordering, Hashing
 ## loops and conditionals. If you need to do performance-critical trigonometry
 ## or square roots, either [F64] or [F32] is probably a better choice than the
 ## usual default choice of [Dec], despite the precision problems they bring.
-##
-## (older docs - TODO merge these two sections!)
-##
-## An [IEEE-754 floating-point number](https://en.wikipedia.org/wiki/IEEE_754), except without
-## considering `NaN` to be unequal to itself.
-##
-## All of the following produce NaN according to the IEEE-754 specification:
-## * ∞ + -∞
-## * -∞ + ∞
-## * ∞ - ∞
-## * -∞ - -∞
-## * ±∞ * ±0
-## * ±0 / ±0
-## * ±0 % ±0
-##
-## This change prevents problems like `NaN` values causing problems with sorting, or with
-## storing floats in dictionaries and sets.
-##
-## Since this change diverges from the IEEE-754 semantics that CPUs use, it means that `==` on
-## floats requires multiple CPU instructions. The [Num.isFloatEq] function does a single-instruction
-## equality check, meaning it works just like `==` except that it returns `False` if both arguments
-## are `NaN`. (In fact, `==` is implemented as `Num.isFloatEq a b || (Num.isNaN a && Num.isNaN b)`.)
-Float a : a | a supports FloatArithmetic, FloatCalculation
-
-## This must never be implemented in userspace. It's for the `Float` builtin only; it shouldn't even be exposed!
-FloatCalculation is
-    impossibleFloat : []
-
-# NOTE: F32 and F64 do *not* support Equating because that operation is unreliable on floats,
-# due to NaN as well as general precision problems. Instead, compiler error messages should
-# recommend using [isApproxEq] or [isWithin] instead. And although the compiler wouldn't
-# recommend it, we could note that if you really need maximum performance, either `!(x < y || x > y)`
-# (or, equivalently, `Order.compare x y == Order.same`) compiles to a check that treats `NaN`s as equal,
-# and actually runs even faster than the # ordinary "NaNs are unequal" check, because the CPU operation for
-# "NaNs are equal" (ucomisd vs cmpeqsd) actually runs faster!
-# See https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/supporting.20NaN.2FInfinity.2F-Infinity.3F/near/275459574
-# for discussion.
-F32 := {} supports FloatArithmetic, Ordering
-F64 := {} supports FloatArithmetic, Ordering
+Frac a : Num [ @Fraction a ]
 
 ## A fixed-size integer - that is, a number with no fractional component.
 ##
@@ -382,9 +368,32 @@ F64 := {} supports FloatArithmetic, Ordering
 ## * Start by deciding if this integer should allow negative numbers, and choose signed or unsigned accordingly.
 ## * Next, think about the range of numbers you expect this number to hold. Choose the smallest size you will never expect to overflow, no matter the inputs your program receives. (Validating inputs for size, and presenting the user with an error if they are too big, can help guard against overflow.)
 ## * Finally, if a particular numeric calculation is running too slowly, you can try experimenting with other number sizes. This rarely makes a meaningful difference, but some processors can operate on different number sizes at different speeds.
+Int size : Num [ @Integer size ]
+
+## A signed 8-bit integer, ranging from -128 to 127
+I8 : Int [ @Signed8 ]
+U8 : Int [ @Unsigned8 ]
+I16 : Int [ @Signed16 ]
+U16 : Int [ @Unsigned16 ]
+I32 : Int [ @Signed32 ]
+U32 : Int [ @Unsigned32 ]
+I64 : Int [ @Signed64 ]
+U64 : Int [ @Unsigned64 ]
+I128 : Int [ @Signed128 ]
+U128 : Int [ @Unsigned128 ]
+
+## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
+## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
+## on 32-bit systems, and so on.
 ##
-## (old content - TODO: merge these two sections together!)
-##
+## This system-specific size makes it useful for certain data structure
+## functions like [List.len], because the number of elements many data strucures
+## can hold is also system-specific. For example, the maximum number of elements
+## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
+## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
+## good fit for [List.len] regardless of system.
+Nat : Int [ @Natural ]
+
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
 ##
 ## >>> 1
@@ -459,39 +468,58 @@ F64 := {} supports FloatArithmetic, Ordering
 ##
 ## As such, it's very important to design your code not to exceed these bounds!
 ## If you need to do math outside these bounds, consider using a larger numeric size.
-Int a : a | a supports IntArithmetic, IntCalculation
+Int size : Num [ @Int size ]
 
-## This must never be implemented in userspace. It's for the `Int` builtin only; it shouldn't even be exposed!
-IntCalculation is
-    impossible : []
+## Convert
 
-## A signed 8-bit integer, ranging from -128 to 127
-I8 := {} supports IntArithmetic, Equating, Ordering, Hashing
-U8 := {} supports IntArithmetic, Equating, Ordering, Hashing
-I16 := {} supports IntArithmetic, Equating, Ordering, Hashing
-U16 := {} supports IntArithmetic, Equating, Ordering, Hashing
-I32 := {} supports IntArithmetic, Equating, Ordering, Hashing
-U32 := {} supports IntArithmetic, Equating, Ordering, Hashing
-I64 := {} supports IntArithmetic, Equating, Ordering, Hashing
-U64 := {} supports IntArithmetic, Equating, Ordering, Hashing
-I128 := {} supports IntArithmetic, Equating, Ordering, Hashing
-U128 := {} supports IntArithmetic, Equating, Ordering, Hashing
-
-## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
-## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
-## on 32-bit systems, and so on.
+## Return a negative number when given a positive one, and vice versa.
 ##
-## This system-specific size makes it useful for certain data structure
-## functions like [List.len], because the number of elements many data strucures
-## can hold is also system-specific. For example, the maximum number of elements
-## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
-## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
-## good fit for [List.len] regardless of system.
-Nat := {} supports IntArithmetic, Equating, Ordering, Hashing
+## >>> Num.neg 5
+##
+## >>> Num.neg -2.5
+##
+## >>> Num.neg 0
+##
+## >>> Num.neg 0.0
+##
+## This is safe to use with any [Frac], but it can cause overflow when used with certain #Int values.
+##
+## For example, calling [Num.neg] on the lowest value of a signed integer (such as #Int.lowestI64 or #Int.lowestI32) will cause overflow.
+## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
+## the highest value it can represent. (For this reason, calling [Num.abs] on the lowest signed value will also cause overflow.)
+##
+## Additionally, calling [Num.neg] on any unsigned integer (such as any [U64] or [U32] value) other than zero will cause overflow.
+##
+## (It will never crash when given a [Frac], however, because of how floating point numbers represent positive and negative numbers.)
+neg : Num a -> Num a
+
+## Return the absolute value of the number.
+##
+## * For a positive number, returns the same number.
+## * For a negative number, returns the same number except positive.
+## * For zero, returns zero.
+##
+## >>> Num.abs 4
+##
+## >>> Num.abs -2.5
+##
+## >>> Num.abs 0
+##
+## >>> Num.abs 0.0
+##
+## This is safe to use with any [Frac], but it can cause overflow when used with certain #Int values.
+##
+## For example, calling [Num.abs] on the lowest value of a signed integer (such as [Num.minI64] or [Num.minI32]) will cause overflow.
+## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
+## the highest value it can represent. (For this reason, calling [Num.neg] on the lowest signed value will also cause overflow.)
+##
+## Calling this on an unsigned integer (like [U32] or [U64]) never does anything.
+abs : Num a -> Num a
 
 ## Check
 
-## The same as using `== 0` on the number.
+## The same as using `== 0` on the number, except [isZero] accepts
+## [Float] values even though they do not support `== 0`.
 isZero : Num * -> Bool
 
 ## Positive numbers are greater than 0.
@@ -510,32 +538,28 @@ isEven : Num * -> Bool
 ## Examples of odd numbers: 1, 3, 5, 7, -1, -3, -5, -7
 isOdd : Num * -> Bool
 
-## Convert
-
-## Return the absolute value of the number.
-##
-## * For a positive number, returns the same number.
-## * For a negative number, returns the same number except positive.
-## * For zero, returns zero.
-##
-## >>> Num.abs 4
-##
-## >>> Num.abs -2.5
-##
-## >>> Num.abs 0
-##
-## >>> Num.abs 0.0
-##
-## This is safe to use with any [Frac], but it can cause overflow when used with certain #Int values.
-##
-## For example, calling #Num.abs on the lowest value of a signed integer (such as #Int.lowestI64 or #Int.lowestI32) will cause overflow.
-## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
-## the highest value it can represent. (For this reason, calling #Num.neg on the lowest signed value will also cause overflow.)
-##
-## Calling this on an unsigned integer (like #U32 or #U64) never does anything.
-abs : Num a -> Num a
-
 ## Arithmetic
+
+## Add two numbers of the same type.
+##
+## (To add an #Int and a [Frac], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Frac] and the other way around.)
+##
+## `a + b` is shorthand for `Num.add a b`.
+##
+## >>> 5 + 7
+##
+## >>> Num.add 5 7
+##
+## `Num.add` can be convenient in pipelines.
+##
+## >>> Frac.pi
+## >>>     |> Num.add 1.0
+##
+## If the answer to this operation can't fit in the return value (e.g. an
+## [I8] answer that's higher than 127 or lower than -128), the result is an
+## *overflow*. For [F64] and [F32], overflow results in an answer of either
+## ∞ or -∞. For all other number types, overflow results in a panic.
+add : Num a, Num a -> Num a
 
 ## Add two numbers and check for overflow.
 ##
@@ -552,6 +576,27 @@ addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 ## yield 255, the maximum value of a `U8`.
 addSaturated : Num a, Num a -> Num a
 
+## Subtract two numbers of the same type.
+##
+## (To subtract an #Int and a [Frac], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Frac] and the other way around.)
+##
+## `a - b` is shorthand for `Num.sub a b`.
+##
+## >>> 7 - 5
+##
+## >>> Num.sub 7 5
+##
+## `Num.sub` can be convenient in pipelines.
+##
+## >>> Frac.pi
+## >>>     |> Num.sub 2.0
+##
+## If the answer to this operation can't fit in the return value (e.g. an
+## [I8] answer that's higher than 127 or lower than -128), the result is an
+## *overflow*. For [F64] and [F32], overflow results in an answer of either
+## ∞ or -∞. For all other number types, overflow results in a panic.
+sub : Num a, Num a -> Num a
+
 ## Subtract two numbers and check for overflow.
 ##
 ## This is the same as [Num.sub] except if the operation overflows, instead of
@@ -567,168 +612,75 @@ subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 ## yield 0, the minimum value of a `U8`.
 subSaturated : Num a, Num a -> Num a
 
+## Multiply two numbers of the same type.
+##
+## (To multiply an #Int and a [Frac], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Frac] and the other way around.)
+##
+## `a * b` is shorthand for `Num.mul a b`.
+##
+## >>> 5 * 7
+##
+## >>> Num.mul 5 7
+##
+## `Num.mul` can be convenient in pipelines.
+##
+## >>> Frac.pi
+## >>>     |> Num.mul 2.0
+##
+## If the answer to this operation can't fit in the return value (e.g. an
+## [I8] answer that's higher than 127 or lower than -128), the result is an
+## *overflow*. For [F64] and [F32], overflow results in an answer of either
+## ∞ or -∞. For all other number types, overflow results in a panic.
+mul : Num a, Num a -> Num a
+
 ## Multiply two numbers and check for overflow.
 ##
 ## This is the same as [Num.mul] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+mulCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
 
-## Operations on numbers that the infix operators [+], [-], [*], [>], [>=], [<], and [<=] desugar to.
-##
-## Note that [Num], [Int], [Fraction], and [Float] all support [Arithmetic], so you can use any of those types
-## whenever you need a value that `supports` [Arithmetic].
-Arithmetic is
-    ## Return a negative number when given a positive one, and vice versa.
-    ##
-    ## >>> Num.neg 5
-    ##
-    ## >>> Num.neg -2.5
-    ##
-    ## >>> Num.neg 0
-    ##
-    ## >>> Num.neg 0.0
-    ##
-    ## This is safe to use with any [Frac], but it can cause overflow when used with certain #Int values.
-    ##
-    ## For example, calling #Num.neg on the lowest value of a signed integer (such as #Int.lowestI64 or #Int.lowestI32) will cause overflow.
-    ## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
-    ## the highest value it can represent. (For this reason, calling #Num.abs on the lowest signed value will also cause overflow.)
-    ##
-    ## Additionally, calling #Num.neg on any unsigned integer (such as any #U64 or #U32 value) other than zero will cause overflow.
-    ##
-    ## (It will never crash when given a [Frac], however, because of how floating point numbers represent positive and negative numbers.)
-    neg : a -> a | a supports Arithmetic
+## Convert
 
-    ## Add two numbers of the same type.
-    ##
-    ## (To add an #Int and a [Frac], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Frac] and the other way around.)
-    ##
-    ## `a + b` is shorthand for `Num.add a b`.
-    ##
-    ## >>> 5 + 7
-    ##
-    ## >>> Num.add 5 7
-    ##
-    ## `Num.add` can be convenient in pipelines.
-    ##
-    ## >>> Frac.pi
-    ## >>>     |> Num.add 1.0
-    ##
-    ## If the answer to this operation can't fit in the return value (e.g. an
-    ## [I8] answer that's higher than 127 or lower than -128), the result is an
-    ## *overflow*. For [Float] values, overflow results in an answer of either
-    ## [infinity] or [negativeInfinity]. For all other number types, overflow results in a panic.
-    add : a, a -> a | a supports Arithmetic
+## Convert any [Int] to a specifically-sized [Int], without checking validity.
+## These are unchecked bitwise operations,
+## so if the source number is outside the target range, then these will
+## effectively modulo-wrap around the target range to reach a valid value.
+toI8 : Int * -> I8
+toI16 : Int * -> I16
+toI32 : Int * -> I32
+toI64 : Int * -> I64
+toI128 : Int * -> I128
+toU8 : Int * -> U8
+toU16 : Int * -> U16
+toU32 : Int * -> U32
+toU64 : Int * -> U64
+toU128 : Int * -> U128
 
-    ## Subtract two numbers of the same type.
-    ##
-    ## (To subtract an #Int and a [Frac], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Frac] and the other way around.)
-    ##
-    ## `a - b` is shorthand for `Num.sub a b`.
-    ##
-    ## >>> 7 - 5
-    ##
-    ## >>> Num.sub 7 5
-    ##
-    ## `Num.sub` can be convenient in pipelines.
-    ##
-    ## >>> Frac.pi
-    ## >>>     |> Num.sub 2.0
-    ##
-    ## If the answer to this operation can't fit in the return value (e.g. an
-    ## [I8] answer that's higher than 127 or lower than -128), the result is an
-    ## *overflow*. For [F64] and [F32], overflow results in an answer of either
-    ## ∞ or -∞. For all other number types, overflow results in a panic.
-    sub : a, a -> a | a supports Arithmetic
+## Convert a [Num] to a [F32]. If the given number can't be precisely represented in a [F32],
+## there will be a loss of precision.
+toF32 : Num * -> F32
 
-    ## Multiply two numbers of the same type.
-    ##
-    ## (To multiply an #Int and a [Frac], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Frac] and the other way around.)
-    ##
-    ## `a * b` is shorthand for `Num.mul a b`.
-    ##
-    ## >>> 5 * 7
-    ##
-    ## >>> Num.mul 5 7
-    ##
-    ## `Num.mul` can be convenient in pipelines.
-    ##
-    ## >>> Frac.pi
-    ## >>>     |> Num.mul 2.0
-    ##
-    ## If the answer to this operation can't fit in the return value (e.g. an
-    ## [I8] answer that's higher than 127 or lower than -128), the result is an
-    ## *overflow*. For [F64] and [F32], overflow results in an answer of either
-    ## ∞ or -∞. For all other number types, overflow results in a panic.
-    mul : a, a -> a | a supports Arithmetic
+## Convert a [Num] to a [F64]. If the given number can't be precisely represented in a [F64],
+## there will be a loss of precision.
+toF64 : Num * -> F64
 
-    ## Comparison
+## Convert any [Int] to a specifically-sized [Int], after checking validity.
+## These are checked bitwise operations,
+## so if the source number is outside the target range, then these will
+## return `Err OutOfBounds`.
+toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
+toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
+toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
+toI64Checked : Int * -> Result I64 [ OutOfBounds ]*
+toI128Checked : Int * -> Result I128 [ OutOfBounds ]*
+toU8Checked : Int * -> Result U8 [ OutOfBounds ]*
+toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
+toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
+toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
+toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
 
-    ## Returns `True` if the first number is less than the second.
-    ##
-    ## `a < b` is shorthand for `Num.isLt a b`.
-    ##
-    ## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
-    ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-    ##
-    ## >>> 5
-    ## >>>     |> Num.isLt 6
-    isLt : a, a -> Bool | a supports Arithmetic
-
-    ## Returns `True` if the first number is less than or equal to the second.
-    ##
-    ## `a <= b` is shorthand for `Num.isLte a b`.
-    ##
-    ## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
-    ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-    isLte : a, a -> Bool | a supports Arithmetic, Equating
-
-    ## Returns `True` if the first number is greater than the second.
-    ##
-    ## `a > b` is shorthand for `Num.isGt a b`.
-    ##
-    ## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
-    ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-    ##
-    ## >>> 6
-    ## >>>     |> Num.isGt 5
-    isGt : a, a -> Bool | a supports Arithmetic
-
-    ## Returns `True` if the first number is greater than or equal to the second.
-    ##
-    ## `a >= b` is shorthand for `Num.isGte a b`.
-    ##
-    ## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
-    ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-    isGte : a, a -> Bool | a supports Arithmetic, Equating
-
-# Branchless implementation that works for all numeric types:
-#
-# let is_lt = arg1 < arg2;
-# let is_eq = arg1 == arg2;
-# return (is_lt as i8 - is_eq as i8) + 1;
-#
-# 1, 1 -> (0 - 1) + 1 == 0 # Eq
-# 5, 1 -> (0 - 0) + 1 == 1 # Gt
-# 1, 5 -> (1 - 0) + 1 == 2 # Lt
-
-## Compares two numbers according to which is higher.
-##
-## [Num] implements [Ordering] using this as its
-## [Order.compare] function.
-increasing : Num a, Num a -> Order
-
-## Returns the higher of two numbers.
-##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
-## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-higher : Num a, Num a -> Num a
-
-## Returns the lower of two numbers.
-##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
-## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-lower : Num a, Num a -> Num a
+toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
+toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 
 ## Convert a number to a [Str].
 ##
@@ -811,397 +763,32 @@ format :
     }
     -> Str
 
-## Convert a #Num to a #F32. If the given number can't be precisely represented in a #F32,
-## there will be a loss of precision.
-toF32 : Num * -> F32
-
-## Convert a #Num to a #F64. If the given number can't be precisely represented in a #F64,
-## there will be a loss of precision.
-toF64 : Num * -> F64
-
-## Convert a #Num to a #Dec. If the given number can't be precisely represented in a #Dec,
-## there will be a loss of precision.
-toDec : Num * -> Dec
-
-## [Endianness](https://en.wikipedia.org/wiki/Endianness)
-# Endi : [ Big, Little, Native ]
-
-## The `Endi` argument does not matter for [U8] and [I8], since they have
-## only one byte.
-# toBytes : Num *, Endi -> List U8
-
-## when Num.parseBytes bytes Big is
-##     Ok { val: f64, rest } -> ...
-##     Err (ExpectedNum (Frac Binary64)) -> ...
-# parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ ExpectedNum a ]*
-
-## when Num.fromBytes bytes Big is
-##     Ok f64 -> ...
-##     Err (ExpectedNum (Frac Binary64)) -> ...
-# fromBytes : List U8, Endi -> Result (Num a) [ ExpectedNum a ]*
-
-## A fixed-size number with a fractional component.
-##
-## Roc fractions come in two flavors: fixed-point base-10 and floating-point base-2.
-##
-## * [Dec] is a 128-bit [fixed-point](https://en.wikipedia.org/wiki/Fixed-point_arithmetic) base-10 number. It's a great default choice, especially when precision is important - for example when representing currency. With [Dec], 0.1 + 0.2 returns 0.3.
-## * [F64] and [F32] are [floating-point](https://en.wikipedia.org/wiki/Floating-point_arithmetic) base-2 numbers. They sacrifice precision for lower memory usage and improved performance on some operations. This makes them a good fit for representing graphical coordinates. With [F64], 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125.
-##
-## If you don't specify a type, Roc will default to using [Dec] because it's
-## the least error-prone overall. For example, suppose you write this:
-##
-##     wasItPrecise = 0.1 + 0.2 == 0.3
-##
-## The value of `wasItPrecise` here will be `True`, because Roc uses [Dec]
-## by default when there are no types specified.
-##
-## In contrast, suppose we use `F32` or `F64` for one of these numbers:
-##
-##     wasItPrecise = 0.1f64 + 0.2 == 0.3
-##
-## Here, `wasItPrecise` will be `False` because the entire calculation will have
-## been done in a base-2 floating point calculation, which causes noticeable
-## precision loss in this case.
-##
-## See the documentation for [Dec] and for [Float] for more information on these types.
-Fraction a : a | a supports FractionArithmetic, FractionCalculation
-
-## This must never be implemented in userspace. It's for the `Fraction` builtin only; it shouldn't even be exposed!
-FractionCalculation is
-    impossibleFraction : []
-
-round : Fraction * -> Int *
-ceil : Fraction * -> Int *
-floor : Fraction * -> Int *
-trunc : Fraction * -> Int *
-
-## Operations on fractions that the infix operators [/], [%], and [^] desugar to.
-##
-## Note that [Float] and [Dec] both support [FractionArithmetic], so you can use a [Float] or [Dec] with any of these!
-FractionArithmetic supports Arithmetic, is
-    ## Round off the given fraction to the nearest integer.
-
-    ## Divide one [Frac] by another.
-    ##
-    ## `a / b` is shorthand for `Num.div a b`.
-    ##
-    ## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero).
-    ## As such, you should make sure never to pass zero as the denomaintor to this function!
-    ## Calling [div] on a [Dec] denominator of zero will cause a panic.
-    ##
-    ## Calling [div] on [F32] and [F64] values follows these rules:
-    ## * Dividing a positive [F64] or [F32] by zero returns ∞.
-    ## * Dividing a negative [F64] or [F32] by zero returns -∞.
-    ## * Dividing a zero [F64] or [F32] by zero returns [*NaN*](Num.isNaN).
-    ##
-    ## > These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
-    ## > floating point standard. Because almost all modern processors are built to
-    ## > this standard, deviating from these rules has a significant performance
-    ## > cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
-    ## > access to hardware-accelerated performance, Roc follows these rules exactly.
-    ##
-    ## To divide an [Int] and a [Frac], first convert the [Int] to a [Frac] using
-    ## one of the functions in this module like [toDec].
-    ##
-    ## >>> 5.0 / 7.0
-    ##
-    ## >>> Num.div 5 7
-    ##
-    ## `Num.div` can be convenient in pipelines.
-    ##
-    ## >>> Num.pi
-    ## >>>     |> Num.div 2.0
-    div : a, a -> a | a supports FractionArithmetic
-
-    ## Perform modulo on two [Frac]s.
-    ##
-    ## Modulo is the same as remainder when working with positive numbers,
-    ## but if either number is negative, then modulo works differently.
-    ##
-    ## `a % b` is shorthand for `Num.mod a b`.
-    ##
-    ## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero),
-    ## and as such, so is modulo by zero. Because of this, you should make sure never
-    ## to pass zero for the second argument to this function!
-    ##
-    ## Passing [mod] a [Dec] value of zero for its second argument will cause a panic.
-    ## Passing [mod] a [F32] and [F64] value for its second argument will cause it
-    ## to return [*NaN*](Num.isNaN).
-    ##
-    ## >>> 5.0 % 7.0
-    ##
-    ## >>> Num.mod 5 7
-    ##
-    ## `Num.mod` can be convenient in pipelines.
-    ##
-    ## >>> Num.pi
-    ## >>>     |> Num.mod 2.0
-    mod : a, a -> a | a supports FractionArithmetic
-
-    ## Raises a [Fraction] to the power of another [Fraction].
-    ##
-    ## For an [Int] alternative to this function, see [Num.expBySquaring]
-    pow : a, a -> | a supports FractionArithmetic
-
-## Returns an approximation of the absolute value of a [Frac]'s square root.
-##
-## The square root of a negative number is an irrational number, and [Frac] only
-## supports rational numbers. As such, you should make sure never to pass this
-## function a negative number! Calling [sqrt] on a negative [Dec] will cause a panic.
-##
-## Calling [sqrt] on [F32] and [F64] values follows these rules:
-## * Passing a negative [F64] or [F32] returns [*NaN*](Num.isNaN).
-## * Passing [*NaN*](Num.isNaN) or -∞ also returns [*NaN*](Num.isNaN).
-## * Passing ∞ returns ∞.
-##
-## > These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
-## > floating point standard. Because almost all modern processors are built to
-## > this standard, deviating from these rules has a significant performance
-## > cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
-## > access to hardware-accelerated performance, Roc follows these rules exactly.
-##
-## >>> Frac.sqrt 4.0
-##
-## >>> Frac.sqrt 1.5
-##
-## >>> Frac.sqrt 0.0
-##
-## >>> Frac.sqrt -4.0f64
-##
-## >>> Float.sqrt -4.0dec
-sqrt : Float a -> Float a
-
-## Like [Num.div] except it can return [infinity], [negativeInfinity], or [nan].
-divFloat : Float a, Float a -> Float a
-
-## Like [Num.mod] except it can return [infinity], [negativeInfinity], or [nan].
-modFloat : Float a, Float a -> Float a
-
-## Comparing
-
-# This uses the ULP method described in [this article](https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/).
-isApproxEq : Float a, Float a -> Bool
-
-## Last arg is epsilon
-isWithin : Float a, Float a, Float a -> Bool
-
-## Trigonometry
-
-cos : Float a -> Float a
-
-acos : Float a -> Float a
-
-sin : Float a -> Float a
-
-asin : Float a -> Float a
-
-tan : Float a -> Float a
-
-atan : Float a -> Float a
-
-## Constants
-
-## Special Floating-Point Values
-
-## When given a [F64] or [F32] value, returns `False` if that value is
-## [*NaN*](Num.isNaN), ∞ or -∞, and `True` otherwise.
-##
-## Always returns `True` when given a [Dec].
-##
-## This is the opposite of [isInfinite], except when given [*NaN*](Num.isNaN). Both
-## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
-isFinite : Float * -> Bool
-
-## When given a [F64] or [F32] value, returns `True` if that value is either
-## ∞ or -∞, and `False` otherwise.
-##
-## Always returns `False` when given a [Dec].
-##
-## This is the opposite of [isFinite], except when given [*NaN*](Num.isNaN). Both
-## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
-isInfinite : Float * -> Bool
-
-## When given a [F64] or [F32] value, returns `True` if that value is
-## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `False` otherwise.
-##
-## Always returns `False` when given a [Dec].
-##
-## >>> Num.isNaN 12.3
-##
-## >>> Num.isNaN (Num.sqrt -2)
-##
-## *NaN* is unusual from other numberic values in that:
-## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `False` if either argument is *NaN*.
-## * *NaN* has no ordering, so [isLt], [isLte], [isGt], and [isGte] always return `False` if either argument is *NaN*.
-##
-## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
-## floating point standard. Because almost all modern processors are built to
-## this standard, deviating from these rules has a significant performance
-## cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
-## access to hardware-accelerated performance, Roc follows these rules exactly.
-##
-## Note that you should never put a *NaN* into a [Set], or use it as the key in
-## a [Dict]. The result is entries that can never be removed from those
-## collections! See the documentation for [Set.add] and [Dict.insert] for details.
-isNaN : Float * -> Bool
-
-## This is the same as `==` except it returns `False` if both arguments are `NaN`.
-##
-## This actually runs faster than `==` because CPUs implement the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
-## specification for floating-point numbers, which requires that `NaN` be considered unequal to itself.
-##
-## Roc does not follow this definition for normal `==` because it would break things
-## like sorting and trying to store floats in dictionaries and sets. This comes at a performance
-## cost (in fact, `==` is implemented as `Num.isFloatEq a b || (Num.isNaN a && Num.isNaN b)`),
-## so you can use [isFloatEq] instead to save a couple of instructions - as long as it's acceptable
-## to get back `False` if both arguments are `NaN`!
-isFloatEq : Float a, Float a -> Bool
-
-## Returns `False` when [isFloatEq] would return `True`, and vice versa.
-isFloatNotEq : Float a, Float a -> Bool
-
-## An approximation of e, specifically 2.718281828459045.
-e : Float *
-
-## An approximation of pi, specifically 3.141592653589793.
-pi : Float *
-
-## The [IEEE-754 floating-point](https://en.wikipedia.org/wiki/IEEE_754) value of *positive infintiy.*
-infinity : Float *
-
-## The [IEEE-754 floating-point](https://en.wikipedia.org/wiki/IEEE_754) value of *negative infintiy.*
-negativeInfinity : Float *
-
-## The [IEEE-754 floating-point](https://en.wikipedia.org/wiki/IEEE_754) value of *not a number,* also known as *NaN*.
-##
-## This has some surprising results with comparisons. For example, both `x < Num.nan` and `x > Num.nan`
-## always return `False`, no matter what `x` is. That's very unusual! For all other numbers besides [Num.nan],
-## those two comparisons always return different answers.
-##
-## Although *NaN* is defined to be unequal to itself in the IEEE-753 specification, note that in the default
-## [Order.compare] implementation for [Float], *NaN* values are considered to be the same as one another
-## for ordering purposes.
-nan : Float *
-
-## Operations on integers that the infix operators [//] and [%%] desugar to.
-##
-## Note that [Int] supports [IntArithmetic], so you can use an [Int] with any of these!
-IntArithmetic supports Arithmetic, is
-    ## Divide two integers and [round] the resulut.
-    ##
-    ## Division by zero is undefined in mathematics. As such, you should make
-    ## sure never to pass zero as the denomaintor to this function!
-    ##
-    ## If zero does get passed as the denominator...
-    ##
-    ## * In a development build, you'll get an assertion failure.
-    ## * In an optimized build, the function will return 0.
-    ##
-    ## `a // b` is shorthand for `Num.divRound a b`.
-    ##
-    ## >>> 5 // 7
-    ##
-    ## >>> Num.divRound 5 7
-    ##
-    ## >>> 8 // -3
-    ##
-    ## >>> Num.divRound 8 -3
-    ##
-    ## This is the same as the [//] operator.
-    divRound : a, a -> a | a supports IntArithmetic
-
-    ## Perform flooring modulo on two integers.
-    ##
-    ## Modulo is the same as remainder when working with positive numbers,
-    ## but if either number is negative, then modulo works differently.
-    ##
-    ## Division by zero is undefined in mathematics. As such, you should make
-    ## sure never to pass zero as the denomaintor to this function!
-    ##
-    ## Additionally, flooring modulo uses [Frac].floor on the result.
-    ##
-    ## (Use [Frac].mod for non-flooring modulo.)
-    ##
-    ## `a %% b` is shorthand for `Int.modFloor a b`.
-    ##
-    ## >>> 5 %% 7
-    ##
-    ## >>> Int.modFloor 5 7
-    ##
-    ## >>> -8 %% -3
-    ##
-    ## >>> Int.modFloor -8 -3
-    modFloor : a, a -> a | a supports IntArithmetic
-
-
-## Raises an integer to the power of another, by multiplying the integer by
-## itself the given number of times.
-##
-## This process is known as [exponentiation by squaring](https://en.wikipedia.org/wiki/Exponentiation_by_squaring).
-##
-## For a [Frac] alternative to this function, which supports negative exponents,
-## see #Num.exp.
-##
-## >>> Num.exp 5 0
-##
-## >>> Num.exp 5 1
-##
-## >>> Num.exp 5 2
-##
-## >>> Num.exp 5 6
-##
-## ## Performance Notes
-##
-## Be careful! Even though this function takes only a #U8, it is very easy to
-## overflow
-expBySquaring : Int a, U8 -> Int a
-
-## Bit shifts
-
-## [Logical bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Logical_shift) left.
-##
-## `a << b` is shorthand for `Num.shl a b`.
-shl : Int a, Int a -> Int a
-
-## [Arithmetic bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Arithmetic_shift) left.
-##
-## This is called `shlWrap` because any bits shifted
-## off the beginning of the number will be wrapped around to
-## the end. (In contrast, [shl] replaces discarded bits with zeroes.)
-shlWrap : Int a, Int a -> Int a
-
-## [Logical bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Logical_shift) right.
-##
-## `a >> b` is shorthand for `Num.shr a b`.
-shr : Int a, Int a -> Int a
-
-## [Arithmetic bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Arithmetic_shift) right.
-##
-## This is called `shrWrap` because any bits shifted
-## off the end of the number will be wrapped around to
-## the beginning. (In contrast, [shr] replaces discarded bits with zeroes.)
-shrWrap : Int a, Int a -> Int a
+## Round off the given float to the nearest integer.
+round : Frac * -> Int *
+ceil : Frac * -> Int *
+floor : Frac * -> Int *
+trunc : Frac * -> Int *
 
 ## Convert an #Int to a #Nat. If the given number doesn't fit in #Nat, it will be truncated.
 ## Since #Nat has a different maximum number depending on the system you're building
 ## for, this may give a different answer on different systems.
 ##
 ## For example, on a 32-bit system, [Num.maxNat] will return the same answer as
-## #Num.maxU32. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
-## system will return #Num.maxU32 instead of 9 billion, because 9 billion is
-## higher than #Num.maxU32 and will not fit in a #Nat on a 32-bit system.
+## [Num.maxU32]. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
+## system will return [Num.maxU32] instead of 9 billion, because 9 billion is
+## higher than [Num.maxU32] and will not fit in a #Nat on a 32-bit system.
 ##
 ## However, calling `Num.toNat 9_000_000_000` on a 64-bit system will return
 ## the #Nat value of 9_000_000_000. This is because on a 64-bit system, #Nat can
-## hold up to #Num.maxU64, and 9_000_000_000 is lower than #Num.maxU64.
+## hold up to [Num.maxU64], and 9_000_000_000 is lower than [Num.maxU64].
 ##
-## To convert a [Frac] to a #Nat, first call either #Num.round, #Num.ceil, or #Num.floor
+## To convert a [Frac] to a #Nat, first call either [Num.round], [Num.ceiling], or [Num.floor]
 ## on it, then call this on the resulting #Int.
 toNat : Int * -> Nat
 
 ## Convert an #Int to an #I8. If the given number doesn't fit in #I8, it will be truncated.
 ##
-## To convert a [Frac] to an #I8, first call either #Num.round, #Num.ceil, or #Num.floor
+## To convert a [Frac] to an #I8, first call either [Num.round], [Num.ceiling], or [Num.floor]
 ## on it, then call this on the resulting #Int.
 toI8 : Int * -> I8
 toI16 : Int * -> I16
@@ -1216,37 +803,47 @@ toU16 : Int * -> U16
 toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
-## Convert
 
-## Convert any [Int] to a specifically-sized [Int], without checking validity.
-## These are unchecked bitwise operations,
-## so if the source number is outside the target range, then these will
-## effectively modulo-wrap around the target range to reach a valid value.
-toI8 : Int * -> I8
-toI16 : Int * -> I16
-toI32 : Int * -> I32
-toI64 : Int * -> I64
-toI128 : Int * -> I128
-toU8 : Int * -> U8
-toU16 : Int * -> U16
-toU32 : Int * -> U32
-toU64 : Int * -> U64
-toU128 : Int * -> U128
+## Convert a #Num to a #Dec. If the given number can't be precisely represented in a #Dec,
+## there will be a loss of precision.
+toDec : Num * -> Dec
 
-## Convert any [Int] to a specifically-sized [Int], after checking validity.
-## These are checked bitwise operations,
-## so if the source number is outside the target range, then these will
-## return `Err OutOfBounds`.
-toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
-toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
-toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
-toI64Checked : Int * -> Result I64 [ OutOfBounds ]*
-toI128Checked : Int * -> Result I128 [ OutOfBounds ]*
-toU8Checked : Int * -> Result U8 [ OutOfBounds ]*
-toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
-toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
-toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
-toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+## Divide two integers, truncating the result towards zero.
+##
+## Division by zero is undefined in mathematics. As such, you should make
+## sure never to pass zero as the denomaintor to this function!
+##
+## If zero does get passed as the denominator...
+##
+## * In a development build, you'll get an assertion failure.
+## * In an optimized build, the function will return 0.
+##
+## `a // b` is shorthand for `Num.divTrunc a b`.
+##
+## >>> 5 // 7
+##
+## >>> Num.divTrunc 5 7
+##
+## >>> 8 // -3
+##
+## >>> Num.divTrunc 8 -3
+##
+## This is the same as the #// operator.
+divTrunc : Int a, Int a -> Int a
+
+## Obtain the remainder (truncating modulo) from the division of two integers.
+##
+## `a % b` is shorthand for `Num.rem a b`.
+##
+## >>> 5 % 7
+##
+## >>> Num.rem 5 7
+##
+## >>> -8 % -3
+##
+## >>> Num.rem -8 -3
+rem : Int a, Int a -> Int a
+
 
 ## Bitwise
 
@@ -1271,8 +868,8 @@ minNat : Nat
 ## available memory and crashing.
 ##
 ## Note that this number varies by systems. For example, when building for a
-## 64-bit system, this will be equal to #Num.maxU64, but when building for a
-## 32-bit system, this will be equal to #Num.maxU32.
+## 64-bit system, this will be equal to [Num.maxU64], but when building for a
+## 32-bit system, this will be equal to [Num.maxU32].
 maxNat : Nat
 
 ## The lowest number that can be stored in an #I8 without underflowing its
@@ -1281,7 +878,7 @@ maxNat : Nat
 ## For reference, this number is `-128`.
 ##
 ## Note that the positive version of this number is larger than #Int.maxI8,
-## which means if you call #Num.abs on #Int.minI8, it will overflow and crash!
+## which means if you call [Num.abs] on #Int.minI8, it will overflow and crash!
 minI8 : I8
 
 ## The highest number that can be stored in an #I8 without overflowing its
@@ -1290,7 +887,7 @@ minI8 : I8
 ## For reference, this number is `127`.
 ##
 ## Note that this is smaller than the positive version of #Int.minI8,
-## which means if you call #Num.abs on #Int.minI8, it will overflow and crash!
+## which means if you call [Num.abs] on #Int.minI8, it will overflow and crash!
 maxI8 : I8
 
 ## The lowest number that can be stored in a #U8 without underflowing its
@@ -1314,7 +911,7 @@ maxU8 : U8
 ## For reference, this number is `-32_768`.
 ##
 ## Note that the positive version of this number is larger than #Int.maxI16,
-## which means if you call #Num.abs on #Int.minI16, it will overflow and crash!
+## which means if you call [Num.abs] on #Int.minI16, it will overflow and crash!
 minI16 : I16
 
 ## The highest number that can be stored in an #I16 without overflowing its
@@ -1323,7 +920,7 @@ minI16 : I16
 ## For reference, this number is `32_767`.
 ##
 ## Note that this is smaller than the positive version of #Int.minI16,
-## which means if you call #Num.abs on #Int.minI16, it will overflow and crash!
+## which means if you call [Num.abs] on #Int.minI16, it will overflow and crash!
 maxI16 : I16
 
 ## The lowest number that can be stored in a #U16 without underflowing its
@@ -1347,7 +944,7 @@ maxU16 : U16
 ## For reference, this number is `-2_147_483_648`.
 ##
 ## Note that the positive version of this number is larger than #Int.maxI32,
-## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
+## which means if you call [Num.abs] on #Int.minI32, it will overflow and crash!
 minI32 : I32
 
 ## The highest number that can be stored in an #I32 without overflowing its
@@ -1357,7 +954,7 @@ minI32 : I32
 ## which is over 2 million.
 ##
 ## Note that this is smaller than the positive version of #Int.minI32,
-## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
+## which means if you call [Num.abs] on #Int.minI32, it will overflow and crash!
 maxI32 : I32
 
 ## The lowest number that can be stored in a #U32 without underflowing its
@@ -1382,7 +979,7 @@ maxU32 : U32
 ## For reference, this number is `-`.
 ##
 ## Note that the positive version of this number is larger than #Int.maxI64,
-## which means if you call #Num.abs on #Int.minI64, it will overflow and crash!
+## which means if you call [Num.abs] on #Int.minI64, it will overflow and crash!
 minI64 : I64
 
 ## The highest number that can be stored in an #I64 without overflowing its
@@ -1392,7 +989,7 @@ minI64 : I64
 ## which is over 2 million.
 ##
 ## Note that this is smaller than the positive version of #Int.minI64,
-## which means if you call #Num.abs on #Int.minI64, it will overflow and crash!
+## which means if you call [Num.abs] on #Int.minI64, it will overflow and crash!
 maxI64 : I64
 
 ## The lowest number that can be stored in a #U64 without underflowing its
@@ -1416,7 +1013,7 @@ maxU64 : U64
 ## For reference, this number is `-170_141_183_460_469_231_731_687_303_715_884_105_728`.
 ##
 ## Note that the positive version of this number is larger than #Int.maxI128,
-## which means if you call #Num.abs on #Int.minI128, it will overflow and crash!
+## which means if you call [Num.abs] on [Num.minI128], it will overflow and crash!
 minI128 : I128
 
 ## The highest number that can be stored in an #I128 without overflowing its
@@ -1425,8 +1022,8 @@ minI128 : I128
 ## For reference, this number is `170_141_183_460_469_231_731_687_303_715_884_105_727`,
 ## which is over 2 million.
 ##
-## Note that this is smaller than the positive version of #Int.minI128,
-## which means if you call #Num.abs on #Int.minI128, it will overflow and crash!
+## Note that this is smaller than the positive version of [Num.minI128],
+## which means if you call [Num.abs] on [Num.minI128], it will overflow and crash!
 maxI128 : I128
 
 ## The lowest supported #F32 value you can have, which is approximately -1.8 × 10^308.
@@ -1460,3 +1057,271 @@ minDec : Dec
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
 maxDec : Dec
+
+## Constants
+
+## An approximation of e, specifically 2.718281828459045.
+e : Frac *
+
+## An approximation of pi, specifically 3.141592653589793.
+pi : Frac *
+
+## Trigonometry
+
+cos : Frac a -> Frac a
+
+acos : Frac a -> Frac a
+
+sin : Frac a -> Frac a
+
+asin : Frac a -> Frac a
+
+tan : Frac a -> Frac a
+
+atan : Frac a -> Frac a
+
+## Other Calculations (arithmetic?)
+
+## Divide one [Frac] by another.
+##
+## `a / b` is shorthand for `Num.div a b`.
+##
+## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero).
+## As such, you should make sure never to pass zero as the denomaintor to this function!
+## Calling [div] on a [Dec] denominator of zero will cause a panic.
+##
+## Calling [div] on [F32] and [F64] values follows these rules:
+## * Dividing a positive [F64] or [F32] by zero returns ∞.
+## * Dividing a negative [F64] or [F32] by zero returns -∞.
+## * Dividing a zero [F64] or [F32] by zero returns [*NaN*](Num.isNaN).
+##
+## > These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+## > floating point standard. Because almost all modern processors are built to
+## > this standard, deviating from these rules has a significant performance
+## > cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
+## > access to hardware-accelerated performance, Roc follows these rules exactly.
+##
+## To divide an [Int] and a [Frac], first convert the [Int] to a [Frac] using
+## one of the functions in this module like [toDec].
+##
+## >>> 5.0 / 7.0
+##
+## >>> Num.div 5 7
+##
+## [Num.div] can be convenient in pipelines.
+##
+## >>> Num.pi
+## >>>     |> Num.div 2.0
+div : Frac a, Frac a -> Frac a
+
+## Raises a [Frac] to the power of another [Frac].
+##
+## `
+## For an [Int] alternative to this function, see [Num.raise].
+pow : Frac a, Frac a -> Frac a
+
+## Raises an integer to the power of another, by multiplying the integer by
+## itself the given number of times.
+##
+## This process is known as [exponentiation by squaring](https://en.wikipedia.org/wiki/Exponentiation_by_squaring).
+##
+## For a [Frac] alternative to this function, which supports negative exponents,
+## see [Num.exp].
+##
+## >>> Num.exp 5 0
+##
+## >>> Num.exp 5 1
+##
+## >>> Num.exp 5 2
+##
+## >>> Num.exp 5 6
+##
+## ## Performance Notes
+##
+## Be careful! Even though this function takes only a #U8, it is very easy to
+## overflow
+expBySquaring : Int a, U8 -> Int a
+
+## Returns an approximation of the absolute value of a [Frac]'s square root.
+##
+## The square root of a negative number is an irrational number, and [Frac] only
+## supports rational numbers. As such, you should make sure never to pass this
+## function a negative number! Calling [sqrt] on a negative [Dec] will cause a panic.
+##
+## Calling [sqrt] on [F32] and [F64] values follows these rules:
+## * Passing a negative [F64] or [F32] returns [*NaN*](Num.isNaN).
+## * Passing [*NaN*](Num.isNaN) or -∞ also returns [*NaN*](Num.isNaN).
+## * Passing ∞ returns ∞.
+##
+## > These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+## > floating point standard. Because almost all modern processors are built to
+## > this standard, deviating from these rules has a significant performance
+## > cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
+## > access to hardware-accelerated performance, Roc follows these rules exactly.
+##
+## >>> Frac.sqrt 4.0
+##
+## >>> Frac.sqrt 1.5
+##
+## >>> Frac.sqrt 0.0
+##
+## >>> Frac.sqrt -4.0f64
+##
+## >>> Frac.sqrt -4.0dec
+sqrt : Frac a -> Frac a
+
+## Bit shifts
+
+## [Logical bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Logical_shift) left.
+##
+## `a << b` is shorthand for `Num.shl a b`.
+shl : Int a, Int a -> Int a
+
+## [Arithmetic bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Arithmetic_shift) left.
+##
+## This is called `shlWrap` because any bits shifted
+## off the beginning of the number will be wrapped around to
+## the end. (In contrast, [shl] replaces discarded bits with zeroes.)
+shlWrap : Int a, Int a -> Int a
+
+## [Logical bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Logical_shift) right.
+##
+## `a >> b` is shorthand for `Num.shr a b`.
+shr : Int a, Int a -> Int a
+
+## [Arithmetic bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Arithmetic_shift) right.
+##
+## This is called `shrWrap` because any bits shifted
+## off the end of the number will be wrapped around to
+## the beginning. (In contrast, [shr] replaces discarded bits with zeroes.)
+shrWrap : Int a, Int a -> Int a
+
+## [Endianness](https://en.wikipedia.org/wiki/Endianness)
+# Endi : [ Big, Little, Native ]
+
+## The `Endi` argument does not matter for [U8] and [I8], since they have
+## only one byte.
+# toBytes : Num *, Endi -> List U8
+
+## when Num.parseBytes bytes Big is
+##     Ok { val: f64, rest } -> ...
+##     Err (ExpectedNum (Float Binary64)) -> ...
+# parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ ExpectedNum a ]*
+
+## when Num.fromBytes bytes Big is
+##     Ok f64 -> ...
+##     Err (ExpectedNum (Float Binary64)) -> ...
+# fromBytes : List U8, Endi -> Result (Num a) [ ExpectedNum a ]*
+
+## Comparison
+
+## Returns `True` if the first number is less than the second.
+##
+## `a < b` is shorthand for `Num.isLt a b`.
+##
+## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
+##
+## >>> 5
+## >>>     |> Num.isLt 6
+isLt : Num a, Num a -> Bool
+
+## Returns `True` if the first number is less than or equal to the second.
+##
+## `a <= b` is shorthand for `Num.isLte a b`.
+##
+## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
+isLte : Num a, Num a -> Bool
+
+## Returns `True` if the first number is greater than the second.
+##
+## `a > b` is shorthand for `Num.isGt a b`.
+##
+## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
+##
+## >>> 6
+## >>>     |> Num.isGt 5
+isGt : Num a, Num a -> Bool
+
+## Returns `True` if the first number is greater than or equal to the second.
+##
+## `a >= b` is shorthand for `Num.isGte a b`.
+##
+## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
+isGte : Num a, Num a -> Bool
+
+## Returns the higher of two numbers.
+##
+## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
+higher : Num a, Num a -> Num a
+
+## Returns the lower of two numbers.
+##
+## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
+lower : Num a, Num a -> Num a
+
+# Branchless implementation that works for all numeric types:
+#
+# let is_lt = arg1 < arg2;
+# let is_eq = arg1 == arg2;
+# return (is_lt as i8 - is_eq as i8) + 1;
+#
+# 1, 1 -> (0 - 1) + 1 == 0 # Eq
+# 5, 1 -> (0 - 0) + 1 == 1 # Gt
+# 1, 5 -> (1 - 0) + 1 == 2 # Lt
+
+## Returns `Lt` if the first number is less than the second, `Gt` if
+## the first is greater than the second, and `Eq` if they're equal.
+##
+## Although this can be passed to `List.sort`, you'll get better performance
+## by using `List.sortAsc` or `List.sortDesc` instead.
+compare : Num a, Num a -> [ Lt, Eq, Gt ]
+
+## Special Floating-Point Values
+
+## When given a [F64] or [F32] value, returns `False` if that value is
+## [*NaN*](Num.isNaN), ∞ or -∞, and `True` otherwise.
+##
+## Always returns `True` when given a [Dec].
+##
+## This is the opposite of [isInfinite], except when given [*NaN*](Num.isNaN). Both
+## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
+isFinite : Frac * -> Bool
+
+## When given a [F64] or [F32] value, returns `True` if that value is either
+## ∞ or -∞, and `False` otherwise.
+##
+## Always returns `False` when given a [Dec].
+##
+## This is the opposite of [isFinite], except when given [*NaN*](Num.isNaN). Both
+## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
+isInfinite : Frac * -> Bool
+
+## When given a [F64] or [F32] value, returns `True` if that value is
+## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `False` otherwise.
+##
+## Always returns `False` when given a [Dec].
+##
+## >>> Num.isNaN 12.3
+##
+## >>> Num.isNaN (Num.pow -1 0.5)
+##
+## *NaN* is unusual from other numberic values in that:
+## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `False` if either argument is *NaN*.
+## * *NaN* has no ordering, so [isLt], [isLte], [isGt], and [isGte] always return `False` if either argument is *NaN*.
+##
+## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+## floating point standard. Because almost all modern processors are built to
+## this standard, deviating from these rules has a significant performance
+## cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
+## access to hardware-accelerated performance, Roc follows these rules exactly.
+##
+## Note that you should never put a *NaN* into a [Set], or use it as the key in
+## a [Dict]. The result is entries that can never be removed from those
+## collections! See the documentation for [Set.add] and [Dict.insert] for details.
+isNaN : Frac * -> Bool
