@@ -551,11 +551,6 @@ impl Constraints {
 
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         match constraint {
-            Constraint::Eq(..) => false,
-            Constraint::Store(..) => false,
-            Constraint::Lookup(..) => false,
-            Constraint::Pattern(..) => false,
-            Constraint::True => false,
             Constraint::SaveTheEnvironment => true,
             Constraint::Let(index, _) => {
                 let let_constraint = &self.let_constraints[index.index()];
@@ -574,10 +569,15 @@ impl Constraints {
                     .iter()
                     .any(|c| self.contains_save_the_environment(c))
             }
-            Constraint::IsOpenType(_) => false,
-            Constraint::IncludesTag(_) => false,
-            Constraint::PatternPresence(_, _, _, _) => false,
-            Constraint::Exhaustive { .. } => false,
+            Constraint::Eq(..)
+            | Constraint::Store(..)
+            | Constraint::Lookup(..)
+            | Constraint::Pattern(..)
+            | Constraint::True
+            | Constraint::IsOpenType(_)
+            | Constraint::IncludesTag(_)
+            | Constraint::PatternPresence(_, _, _, _)
+            | Constraint::Exhaustive { .. } => false,
         }
     }
 

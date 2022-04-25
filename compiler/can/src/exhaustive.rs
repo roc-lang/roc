@@ -30,8 +30,8 @@ pub fn check(
 enum SketchedPattern {
     Anything,
     Literal(Literal),
-    Ctor(Variable, TagName, std::vec::Vec<SketchedPattern>),
-    KnownCtor(Union, TagId, std::vec::Vec<SketchedPattern>),
+    Ctor(Variable, TagName, Vec<SketchedPattern>),
+    KnownCtor(Union, TagId, Vec<SketchedPattern>),
 }
 
 impl SketchedPattern {
