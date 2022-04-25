@@ -110,7 +110,7 @@ fn build_effect_always(
     effect_symbol: Symbol,
     var_store: &mut VarStore,
 ) -> (Symbol, Def) {
-    // Effect.always = \value -> $Effect \{} -> value
+    // Effect.always = \value -> @Effect \{} -> value
 
     let value_symbol = {
         scope
@@ -167,9 +167,9 @@ fn build_effect_always(
         })
     };
 
-    // \value -> $Effect \{} -> value
+    // \value -> @Effect \{} -> value
     let (function_var, always_closure) = {
-        // `$Effect \{} -> value`
+        // `@Effect \{} -> value`
         let (specialized_def_type, type_arguments, lambda_set_variables) =
             build_fresh_opaque_variables(var_store);
         let body = Expr::OpaqueRef {
@@ -255,7 +255,7 @@ fn build_effect_map(
     effect_symbol: Symbol,
     var_store: &mut VarStore,
 ) -> (Symbol, Def) {
-    // Effect.map = \$Effect thunk, mapper -> $Effect \{} -> mapper (thunk {})
+    // Effect.map = \@Effect thunk, mapper -> @Effect \{} -> mapper (thunk {})
 
     let thunk_symbol = {
         scope
@@ -350,7 +350,7 @@ fn build_effect_map(
         })
     };
 
-    // \$Effect thunk, mapper
+    // \@Effect thunk, mapper
     let (specialized_def_type, type_arguments, lambda_set_variables) =
         build_fresh_opaque_variables(var_store);
     let arguments = vec![
@@ -374,7 +374,7 @@ fn build_effect_map(
         ),
     ];
 
-    // `$Effect \{} -> (mapper (thunk {}))`
+    // `@Effect \{} -> (mapper (thunk {}))`
     let (specialized_def_type, type_arguments, lambda_set_variables) =
         build_fresh_opaque_variables(var_store);
     let body = Expr::OpaqueRef {
@@ -473,7 +473,7 @@ fn build_effect_after(
     effect_symbol: Symbol,
     var_store: &mut VarStore,
 ) -> (Symbol, Def) {
-    // Effect.after = \$Effect effect, toEffect -> toEffect (effect {})
+    // Effect.after = \@Effect effect, toEffect -> toEffect (effect {})
 
     let thunk_symbol = {
         scope
@@ -636,7 +636,7 @@ fn build_effect_after(
     (after_symbol, def)
 }
 
-/// turn `value` into `$Effect \{} -> value`
+/// turn `value` into `@Effect \{} -> value`
 fn wrap_in_effect_thunk(
     body: Expr,
     effect_symbol: Symbol,
@@ -670,7 +670,7 @@ fn wrap_in_effect_thunk(
         })
     };
 
-    // `$Effect \{} -> value`
+    // `@Effect \{} -> value`
     let (specialized_def_type, type_arguments, lambda_set_variables) =
         build_fresh_opaque_variables(var_store);
     Expr::OpaqueRef {
@@ -749,14 +749,14 @@ fn build_effect_forever(
     //
     //  Effect.forever : Effect a -> Effect b
     //  Effect.forever = \effect ->
-    //      $Effect \{} ->
-    //          $Effect thunk1 = effect
+    //      @Effect \{} ->
+    //          @Effect thunk1 = effect
     //          _ = thunk1 {}
-    //          $Effect thunk2 = Effect.forever effect
+    //          @Effect thunk2 = Effect.forever effect
     //          thunk2 {}
     //
     // We then rely on our defunctionalization to turn this into a tail-recursive loop.
-    // First the `$Effect` wrapper melts away
+    // First the `@Effect` wrapper melts away
     //
     //  Effect.forever : ({} -> a) -> ({} -> b)
     //  Effect.forever = \effect ->
@@ -955,7 +955,7 @@ fn build_effect_forever_inner_body(
             .unwrap()
     };
 
-    // $Effect thunk1 = effect
+    // @Effect thunk1 = effect
     let thunk_from_effect = {
         let whole_var = var_store.fresh();
 
@@ -1022,7 +1022,7 @@ fn build_effect_forever_inner_body(
     };
 
     // ```
-    // $Effect thunk2 = forever effect
+    // @Effect thunk2 = forever effect
     // thunk2 {}
     // ```
     let force_thunk2 = Loc::at_zero(force_effect(
@@ -1330,7 +1330,7 @@ fn build_effect_loop_inner_body(
     };
 
     // ```
-    // $Effect thunk2 = loop effect
+    // @Effect thunk2 = loop effect
     // thunk2 {}
     // ```
     let force_thunk2 = force_effect(loop_new_state_step, effect_symbol, thunk2_symbol, var_store);

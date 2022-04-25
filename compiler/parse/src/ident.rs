@@ -36,8 +36,7 @@ impl<'a> From<&'a UppercaseIdent<'a>> for &'a str {
 pub enum Ident<'a> {
     /// Foo or Bar
     GlobalTag(&'a str),
-    /// $Foo or $Bar
-    // TODO(opaques): $->@ in the above comment
+    /// @Foo or @Bar
     OpaqueRef(&'a str),
     /// foo or foo.bar or Foo.Bar.baz.qux
     Access {
@@ -291,10 +290,10 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     }
 }
 
-/// a `$Token` opaque
+/// a `@Token` opaque
 fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
-    // assumes the leading `$` has NOT been chomped already
-    debug_assert_eq!(buffer.get(0), Some(&b'$'));
+    // assumes the leading `@` has NOT been chomped already
+    debug_assert_eq!(buffer.get(0), Some(&b'@'));
     use encode_unicode::CharExt;
 
     let bad_ident = BadIdent::BadOpaqueRef;
@@ -334,7 +333,7 @@ fn chomp_identifier_chain<'a>(
                 }
                 Err(fail) => return Err((1, fail)),
             },
-            '$' => match chomp_opaque_ref(buffer, pos) {
+            '@' => match chomp_opaque_ref(buffer, pos) {
                 Ok(tagname) => {
                     let bytes_parsed = tagname.len();
 

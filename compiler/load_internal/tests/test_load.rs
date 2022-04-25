@@ -757,9 +757,9 @@ mod test_load {
                     r#"
                     interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
 
-                    twenty = $Age 20
+                    twenty = @Age 20
 
-                    readAge = \$Age n -> n
+                    readAge = \@Age n -> n
                     "#
                 ),
             ),
@@ -775,7 +775,7 @@ mod test_load {
 
                 The unwrapped opaque type Age referenced here:
 
-                3│  twenty = $Age 20
+                3│  twenty = @Age 20
                              ^^^^
 
                 is imported from another module:
@@ -789,7 +789,7 @@ mod test_load {
 
                 The unwrapped opaque type Age referenced here:
 
-                5│  readAge = \$Age n -> n
+                5│  readAge = \@Age n -> n
                                ^^^^
 
                 is imported from another module:

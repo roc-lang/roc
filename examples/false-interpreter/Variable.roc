@@ -15,7 +15,7 @@ totalCount =
         + 1
 
 toStr : Variable -> Str
-toStr = \$Variable char ->
+toStr = \@Variable char ->
     when Str.fromUtf8 [ char ] is
         Ok str ->
             str
@@ -33,11 +33,11 @@ fromUtf8 = \char ->
             <= 0x7A
         # "z"
     then
-        Ok ($Variable char)
+        Ok (@Variable char)
     else
         Err InvalidVariableUtf8
 
 toIndex : Variable -> Nat
-toIndex = \$Variable char ->
+toIndex = \@Variable char ->
     Num.intCast (char - 0x61)# "a"
 # List.first (Str.toUtf8 "a")

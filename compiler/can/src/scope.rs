@@ -134,15 +134,14 @@ impl Scope {
     }
 
     /// Check if there is an opaque type alias referenced by `opaque_ref` referenced in the
-    /// current scope. E.g. `$Age` must reference an opaque `Age` declared in this module, not any
+    /// current scope. E.g. `@Age` must reference an opaque `Age` declared in this module, not any
     /// other!
-    // TODO(opaques): $->@ in the above comment
     pub fn lookup_opaque_ref(
         &self,
         opaque_ref: &str,
         lookup_region: Region,
     ) -> Result<(Symbol, &Alias), RuntimeError> {
-        debug_assert!(opaque_ref.starts_with('$'));
+        debug_assert!(opaque_ref.starts_with('@'));
         let opaque = opaque_ref[1..].into();
 
         match self.idents.get(&opaque) {

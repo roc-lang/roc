@@ -7,7 +7,7 @@ DecodeProblem : [ OutOfBytes ]
 Decoder a := State -> [ Good State a, Bad DecodeProblem ]
 
 decode : List U8, Decoder a -> Result a DecodeProblem
-decode = \bytes, $Decoder decoder ->
+decode = \bytes, @Decoder decoder ->
     when decoder { bytes, cursor: 0 } is
         Good _ value ->
             Ok value
@@ -16,11 +16,11 @@ decode = \bytes, $Decoder decoder ->
             Err e
 
 succeed : a -> Decoder a
-succeed = \value -> $Decoder \state -> Good state value
+succeed = \value -> @Decoder \state -> Good state value
 
 map : Decoder a, (a -> b) -> Decoder b
-map = \$Decoder decoder, transform ->
-    $Decoder
+map = \@Decoder decoder, transform ->
+    @Decoder
         \state ->
             when decoder state is
                 Good state1 value ->
@@ -30,8 +30,8 @@ map = \$Decoder decoder, transform ->
                     Bad e
 
 map2 : Decoder a, Decoder b, (a, b -> c) -> Decoder c
-map2 = \$Decoder decoder1, $Decoder decoder2, transform ->
-    $Decoder
+map2 = \@Decoder decoder1, @Decoder decoder2, transform ->
+    @Decoder
         \state1 ->
             when decoder1 state1 is
                 Good state2 a ->
@@ -46,8 +46,8 @@ map2 = \$Decoder decoder1, $Decoder decoder2, transform ->
                     Bad e
 
 map3 : Decoder a, Decoder b, Decoder c, (a, b, c -> d) -> Decoder d
-map3 = \$Decoder decoder1, $Decoder decoder2, $Decoder decoder3, transform ->
-    $Decoder
+map3 = \@Decoder decoder1, @Decoder decoder2, @Decoder decoder3, transform ->
+    @Decoder
         \state1 ->
             when decoder1 state1 is
                 Good state2 a ->
@@ -67,12 +67,12 @@ map3 = \$Decoder decoder1, $Decoder decoder2, $Decoder decoder3, transform ->
                     Bad e
 
 after : Decoder a, (a -> Decoder b) -> Decoder b
-after = \$Decoder decoder, transform ->
-    $Decoder
+after = \@Decoder decoder, transform ->
+    @Decoder
         \state ->
             when decoder state is
                 Good state1 value ->
-                    ($Decoder decoder1) = transform value
+                    (@Decoder decoder1) = transform value
 
                     decoder1 state1
 
@@ -80,7 +80,7 @@ after = \$Decoder decoder, transform ->
                     Bad e
 
 u8 : Decoder U8
-u8 = $Decoder
+u8 = @Decoder
     \state ->
         when List.get state.bytes state.cursor is
             Ok b ->
@@ -93,12 +93,12 @@ Step state b : [ Loop state, Done b ]
 
 loop : (state -> Decoder (Step state a)), state -> Decoder a
 loop = \stepper, initial ->
-    $Decoder
+    @Decoder
         \state ->
             loopHelp stepper initial state
 
 loopHelp = \stepper, accum, state ->
-    ($Decoder stepper1) = stepper accum
+    (@Decoder stepper1) = stepper accum
 
     when stepper1 state is
         Good newState (Done value) ->

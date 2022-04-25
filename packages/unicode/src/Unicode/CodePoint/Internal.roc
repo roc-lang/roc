@@ -13,9 +13,9 @@ interface Unicode.CodePoint.Internal
 CodePoint := U32
 
 fromU32Unchecked : U32 -> CodePoint
-fromU32Unchecked = \u32 -> $CodePoint u32
+fromU32Unchecked = \u32 -> @CodePoint u32
 
 toU32 : CodePoint -> U32
-toU32 = \$CodePoint u32 -> u32
+toU32 = \@CodePoint u32 -> u32
 
 fromU32 : U32 -> Result CodePoint [ BadCodePoint ]*

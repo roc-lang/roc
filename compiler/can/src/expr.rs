@@ -163,8 +163,7 @@ pub enum Expr {
         name: TagName,
     },
 
-    /// A wrapping of an opaque type, like `$Age 21`
-    // TODO(opaques): $->@ above when opaques land
+    /// A wrapping of an opaque type, like `@Age 21`
     OpaqueRef {
         opaque_var: Variable,
         name: Symbol,

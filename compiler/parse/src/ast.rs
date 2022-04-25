@@ -190,8 +190,7 @@ pub enum Expr<'a> {
     // Tags
     GlobalTag(&'a str),
 
-    // Reference to an opaque type, e.g. $Opaq
-    // TODO(opaques): $->@ in the above comment
+    // Reference to an opaque type, e.g. @Opaq
     OpaqueRef(&'a str),
 
     // Pattern Matching
