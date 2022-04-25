@@ -392,7 +392,7 @@ pub struct Subs {
 pub struct TagNameCache {
     globals: Vec<Uppercase>,
     globals_slices: Vec<SubsSlice<TagName>>,
-    /// Currently private tags and closure tags; in the future just closure tags
+    /// Just closure tags
     symbols: Vec<Symbol>,
     symbols_slices: Vec<SubsSlice<TagName>>,
 }

@@ -72,10 +72,7 @@ mod test_peg_grammar {
 
 
             rule tag() =
-              private_tag()
-              / [T::UppercaseIdent]
-
-            rule private_tag() = [T::PrivateTag] {}
+              [T::UppercaseIdent]
 
 
             rule list() = empty_list()

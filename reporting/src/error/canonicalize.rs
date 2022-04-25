@@ -1253,9 +1253,9 @@ fn pretty_runtime_error<'b>(
                 EmptySingleQuote | MultipleCharsInSingleQuote | Unknown | BadIdent(_) => {
                     alloc.nil()
                 }
-                QualifiedIdentifier => alloc.tip().append(
-                    alloc.reflow("In patterns, only private and global tags can be qualified"),
-                ),
+                QualifiedIdentifier => alloc
+                    .tip()
+                    .append(alloc.reflow("In patterns, only global tags can be qualified")),
             };
 
             doc = alloc.stack([

@@ -7,7 +7,7 @@ use roc_region::all::{Loc, Region};
 
 /// The canonicalization environment for a particular module.
 pub struct Env<'a> {
-    /// The module's path. Private tags and unqualified references to identifiers
+    /// The module's path. Opaques and unqualified references to identifiers
     /// are assumed to be relative to this path.
     pub home: ModuleId,
 
