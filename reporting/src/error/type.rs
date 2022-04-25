@@ -1,6 +1,7 @@
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
+use roc_exhaustive::CtorName;
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -3653,10 +3654,9 @@ fn pattern_to_doc_help<'b>(
             match union.render_as {
                 RenderAs::Guard => {
                     // #Guard <fake-condition-tag> <unexhausted-pattern>
-                    debug_assert_eq!(
-                        union.alternatives[tag_id.0 as usize].name,
-                        TagName::Global(GUARD_CTOR.into())
-                    );
+                    debug_assert!(union.alternatives[tag_id.0 as usize]
+                        .name
+                        .is_tag(&TagName::Global(GUARD_CTOR.into())));
                     debug_assert!(args.len() == 2);
                     let tag = pattern_to_doc_help(alloc, args[1].clone(), in_type_param);
                     alloc.concat([
@@ -3692,9 +3692,11 @@ fn pattern_to_doc_help<'b>(
                         .append(" }")
                 }
                 RenderAs::Tag | RenderAs::Opaque => {
-                    let tag = &union.alternatives[tag_id.0 as usize];
-                    match &tag.name {
-                        TagName::Global(name) if name.as_str() == NONEXHAUSIVE_CTOR => {
+                    let ctor = &union.alternatives[tag_id.0 as usize];
+                    match &ctor.name {
+                        CtorName::Tag(TagName::Global(name))
+                            if name.as_str() == NONEXHAUSIVE_CTOR =>
+                        {
                             return pattern_to_doc_help(
                                 alloc,
                                 roc_exhaustive::Pattern::Anything,
@@ -3704,12 +3706,11 @@ fn pattern_to_doc_help<'b>(
                         _ => {}
                     }
 
-                    let tag_name = match union.render_as {
-                        RenderAs::Tag => alloc.tag_name(tag.name.clone()),
-                        RenderAs::Opaque => match tag.name {
-                            TagName::Private(opaque) => alloc.wrapped_opaque_name(opaque),
-                            _ => unreachable!(),
-                        },
+                    let tag_name = match (union.render_as, &ctor.name) {
+                        (RenderAs::Tag, CtorName::Tag(tag)) => alloc.tag_name(tag.clone()),
+                        (RenderAs::Opaque, CtorName::Opaque(opaque)) => {
+                            alloc.wrapped_opaque_name(*opaque)
+                        }
                         _ => unreachable!(),
                     };
 
@@ -3719,7 +3720,7 @@ fn pattern_to_doc_help<'b>(
                         .map(|v| pattern_to_doc_help(alloc, v, true));
 
                     // We assume the alternatives are sorted. If not, this assert will trigger
-                    debug_assert!(tag_id == tag.tag_id);
+                    debug_assert!(tag_id == ctor.tag_id);
 
                     let docs = std::iter::once(tag_name).chain(arg_docs);
 

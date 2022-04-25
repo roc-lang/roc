@@ -2,7 +2,9 @@ use crate::expr::{IntValue, WhenBranch};
 use crate::pattern::DestructType;
 use roc_collections::all::HumanIndex;
 use roc_error_macros::internal_error;
-use roc_exhaustive::{is_useful, Ctor, Error, Guard, Literal, Pattern, RenderAs, TagId, Union};
+use roc_exhaustive::{
+    is_useful, Ctor, CtorName, Error, Guard, Literal, Pattern, RenderAs, TagId, Union,
+};
 use roc_module::ident::{TagIdIntType, TagName};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{Content, FlatType, Subs, SubsFmtContent, Variable};
@@ -114,7 +116,7 @@ fn sketch_pattern(var: Variable, pattern: &crate::pattern::Pattern) -> SketchedP
             let union = Union {
                 render_as: RenderAs::Record(field_names),
                 alternatives: vec![Ctor {
-                    name: TagName::Global("#Record".into()),
+                    name: CtorName::Tag(TagName::Global("#Record".into())),
                     tag_id,
                     arity: destructs.len(),
                 }],
@@ -146,7 +148,7 @@ fn sketch_pattern(var: Variable, pattern: &crate::pattern::Pattern) -> SketchedP
             let union = Union {
                 render_as: RenderAs::Opaque,
                 alternatives: vec![Ctor {
-                    name: TagName::Private(*opaque),
+                    name: CtorName::Opaque(*opaque),
                     tag_id,
                     arity: 1,
                 }],
@@ -218,7 +220,7 @@ pub fn sketch_rows(target_var: Variable, region: Region, patterns: &[WhenBranch]
                     render_as: RenderAs::Guard,
                     alternatives: vec![Ctor {
                         tag_id,
-                        name: TagName::Global(GUARD_CTOR.into()),
+                        name: CtorName::Tag(TagName::Global(GUARD_CTOR.into())),
                         arity: 2,
                     }],
                 };
@@ -322,7 +324,7 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
                     my_tag_id = tag_id;
                 }
                 alternatives.push(Ctor {
-                    name: tag,
+                    name: CtorName::Tag(tag),
                     tag_id,
                     arity: args.len(),
                 });
