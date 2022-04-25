@@ -715,11 +715,7 @@ pub fn constrain_expr(
                 &loc_cond.value,
                 Expected::NoExpectation(real_cond_type),
             );
-            // branch_cons.extend(pattern_cons);
-            // branch_constraints.push(constraints.and_constraint(pattern_cons));
-            let mut total_cons = Vec::with_capacity(1 + 2 * branches.len() + 1);
-            // total_cons.push(expr_con);
-            pattern_cons.push(expr_con);
+            pattern_cons.push(cond_constraint);
 
             // Now check the condition against the type expected by the branches.
             let sketched_rows = sketch_rows(real_cond_var, branches_region, branches);
@@ -746,7 +742,7 @@ pub fn constrain_expr(
             );
 
             let result_con =
-                constraints.equal_types_var(branch_var, expected, Category::When, region);
+                constraints.equal_types_var(body_var, expected, Category::When, region);
 
             let total_cons = [when_body_con, result_con];
             let branch_constraints = constraints.and_constraint(total_cons);
