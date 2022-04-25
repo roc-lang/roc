@@ -68,10 +68,6 @@ impl Symbol {
     }
 
     pub fn as_str(self, interns: &Interns) -> &str {
-        self.ident_str(interns).as_str()
-    }
-
-    pub fn ident_str(self, interns: &Interns) -> &IdentStr {
         let ident_ids = interns
             .all_ident_ids
             .get(&self.module_id())
@@ -83,16 +79,13 @@ impl Symbol {
                 )
             });
 
-        ident_ids
-            .get_name(self.ident_id())
-            .unwrap_or_else(|| {
-                panic!(
-                    "ident_string's IdentIds did not contain an entry for {} in module {:?}",
-                    self.ident_id().0,
-                    self.module_id()
-                )
-            })
-            .into()
+        ident_ids.get_name(self.ident_id()).unwrap_or_else(|| {
+            panic!(
+                "ident_string's IdentIds did not contain an entry for {} in module {:?}",
+                self.ident_id().0,
+                self.module_id()
+            )
+        })
     }
 
     pub fn as_u64(self) -> u64 {
@@ -103,13 +96,13 @@ impl Symbol {
         let module_id = self.module_id();
 
         if module_id == home {
-            self.ident_str(interns).clone().into()
+            ModuleName::from(self.as_str(interns))
         } else {
             // TODO do this without format! to avoid allocation for short strings
             format!(
                 "{}.{}",
                 self.module_string(interns).as_str(),
-                self.ident_str(interns)
+                self.as_str(interns)
             )
             .into()
         }
@@ -535,25 +528,50 @@ pub struct IdentId(u32);
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
-    /// Each IdentId is an index into this Vec
-    by_id: Vec<Ident>,
+    buffer: String,
 
-    next_generated_name: u32,
+    lengths: Vec<u16>,
+    offsets: Vec<u32>,
 }
 
 impl IdentIds {
-    pub fn ident_strs(&self) -> impl Iterator<Item = (IdentId, &str)> {
-        self.by_id
-            .iter()
-            .enumerate()
-            .map(|(index, ident)| (IdentId(index as u32), ident.as_inline_str().as_str()))
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            // guess: the average symbol length is 3
+            buffer: String::with_capacity(3 * capacity),
+
+            lengths: Vec::with_capacity(capacity),
+            offsets: Vec::with_capacity(capacity),
+        }
     }
 
-    pub fn add(&mut self, ident_name: Ident) -> IdentId {
-        let by_id = &mut self.by_id;
-        let ident_id = IdentId(by_id.len() as u32);
+    fn strs(&self) -> impl Iterator<Item = &str> {
+        self.offsets
+            .iter()
+            .zip(self.lengths.iter())
+            .map(move |(offset, length)| &self.buffer[*offset as usize..][..*length as usize])
+    }
 
-        by_id.push(ident_name);
+    pub fn ident_strs(&self) -> impl Iterator<Item = (IdentId, &str)> {
+        self.strs()
+            .enumerate()
+            .map(|(index, ident)| (IdentId(index as u32), ident))
+    }
+
+    pub fn add(&mut self, ident_name: &Ident) -> IdentId {
+        self.add_str(ident_name.as_inline_str().as_str())
+    }
+
+    fn add_str(&mut self, string: &str) -> IdentId {
+        let offset = self.buffer.len() as u32;
+        let length = string.len() as u16;
+
+        let ident_id = IdentId(self.lengths.len() as u32);
+
+        self.lengths.push(length);
+        self.offsets.push(offset);
+
+        self.buffer.push_str(string);
 
         ident_id
     }
@@ -561,13 +579,7 @@ impl IdentIds {
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
         match self.get_id(name) {
             Some(id) => id,
-            None => {
-                let ident_id = IdentId(self.by_id.len() as u32);
-
-                self.by_id.push(name.clone());
-
-                ident_id
-            }
+            None => self.add(name),
         }
     }
 
@@ -586,31 +598,26 @@ impl IdentIds {
             Some(ident_id_ref) => {
                 let ident_id = ident_id_ref;
 
-                let by_id = &mut self.by_id;
-                let key_index_opt = by_id.iter().position(|x| *x == old_ident);
+                match self.find_index(old_ident_name) {
+                    Some(key_index) => {
+                        let length = new_ident_name.len();
+                        let offset = self.buffer.len();
+                        self.buffer.push_str(new_ident_name);
 
-                if let Some(key_index) = key_index_opt {
-                    if let Some(vec_elt) = by_id.get_mut(key_index) {
-                        *vec_elt = new_ident_name.into();
-                    } else {
-                        // we get the index from by_id
-                        unreachable!()
+                        self.lengths[key_index] = length as u16;
+                        self.offsets[key_index] = offset as u32;
+
+                        Ok(ident_id)
                     }
-
-                    Ok(ident_id)
-                } else {
-                    Err(
-                        format!(
-                            "Tried to find position of key {:?} in IdentIds.by_id but I could not find the key. IdentIds.by_id: {:?}",
-                            old_ident_name,
-                            self.by_id
-                        )
-                    )
+                    None => Err(format!(
+                        r"Tried to find position of key {:?} in IdentIds.by_id but I could not find the key",
+                        old_ident_name
+                    )),
                 }
             }
             None => Err(format!(
-                "Tried to update key in IdentIds ({:?}) but I could not find the key ({}).",
-                self.by_id, old_ident_name
+                "Tried to update key in IdentIds, but I could not find the key ({}).",
+                old_ident_name
             )),
         }
     }
@@ -625,44 +632,60 @@ impl IdentIds {
     pub fn gen_unique(&mut self) -> IdentId {
         use std::fmt::Write;
 
-        let index: u32 = self.next_generated_name;
-        self.next_generated_name += 1;
+        let index = self.lengths.len();
 
-        // "4294967296" is 10 characters
-        let mut buffer: arrayvec::ArrayString<10> = arrayvec::ArrayString::new();
+        let offset = self.buffer.len();
+        write!(self.buffer, "{}", index).unwrap();
+        let length = self.buffer.len() - offset;
 
-        write!(buffer, "{}", index).unwrap();
-        let ident = Ident(IdentStr::from_str(buffer.as_str()));
+        self.lengths.push(length as u16);
+        self.offsets.push(offset as u32);
 
-        self.add(ident)
+        IdentId(index as u32)
     }
 
     #[inline(always)]
     pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
-        let ident_name = ident_name.as_inline_str().as_str();
+        self.find_index(ident_name.as_inline_str().as_str())
+            .map(|i| IdentId(i as u32))
+    }
 
-        for (id, ident_str) in self.ident_strs() {
-            if ident_name == ident_str {
-                return Some(id);
+    #[inline(always)]
+    fn find_index(&self, string: &str) -> Option<usize> {
+        let target_length = string.len() as u16;
+
+        for (index, length) in self.lengths.iter().enumerate() {
+            if *length == target_length {
+                let offset = self.offsets[index] as usize;
+                let ident = &self.buffer[offset..][..*length as usize];
+
+                // skip the length check
+                if string.bytes().eq(ident.bytes()) {
+                    return Some(index);
+                }
             }
         }
 
         None
     }
 
-    pub fn get_name(&self, id: IdentId) -> Option<&Ident> {
-        self.by_id.get(id.0 as usize)
+    pub fn get_name(&self, id: IdentId) -> Option<&str> {
+        let index = id.0 as usize;
+
+        match self.lengths.get(index) {
+            None => None,
+            Some(length) => {
+                let offset = self.offsets[index] as usize;
+                Some(&self.buffer[offset..][..*length as usize])
+            }
+        }
     }
 
     pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
-        Ok(self
-            .get_name(ident_id)
-            .with_context(|| IdentIdNotFound {
-                ident_id,
-                ident_ids_str: format!("{:?}", self),
-            })?
-            .as_inline_str()
-            .as_str())
+        Ok(self.get_name(ident_id).with_context(|| IdentIdNotFound {
+            ident_id,
+            ident_ids_str: format!("{:?}", self),
+        })?)
     }
 }
 
@@ -686,45 +709,18 @@ macro_rules! define_builtins {
                 $(
                     debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), "Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
 
-                    let mut by_id : Vec<Ident> = Vec::new();
-                    let ident_ids = {
-                            $(
-                                debug_assert!(by_id.len() == $ident_id, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {:?} to {} …: {:?} instead.", $ident_id, $ident_name, $module_id, $module_name, $ident_id, by_id.len(), $ident_id, $ident_name, by_id.len(), $ident_name);
+                    let ident_indexes = [ $($ident_id),+ ];
+                    let ident_names = [ $($ident_name),+ ];
 
-                                by_id.push($ident_name.into());
-                            )+
+                    let mut ident_ids = IdentIds::with_capacity(ident_names.len());
 
-                            #[cfg(debug_assertions)]
-                            {
-                                let mut cloned = by_id.clone();
-                                let before = cloned.len();
-                                cloned.sort();
-                                cloned.dedup();
-                                let after = cloned.len();
+                    for (_expected_id, name) in ident_indexes.iter().zip(ident_names.iter()) {
+                        debug_assert!(!ident_ids.strs().any(|s| s == *name), "The Ident {} is already in IdentIds", name);
 
+                        let _actual_id = ident_ids.add_str(name);
 
-                                if before != after {
-                                    let mut duplicates : Vec<&Ident> = Vec::new();
-                                    let mut temp : Vec<&Ident> = Vec::new();
-
-                                    for symbol in cloned.iter() {
-                                        if temp.contains(&&symbol) {
-                                            duplicates.push(symbol);
-                                        }
-
-                                        temp.push(&symbol);
-                                    }
-
-
-                                    panic!("duplicate symbols in IdentIds for module {:?}: {:?}", $module_name, duplicates);
-                                }
-                            }
-
-                            IdentIds {
-                                by_id,
-                                next_generated_name: 0,
-                            }
-                        };
+                        debug_assert_eq!(*_expected_id, _actual_id.0 as usize, "Error setting up Builtins: when inserting {} …: {} into module {} …: {} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {} to {} …: {} instead.", _expected_id, name, $module_id, $module_name, _expected_id, _actual_id.0, _expected_id, name, _actual_id.0, name );
+                    }
 
                     if cfg!(debug_assertions) {
                         let module_id = ModuleId($module_id);
@@ -733,6 +729,7 @@ macro_rules! define_builtins {
                         PackageModuleIds::insert_debug_name(module_id, &name);
                         module_id.register_debug_idents(&ident_ids);
                     }
+
 
                     exposed_idents_by_module.insert(
                         ModuleId($module_id),

@@ -1,6 +1,7 @@
 use roc_ast::lang::core::expr::expr2::Expr2;
 use roc_ast::lang::core::pattern::Pattern2;
 use roc_ast::lang::core::val_def::ValueDef;
+use roc_module::ident::Ident;
 use roc_module::symbol::Symbol;
 
 use crate::editor::ed_error::EdResult;
@@ -25,7 +26,8 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let val_expr2_node = Expr2::Blank;
     let val_expr_id = ed_model.module.env.pool.add(val_expr2_node);
 
-    let ident_id = ed_model.module.env.ident_ids.add(val_name_string.into());
+    let ident = Ident::from(val_name_string);
+    let ident_id = ed_model.module.env.ident_ids.add(&ident);
     let var_symbol = Symbol::new(ed_model.module.env.home, ident_id);
     let body = Expr2::Var(var_symbol);
     let body_id = ed_model.module.env.pool.add(body);
