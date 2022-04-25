@@ -3,7 +3,7 @@ Defs(
         @26-46 Value(
             AnnotatedBody {
                 ann_pattern: @0-8 Apply(
-                    @0-6 GlobalTag(
+                    @0-6 Tag(
                         "UserId",
                     ),
                     [
@@ -15,7 +15,7 @@ Defs(
                 ann_type: @11-25 TagUnion {
                     ext: None,
                     tags: [
-                        @13-23 Global {
+                        @13-23 Apply {
                             name: @13-19 "UserId",
                             args: [
                                 @20-23 Apply(
@@ -29,7 +29,7 @@ Defs(
                 },
                 comment: None,
                 body_pattern: @26-34 Apply(
-                    @26-32 GlobalTag(
+                    @26-32 Tag(
                         "UserId",
                     ),
                     [
@@ -39,7 +39,7 @@ Defs(
                     ],
                 ),
                 body_expr: @37-46 Apply(
-                    @37-43 GlobalTag(
+                    @37-43 Tag(
                         "UserId",
                     ),
                     [

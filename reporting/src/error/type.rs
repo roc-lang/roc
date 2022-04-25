@@ -637,9 +637,9 @@ fn to_expr_report<'b>(
                         alloc.reflow(" condition to evaluate to a "),
                         alloc.type_str("Bool"),
                         alloc.reflow("—either "),
-                        alloc.global_tag_name("True".into()),
+                        alloc.tag("True".into()),
                         alloc.reflow(" or "),
-                        alloc.global_tag_name("False".into()),
+                        alloc.tag("False".into()),
                         alloc.reflow("."),
                     ]),
                     // Note: Elm has a hint here about truthiness. I think that
@@ -676,9 +676,9 @@ fn to_expr_report<'b>(
                         alloc.reflow(" condition to evaluate to a "),
                         alloc.type_str("Bool"),
                         alloc.reflow("—either "),
-                        alloc.global_tag_name("True".into()),
+                        alloc.tag("True".into()),
                         alloc.reflow(" or "),
-                        alloc.global_tag_name("False".into()),
+                        alloc.tag("False".into()),
                         alloc.reflow("."),
                     ]),
                     // Note: Elm has a hint here about truthiness. I think that
@@ -714,9 +714,9 @@ fn to_expr_report<'b>(
                         alloc.reflow(" guard condition to evaluate to a "),
                         alloc.type_str("Bool"),
                         alloc.reflow("—either "),
-                        alloc.global_tag_name("True".into()),
+                        alloc.tag("True".into()),
                         alloc.reflow(" or "),
-                        alloc.global_tag_name("False".into()),
+                        alloc.tag("False".into()),
                         alloc.reflow("."),
                     ]),
                 )
@@ -1435,29 +1435,29 @@ fn format_category<'b>(
         ),
 
         TagApply {
-            tag_name: TagName::Global(name),
+            tag_name: TagName::Tag(name),
             args_count: 0,
         } => (
             alloc.concat([
                 alloc.text(format!("{}his ", t)),
-                alloc.global_tag_name(name.to_owned()),
+                alloc.tag(name.to_owned()),
                 if name.as_str() == "True" || name.as_str() == "False" {
                     alloc.text(" boolean")
                 } else {
-                    alloc.text(" global tag")
+                    alloc.text(" tag")
                 },
             ]),
             alloc.text(" has the type:"),
         ),
 
         TagApply {
-            tag_name: TagName::Global(name),
+            tag_name: TagName::Tag(name),
             args_count: _,
         } => (
             alloc.concat([
                 alloc.text(format!("{}his ", t)),
-                alloc.global_tag_name(name.to_owned()),
-                alloc.text(" global tag application"),
+                alloc.tag(name.to_owned()),
+                alloc.text(" tag application"),
             ]),
             alloc.text(" has the type:"),
         ),

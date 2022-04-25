@@ -245,13 +245,13 @@ pub fn constrain_expr<'a>(
                 exists(arena, field_vars, And(constraints))
             }
         }
-        Expr2::GlobalTag {
+        Expr2::Tag {
             variant_var,
             ext_var,
             name,
             arguments,
         } => {
-            let tag_name = TagName::Global(name.as_str(env.pool).into());
+            let tag_name = TagName::Tag(name.as_str(env.pool).into());
 
             constrain_tag(
                 arena,
@@ -1604,13 +1604,13 @@ pub fn constrain_pattern<'a>(
             state.constraints.push(whole_con);
             state.constraints.push(record_con);
         }
-        GlobalTag {
+        Tag {
             whole_var,
             ext_var,
             tag_name: name,
             arguments,
         } => {
-            let tag_name = TagName::Global(name.as_str(env.pool).into());
+            let tag_name = TagName::Tag(name.as_str(env.pool).into());
 
             constrain_tag_pattern(
                 arena,
@@ -2198,7 +2198,7 @@ pub mod test_constrain {
     }
 
     #[test]
-    fn constrain_global_tag() {
+    fn constrain_tag() {
         infer_eq(
             indoc!(
                 r#"

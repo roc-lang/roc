@@ -100,7 +100,7 @@ fn unroll_newtypes_and_aliases<'a>(
     loop {
         match content {
             Content::Structure(FlatType::TagUnion(tags, _))
-                if tags.is_newtype_wrapper_of_global_tag(env.subs) =>
+                if tags.is_newtype_wrapper_of_tag(env.subs) =>
             {
                 let (tag_name, vars): (&TagName, &[Variable]) = tags
                     .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
@@ -471,7 +471,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
 
 fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
     match tag_name {
-        TagName::Global(_) => Expr::GlobalTag(
+        TagName::Tag(_) => Expr::Tag(
             env.arena
                 .alloc_str(&tag_name.as_ident_str(env.interns, env.home)),
         ),
@@ -1048,7 +1048,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
 
                     let loc_tag_expr = {
                         let tag_name = &tag_name.as_ident_str(env.interns, env.home);
-                        let tag_expr = Expr::GlobalTag(arena.alloc_str(tag_name));
+                        let tag_expr = Expr::Tag(arena.alloc_str(tag_name));
 
                         &*arena.alloc(Loc {
                             value: tag_expr,
@@ -1127,7 +1127,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
 
                     let loc_tag_expr = {
                         let tag_name = &tag_name.as_ident_str(env.interns, env.home);
-                        let tag_expr = Expr::GlobalTag(arena.alloc_str(tag_name));
+                        let tag_expr = Expr::Tag(arena.alloc_str(tag_name));
 
                         &*arena.alloc(Loc {
                             value: tag_expr,

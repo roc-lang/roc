@@ -365,7 +365,7 @@ pub fn find_type_def_symbols(
 
                 while let Some(tag) = inner_stack.pop() {
                     match tag {
-                        Tag::Global { args, .. } => {
+                        Tag::Apply { args, .. } => {
                             for t in args.iter() {
                                 stack.push(&t.value);
                             }
@@ -1229,7 +1229,7 @@ fn can_tags<'a>(
         // a duplicate
         let new_name = 'inner: loop {
             match tag {
-                Tag::Global { name, args } => {
+                Tag::Apply { name, args } => {
                     let name = name.value.into();
                     let mut arg_types = Vec::with_capacity(args.len());
 
@@ -1248,7 +1248,7 @@ fn can_tags<'a>(
                         arg_types.push(ann);
                     }
 
-                    let tag_name = TagName::Global(name);
+                    let tag_name = TagName::Tag(name);
                     tag_types.push((tag_name.clone(), arg_types));
 
                     break 'inner tag_name;

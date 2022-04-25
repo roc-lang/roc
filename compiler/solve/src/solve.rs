@@ -2048,7 +2048,7 @@ fn insert_tags_fast_path<'a>(
     tags: &'a [(TagName, Vec<Type>)],
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
-    if let [(TagName::Global(tag_name), arguments)] = tags {
+    if let [(TagName::Tag(tag_name), arguments)] = tags {
         let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, arguments);
         let new_variable_slices =
             SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
