@@ -9882,6 +9882,34 @@ I need all branches in an `if` to have the same type!
         )
     }
 
+    fn imports_missing_comma() {
+        new_report_problem_as(
+            "imports_missing_comma",
+            indoc!(
+                r#"
+                app "test-missing-comma"
+                    packages { pf: "platform" }
+                    imports [ pf.Task Base64 ]
+                    provides [ main, @Foo ] to pf
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD IMPORTS ────────────────────────── tmp/imports_missing_comma/Test.roc ─
+
+                I am partway through parsing a imports list, but I got stuck here:
+
+                2│      packages { pf: "platform" }
+                3│      imports [ pf.Task Base64 ]
+                                          ^
+
+                I am expecting a comma or end of list, like
+
+                    imports [ Math, Util ]"#
+            ),
+        )
+    }
+
     #[test]
     fn not_enough_cases_for_open_union() {
         new_report_problem_as(
