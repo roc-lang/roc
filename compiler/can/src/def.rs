@@ -203,7 +203,7 @@ pub(crate) fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
     var_store: &mut VarStore,
-    original_scope: &Scope,
+    mut scope: Scope,
     loc_defs: &'a [&'a Loc<ast::Def<'a>>],
     pattern_type: PatternType,
 ) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
@@ -224,11 +224,7 @@ pub(crate) fn canonicalize_defs<'a>(
     // This naturally handles recursion too, because a given expr which refers
     // to itself won't be processed until after its def has been added to scope.
 
-    // Record both the original and final idents from the scope,
-    // so we can diff them while detecting unused defs.
-    let mut scope = original_scope.clone();
     let num_defs = loc_defs.len();
-
     let mut type_defs = Vec::with_capacity(num_defs);
     let mut value_defs = Vec::with_capacity(num_defs);
 
@@ -1398,7 +1394,7 @@ pub fn can_defs_with_return<'a>(
         env,
         Output::default(),
         var_store,
-        &scope,
+        scope,
         loc_defs,
         PatternType::DefExpr,
     );
