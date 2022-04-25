@@ -2210,18 +2210,6 @@ pub mod test_constrain {
     }
 
     #[test]
-    fn constrain_private_tag() {
-        infer_eq(
-            indoc!(
-                r#"
-                @Foo
-                "#
-            ),
-            "[ @Foo ]*",
-        )
-    }
-
-    #[test]
     fn constrain_call_and_accessor() {
         infer_eq(
             indoc!(

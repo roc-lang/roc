@@ -223,7 +223,6 @@ pub enum BadIdent {
     WeirdDotAccess(Position),
     WeirdDotQualified(Position),
     StrayDot(Position),
-    BadPrivateTag(Position),
     BadOpaqueRef(Position),
 }
 
