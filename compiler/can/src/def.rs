@@ -225,24 +225,17 @@ pub(crate) fn canonicalize_defs<'a>(
     // to itself won't be processed until after its def has been added to scope.
 
     let num_defs = loc_defs.len();
-    let mut type_defs = Vec::with_capacity(num_defs);
+    let mut pending_type_defs = Vec::with_capacity(num_defs);
     let mut value_defs = Vec::with_capacity(num_defs);
 
     for loc_def in loc_defs {
         match loc_def.value.unroll_def() {
-            Ok(type_def) => type_defs.push(Loc::at(loc_def.region, type_def)),
+            Ok(type_def) => {
+                pending_type_defs.push(to_pending_type_def(env, type_def, &mut scope, pattern_type))
+            }
             Err(value_def) => value_defs.push(Loc::at(loc_def.region, value_def)),
         }
     }
-
-    // We need to canonicalize all the type defs first.
-    // Clippy is wrong - we do need the collect, otherwise "env" and "scope" are captured for
-    // longer than we'd like.
-    #[allow(clippy::needless_collect)]
-    let pending_type_defs = type_defs
-        .into_iter()
-        .map(|loc_def| to_pending_type_def(env, loc_def.value, &mut scope, pattern_type))
-        .collect::<Vec<_>>();
 
     if cfg!(debug_assertions) {
         env.home.register_debug_idents(&env.ident_ids);
