@@ -452,7 +452,6 @@ pub(crate) fn canonicalize_defs<'a>(
         &mut output,
         var_store,
         &mut scope,
-        &mut symbols_introduced,
         abilities,
         &abilities_in_scope,
         pattern_type,
@@ -554,7 +553,6 @@ fn resolve_abilities<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    symbols_introduced: &mut MutMap<Symbol, Region>,
     abilities: MutMap<Symbol, (Loc<Symbol>, &[AbilityMember])>,
     abilities_in_scope: &[Symbol],
     pattern_type: PatternType,
@@ -597,8 +595,6 @@ fn resolve_abilities<'a>(
                     continue;
                 }
             };
-
-            symbols_introduced.insert(member_sym, name_region);
 
             if pattern_type == PatternType::TopLevelDef {
                 env.top_level_symbols.insert(member_sym);
