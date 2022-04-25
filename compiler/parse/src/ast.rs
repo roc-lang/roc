@@ -189,7 +189,6 @@ pub enum Expr<'a> {
 
     // Tags
     GlobalTag(&'a str),
-    PrivateTag(&'a str),
 
     // Reference to an opaque type, e.g. $Opaq
     // TODO(opaques): $->@ in the above comment
@@ -446,11 +445,6 @@ pub enum Tag<'a> {
         args: &'a [Loc<TypeAnnotation<'a>>],
     },
 
-    Private {
-        name: Loc<&'a str>,
-        args: &'a [Loc<TypeAnnotation<'a>>],
-    },
-
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Tag<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a Tag<'a>, &'a [CommentOrNewline<'a>]),
@@ -523,7 +517,6 @@ pub enum Pattern<'a> {
     Identifier(&'a str),
 
     GlobalTag(&'a str),
-    PrivateTag(&'a str),
 
     OpaqueRef(&'a str),
 
@@ -628,7 +621,6 @@ impl<'a> Pattern<'a> {
         match (self, other) {
             (Identifier(x), Identifier(y)) => x == y,
             (GlobalTag(x), GlobalTag(y)) => x == y,
-            (PrivateTag(x), PrivateTag(y)) => x == y,
             (Apply(constructor_x, args_x), Apply(constructor_y, args_y)) => {
                 let equivalent_args = args_x
                     .iter()
@@ -926,7 +918,7 @@ impl<'a> Expr<'a> {
     }
 
     pub fn is_tag(&self) -> bool {
-        matches!(self, Expr::GlobalTag(_) | Expr::PrivateTag(_))
+        matches!(self, Expr::GlobalTag(_))
     }
 }
 

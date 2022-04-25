@@ -830,23 +830,6 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
-        ast::Expr::PrivateTag(tag) => {
-            let variant_var = var_store.fresh();
-            let ext_var = var_store.fresh();
-            let tag_ident = env.ident_ids.get_or_insert(&(*tag).into());
-            let symbol = Symbol::new(env.home, tag_ident);
-            let lambda_set_symbol = env.gen_unique_symbol();
-
-            (
-                ZeroArgumentTag {
-                    name: TagName::Private(symbol),
-                    variant_var,
-                    ext_var,
-                    closure_name: lambda_set_symbol,
-                },
-                Output::default(),
-            )
-        }
         ast::Expr::OpaqueRef(opaque_ref) => {
             // If we're here, the opaque reference is definitely not wrapping an argument - wrapped
             // arguments are handled in the Apply branch.

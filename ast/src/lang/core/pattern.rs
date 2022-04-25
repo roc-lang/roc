@@ -280,17 +280,6 @@ pub fn to_pattern2<'a>(
                 arguments: PoolVec::empty(env.pool),
             }
         }
-        PrivateTag(name) => {
-            let ident_id = env.ident_ids.get_or_insert(&(*name).into());
-
-            // Canonicalize the tag's name.
-            Pattern2::PrivateTag {
-                whole_var: env.var_store.fresh(),
-                ext_var: env.var_store.fresh(),
-                tag_name: Symbol::new(env.home, ident_id),
-                arguments: PoolVec::empty(env.pool),
-            }
-        }
 
         OpaqueRef(..) => todo_opaques!(),
 
@@ -319,16 +308,6 @@ pub fn to_pattern2<'a>(
                     tag_name: PoolStr::new(name, env.pool),
                     arguments: can_patterns,
                 },
-                PrivateTag(name) => {
-                    let ident_id = env.ident_ids.get_or_insert(&name.into());
-
-                    Pattern2::PrivateTag {
-                        whole_var: env.var_store.fresh(),
-                        ext_var: env.var_store.fresh(),
-                        tag_name: Symbol::new(env.home, ident_id),
-                        arguments: can_patterns,
-                    }
-                }
                 _ => unreachable!("Other patterns cannot be applied"),
             }
         }

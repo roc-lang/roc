@@ -702,21 +702,6 @@ fn can_tags<'a>(
 
                     break 'inner tag_name;
                 }
-                Tag::Private { name, args } => {
-                    let ident_id = env.ident_ids.get_or_insert(&name.value.into());
-                    let symbol = Symbol::new(env.home, ident_id);
-
-                    let arg_types = PoolVec::with_capacity(args.len() as u32, env.pool);
-
-                    for (type_id, loc_arg) in arg_types.iter_node_ids().zip(args.iter()) {
-                        as_type_id(env, scope, rigids, type_id, &loc_arg.value, loc_arg.region);
-                    }
-
-                    let tag_name = TagName::Private(symbol);
-                    tag_types.push((tag_name.clone(), arg_types));
-
-                    break 'inner tag_name;
-                }
                 Tag::SpaceBefore(nested, _) | Tag::SpaceAfter(nested, _) => {
                     // check the nested tag instead
                     tag = nested;

@@ -475,11 +475,7 @@ fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
             env.arena
                 .alloc_str(&tag_name.as_ident_str(env.interns, env.home)),
         ),
-        TagName::Private(_) => Expr::PrivateTag(
-            env.arena
-                .alloc_str(&tag_name.as_ident_str(env.interns, env.home)),
-        ),
-        TagName::Closure(_) => unreachable!("User cannot type this"),
+        TagName::Private(_) | TagName::Closure(_) => unreachable!("User cannot type this"),
     }
 }
 
@@ -1052,11 +1048,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
 
                     let loc_tag_expr = {
                         let tag_name = &tag_name.as_ident_str(env.interns, env.home);
-                        let tag_expr = if tag_name.starts_with('@') {
-                            Expr::PrivateTag(arena.alloc_str(tag_name))
-                        } else {
-                            Expr::GlobalTag(arena.alloc_str(tag_name))
-                        };
+                        let tag_expr = Expr::GlobalTag(arena.alloc_str(tag_name));
 
                         &*arena.alloc(Loc {
                             value: tag_expr,
@@ -1135,11 +1127,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
 
                     let loc_tag_expr = {
                         let tag_name = &tag_name.as_ident_str(env.interns, env.home);
-                        let tag_expr = if tag_name.starts_with('@') {
-                            Expr::PrivateTag(arena.alloc_str(tag_name))
-                        } else {
-                            Expr::GlobalTag(arena.alloc_str(tag_name))
-                        };
+                        let tag_expr = Expr::GlobalTag(arena.alloc_str(tag_name));
 
                         &*arena.alloc(Loc {
                             value: tag_expr,

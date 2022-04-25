@@ -404,8 +404,7 @@ fn record_field_to_doc(
     }
 }
 
-// The Option here represents if it is private. Private tags
-// evaluate to `None`.
+// The Option here represents if it is malformed.
 fn tag_to_doc(in_func_ann: bool, tag: ast::Tag) -> Option<Tag> {
     match tag {
         ast::Tag::Global { name, args } => Some(Tag {
@@ -420,7 +419,6 @@ fn tag_to_doc(in_func_ann: bool, tag: ast::Tag) -> Option<Tag> {
                 type_vars
             },
         }),
-        ast::Tag::Private { .. } => None,
         ast::Tag::SpaceBefore(&sub_tag, _) => tag_to_doc(in_func_ann, sub_tag),
         ast::Tag::SpaceAfter(&sub_tag, _) => tag_to_doc(in_func_ann, sub_tag),
         ast::Tag::Malformed(_) => None,
