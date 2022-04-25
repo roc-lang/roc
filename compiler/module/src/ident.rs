@@ -10,6 +10,10 @@ impl Ident {
     pub fn as_inline_str(&self) -> &IdentStr {
         &self.0
     }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
 }
 
 pub struct QualifiedModuleName<'a> {

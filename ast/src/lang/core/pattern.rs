@@ -516,7 +516,7 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
 
 pub fn get_identifier_string(pattern: &Pattern2, interns: &Interns) -> ASTResult<String> {
     match pattern {
-        Pattern2::Identifier(symbol) => Ok(symbol.ident_str(interns).to_string()),
+        Pattern2::Identifier(symbol) => Ok(symbol.as_str(interns).to_string()),
         other => UnexpectedPattern2Variant {
             required_pattern2: "Identifier".to_string(),
             encountered_pattern2: format!("{:?}", other),

@@ -225,7 +225,7 @@ impl Scope {
                     region,
                 };
 
-                let ident_id = all_ident_ids.add(ident.clone());
+                let ident_id = all_ident_ids.add(&ident);
                 let symbol = Symbol::new(self.home, ident_id);
 
                 self.symbols.insert(symbol, region);
@@ -273,7 +273,7 @@ impl Scope {
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
         match self.idents.get(&ident) {
             Some(&(original_symbol, original_region)) => {
-                let shadow_ident_id = all_ident_ids.add(ident.clone());
+                let shadow_ident_id = all_ident_ids.add(&ident);
                 let shadow_symbol = Symbol::new(self.home, shadow_ident_id);
 
                 self.symbols.insert(shadow_symbol, region);
@@ -315,7 +315,7 @@ impl Scope {
         // use that existing IdentId. Otherwise, create a fresh one.
         let ident_id = match exposed_ident_ids.get_id(&ident) {
             Some(ident_id) => ident_id,
-            None => all_ident_ids.add(ident.clone()),
+            None => all_ident_ids.add(&ident),
         };
 
         let symbol = Symbol::new(self.home, ident_id);
@@ -329,7 +329,7 @@ impl Scope {
     /// Ignore an identifier.
     ///
     /// Used for record guards like { x: Just _ }
-    pub fn ignore(&mut self, ident: Ident, all_ident_ids: &mut IdentIds) -> Symbol {
+    pub fn ignore(&mut self, ident: &Ident, all_ident_ids: &mut IdentIds) -> Symbol {
         let ident_id = all_ident_ids.add(ident);
         Symbol::new(self.home, ident_id)
     }

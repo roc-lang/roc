@@ -994,7 +994,7 @@ fn write_fn<'a>(
 
 fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
     let interns = &env.interns;
-    let ident = symbol.ident_str(interns);
+    let ident_str = symbol.as_str(interns);
     let module_id = symbol.module_id();
 
     // Don't qualify the symbol if it's in our home module,
@@ -1004,5 +1004,5 @@ fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
         buf.push('.');
     }
 
-    buf.push_str(ident.as_str());
+    buf.push_str(ident_str);
 }

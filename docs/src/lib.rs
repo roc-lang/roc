@@ -71,7 +71,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
                     let exposed_values = loaded_module
                         .exposed_values
                         .iter()
-                        .map(|symbol| symbol.ident_str(&loaded_module.interns).to_string())
+                        .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
                         .collect::<Vec<String>>();
 
                     (exposed_values, d)

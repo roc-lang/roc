@@ -2011,7 +2011,7 @@ fn write_error_type_help(
             if write_parens {
                 buf.push('(');
             }
-            buf.push_str(symbol.ident_str(interns).as_str());
+            buf.push_str(symbol.as_str(interns));
 
             for arg in arguments {
                 buf.push(' ');

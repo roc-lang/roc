@@ -446,7 +446,7 @@ impl LoadedModule {
     pub fn exposed_values_str(&self) -> Vec<&str> {
         self.exposed_values
             .iter()
-            .map(|symbol| symbol.ident_str(&self.interns).as_str())
+            .map(|symbol| symbol.as_str(&self.interns))
             .collect()
     }
 }
