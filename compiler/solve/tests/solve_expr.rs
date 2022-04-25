@@ -6168,4 +6168,17 @@ mod solve_expr {
             "a -> Task a *",
         );
     }
+
+    #[test]
+    fn list_with_num_and_str() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                val = [ 1, "abc" ]
+                val
+                "#
+            ),
+            "",
+        )
+    }
 }

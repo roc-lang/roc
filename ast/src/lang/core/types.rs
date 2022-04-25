@@ -24,6 +24,7 @@ pub enum Type2 {
     Variable(Variable), // 4B
 
     Alias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
+    Opaque(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
     AsAlias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
 
     // 24B
@@ -74,6 +75,9 @@ impl ShallowClone for Type2 {
             Self::Alias(symbol, args, alias_type_id) => {
                 Self::Alias(*symbol, args.shallow_clone(), alias_type_id.clone())
             }
+            Self::Opaque(symbol, args, alias_type_id) => {
+                Self::Opaque(*symbol, args.shallow_clone(), alias_type_id.clone())
+            }
             Self::Record(fields, ext_id) => Self::Record(fields.shallow_clone(), ext_id.clone()),
             Self::Function(args, closure_type_id, ret_type_id) => Self::Function(
                 args.shallow_clone(),
@@ -101,7 +105,7 @@ impl Type2 {
                 Variable(v) => {
                     result.insert(*v);
                 }
-                Alias(_, _, actual) | AsAlias(_, _, actual) => {
+                Alias(_, _, actual) | AsAlias(_, _, actual) | Opaque(_, _, actual) => {
                     stack.push(pool.get(*actual));
                 }
                 HostExposedAlias {

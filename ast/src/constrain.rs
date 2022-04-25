@@ -1857,7 +1857,7 @@ fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
 
     let alias_content = range_type.shallow_clone();
 
-    Type2::Alias(
+    Type2::Opaque(
         Symbol::NUM_FLOATINGPOINT,
         PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
         pool.add(alias_content),
@@ -1905,7 +1905,7 @@ fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
 
     let alias_content = range_type.shallow_clone();
 
-    Type2::Alias(
+    Type2::Opaque(
         Symbol::NUM_INTEGER,
         PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
         pool.add(alias_content),
@@ -1918,7 +1918,7 @@ fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
 
     let alias_content = range_type.shallow_clone();
 
-    Type2::Alias(
+    Type2::Opaque(
         Symbol::NUM_NUM,
         PoolVec::new(
             vec![(PoolStr::new("range", pool), type_id)].into_iter(),
