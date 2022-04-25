@@ -475,7 +475,7 @@ fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
             env.arena
                 .alloc_str(&tag_name.as_ident_str(env.interns, env.home)),
         ),
-        TagName::Private(_) | TagName::Closure(_) => unreachable!("User cannot type this"),
+        TagName::Closure(_) => unreachable!("User cannot type this"),
     }
 }
 

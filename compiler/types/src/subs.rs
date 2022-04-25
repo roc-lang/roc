@@ -114,7 +114,6 @@ fn round_to_multiple_of(value: usize, base: usize) -> usize {
 
 enum SerializedTagName {
     Global(SubsSlice<u8>),
-    Private(Symbol),
     Closure(Symbol),
 }
 
@@ -211,7 +210,6 @@ impl Subs {
                     );
                     SerializedTagName::Global(slice)
                 }
-                TagName::Private(symbol) => SerializedTagName::Private(*symbol),
                 TagName::Closure(symbol) => SerializedTagName::Closure(*symbol),
             };
 
@@ -354,7 +352,6 @@ impl Subs {
 
                     TagName::Global(string.into())
                 }
-                SerializedTagName::Private(symbol) => TagName::Private(*symbol),
                 SerializedTagName::Closure(symbol) => TagName::Closure(*symbol),
             };
 
@@ -410,12 +407,10 @@ impl TagNameCache {
                     None => None,
                 }
             }
-            TagName::Private(symbol) | TagName::Closure(symbol) => {
-                match self.symbols.iter().position(|s| s == symbol) {
-                    Some(index) => Some(&mut self.symbols_slices[index]),
-                    None => None,
-                }
-            }
+            TagName::Closure(symbol) => match self.symbols.iter().position(|s| s == symbol) {
+                Some(index) => Some(&mut self.symbols_slices[index]),
+                None => None,
+            },
         }
     }
 
@@ -425,7 +420,7 @@ impl TagNameCache {
                 self.globals.push(uppercase.clone());
                 self.globals_slices.push(slice);
             }
-            TagName::Private(symbol) | TagName::Closure(symbol) => {
+            TagName::Closure(symbol) => {
                 self.symbols.push(*symbol);
                 self.symbols_slices.push(slice);
             }

@@ -386,9 +386,7 @@ impl<'a> RocDocAllocator<'a> {
     pub fn tag_name(&'a self, tn: TagName) -> DocBuilder<'a, Self, Annotation> {
         match tn {
             TagName::Global(uppercase) => self.global_tag_name(uppercase),
-            TagName::Private(symbol) => self.private_tag_name(symbol),
-            TagName::Closure(symbol) => self.private_tag_name(symbol),
-            // TagName::Closure(_symbol) => unreachable!("closure tags are internal only"),
+            TagName::Closure(_symbol) => unreachable!("closure tags are internal only"),
         }
     }
 

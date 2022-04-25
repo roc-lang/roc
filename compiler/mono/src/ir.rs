@@ -10,7 +10,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
-use roc_exhaustive::{Ctor, Guard, RenderAs, TagId};
+use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -1656,7 +1656,6 @@ impl<'a> Expr<'a> {
             } => {
                 let doc_tag = match tag_name {
                     TagName::Global(s) => alloc.text(s.as_str()),
-                    TagName::Private(s) => symbol_to_doc(alloc, *s),
                     TagName::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))
@@ -1678,7 +1677,6 @@ impl<'a> Expr<'a> {
             } => {
                 let doc_tag = match tag_name {
                     TagName::Global(s) => alloc.text(s.as_str()),
-                    TagName::Private(s) => alloc.text(format!("{}", s)),
                     TagName::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))
@@ -8039,7 +8037,7 @@ fn from_can_pattern_help<'a>(
                         render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
                             tag_id: TagId(0),
-                            name: tag_name.clone(),
+                            name: CtorName::Tag(tag_name.clone()),
                             arity: 0,
                         }],
                     },
@@ -8052,12 +8050,12 @@ fn from_can_pattern_help<'a>(
                         alternatives: vec![
                             Ctor {
                                 tag_id: TagId(0),
-                                name: ffalse,
+                                name: CtorName::Tag(ffalse),
                                 arity: 0,
                             },
                             Ctor {
                                 tag_id: TagId(1),
-                                name: ttrue,
+                                name: CtorName::Tag(ttrue),
                                 arity: 0,
                             },
                         ],
@@ -8073,7 +8071,7 @@ fn from_can_pattern_help<'a>(
                     for (i, tag_name) in tag_names.into_iter().enumerate() {
                         ctors.push(Ctor {
                             tag_id: TagId(i as _),
-                            name: tag_name,
+                            name: CtorName::Tag(tag_name),
                             arity: 0,
                         })
                     }
@@ -8164,7 +8162,7 @@ fn from_can_pattern_help<'a>(
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: tag_name.clone(),
+                                    name: CtorName::Tag(tag_name.clone()),
                                     arity: args.len(),
                                 })
                             }
@@ -8215,7 +8213,7 @@ fn from_can_pattern_help<'a>(
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: tag_name.clone(),
+                                    name: CtorName::Tag(tag_name.clone()),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
                                 })
@@ -8260,7 +8258,7 @@ fn from_can_pattern_help<'a>(
 
                             ctors.push(Ctor {
                                 tag_id: TagId(0),
-                                name: tag_name.clone(),
+                                name: CtorName::Tag(tag_name.clone()),
                                 arity: fields.len(),
                             });
 
@@ -8307,7 +8305,7 @@ fn from_can_pattern_help<'a>(
                                 if i == nullable_id as usize {
                                     ctors.push(Ctor {
                                         tag_id: TagId(i as _),
-                                        name: nullable_name.clone(),
+                                        name: CtorName::Tag(nullable_name.clone()),
                                         // don't include tag discriminant in arity
                                         arity: 0,
                                     });
@@ -8317,7 +8315,7 @@ fn from_can_pattern_help<'a>(
 
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: tag_name.clone(),
+                                    name: CtorName::Tag(tag_name.clone()),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
                                 });
@@ -8328,7 +8326,7 @@ fn from_can_pattern_help<'a>(
                             if i == nullable_id as usize {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: nullable_name.clone(),
+                                    name: CtorName::Tag(nullable_name.clone()),
                                     // don't include tag discriminant in arity
                                     arity: 0,
                                 });
@@ -8378,13 +8376,13 @@ fn from_can_pattern_help<'a>(
 
                             ctors.push(Ctor {
                                 tag_id: TagId(nullable_id as _),
-                                name: nullable_name.clone(),
+                                name: CtorName::Tag(nullable_name.clone()),
                                 arity: 0,
                             });
 
                             ctors.push(Ctor {
                                 tag_id: TagId(!nullable_id as _),
-                                name: nullable_name.clone(),
+                                name: CtorName::Tag(nullable_name.clone()),
                                 // FIXME drop tag
                                 arity: other_fields.len() - 1,
                             });

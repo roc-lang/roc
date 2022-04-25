@@ -1076,10 +1076,3 @@ pub fn set_type(a: SolvedType) -> SolvedType {
 pub fn dict_type(key: SolvedType, value: SolvedType) -> SolvedType {
     SolvedType::Apply(Symbol::DICT_DICT, vec![key, value])
 }
-
-pub fn single_private_tag(symbol: Symbol, type_arguments: Vec<SolvedType>) -> SolvedType {
-    SolvedType::TagUnion(
-        vec![(TagName::Private(symbol), type_arguments)],
-        Box::new(SolvedType::EmptyTagUnion),
-    )
-}

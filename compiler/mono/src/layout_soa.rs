@@ -344,7 +344,6 @@ impl LambdaSet {
                     layouts.symbols.push(*symbol);
                 }
                 TagName::Global(_) => unreachable!("lambda set tags must be closure tags"),
-                TagName::Private(_) => unreachable!("lambda set tags must be closure tags"),
             }
         }
 

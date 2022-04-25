@@ -1449,17 +1449,6 @@ fn format_category<'b>(
             ]),
             alloc.text(" has the type:"),
         ),
-        TagApply {
-            tag_name: TagName::Private(name),
-            args_count: 0,
-        } => (
-            alloc.concat([
-                alloc.text(format!("{}his ", t)),
-                alloc.private_tag_name(*name),
-                alloc.text(" private tag"),
-            ]),
-            alloc.text(" has the type:"),
-        ),
 
         TagApply {
             tag_name: TagName::Global(name),
@@ -1469,17 +1458,6 @@ fn format_category<'b>(
                 alloc.text(format!("{}his ", t)),
                 alloc.global_tag_name(name.to_owned()),
                 alloc.text(" global tag application"),
-            ]),
-            alloc.text(" has the type:"),
-        ),
-        TagApply {
-            tag_name: TagName::Private(name),
-            args_count: _,
-        } => (
-            alloc.concat([
-                alloc.text("This "),
-                alloc.private_tag_name(*name),
-                alloc.text(" private tag application"),
             ]),
             alloc.text(" has the type:"),
         ),
