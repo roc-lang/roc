@@ -211,7 +211,6 @@ pub enum Type {
         type_arguments: Vec<(Lowercase, Type)>,
         lambda_set_variables: Vec<LambdaSet>,
         actual: Box<Type>,
-        kind: AliasKind,
     },
     HostExposedAlias {
         name: Symbol,
@@ -219,6 +218,10 @@ pub enum Type {
         lambda_set_variables: Vec<LambdaSet>,
         actual_var: Variable,
         actual: Box<Type>,
+    },
+    Opaque {
+        symbol: Symbol,
+        type_arguments: Vec<Type>,
     },
     RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, TypeExtension),
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
@@ -275,6 +278,13 @@ impl Clone for Type {
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: actual.clone(),
                 kind: *kind,
+            },
+            Self::Opaque {
+                symbol,
+                type_arguments,
+            } => Self::Opaque {
+                symbol: *symbol,
+                type_arguments: type_arguments.clone(),
             },
             Self::HostExposedAlias {
                 name,
@@ -423,6 +433,18 @@ impl fmt::Debug for Type {
                 write!(f, "[ but actually {:?} ]", _actual)?;
 
                 write!(f, ")")?;
+
+                Ok(())
+            }
+            Type::Opaque {
+                symbol,
+                type_arguments,
+            } => {
+                write!(f, "(Opaque {:?}", symbol)?;
+
+                for arg in type_arguments {
+                    write!(f, " {:?}", arg)?;
+                }
 
                 Ok(())
             }
@@ -718,6 +740,11 @@ impl Type {
 
                     stack.push(actual);
                 }
+                Opaque { type_arguments, .. } => {
+                    for value in type_arguments.iter_mut() {
+                        stack.push(value);
+                    }
+                }
                 HostExposedAlias {
                     type_arguments,
                     lambda_set_variables,
@@ -826,6 +853,11 @@ impl Type {
 
                     stack.push(actual);
                 }
+                Opaque { type_arguments, .. } => {
+                    for value in type_arguments.iter_mut() {
+                        stack.push(value);
+                    }
+                }
                 HostExposedAlias {
                     type_arguments,
                     lambda_set_variables,
@@ -919,6 +951,12 @@ impl Type {
                 }
                 alias_actual.substitute_alias(rep_symbol, rep_args, actual)
             }
+            Opaque { type_arguments, .. } => {
+                for ta in type_arguments {
+                    ta.substitute_alias(rep_symbol, rep_args, actual)?;
+                }
+                Ok(())
+            }
             HostExposedAlias {
                 actual: actual_type,
                 ..
@@ -997,6 +1035,14 @@ impl Type {
                 actual: actual_type,
                 ..
             } => alias_symbol == &rep_symbol || actual_type.contains_symbol(rep_symbol),
+            Opaque {
+                symbol,
+                type_arguments,
+                ..
+            } => {
+                symbol == &rep_symbol
+                    || type_arguments.iter().any(|t| t.contains_symbol(rep_symbol))
+            }
             HostExposedAlias { name, actual, .. } => {
                 name == &rep_symbol || actual.contains_symbol(rep_symbol)
             }
@@ -1046,6 +1092,9 @@ impl Type {
                 actual: actual_type,
                 ..
             } => actual_type.contains_variable(rep_variable),
+            Opaque { type_arguments, .. } => type_arguments
+                .iter()
+                .any(|t| t.contains_variable(rep_variable)),
             HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
             Apply(_, args, _) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
             RangedNumber(typ, vars) => {
@@ -1155,6 +1204,11 @@ impl Type {
                     var_store,
                     new_lambda_set_variables,
                 );
+            }
+            Opaque { type_arguments, .. } => {
+                for arg in type_arguments {
+                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                }
             }
             Apply(symbol, args, _) => {
                 if let Some(alias) = aliases(*symbol) {
@@ -1395,6 +1449,14 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 output.push(*alias_symbol);
                 stack.push(actual_type);
             }
+            Opaque {
+                symbol,
+                type_arguments,
+                ..
+            } => {
+                output.push(*symbol);
+                type_arguments.iter().for_each(|t| stack.push(&t));
+            }
             HostExposedAlias { name, actual, .. } => {
                 // because the type parameters are inlined in the actual type, we don't need to look
                 // at the type parameters here
@@ -1508,6 +1570,11 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(arg, accum);
             }
             variables_help(actual, accum);
+        }
+        Opaque { type_arguments, .. } => {
+            for arg in type_arguments {
+                variables_help(arg, accum);
+            }
         }
         HostExposedAlias {
             type_arguments: arguments,
@@ -1644,6 +1711,14 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(arg, accum);
             }
             variables_help_detailed(actual, accum);
+        }
+        Opaque {
+            symbol: _,
+            type_arguments,
+        } => {
+            for arg in type_arguments {
+                variables_help_detailed(arg, accum);
+            }
         }
         HostExposedAlias {
             type_arguments: arguments,
