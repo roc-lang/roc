@@ -1646,18 +1646,20 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                2│      {} -> 42
-                        ^^
+                1│>  when 1 is
+                2│       {} -> 42
 
-                The first pattern is trying to match record values of type:
+                The `when` condition is a number of type:
+
+                    Num a
+
+                But the branch patterns have type:
 
                     {}a
 
-                But the expression between `when` and `is` has the type:
-
-                    Num a
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -1707,18 +1709,20 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                2│      { foo: True } -> 42
-                        ^^^^^^^^^^^^^
+                1│>  when { foo: 1 } is
+                2│       { foo: True } -> 42
 
-                The first pattern is trying to match record values of type:
+                The `when` condition is a record of type:
+
+                    { foo : Num a }
+
+                But the branch patterns have type:
 
                     { foo : [ True ] }
 
-                But the expression between `when` and `is` has the type:
-
-                    { foo : Num a }
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -1737,18 +1741,20 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                2│      { foo: True } -> 42
-                        ^^^^^^^^^^^^^
+                1│>  when { foo: "" } is
+                2│       { foo: True } -> 42
 
-                The first pattern is trying to match record values of type:
+                The `when` condition is a record of type:
+
+                    { foo : Str }
+
+                But the branch patterns have type:
 
                     { foo : [ True ] }
 
-                But the expression between `when` and `is` has the type:
-
-                    { foo : Str }
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -1833,18 +1839,18 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The 2nd pattern in this branch does not match the previous ones:
 
                 2│      {} | 1 -> 3
-                        ^^^^^^
+                             ^
 
-                The first pattern is trying to match numbers:
+                The 2nd pattern is trying to match numbers:
 
                     Num a
 
-                But the expression between `when` and `is` has the type:
+                But all the previous branches match:
 
-                    { foo : Num a }
+                    {}a
                 "#
             ),
         )
@@ -2713,11 +2719,10 @@ mod test_reporting {
 
                     [ Left a ]
 
-                Tip: Seems like a tag typo. Maybe `Right` should be `Left`?
+                Tip: Looks like a closed tag union does not have the `Right` tag.
 
-                Tip: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
+                Tip: Closed tag unions can't grow, because that might change the size
+                in memory. Can you use an open tag union?
                 "#
             ),
         )
@@ -2765,18 +2770,26 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+                The branches of this `when` expression don't match the condition:
 
                 4│>  when x is
-                5│>      Red -> 3
+                5│       Red -> 3
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Green
+                    [ Green, Red ]
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the branch patterns have type:
+
+                    [ Red ]
+
+                The branches must be cases of the `when` condition's type!
+
+                Tip: Looks like the branches are missing coverage of the `Green` tag.
+
+                Tip: Maybe you need to add a catch-all branch, like `_`?
                 "#
             ),
         )
@@ -2797,19 +2810,27 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+                The branches of this `when` expression don't match the condition:
 
                 4│>  when x is
-                5│>      Red -> 0
-                6│>      Green -> 1
+                5│       Red -> 0
+                6│       Green -> 1
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Blue
+                    [ Blue, Green, Red ]
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the branch patterns have type:
+
+                    [ Green, Red ]
+
+                The branches must be cases of the `when` condition's type!
+
+                Tip: Looks like the branches are missing coverage of the `Blue` tag.
+
+                Tip: Maybe you need to add a catch-all branch, like `_`?
                 "#
             ),
         )
@@ -2830,20 +2851,27 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+                The branches of this `when` expression don't match the condition:
 
                 5│>  when x is
-                6│>      NotAsked -> 3
+                6│       NotAsked -> 3
 
-                Other possibilities include:
+                This `x` value is a:
 
-                    Failure _
-                    Loading
-                    Success _
+                    [ Failure I64, Loading, NotAsked, Success Str ]
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the branch patterns have type:
+
+                    [ NotAsked ]
+
+                The branches must be cases of the `when` condition's type!
+
+                Tip: Looks like the branches are missing coverage of the
+                `Success`, `Failure` and `Loading` tags.
+
+                Tip: Maybe you need to add a catch-all branch, like `_`?
                 "#
             ),
         )
@@ -3243,15 +3271,15 @@ mod test_reporting {
                 ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
 
                 This record type defines the `.foo` field twice!
-                
+
                 1│  a : { foo : Num.I64, bar : {}, foo : Str }
                           ^^^^^^^^^^^^^            ^^^^^^^^^
-                
+
                 In the rest of the program, I will only use the latter definition:
-                
+
                 1│  a : { foo : Num.I64, bar : {}, foo : Str }
                                                    ^^^^^^^^^
-                
+
                 For clarity, remove the previous `.foo` definitions from this record
                 type.
                 "#
@@ -3275,15 +3303,15 @@ mod test_reporting {
                 ── DUPLICATE TAG NAME ──────────────────────────────────── /code/proj/Main.roc ─
 
                 This tag union type defines the `Foo` tag twice!
-                
+
                 1│  a : [ Foo Num.I64, Bar {}, Foo Str ]
                           ^^^^^^^^^^^          ^^^^^^^
-                
+
                 In the rest of the program, I will only use the latter definition:
-                
+
                 1│  a : [ Foo Num.I64, Bar {}, Foo Str ]
                                                ^^^^^^^
-                
+
                 For clarity, remove the previous `Foo` definitions from this tag union
                 type.
                 "#
@@ -3412,10 +3440,10 @@ mod test_reporting {
                 ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
                 The `Num` alias expects 1 type argument, but it got 2 instead:
-                
+
                 1│  a : Num.Num Num.I64 Num.F64
                         ^^^^^^^^^^^^^^^^^^^^^^^
-                
+
                 Are there missing parentheses?
                 "#
             ),
@@ -3438,10 +3466,10 @@ mod test_reporting {
                 ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
                 The `Num` alias expects 1 type argument, but it got 2 instead:
-                
+
                 1│  f : Str -> Num.Num Num.I64 Num.F64
                                ^^^^^^^^^^^^^^^^^^^^^^^
-                
+
                 Are there missing parentheses?
                 "#
             ),
@@ -4119,18 +4147,20 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                4│              { x, y } -> x + y
-                                ^^^^^^^^
+                3│>          when r is
+                4│               { x, y } -> x + y
 
-                The first pattern is trying to match record values of type:
+                This `r` value is a:
+
+                    { x : I64, y ? I64 }
+
+                But the branch patterns have type:
 
                     { x : I64, y : I64 }
 
-                But the expression between `when` and `is` has the type:
-
-                    { x : I64, y ? I64 }
+                The branches must be cases of the `when` condition's type!
 
                 Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
@@ -4227,18 +4257,21 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                4│              { x, y : "foo" } -> x + 0
-                                ^^^^^^^^^^^^^^^^
+                3│>          when r is
+                4│               { x, y : "foo" } -> x + 0
+                5│               _ -> 0
 
-                The first pattern is trying to match record values of type:
+                This `r` value is a:
+
+                    { x : I64, y : I64 }
+
+                But the branch patterns have type:
 
                     { x : I64, y : Str }
 
-                But the expression between `when` and `is` has the type:
-
-                    { x : I64, y : I64 }
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -4262,18 +4295,21 @@ mod test_reporting {
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                4│              { x, y ? "foo" } -> (\g, _ -> g) x y
-                                ^^^^^^^^^^^^^^^^
+                3│>          when r is
+                4│               { x, y ? "foo" } -> (\g, _ -> g) x y
+                5│               _ -> 0
 
-                The first pattern is trying to match record values of type:
+                This `r` value is a:
+
+                    { x : I64, y ? I64 }
+
+                But the branch patterns have type:
 
                     { x : I64, y ? Str }
 
-                But the expression between `when` and `is` has the type:
-
-                    { x : I64, y ? I64 }
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -4465,30 +4501,6 @@ mod test_reporting {
                             ^
 
                 So I expect to see a lowercase letter next, like .name or .height.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn qualified_private_tag() {
-        report_problem_as(
-            indoc!(
-                r#"
-                @Foo.Bar
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am very confused by this expression:
-
-                1│  @Foo.Bar
-                        ^^^^
-
-                Looks like a private tag is treated like a module name. Maybe you
-                wanted a qualified name, like Json.Decode.string?
             "#
             ),
         )
@@ -5153,36 +5165,6 @@ mod test_reporting {
                                    ^
 
                 Note: I may be confused by indentation
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn invalid_private_tag_name() {
-        // TODO could do better by pointing out we're parsing a function type
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [ @Foo Str, @100 I64 ]
-                f = 0
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── WEIRD TAG NAME ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a tag union type, but I got stuck here:
-
-                1│  f : [ @Foo Str, @100 I64 ]
-                                    ^
-
-                I was expecting to see a private tag name.
-
-                Hint: Private tag names start with an `@` symbol followed by an
-                uppercase letter, like @UID or @SecretKey.
             "#
             ),
         )
@@ -5971,32 +5953,7 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn private_tag_not_uppercase() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Num.add @foo 23
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am trying to parse a private tag here:
-
-                1│  Num.add @foo 23
-                             ^
-
-                But after the `@` symbol I found a lowercase letter. All tag names
-                (global and private) must start with an uppercase letter, like @UUID
-                or @Secrets.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn private_tag_field_access() {
+    fn opaque_ref_field_access() {
         report_problem_as(
             indoc!(
                 r#"
@@ -6010,29 +5967,6 @@ I need all branches in an `if` to have the same type!
                 I am very confused by this field access:
 
                 1│  @UUID.bar
-                         ^^^^
-
-                It looks like a record field access on a private tag.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn opaque_ref_field_access() {
-        report_problem_as(
-            indoc!(
-                r#"
-                $UUID.bar
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am very confused by this field access:
-
-                1│  $UUID.bar
                          ^^^^
 
                 It looks like a record field access on an opaque reference.
@@ -7072,25 +7006,22 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                Something is off with the body of the `f` definition:
+                Something is off with the body of the `inner` definition:
 
-                1│  f : a, b, * -> *
-                2│  f = \_, _, x2 ->
                 3│      inner : * -> *
                 4│      inner = \y -> y
-                5│      inner x2
-                        ^^^^^^^^
+                                      ^
 
-                The type annotation on `f` says this `inner` call should have the type:
+                The type annotation on `inner` says this `y` value should have the type:
 
                     *
 
-                However, the type of this `inner` call is connected to another type in a
+                However, the type of this `y` value is connected to another type in a
                 way that isn't reflected in this annotation.
 
                 Tip: Any connection between types must use a named type variable, not
-                a `*`! Maybe the annotation  on `f` should have a named type variable in
-                place of the `*`?
+                a `*`! Maybe the annotation  on `inner` should have a named type variable
+                in place of the `*`?
                 "#
             ),
         )
@@ -7331,10 +7262,10 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Job : [ @Job { inputs : List Str } ]
+                Job : [ Job { inputs : List Str } ]
                 job : { inputs ? List Str } -> Job
                 job = \{ inputs } ->
-                    @Job { inputs }
+                    Job { inputs }
 
                 job { inputs: [ "build", "test" ] }
                 "#
@@ -7369,11 +7300,11 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Job : [ @Job { inputs : List Job } ]
+                Job : [ Job { inputs : List Job } ]
 
                 job : { inputs : List Str } -> Job
                 job = \{ inputs } ->
-                    @Job { inputs }
+                    Job { inputs }
 
                 job { inputs: [ "build", "test" ] }
                 "#
@@ -7386,16 +7317,16 @@ I need all branches in an `if` to have the same type!
 
                 3│  job : { inputs : List Str } -> Job
                 4│  job = \{ inputs } ->
-                5│      @Job { inputs }
-                        ^^^^^^^^^^^^^^^
+                5│      Job { inputs }
+                        ^^^^^^^^^^^^^^
 
-                This `@Job` private tag application has the type:
+                This `Job` global tag application has the type:
 
-                    [ @Job { inputs : List Str } ]
+                    [ Job { inputs : List Str } ]
 
                 But the type annotation on `job` says it should be:
 
-                    [ @Job { inputs : List a } ] as a
+                    [ Job { inputs : List a } ] as a
                 "#
             ),
         )
@@ -7537,11 +7468,6 @@ I need all branches in an `if` to have the same type!
                 typ.get_mut(0..1).unwrap().make_ascii_uppercase();
                 let bad_suffix = if $suffix == "u8" { "i8" } else { "u8" };
                 let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
-                let carets = "^".repeat(number.len() + $suffix.len());
-                let kind = match $suffix {
-                    "dec"|"f32"|"f64" => "floats",
-                    _ => "integers",
-                };
 
                 report_problem_as(
                     &format!(indoc!(
@@ -7555,20 +7481,23 @@ I need all branches in an `if` to have the same type!
                         r#"
                         ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                        The 1st pattern in this `when` is causing a mismatch:
+                        The branches of this `when` expression don't match the condition:
 
-                        2│      {}{} -> 1
-                                {}
+                        1│>  when {}{} is
+                        2│       {}{} -> 1
+                        3│       _ -> 1
 
-                        The first pattern is trying to match {}:
+                        The `when` condition is an integer of type:
+
+                            {}
+
+                        But the branch patterns have type:
 
                             {}
 
-                        But the expression between `when` and `is` has the type:
-
-                            {}
+                        The branches must be cases of the `when` condition's type!
                         "#
-                    ), number, $suffix, carets, kind, typ, bad_type),
+                    ), number, bad_suffix, number, $suffix, bad_type, typ),
                 )
             }
         )*}
@@ -8153,18 +8082,21 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st pattern in this `when` is causing a mismatch:
+                The branches of this `when` expression don't match the condition:
 
-                2│     1u8 -> 1
-                       ^^^
+                1│>  when -1 is
+                2│      1u8 -> 1
+                3│      _ -> 1
 
-                The first pattern is trying to match integers:
+                The `when` condition is a number of type:
+
+                    I8, I16, I32, I64, I128, F32, F64, or Dec
+
+                But the branch patterns have type:
 
                     U8
 
-                But the expression between `when` and `is` has the type:
-
-                    I8, I16, I32, I64, I128, F32, F64, or Dec
+                The branches must be cases of the `when` condition's type!
                 "#
             ),
         )
@@ -8284,7 +8216,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                $Age 21
+                @Age 21
                 "#
             ),
             indoc!(
@@ -8293,7 +8225,7 @@ I need all branches in an `if` to have the same type!
 
                 The opaque type Age referenced here is not defined:
 
-                1│  $Age 21
+                1│  @Age 21
                     ^^^^
 
                 Note: It looks like there are no opaque types declared in this scope yet!
@@ -8309,7 +8241,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 Age : Num.U8
 
-                $Age 21
+                @Age 21
                 "#
             ),
             indoc!(
@@ -8318,7 +8250,7 @@ I need all branches in an `if` to have the same type!
 
                 The opaque type Age referenced here is not defined:
 
-                3│  $Age 21
+                3│  @Age 21
                     ^^^^
 
                 Note: There is an alias of the same name:
@@ -8347,19 +8279,19 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                OtherModule.$Age 21
+                OtherModule.@Age 21
                 "#
             ),
-            // TODO: get rid of the first error. Consider parsing OtherModule.$Age to completion
+            // TODO: get rid of the first error. Consider parsing OtherModule.@Age to completion
             // and checking it during can. The reason the error appears is because it is parsed as
-            // Apply(Error(OtherModule), [ $Age, 21 ])
+            // Apply(Error(OtherModule), [ @Age, 21 ])
             indoc!(
                 r#"
                 ── OPAQUE TYPE NOT APPLIED ─────────────────────────────── /code/proj/Main.roc ─
 
                 This opaque type is not applied to an argument:
 
-                1│  OtherModule.$Age 21
+                1│  OtherModule.@Age 21
                                 ^^^^
 
                 Note: Opaque types always wrap exactly one argument!
@@ -8368,7 +8300,7 @@ I need all branches in an `if` to have the same type!
 
                 I am trying to parse a qualified name here:
 
-                1│  OtherModule.$Age 21
+                1│  OtherModule.@Age 21
                                 ^
 
                 I was expecting to see an identifier next, like height. A complete
@@ -8387,11 +8319,11 @@ I need all branches in an `if` to have the same type!
                     Age := Num.U8
                     21u8
 
-                $Age age
+                @Age age
                 "#
             ),
             // TODO(opaques): there is a potential for a better error message here, if the usage of
-            // `$Age` can be linked to the declaration of `Age` inside `age`, and a suggestion to
+            // `@Age` can be linked to the declaration of `Age` inside `age`, and a suggestion to
             // raise that declaration to the outer scope.
             indoc!(
                 r#"
@@ -8409,7 +8341,7 @@ I need all branches in an `if` to have the same type!
 
                 The opaque type Age referenced here is not defined:
 
-                5│  $Age age
+                5│  @Age age
                     ^^^^
 
                 Note: It looks like there are no opaque types declared in this scope yet!
@@ -8457,7 +8389,7 @@ I need all branches in an `if` to have the same type!
                 Age := Num.U8
 
                 n : Age
-                n = $Age ""
+                n = @Age ""
 
                 n
                 "#
@@ -8470,7 +8402,7 @@ I need all branches in an `if` to have the same type!
 
                 This expression is used in an unexpected way:
 
-                4│  n = $Age ""
+                4│  n = @Age ""
                              ^^
 
                 This argument to an opaque type has type:
@@ -8493,8 +8425,8 @@ I need all branches in an `if` to have the same type!
                 F n := n
 
                 if True
-                then $F ""
-                else $F {}
+                then @F ""
+                else @F {}
                 "#
             ),
             indoc!(
@@ -8503,7 +8435,7 @@ I need all branches in an `if` to have the same type!
 
                 This expression is used in an unexpected way:
 
-                5│  else $F {}
+                5│  else @F {}
                             ^^
 
                 This argument to an opaque type has type:
@@ -8608,8 +8540,8 @@ I need all branches in an `if` to have the same type!
 
                 \x ->
                     when x is
-                        $F A -> ""
-                        $F {} -> ""
+                        @F A -> ""
+                        @F {} -> ""
                 "#
             ),
             indoc!(
@@ -8618,7 +8550,7 @@ I need all branches in an `if` to have the same type!
 
                 The 2nd pattern in this `when` does not match the previous ones:
 
-                6│          $F {} -> ""
+                6│          @F {} -> ""
                             ^^^^^
 
                 The 2nd pattern is trying to matchF unwrappings of type:
@@ -8643,25 +8575,33 @@ I need all branches in an `if` to have the same type!
                 v : F [ A, B, C ]
 
                 when v is
-                    $F A -> ""
-                    $F B -> ""
+                    @F A -> ""
+                    @F B -> ""
                 "#
             ),
             indoc!(
                 r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+                The branches of this `when` expression don't match the condition:
 
                 5│>  when v is
-                6│>      $F A -> ""
-                7│>      $F B -> ""
+                6│       @F A -> ""
+                7│       @F B -> ""
 
-                Other possibilities include:
+                This `v` value is a:
 
-                    $F C
+                    F [ A, B, C ]
 
-                I would have to crash if I saw one of those! Add branches for them!
+                But the branch patterns have type:
+
+                    F [ A, B ]
+
+                The branches must be cases of the `when` condition's type!
+
+                Tip: Looks like the branches are missing coverage of the `C` tag.
+
+                Tip: Maybe you need to add a catch-all branch, like `_`?
                 "#
             ),
         )
@@ -8677,8 +8617,8 @@ I need all branches in an `if` to have the same type!
                 v : F Num.U8
 
                 when v is
-                    $F 1 -> ""
-                    $F 2 -> ""
+                    @F 1 -> ""
+                    @F 2 -> ""
                 "#
             ),
             indoc!(
@@ -8688,12 +8628,12 @@ I need all branches in an `if` to have the same type!
                 This `when` does not cover all the possibilities:
 
                 5│>  when v is
-                6│>      $F 1 -> ""
-                7│>      $F 2 -> ""
+                6│>      @F 1 -> ""
+                7│>      @F 2 -> ""
 
                 Other possibilities include:
 
-                    $F _
+                    @F _
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#
@@ -8849,21 +8789,21 @@ I need all branches in an `if` to have the same type!
                                          ^^^^^^^^^^^
 
                 Did you mean one of these?
-                
+
                     Type
                     True
                     Box
                     Ok
-                
+
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
                 I cannot find a `UnknownType` value
-                
+
                 3│  insertHelper : UnknownType, Type -> Type
                                    ^^^^^^^^^^^
-                
+
                 Did you mean one of these?
-                
+
                     Type
                     True
                     insertHelper
@@ -9529,7 +9469,7 @@ I need all branches in an `if` to have the same type!
 
                 Id := U32
 
-                hash = \$Id n -> n
+                hash = \@Id n -> n
                 "#
             ),
             indoc!(
@@ -9538,7 +9478,7 @@ I need all branches in an `if` to have the same type!
 
                 Something is off with this specialization of `hash`:
 
-                7│  hash = \$Id n -> n
+                7│  hash = \@Id n -> n
                     ^^^^
 
                 This value is a declared specialization of type:
@@ -9567,7 +9507,7 @@ I need all branches in an `if` to have the same type!
 
                 Id := U64
 
-                eq = \$Id m, $Id n -> m == n
+                eq = \@Id m, @Id n -> m == n
                 "#
             ),
             indoc!(
@@ -9586,7 +9526,7 @@ I need all branches in an `if` to have the same type!
 
                 `eq`, specialized here:
 
-                9│  eq = \$Id m, $Id n -> m == n
+                9│  eq = \@Id m, @Id n -> m == n
                     ^^
                 "#
             ),
@@ -9649,7 +9589,7 @@ I need all branches in an `if` to have the same type!
                 You := {}
                 AndI := {}
 
-                eq = \$You {}, $AndI {} -> False
+                eq = \@You {}, @AndI {} -> False
                 "#
             ),
             indoc!(
@@ -9658,7 +9598,7 @@ I need all branches in an `if` to have the same type!
 
                 Something is off with this specialization of `eq`:
 
-                9│  eq = \$You {}, $AndI {} -> False
+                9│  eq = \@You {}, @AndI {} -> False
                     ^^
 
                 This value is a declared specialization of type:
@@ -9692,7 +9632,7 @@ I need all branches in an `if` to have the same type!
                 Id := U64
 
                 hash : Id -> U32
-                hash = \$Id n -> n
+                hash = \@Id n -> n
                 "#
             ),
             indoc!(
@@ -9702,7 +9642,7 @@ I need all branches in an `if` to have the same type!
                 Something is off with the body of this definition:
 
                 8│  hash : Id -> U32
-                9│  hash = \$Id n -> n
+                9│  hash = \@Id n -> n
                                      ^
 
                 This `n` value is a:
@@ -9717,7 +9657,7 @@ I need all branches in an `if` to have the same type!
 
                 Something is off with this specialization of `hash`:
 
-                9│  hash = \$Id n -> n
+                9│  hash = \@Id n -> n
                     ^^^^
 
                 This value is a declared specialization of type:
@@ -9745,13 +9685,13 @@ I need all branches in an `if` to have the same type!
 
                 Id := U64
 
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
                 User := {}
 
                 noGoodVeryBadTerrible =
                     {
-                        nope: hash ($User {}),
+                        nope: hash (@User {}),
                         notYet: hash (A 1),
                     }
                 "#
@@ -9777,7 +9717,7 @@ I need all branches in an `if` to have the same type!
 
                 This expression has a type that does not implement the abilities it's expected to:
 
-                14│          nope: hash ($User {}),
+                14│          nope: hash (@User {}),
                                          ^^^^^^^^
 
                 This User opaque wrapping has the type:
@@ -9843,10 +9783,10 @@ I need all branches in an `if` to have the same type!
                     hash : a -> U64 | a has Hash
 
                 Id := U64
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
                 hashable : a | a has Hash
-                hashable = $Id 15
+                hashable = @Id 15
                 "#
             ),
             indoc!(
@@ -9856,7 +9796,7 @@ I need all branches in an `if` to have the same type!
                 Something is off with the body of the `hashable` definition:
 
                  9│  hashable : a | a has Hash
-                10│  hashable = $Id 15
+                10│  hashable = @Id 15
                                 ^^^^^^
 
                 This Id opaque wrapping has the type:
@@ -9892,12 +9832,12 @@ I need all branches in an `if` to have the same type!
                 mulHashes = \x, y -> hash x * hash y
 
                 Id := U64
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
                 Three := {}
-                hash = \$Three _ -> 3
+                hash = \@Three _ -> 3
 
-                result = mulHashes ($Id 100) ($Three {})
+                result = mulHashes (@Id 100) (@Three {})
                 "#
             ),
             indoc!(
@@ -9931,6 +9871,65 @@ I need all branches in an `if` to have the same type!
                     b has Hash
                 "#
             ),
+        )
+    }
+
+    #[test]
+    fn branches_have_more_cases_than_condition() {
+        new_report_problem_as(
+            "branches_have_more_cases_than_condition",
+            indoc!(
+                r#"
+                foo : Bool -> Str
+                foo = \bool ->
+                    when bool is
+                        True -> "true"
+                        False -> "false"
+                        Wat -> "surprise!"
+                foo
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                The branches of this `when` expression don't match the condition:
+
+                6│>          when bool is
+                7│               True -> "true"
+                8│               False -> "false"
+                9│               Wat -> "surprise!"
+
+                This `bool` value is a:
+
+                    Bool
+
+                But the branch patterns have type:
+
+                    [ False, True, Wat ]
+
+                The branches must be cases of the `when` condition's type!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn always_function() {
+        // from https://github.com/rtfeldman/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
+        // There was a bug where this reported UnusedArgument("val")
+        // since it was used only in the returned function only.
+        //
+        // we want this to not give any warnings/errors!
+        report_problem_as(
+            indoc!(
+                r#"
+                always = \val -> \_ -> val
+
+                always
+                "#
+            ),
+            "",
         )
     }
 }

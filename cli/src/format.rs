@@ -618,7 +618,6 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::GlobalTag(a) => Expr::GlobalTag(a),
-            Expr::PrivateTag(a) => Expr::PrivateTag(a),
             Expr::OpaqueRef(a) => Expr::OpaqueRef(a),
             Expr::Closure(a, b) => Expr::Closure(
                 arena.alloc(a.remove_spaces(arena)),
@@ -670,7 +669,6 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
         match *self {
             Pattern::Identifier(a) => Pattern::Identifier(a),
             Pattern::GlobalTag(a) => Pattern::GlobalTag(a),
-            Pattern::PrivateTag(a) => Pattern::PrivateTag(a),
             Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
             Pattern::Apply(a, b) => Pattern::Apply(
                 arena.alloc(a.remove_spaces(arena)),
@@ -754,10 +752,6 @@ impl<'a> RemoveSpaces<'a> for Tag<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
             Tag::Global { name, args } => Tag::Global {
-                name: name.remove_spaces(arena),
-                args: args.remove_spaces(arena),
-            },
-            Tag::Private { name, args } => Tag::Private {
                 name: name.remove_spaces(arena),
                 args: args.remove_spaces(arena),
             },

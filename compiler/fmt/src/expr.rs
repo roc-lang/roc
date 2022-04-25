@@ -38,7 +38,6 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedIdent(_, _)
             | MalformedClosure
             | GlobalTag(_)
-            | PrivateTag(_)
             | OpaqueRef(_) => false,
 
             // These expressions always have newlines
@@ -187,12 +186,72 @@ impl<'a> Formattable for Expr<'a> {
 
                 let multiline_args = loc_args.iter().any(|loc_arg| loc_arg.is_multiline());
 
-                if multiline_args {
+                let mut found_multiline_expr = false;
+                let mut iter = loc_args.iter().peekable();
+
+                while let Some(loc_arg) = iter.next() {
+                    if iter.peek().is_none() {
+                        found_multiline_expr = match loc_arg.value {
+                            SpaceBefore(sub_expr, spaces) => match sub_expr {
+                                Record { .. } | List { .. } => {
+                                    let is_only_newlines = spaces.iter().all(|s| s.is_newline());
+                                    is_only_newlines
+                                        && !found_multiline_expr
+                                        && sub_expr.is_multiline()
+                                }
+                                _ => false,
+                            },
+                            Record { .. } | List { .. } | Closure { .. } => {
+                                !found_multiline_expr && loc_arg.is_multiline()
+                            }
+                            _ => false,
+                        }
+                    } else {
+                        found_multiline_expr = loc_arg.is_multiline();
+                    }
+                }
+
+                let should_outdent_last_arg = found_multiline_expr;
+
+                if multiline_args && !should_outdent_last_arg {
                     let arg_indent = indent + INDENT;
 
                     for loc_arg in loc_args.iter() {
                         buf.newline();
                         loc_arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
+                    }
+                } else if multiline_args && should_outdent_last_arg {
+                    let mut iter = loc_args.iter().peekable();
+                    while let Some(loc_arg) = iter.next() {
+                        buf.spaces(1);
+
+                        if iter.peek().is_none() {
+                            match loc_arg.value {
+                                SpaceBefore(sub_expr, _) => {
+                                    sub_expr.format_with_options(
+                                        buf,
+                                        Parens::InApply,
+                                        Newlines::Yes,
+                                        indent,
+                                    );
+                                }
+                                _ => {
+                                    loc_arg.format_with_options(
+                                        buf,
+                                        Parens::InApply,
+                                        Newlines::Yes,
+                                        indent,
+                                    );
+                                }
+                            }
+                        } else {
+                            loc_arg.format_with_options(
+                                buf,
+                                Parens::InApply,
+                                Newlines::Yes,
+                                indent,
+                            );
+                        }
                     }
                 } else {
                     for loc_arg in loc_args.iter() {
@@ -213,7 +272,7 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 buf.push_str(string);
             }
-            GlobalTag(string) | PrivateTag(string) | OpaqueRef(string) => {
+            GlobalTag(string) | OpaqueRef(string) => {
                 buf.indent(indent);
                 buf.push_str(string)
             }
@@ -372,7 +431,6 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::Slash => buf.push('/'),
         called_via::BinOp::DoubleSlash => buf.push_str("//"),
         called_via::BinOp::Percent => buf.push('%'),
-        called_via::BinOp::DoublePercent => buf.push_str("%%"),
         called_via::BinOp::Plus => buf.push('+'),
         called_via::BinOp::Minus => buf.push('-'),
         called_via::BinOp::Equals => buf.push_str("=="),
@@ -847,7 +905,34 @@ fn fmt_closure<'a, 'buf>(
         }
     };
 
-    loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
+    if is_multiline {
+        match &loc_ret.value {
+            SpaceBefore(sub_expr, spaces) => {
+                let should_outdent = match sub_expr {
+                    Record { .. } | List { .. } => {
+                        let is_only_newlines = spaces.iter().all(|s| s.is_newline());
+                        is_only_newlines && sub_expr.is_multiline()
+                    }
+                    _ => false,
+                };
+
+                if should_outdent {
+                    buf.spaces(1);
+                    sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                } else {
+                    loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
+                }
+            }
+            Record { .. } | List { .. } => {
+                loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+            }
+            _ => {
+                loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
+            }
+        }
+    } else {
+        loc_ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, body_indent);
+    }
 }
 
 fn fmt_backpassing<'a, 'buf>(
@@ -1104,7 +1189,6 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::Slash
                     | BinOp::DoubleSlash
                     | BinOp::Percent
-                    | BinOp::DoublePercent
                     | BinOp::Plus
                     | BinOp::Minus
                     | BinOp::Equals

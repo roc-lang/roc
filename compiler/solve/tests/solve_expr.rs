@@ -10,14 +10,54 @@ mod helpers;
 #[cfg(test)]
 mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
+    use lazy_static::lazy_static;
+    use regex::Regex;
+    use roc_can::traverse::find_type_at;
     use roc_load::LoadedModule;
+    use roc_module::symbol::{Interns, ModuleId};
+    use roc_problem::can::Problem;
+    use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
+    use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
+    use roc_solve::solve::TypeError;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
+    use std::path::PathBuf;
 
     // HELPERS
 
-    fn run_load_and_infer(src: &str) -> Result<LoadedModule, std::io::Error> {
+    lazy_static! {
+        static ref RE_TYPE_QUERY: Regex = Regex::new(r#"^\s*#\s*(?P<where>\^+)\s*$"#).unwrap();
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct TypeQuery(Region);
+
+    fn parse_queries(src: &str) -> Vec<TypeQuery> {
+        let line_info = LineInfo::new(src);
+        let mut queries = vec![];
+        for (i, line) in src.lines().enumerate() {
+            if let Some(capture) = RE_TYPE_QUERY.captures(line) {
+                let wher = capture.name("where").unwrap();
+                let (start, end) = (wher.start() as u32, wher.end() as u32);
+                let last_line = i as u32 - 1;
+                let start_lc = LineColumn {
+                    line: last_line,
+                    column: start,
+                };
+                let end_lc = LineColumn {
+                    line: last_line,
+                    column: end,
+                };
+                let lc_region = LineColumnRegion::new(start_lc, end_lc);
+                let region = line_info.convert_line_column_region(lc_region);
+
+                queries.push(TypeQuery(region));
+            }
+        }
+        queries
+    }
+
+    fn run_load_and_infer(src: &str) -> Result<(LoadedModule, String), std::io::Error> {
         use bumpalo::Bump;
-        use std::path::PathBuf;
         use tempfile::tempdir;
 
         let arena = &Bump::new();
@@ -54,50 +94,77 @@ mod solve_expr {
         };
 
         let loaded = loaded.expect("failed to load module");
-        Ok(loaded)
+        Ok((loaded, module_src.to_string()))
     }
 
-    fn infer_eq_help(
+    fn format_problems(
         src: &str,
-    ) -> Result<
-        (
-            Vec<roc_solve::solve::TypeError>,
-            Vec<roc_problem::can::Problem>,
-            String,
-        ),
-        std::io::Error,
-    > {
-        let LoadedModule {
-            module_id: home,
-            mut can_problems,
-            mut type_problems,
-            interns,
-            mut solved,
-            exposed_to_host,
-            ..
-        } = run_load_and_infer(src)?;
+        home: ModuleId,
+        interns: &Interns,
+        can_problems: Vec<Problem>,
+        type_problems: Vec<TypeError>,
+    ) -> (String, String) {
+        let filename = PathBuf::from("test.roc");
+        let src_lines: Vec<&str> = src.split('\n').collect();
+        let lines = LineInfo::new(src);
+        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+        let mut can_reports = vec![];
+        let mut type_reports = vec![];
+
+        for problem in can_problems {
+            let report = can_problem(&alloc, &lines, filename.clone(), problem.clone());
+            can_reports.push(report.pretty(&alloc));
+        }
+
+        for problem in type_problems {
+            if let Some(report) = type_problem(&alloc, &lines, filename.clone(), problem.clone()) {
+                type_reports.push(report.pretty(&alloc));
+            }
+        }
+
+        let mut can_reports_buf = String::new();
+        let mut type_reports_buf = String::new();
+        use roc_reporting::report::CiWrite;
+        alloc
+            .stack(can_reports)
+            .1
+            .render_raw(70, &mut CiWrite::new(&mut can_reports_buf))
+            .unwrap();
+        alloc
+            .stack(type_reports)
+            .1
+            .render_raw(70, &mut CiWrite::new(&mut type_reports_buf))
+            .unwrap();
+
+        (can_reports_buf, type_reports_buf)
+    }
+
+    fn infer_eq_help(src: &str) -> Result<(String, String, String), std::io::Error> {
+        let (
+            LoadedModule {
+                module_id: home,
+                mut can_problems,
+                mut type_problems,
+                interns,
+                mut solved,
+                exposed_to_host,
+                ..
+            },
+            src,
+        ) = run_load_and_infer(src)?;
 
         let mut can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
 
+        // Disregard UnusedDef problems, because those are unavoidable when
+        // returning a function from the test expression.
+        can_problems.retain(|prob| !matches!(prob, roc_problem::can::Problem::UnusedDef(_, _)));
+
+        let (can_problems, type_problems) =
+            format_problems(&src, home, &interns, can_problems, type_problems);
+
         let subs = solved.inner_mut();
-
-        //        assert!(can_problems.is_empty());
-        //        assert!(type_problems.is_empty());
-        //        let CanExprOut {
-        //            output,
-        //            var_store,
-        //            var,
-        //            constraint,
-        //            home,
-        //            interns,
-        //            problems: mut can_problems,
-        //            ..
-        //        } = can_expr(src);
-        //        let mut subs = Subs::new(var_store.into());
-
-        // TODO fix this
-        // assert_correct_variable_usage(&constraint);
 
         // name type vars
         for var in exposed_to_host.values() {
@@ -111,10 +178,6 @@ mod solve_expr {
         };
 
         let actual_str = content_to_string(content, subs, home, &interns);
-
-        // Disregard UnusedDef problems, because those are unavoidable when
-        // returning a function from the test expression.
-        can_problems.retain(|prob| !matches!(prob, roc_problem::can::Problem::UnusedDef(_, _)));
 
         Ok((type_problems, can_problems, actual_str))
     }
@@ -143,7 +206,11 @@ mod solve_expr {
     fn infer_eq(src: &str, expected: &str) {
         let (_, can_problems, actual) = infer_eq_help(src).unwrap();
 
-        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
+        assert!(
+            can_problems.is_empty(),
+            "Canonicalization problems: {}",
+            can_problems
+        );
 
         assert_eq!(actual, expected.to_string());
     }
@@ -151,14 +218,71 @@ mod solve_expr {
     fn infer_eq_without_problem(src: &str, expected: &str) {
         let (type_problems, can_problems, actual) = infer_eq_help(src).unwrap();
 
-        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
+        assert!(
+            can_problems.is_empty(),
+            "Canonicalization problems: {}",
+            can_problems
+        );
 
         if !type_problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
+            panic!(
+                "expected:\n{:?}\ninferred:\n{:?}\nproblems:\n{}",
+                expected, actual, type_problems,
+            );
         }
         assert_eq!(actual, expected.to_string());
+    }
+
+    fn infer_queries(src: &str, expected: &[&'static str]) {
+        let (
+            LoadedModule {
+                module_id: home,
+                mut can_problems,
+                mut type_problems,
+                mut declarations_by_id,
+                mut solved,
+                interns,
+                ..
+            },
+            src,
+        ) = run_load_and_infer(src).unwrap();
+
+        let decls = declarations_by_id.remove(&home).unwrap();
+        let subs = solved.inner_mut();
+
+        let can_problems = can_problems.remove(&home).unwrap_or_default();
+        let type_problems = type_problems.remove(&home).unwrap_or_default();
+
+        let (can_problems, type_problems) =
+            format_problems(&src, home, &interns, can_problems, type_problems);
+
+        assert!(
+            can_problems.is_empty(),
+            "Canonicalization problems: {}",
+            can_problems
+        );
+        assert!(type_problems.is_empty(), "Type problems: {}", type_problems);
+
+        let queries = parse_queries(&src);
+        assert!(!queries.is_empty(), "No queries provided!");
+
+        let mut solved_queries = Vec::with_capacity(queries.len());
+        for TypeQuery(region) in queries.into_iter() {
+            let start = region.start().offset;
+            let end = region.end().offset;
+            let text = &src[start as usize..end as usize];
+            let var = find_type_at(region, &decls).expect(&format!("No type for {}!", &text));
+
+            name_all_type_vars(var, subs);
+            let content = subs.get_content_without_compacting(var);
+            let actual_str = content_to_string(content, subs, home, &interns);
+
+            solved_queries.push(format!("{} : {}", text, actual_str));
+        }
+
+        assert_eq!(solved_queries, expected)
     }
 
     fn check_inferred_abilities<'a, I>(src: &'a str, expected_specializations: I)
@@ -172,7 +296,7 @@ mod solve_expr {
             interns,
             abilities_store,
             ..
-        } = run_load_and_infer(src).unwrap();
+        } = run_load_and_infer(src).unwrap().0;
 
         let can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
@@ -1384,18 +1508,6 @@ mod solve_expr {
     }
 
     #[test]
-    fn single_private_tag_pattern() {
-        infer_eq(
-            indoc!(
-                r#"
-                    \@Foo -> 42
-                "#
-            ),
-            "[ @Foo ] -> Num *",
-        );
-    }
-
-    #[test]
     fn two_tag_pattern() {
         infer_eq(
             indoc!(
@@ -1419,18 +1531,6 @@ mod solve_expr {
                 "#
             ),
             "[ Foo Str (Num *) ]*",
-        );
-    }
-
-    #[test]
-    fn private_tag_application() {
-        infer_eq(
-            indoc!(
-                r#"
-                    @Foo "happy" 2020
-                "#
-            ),
-            "[ @Foo Str (Num *) ]*",
         );
     }
 
@@ -1494,19 +1594,6 @@ mod solve_expr {
                 r#"
                     when Foo "blah" is
                         Foo x -> x
-                "#
-            ),
-            "Str",
-        );
-    }
-
-    #[test]
-    fn private_tag_with_field() {
-        infer_eq(
-            indoc!(
-                r#"
-                    when @Foo "blah" is
-                        @Foo x -> x
                 "#
             ),
             "Str",
@@ -4116,31 +4203,6 @@ mod solve_expr {
     }
 
     #[test]
-    fn double_tag_application_pattern_private() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                app "test" provides [ main ] to "./platform"
-
-                Foo : [ @Foo [ @Bar ] I64, @Empty ]
-
-                foo : Foo
-                foo = @Foo @Bar 1
-
-                main =
-                    when foo is
-                        @Foo @Bar 1 ->
-                            @Foo @Bar 2
-
-                        x ->
-                            x
-                "#
-            ),
-            "[ @Empty, @Foo [ @Bar ] I64 ]",
-        );
-    }
-
-    #[test]
     fn recursive_function_with_rigid() {
         infer_eq_without_problem(
             indoc!(
@@ -5313,6 +5375,24 @@ mod solve_expr {
         )
     }
 
+    #[test]
+    fn issue_2458_swapped_order() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Bar a : Foo a
+                Foo a : [ Blah (Result (Bar a) { val: a }) ]
+
+                v : Bar U8
+                v = Blah (Ok (Blah (Err { val: 1 })))
+
+                v
+                "#
+            ),
+            "Bar U8",
+        )
+    }
+
     // https://github.com/rtfeldman/roc/issues/2379
     #[test]
     fn copy_vars_referencing_copied_vars() {
@@ -5400,7 +5480,7 @@ mod solve_expr {
                 r#"
                 Age := U32
 
-                $Age 21
+                @Age 21
                 "#
             ),
             r#"Age"#,
@@ -5415,7 +5495,7 @@ mod solve_expr {
                 Age := U32
 
                 a : Age
-                a = $Age 21
+                a = @Age 21
 
                 a
                 "#
@@ -5431,7 +5511,7 @@ mod solve_expr {
                 r#"
                 Id n := [ Id U32 n ]
 
-                $Id (Id 21 "sasha")
+                @Id (Id 21 "sasha")
                 "#
             ),
             r#"Id Str"#,
@@ -5446,7 +5526,7 @@ mod solve_expr {
                 Id n := [ Id U32 n ]
 
                 a : Id Str
-                a = $Id (Id 21 "sasha")
+                a = @Id (Id 21 "sasha")
 
                 a
                 "#
@@ -5464,8 +5544,8 @@ mod solve_expr {
                 condition : Bool
 
                 if condition
-                then $Id (Id 21 (Y "sasha"))
-                else $Id (Id 21 (Z "felix"))
+                then @Id (Id 21 (Y "sasha"))
+                else @Id (Id 21 (Z "felix"))
                 "#
             ),
             r#"Id [ Y Str, Z Str ]*"#,
@@ -5483,8 +5563,8 @@ mod solve_expr {
                 v : Id [ Y Str, Z Str ]
                 v =
                     if condition
-                    then $Id (Id 21 (Y "sasha"))
-                    else $Id (Id 21 (Z "felix"))
+                    then @Id (Id 21 (Y "sasha"))
+                    else @Id (Id 21 (Z "felix"))
 
                 v
                 "#
@@ -5500,7 +5580,7 @@ mod solve_expr {
                 r#"
                 Age := U32
 
-                \$Age n -> n
+                \@Age n -> n
                 "#
             ),
             r#"Age -> U32"#,
@@ -5515,7 +5595,7 @@ mod solve_expr {
                 Age := U32
 
                 v : Age -> U32
-                v = \$Age n -> n
+                v = \@Age n -> n
                 v
                 "#
             ),
@@ -5530,7 +5610,7 @@ mod solve_expr {
                 r#"
                 Id n := [ Id U32 n ]
 
-                \$Id (Id _ n) -> n
+                \@Id (Id _ n) -> n
                 "#
             ),
             r#"Id a -> a"#,
@@ -5545,7 +5625,7 @@ mod solve_expr {
                 Id n := [ Id U32 n ]
 
                 v : Id a -> a
-                v = \$Id (Id _ n) -> n
+                v = \@Id (Id _ n) -> n
 
                 v
                 "#
@@ -5563,7 +5643,7 @@ mod solve_expr {
 
                 strToBool : Str -> Bool
 
-                \$Id (Id _ n) -> strToBool n
+                \@Id (Id _ n) -> strToBool n
                 "#
             ),
             r#"Id Str -> Bool"#,
@@ -5580,7 +5660,7 @@ mod solve_expr {
                 strToBool : Str -> Bool
 
                 v : Id Str -> Bool
-                v = \$Id (Id _ n) -> strToBool n
+                v = \@Id (Id _ n) -> strToBool n
 
                 v
                 "#
@@ -5598,9 +5678,9 @@ mod solve_expr {
 
                 \id ->
                     when id is
-                        $Id (Id _ A) -> ""
-                        $Id (Id _ B) -> ""
-                        $Id (Id _ (C { a: "" })) -> ""
+                        @Id (Id _ A) -> ""
+                        @Id (Id _ B) -> ""
+                        @Id (Id _ (C { a: "" })) -> ""
                 "#
             ),
             r#"Id [ A, B, C { a : Str }* ] -> Str"#,
@@ -5617,9 +5697,9 @@ mod solve_expr {
                 f : Id [ A, B, C { a : Str }e ] -> Str
                 f = \id ->
                     when id is
-                        $Id (Id _ A) -> ""
-                        $Id (Id _ B) -> ""
-                        $Id (Id _ (C { a: "" })) -> ""
+                        @Id (Id _ A) -> ""
+                        @Id (Id _ B) -> ""
+                        @Id (Id _ (C { a: "" })) -> ""
 
                 f
                 "#
@@ -5635,7 +5715,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [ effectAlways ] to "./platform"
 
-                Effect a : [ @Effect ({} -> a) ]
+                Effect a := {} -> a
 
                 effectAlways : a -> Effect a
                 effectAlways = \x ->
@@ -5703,8 +5783,8 @@ mod solve_expr {
                 insert : Outer k, k -> Outer k
                 insert = \m, var ->
                     when m is
-                        $Outer Empty -> $Outer (Wrapped var)
-                        $Outer (Wrapped _) -> $Outer (Wrapped var)
+                        @Outer Empty -> @Outer (Wrapped var)
+                        @Outer (Wrapped _) -> @Outer (Wrapped var)
 
                 insert
                 "#
@@ -5720,9 +5800,9 @@ mod solve_expr {
                 r#"
                 Outer k := [ Empty, Wrapped k ]
 
-                when ($Outer Empty) is
-                    $Outer Empty -> $Outer (Wrapped "")
-                    $Outer (Wrapped k) -> $Outer (Wrapped k)
+                when (@Outer Empty) is
+                    @Outer Empty -> @Outer (Wrapped "")
+                    @Outer (Wrapped k) -> @Outer (Wrapped k)
                 "#
             ),
             r#"Outer Str"#,
@@ -5736,9 +5816,9 @@ mod solve_expr {
                 r#"
                 Outer := [ A, B ]
 
-                when ($Outer A) is
-                    $Outer A -> $Outer A
-                    $Outer B -> $Outer B
+                when (@Outer A) is
+                    @Outer A -> @Outer A
+                    @Outer B -> @Outer B
                 "#
             ),
             r#"Outer"#,
@@ -5795,7 +5875,7 @@ mod solve_expr {
 
                 Id := U64
 
-                hash = \$Id n -> n
+                hash = \@Id n -> n
                 "#
             ),
             [("Hash:hash", "Id")],
@@ -5815,8 +5895,8 @@ mod solve_expr {
 
                 Id := U64
 
-                hash = \$Id n -> n
-                hash32 = \$Id n -> Num.toU32 n
+                hash = \@Id n -> n
+                hash32 = \@Id n -> Num.toU32 n
                 "#
             ),
             [("Hash:hash", "Id"), ("Hash:hash32", "Id")],
@@ -5840,11 +5920,11 @@ mod solve_expr {
 
                 Id := U64
 
-                hash = \$Id n -> n
-                hash32 = \$Id n -> Num.toU32 n
+                hash = \@Id n -> n
+                hash32 = \@Id n -> Num.toU32 n
 
-                eq = \$Id m, $Id n -> m == n
-                le = \$Id m, $Id n -> m < n
+                eq = \@Id m, @Id n -> m == n
+                le = \@Id m, @Id n -> m < n
                 "#
             ),
             [
@@ -5869,7 +5949,7 @@ mod solve_expr {
                 Id := U64
 
                 hash : Id -> U64
-                hash = \$Id n -> n
+                hash = \@Id n -> n
                 "#
             ),
             [("Hash:hash", "Id")],
@@ -5907,9 +5987,9 @@ mod solve_expr {
 
                 Id := U64
 
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
-                zero = hash ($Id 0)
+                zero = hash (@Id 0)
                 "#
             ),
             "U64",
@@ -6000,9 +6080,9 @@ mod solve_expr {
                 hashEq = \x, y -> hash x == hash y
 
                 Id := U64
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
-                result = hashEq ($Id 100) ($Id 101)
+                result = hashEq (@Id 100) (@Id 101)
                 "#
             ),
             "Bool",
@@ -6022,15 +6102,88 @@ mod solve_expr {
                 mulHashes = \x, y -> hash x * hash y
 
                 Id := U64
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
                 Three := {}
-                hash = \$Three _ -> 3
+                hash = \@Three _ -> 3
 
-                result = mulHashes ($Id 100) ($Three {})
+                result = mulHashes (@Id 100) (@Three {})
                 "#
             ),
             "U64",
         )
+    }
+
+    #[test]
+    fn intermediate_branch_types() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test" provides [ foo ] to "./platform"
+
+                foo : Bool -> Str
+                foo = \ob ->
+                #      ^^
+                    when ob is
+                #        ^^
+                        True -> "A"
+                #       ^^^^
+                        False -> "B"
+                #       ^^^^^
+                "#
+            ),
+            &[
+                "ob : Bool",
+                "ob : [ False, True ]",
+                "True : [ False, True ]",
+                "False : [ False, True ]",
+            ],
+        )
+    }
+
+    #[test]
+    fn nested_open_tag_union() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ go ] to "./platform"
+
+                Expr : [
+                    Wrap Expr,
+                    Val I64,
+                ]
+
+                go : Expr -> Expr
+                go = \e ->
+                        when P e is
+                            P (Wrap (Val _)) -> Wrap e
+
+                            # This branch should force the first argument to `P` and
+                            # the first argument to `Wrap` to be an open tag union.
+                            # This tests checks that we don't regress on that.
+                            P y1 -> Wrap y1
+                "#
+            ),
+            indoc!(r#"Expr -> Expr"#),
+        )
+    }
+
+    #[test]
+    fn opaque_and_alias_unify() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ always ] to "./platform"
+
+                Effect a := {} -> a
+
+                Task a err : Effect (Result a err)
+
+                always : a -> Task a *
+                always = \x -> @Effect (\{} -> Ok x)
+                "#
+            ),
+            "a -> Task a *",
+        );
     }
 }

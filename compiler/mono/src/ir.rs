@@ -10,7 +10,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::{ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
-use roc_exhaustive::{Ctor, Guard, RenderAs, TagId};
+use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -1656,7 +1656,6 @@ impl<'a> Expr<'a> {
             } => {
                 let doc_tag = match tag_name {
                     TagName::Global(s) => alloc.text(s.as_str()),
-                    TagName::Private(s) => symbol_to_doc(alloc, *s),
                     TagName::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))
@@ -1678,7 +1677,6 @@ impl<'a> Expr<'a> {
             } => {
                 let doc_tag = match tag_name {
                     TagName::Global(s) => alloc.text(s.as_str()),
-                    TagName::Private(s) => alloc.text(format!("{}", s)),
                     TagName::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))
@@ -3499,15 +3497,24 @@ pub fn with_hole<'a>(
 
         OpaqueRef { argument, .. } => {
             let (arg_var, loc_arg_expr) = *argument;
-            with_hole(
-                env,
-                loc_arg_expr.value,
-                arg_var,
-                procs,
-                layout_cache,
-                assigned,
-                hole,
-            )
+
+            match can_reuse_symbol(env, procs, &loc_arg_expr.value) {
+                // Opaques decay to their argument.
+                ReuseSymbol::Value(real_name) => {
+                    let mut result = hole.clone();
+                    substitute_in_exprs(arena, &mut result, assigned, real_name);
+                    result
+                }
+                _ => with_hole(
+                    env,
+                    loc_arg_expr.value,
+                    arg_var,
+                    procs,
+                    layout_cache,
+                    assigned,
+                    hole,
+                ),
+            }
         }
 
         Record {
@@ -8030,7 +8037,7 @@ fn from_can_pattern_help<'a>(
                         render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
                             tag_id: TagId(0),
-                            name: tag_name.clone(),
+                            name: CtorName::Tag(tag_name.clone()),
                             arity: 0,
                         }],
                     },
@@ -8043,12 +8050,12 @@ fn from_can_pattern_help<'a>(
                         alternatives: vec![
                             Ctor {
                                 tag_id: TagId(0),
-                                name: ffalse,
+                                name: CtorName::Tag(ffalse),
                                 arity: 0,
                             },
                             Ctor {
                                 tag_id: TagId(1),
-                                name: ttrue,
+                                name: CtorName::Tag(ttrue),
                                 arity: 0,
                             },
                         ],
@@ -8064,7 +8071,7 @@ fn from_can_pattern_help<'a>(
                     for (i, tag_name) in tag_names.into_iter().enumerate() {
                         ctors.push(Ctor {
                             tag_id: TagId(i as _),
-                            name: tag_name,
+                            name: CtorName::Tag(tag_name),
                             arity: 0,
                         })
                     }
@@ -8155,7 +8162,7 @@ fn from_can_pattern_help<'a>(
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: tag_name.clone(),
+                                    name: CtorName::Tag(tag_name.clone()),
                                     arity: args.len(),
                                 })
                             }
@@ -8206,7 +8213,7 @@ fn from_can_pattern_help<'a>(
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: tag_name.clone(),
+                                    name: CtorName::Tag(tag_name.clone()),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
                                 })
@@ -8251,7 +8258,7 @@ fn from_can_pattern_help<'a>(
 
                             ctors.push(Ctor {
                                 tag_id: TagId(0),
-                                name: tag_name.clone(),
+                                name: CtorName::Tag(tag_name.clone()),
                                 arity: fields.len(),
                             });
 
@@ -8298,7 +8305,7 @@ fn from_can_pattern_help<'a>(
                                 if i == nullable_id as usize {
                                     ctors.push(Ctor {
                                         tag_id: TagId(i as _),
-                                        name: nullable_name.clone(),
+                                        name: CtorName::Tag(nullable_name.clone()),
                                         // don't include tag discriminant in arity
                                         arity: 0,
                                     });
@@ -8308,7 +8315,7 @@ fn from_can_pattern_help<'a>(
 
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: tag_name.clone(),
+                                    name: CtorName::Tag(tag_name.clone()),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
                                 });
@@ -8319,7 +8326,7 @@ fn from_can_pattern_help<'a>(
                             if i == nullable_id as usize {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: nullable_name.clone(),
+                                    name: CtorName::Tag(nullable_name.clone()),
                                     // don't include tag discriminant in arity
                                     arity: 0,
                                 });
@@ -8369,13 +8376,13 @@ fn from_can_pattern_help<'a>(
 
                             ctors.push(Ctor {
                                 tag_id: TagId(nullable_id as _),
-                                name: nullable_name.clone(),
+                                name: CtorName::Tag(nullable_name.clone()),
                                 arity: 0,
                             });
 
                             ctors.push(Ctor {
                                 tag_id: TagId(!nullable_id as _),
-                                name: nullable_name.clone(),
+                                name: CtorName::Tag(nullable_name.clone()),
                                 // FIXME drop tag
                                 arity: other_fields.len() - 1,
                             });
@@ -8631,9 +8638,9 @@ pub fn num_argument_to_int_or_float(
                     num_argument_to_int_or_float(subs, target_info, var, true)
                 }
 
-                Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => IntOrFloat::DecimalFloatType,
+                Symbol::NUM_DECIMAL => IntOrFloat::DecimalFloatType,
 
-                Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
+                Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
                     let int_width = match target_info.ptr_width() {
                         roc_target::PtrWidth::Bytes4 => IntWidth::U32,
                         roc_target::PtrWidth::Bytes8 => IntWidth::U64,

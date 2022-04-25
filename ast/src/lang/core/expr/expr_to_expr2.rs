@@ -185,20 +185,6 @@ pub fn expr_to_expr2<'a>(
                 Output::default(),
             )
         }
-        PrivateTag(name) => {
-            // a private tag without any arguments
-            let ident_id = env.ident_ids.get_or_insert(&(*name).into());
-            let name = Symbol::new(env.home, ident_id);
-            (
-                Expr2::PrivateTag {
-                    name,
-                    variant_var: env.var_store.fresh(),
-                    ext_var: env.var_store.fresh(),
-                    arguments: PoolVec::empty(env.pool),
-                },
-                Output::default(),
-            )
-        }
 
         RecordUpdate {
             fields,
@@ -563,17 +549,6 @@ pub fn expr_to_expr2<'a>(
                     name,
                     ..
                 } => Expr2::GlobalTag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    arguments: args,
-                },
-                Expr2::PrivateTag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    ..
-                } => Expr2::PrivateTag {
                     variant_var,
                     ext_var,
                     name,

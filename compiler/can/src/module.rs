@@ -8,8 +8,8 @@ use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::{MutMap, SendMap, VecSet};
+use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
-use roc_module::ident::{Ident, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_parse::header::HeaderFor;
@@ -116,23 +116,18 @@ impl GeneratedInfo {
                     )
                     .unwrap();
 
-                let effect_tag_name = TagName::Private(effect_symbol);
-
                 {
                     let a_var = var_store.fresh();
 
-                    let actual = crate::effect_module::build_effect_actual(
-                        effect_tag_name,
-                        Type::Variable(a_var),
-                        var_store,
-                    );
+                    let actual =
+                        crate::effect_module::build_effect_actual(Type::Variable(a_var), var_store);
 
                     scope.add_alias(
                         effect_symbol,
                         Region::zero(),
                         vec![Loc::at_zero(("a".into(), a_var))],
                         actual,
-                        AliasKind::Structural,
+                        AliasKind::Opaque,
                     );
                 }
 
@@ -433,7 +428,7 @@ pub fn canonicalize_module_defs<'a>(
                                         &mut scope,
                                         *symbol,
                                         &ident,
-                                        TagName::Private(effect_symbol),
+                                        effect_symbol,
                                         var_store,
                                         annotation,
                                     );

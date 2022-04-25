@@ -56,7 +56,7 @@ fn float_addition() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_rem() {
-    expect_success("299 % 10", "Ok 9 : Result (Int *) [ DivByZero ]*");
+    expect_success("299 % 10", "9 : Int *");
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -901,7 +901,7 @@ fn parse_problem() {
 
 #[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
-fn mono_problem() {
+fn exhaustiveness_problem() {
     expect_failure(
         r#"
             t : [A, B, C]
@@ -912,22 +912,29 @@ fn mono_problem() {
             "#,
         indoc!(
             r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+            ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                This when does not cover all the possibilities:
+            The branches of this when expression don't match the condition:
 
-                7│>                  when t is
-                8│>                      A -> "a"
+            7│>                  when t is
+            8│                       A -> "a"
 
-                Other possibilities include:
+            This t value is a:
 
-                    B
-                    C
+                [ A, B, C ]
+            
+            But the branch patterns have type:
+            
+                [ A ]
 
-                I would have to crash if I saw one of those! Add branches for them!
-
-
-                Enter an expression, or :help, or :exit/:q."#
+            The branches must be cases of the when condition's type!
+            
+            Tip: Looks like the branches are missing coverage of the C and B tags.
+            
+            Tip: Maybe you need to add a catch-all branch, like _?
+            
+            
+            Enter an expression, or :help, or :exit/:q."#
         ),
     );
 }
@@ -1019,7 +1026,7 @@ fn opaque_apply() {
             r#"
             Age := U32
 
-            $Age 23
+            @Age 23
             "#
         ),
         "23 : Age",
@@ -1033,7 +1040,7 @@ fn opaque_apply_polymorphic() {
             r#"
             F t u := [ Package t u ]
 
-            $F (Package "" { a: "" })
+            @F (Package "" { a: "" })
             "#
         ),
         r#"Package "" { a: "" } : F Str { a : Str }"#,
@@ -1047,9 +1054,9 @@ fn opaque_pattern_and_call() {
             r#"
             F t u := [ Package t u ]
 
-            f = \$F (Package A {}) -> $F (Package {} A)
+            f = \@F (Package A {}) -> @F (Package {} A)
 
-            f ($F (Package A {}))
+            f (@F (Package A {}))
             "#
         ),
         r#"Package {} A : F {} [ A ]*"#,
@@ -1136,5 +1143,44 @@ fn issue_2818() {
             "#
         ),
         r"<function> : {} -> List Str",
+    )
+}
+
+#[test]
+fn issue_2810_recursive_layout_inside_nonrecursive() {
+    expect_success(
+        indoc!(
+            r#"
+            Command : [ Command Tool ]
+
+            Job : [ Job Command ]
+
+            Tool : [ SystemTool, FromJob Job ]
+
+            a : Job
+            a = Job (Command (FromJob (Job (Command SystemTool))))
+            a
+            "#
+        ),
+        "Job (Command (FromJob (Job (Command SystemTool)))) : Job",
+    )
+}
+
+#[test]
+fn render_nullable_unwrapped_passing_through_alias() {
+    expect_success(
+        indoc!(
+            r#"
+            Deep : [ L DeepList ]
+            
+            DeepList : [ Nil, Cons Deep ]
+            
+            v : DeepList 
+            v = (Cons (L (Cons (L (Cons (L Nil))))))
+            
+            v
+            "#
+        ),
+        "Cons (L (Cons (L (Cons (L Nil))))) : DeepList",
     )
 }

@@ -1,2 +1,2 @@
 when n is
-  $Age -> 1
+  @Age -> 1

@@ -154,12 +154,6 @@ pub enum Expr2 {
         ext_var: Variable,                      // 4B
         arguments: PoolVec<(Variable, ExprId)>, // 8B
     },
-    PrivateTag {
-        name: Symbol,                           // 8B
-        variant_var: Variable,                  // 4B
-        ext_var: Variable,                      // 4B
-        arguments: PoolVec<(Variable, ExprId)>, // 8B
-    },
     Blank, // Rendered as empty box in editor
 
     // Compiles, but will crash if reached

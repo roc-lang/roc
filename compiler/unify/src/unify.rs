@@ -5,7 +5,8 @@ use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
-    RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    RecordFields, Subs, SubsFmtContent, SubsIndex, SubsSlice, UnionTags, Variable,
+    VariableSubsSlice,
 };
 use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField};
 
@@ -118,6 +119,21 @@ impl Mode {
 
     fn as_eq(self) -> Self {
         (self - Mode::PRESENT) | Mode::EQ
+    }
+
+    #[cfg(debug_assertions)]
+    fn pretty_print(&self) -> &str {
+        if self.contains(Mode::EQ | Mode::RIGID_AS_FLEX) {
+            "~*"
+        } else if self.contains(Mode::PRESENT | Mode::RIGID_AS_FLEX) {
+            "+=*"
+        } else if self.contains(Mode::EQ) {
+            "~"
+        } else if self.contains(Mode::PRESENT) {
+            "+="
+        } else {
+            unreachable!("Bad mode!")
+        }
     }
 }
 
@@ -308,7 +324,7 @@ fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option
         //        println!("\n --------------- \n");
         let content_1 = subs.get(ctx.first).content;
         let content_2 = subs.get(ctx.second).content;
-        let mode = if ctx.mode.is_eq() { "~" } else { "+=" };
+        let mode = ctx.mode.pretty_print();
         eprintln!(
             "{}{}({:?}-{:?}): {:?} {:?} {} {:?} {:?}",
             " ".repeat(use_depth),
@@ -316,10 +332,10 @@ fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option
             ctx.first,
             ctx.second,
             ctx.first,
-            roc_types::subs::SubsFmtContent(&content_1, subs),
+            SubsFmtContent(&content_1, subs),
             mode,
             ctx.second,
-            roc_types::subs::SubsFmtContent(&content_2, subs),
+            SubsFmtContent(&content_2, subs),
         );
 
         unsafe { UNIFICATION_DEPTH = new_depth };
@@ -357,8 +373,11 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
         }
-        Alias(symbol, args, real_var, kind) => {
-            unify_alias(subs, pool, &ctx, *symbol, *args, *real_var, *kind)
+        Alias(symbol, args, real_var, AliasKind::Structural) => {
+            unify_alias(subs, pool, &ctx, *symbol, *args, *real_var)
+        }
+        Alias(symbol, args, real_var, AliasKind::Opaque) => {
+            unify_opaque(subs, pool, &ctx, *symbol, *args, *real_var)
         }
         &RangedNumber(typ, range_vars) => unify_ranged_number(subs, pool, &ctx, typ, range_vars),
         Error => {
@@ -448,6 +467,57 @@ fn check_valid_range(
 }
 
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn unify_two_aliases(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    ctx: &Context,
+    symbol: Symbol,
+    args: AliasVariables,
+    real_var: Variable,
+    other_args: AliasVariables,
+    other_real_var: Variable,
+    other_content: &Content,
+) -> Outcome {
+    if args.len() == other_args.len() {
+        let mut outcome = Outcome::default();
+        let it = args
+            .all_variables()
+            .into_iter()
+            .zip(other_args.all_variables().into_iter());
+
+        let args_unification_snapshot = subs.snapshot();
+
+        for (l, r) in it {
+            let l_var = subs[l];
+            let r_var = subs[r];
+            outcome.union(unify_pool(subs, pool, l_var, r_var, ctx.mode));
+        }
+
+        if outcome.mismatches.is_empty() {
+            outcome.union(merge(subs, ctx, *other_content));
+        }
+
+        let args_unification_had_changes = !subs
+            .vars_since_snapshot(&args_unification_snapshot)
+            .is_empty();
+        subs.commit_snapshot(args_unification_snapshot);
+
+        if !args.is_empty() && args_unification_had_changes && outcome.mismatches.is_empty() {
+            // We need to unify the real vars because unification of type variables
+            // may have made them larger, which then needs to be reflected in the `real_var`.
+            outcome.union(unify_pool(subs, pool, real_var, other_real_var, ctx.mode));
+        }
+
+        outcome
+    } else {
+        dbg!(args.len(), other_args.len());
+        mismatch!("{:?}", symbol)
+    }
+}
+
+// Unifies a structural alias
+#[inline(always)]
 fn unify_alias(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -455,72 +525,40 @@ fn unify_alias(
     symbol: Symbol,
     args: AliasVariables,
     real_var: Variable,
-    kind: AliasKind,
 ) -> Outcome {
     let other_content = &ctx.second_desc.content;
 
-    let either_is_opaque =
-        kind == AliasKind::Opaque || matches!(other_content, Alias(_, _, _, AliasKind::Opaque));
+    let kind = AliasKind::Structural;
 
     match other_content {
         FlexVar(_) => {
             // Alias wins
             merge(subs, ctx, Alias(symbol, args, real_var, kind))
         }
-        RecursionVar { structure, .. } if !either_is_opaque => {
-            unify_pool(subs, pool, real_var, *structure, ctx.mode)
+        RecursionVar { structure, .. } => unify_pool(subs, pool, real_var, *structure, ctx.mode),
+        RigidVar(_) | RigidAbleVar(..) | FlexAbleVar(..) => {
+            unify_pool(subs, pool, real_var, ctx.second, ctx.mode)
         }
-        RigidVar(_) | RigidAbleVar(..) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
-        FlexAbleVar(_, ability) if kind == AliasKind::Opaque && args.is_empty() => {
-            // Opaque type wins
-            let mut outcome = merge(subs, ctx, Alias(symbol, args, real_var, kind));
-            outcome.must_implement_ability.push(MustImplementAbility { typ: symbol, ability: *ability });
-            outcome
-        }
-        Alias(other_symbol, other_args, other_real_var, _)
-            // Opaques types are only equal if the opaque symbols are equal!
-            if !either_is_opaque || symbol == *other_symbol =>
-        {
+        Alias(_, _, _, AliasKind::Opaque) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        Alias(other_symbol, other_args, other_real_var, AliasKind::Structural) => {
             if symbol == *other_symbol {
-                if args.len() == other_args.len() {
-                    let mut outcome = Outcome::default();
-                    let it = args
-                        .all_variables()
-                        .into_iter()
-                        .zip(other_args.all_variables().into_iter());
-
-                    let args_unification_snapshot = subs.snapshot();
-
-                    for (l, r) in it {
-                        let l_var = subs[l];
-                        let r_var = subs[r];
-                        outcome.union(unify_pool(subs, pool, l_var, r_var, ctx.mode));
-                    }
-
-                    if outcome.mismatches.is_empty() {
-                        outcome.union(merge(subs, ctx, *other_content));
-                    }
-
-                    let args_unification_had_changes = !subs.vars_since_snapshot(&args_unification_snapshot).is_empty();
-                    subs.commit_snapshot(args_unification_snapshot);
-
-                    if !args.is_empty() && args_unification_had_changes && outcome.mismatches.is_empty() {
-                        // We need to unify the real vars because unification of type variables
-                        // may have made them larger, which then needs to be reflected in the `real_var`.
-                        outcome.union(unify_pool(subs, pool, real_var, *other_real_var, ctx.mode));
-                    }
-
-                    outcome
-                } else {
-                    dbg!(args.len(), other_args.len());
-                    mismatch!("{:?}", symbol)
-                }
+                unify_two_aliases(
+                    subs,
+                    pool,
+                    ctx,
+                    symbol,
+                    args,
+                    real_var,
+                    *other_args,
+                    *other_real_var,
+                    other_content,
+                )
             } else {
                 unify_pool(subs, pool, real_var, *other_real_var, ctx.mode)
             }
         }
-        Structure(_) if !either_is_opaque => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
-        RangedNumber(other_real_var, other_range_vars) if !either_is_opaque => {
+        Structure(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, real_var, *other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
                 check_valid_range(subs, pool, real_var, *other_range_vars, ctx.mode)
@@ -529,9 +567,69 @@ fn unify_alias(
             }
         }
         Error => merge(subs, ctx, Error),
+    }
+}
+
+#[inline(always)]
+fn unify_opaque(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    ctx: &Context,
+    symbol: Symbol,
+    args: AliasVariables,
+    real_var: Variable,
+) -> Outcome {
+    let other_content = &ctx.second_desc.content;
+
+    let kind = AliasKind::Opaque;
+
+    match other_content {
+        FlexVar(_) => {
+            // Alias wins
+            merge(subs, ctx, Alias(symbol, args, real_var, kind))
+        }
+        // RigidVar(_) | RigidAbleVar(..) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        FlexAbleVar(_, ability) if args.is_empty() => {
+            // Opaque type wins
+            let mut outcome = merge(subs, ctx, Alias(symbol, args, real_var, kind));
+            outcome.must_implement_ability.push(MustImplementAbility {
+                typ: symbol,
+                ability: *ability,
+            });
+            outcome
+        }
+        Alias(_, _, other_real_var, AliasKind::Structural) => {
+            unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode)
+        }
+        Alias(other_symbol, other_args, other_real_var, AliasKind::Opaque) => {
+            // Opaques types are only equal if the opaque symbols are equal!
+            if symbol == *other_symbol {
+                unify_two_aliases(
+                    subs,
+                    pool,
+                    ctx,
+                    symbol,
+                    args,
+                    real_var,
+                    *other_args,
+                    *other_real_var,
+                    other_content,
+                )
+            } else {
+                mismatch!("{:?}", symbol)
+            }
+        }
+        RangedNumber(other_real_var, other_range_vars) => {
+            // This opaque might be a number, check if it unifies with the target ranged number var.
+            let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
+            if outcome.mismatches.is_empty() {
+                check_valid_range(subs, pool, ctx.first, *other_range_vars, ctx.mode)
+            } else {
+                outcome
+            }
+        }
         other => {
-            // The type on the left is an alias, but the one on the right is not!
-            debug_assert!(either_is_opaque);
+            // The type on the left is an opaque, but the one on the right is not!
             mismatch!("Cannot unify opaque {:?} with {:?}", symbol, other)
         }
     }
@@ -576,7 +674,15 @@ fn unify_structure(
         RecursionVar { structure, .. } => match flat_type {
             FlatType::TagUnion(_, _) => {
                 // unify the structure with this unrecursive tag union
-                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
+                let mut outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
+
+                if outcome.mismatches.is_empty() {
+                    outcome.union(fix_tag_union_recursion_variable(
+                        subs, ctx, ctx.first, other,
+                    ));
+                }
+
+                outcome
             }
             FlatType::RecursiveTagUnion(rec, _, _) => {
                 debug_assert!(is_recursion_var(subs, *rec));
@@ -585,7 +691,15 @@ fn unify_structure(
             }
             FlatType::FunctionOrTagUnion(_, _, _) => {
                 // unify the structure with this unrecursive tag union
-                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
+                let mut outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
+
+                if outcome.mismatches.is_empty() {
+                    outcome.union(fix_tag_union_recursion_variable(
+                        subs, ctx, ctx.first, other,
+                    ));
+                }
+
+                outcome
             }
             // Only tag unions can be recursive; everything else is an error.
             _ => mismatch!(
@@ -640,6 +754,57 @@ fn unify_structure(
                 &other
             )
         }
+    }
+}
+
+/// Ensures that a non-recursive tag union, when unified with a recursion var to become a recursive
+/// tag union, properly contains a recursion variable that recurses on itself.
+//
+// When might this not be the case? For example, in the code
+//
+//   Indirect : [ Indirect ConsList ]
+//
+//   ConsList : [ Nil, Cons Indirect ]
+//
+//   l : ConsList
+//   l = Cons (Indirect (Cons (Indirect Nil)))
+//   #   ^^^^^^^^^^^^^^^~~~~~~~~~~~~~~~~~~~~~^ region-a
+//   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
+//   l
+//
+// Suppose `ConsList` has the expanded type `[ Nil, Cons [ Indirect <rec> ] ] as <rec>`.
+// After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
+// the tentative total-type of the application annotated "region-a" would be
+// `<v> = [ Nil, Cons [ Indirect <v> ] ] as <rec>`. That is, the type of the recursive tag union
+// would be inlined at the site "v", rather than passing through the correct recursion variable
+// "rec" first.
+//
+// This is not incorrect from a type perspective, but causes problems later on for e.g. layout
+// determination, which expects recursion variables to be placed correctly. Attempting to detect
+// this during layout generation does not work so well because it may be that there *are* recursive
+// tag unions that should be inlined, and not pass through recursion variables. So instead, try to
+// resolve these cases here.
+//
+// See tests labeled "issue_2810" for more examples.
+fn fix_tag_union_recursion_variable(
+    subs: &mut Subs,
+    ctx: &Context,
+    tag_union_promoted_to_recursive: Variable,
+    recursion_var: &Content,
+) -> Outcome {
+    debug_assert!(matches!(
+        subs.get_content_without_compacting(tag_union_promoted_to_recursive),
+        Structure(FlatType::RecursiveTagUnion(..))
+    ));
+
+    let has_recursing_recursive_variable = subs
+        .occurs_including_recursion_vars(tag_union_promoted_to_recursive)
+        .is_err();
+
+    if !has_recursing_recursive_variable {
+        merge(subs, ctx, *recursion_var)
+    } else {
+        Outcome::default()
     }
 }
 

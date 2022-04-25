@@ -19,10 +19,7 @@ interface Parser
     exposes [ Parser ]
     imports []
 
-Parser a :
-    [
-        @Parser (Str -> Result { answer : a, rest : Str } RawProblem),
-    ]
+Parser a := Str -> Result { answer : a, rest : Str } RawProblem
 
 Problem :
     [

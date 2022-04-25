@@ -191,12 +191,26 @@ pub fn fmt_body<'a, 'buf>(
     buf.push_str(" =");
     if body.is_multiline() {
         match body {
-            Expr::SpaceBefore(_, _) => {
-                body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
-            }
-            Expr::Record { .. } | Expr::List { .. } => {
-                buf.newline();
-                body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
+            Expr::SpaceBefore(sub_def, spaces) => {
+                let should_outdent = match sub_def {
+                    Expr::Record { .. } | Expr::List { .. } => {
+                        let is_only_newlines = spaces.iter().all(|s| s.is_newline());
+                        is_only_newlines && sub_def.is_multiline()
+                    }
+                    _ => false,
+                };
+
+                if should_outdent {
+                    buf.spaces(1);
+                    sub_def.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                } else {
+                    body.format_with_options(
+                        buf,
+                        Parens::NotNeeded,
+                        Newlines::Yes,
+                        indent + INDENT,
+                    );
+                }
             }
             _ => {
                 buf.spaces(1);

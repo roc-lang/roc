@@ -134,7 +134,12 @@ fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
     let mut aliases = SendMap::default();
 
     for (symbol, builtin_alias) in solved_aliases {
-        let BuiltinAlias { region, vars, typ } = builtin_alias;
+        let BuiltinAlias {
+            region,
+            vars,
+            typ,
+            kind,
+        } = builtin_alias;
 
         let mut free_vars = FreeVars::default();
         let typ = roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
@@ -153,8 +158,7 @@ fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
             lambda_set_variables: Vec::new(),
             recursion_variables: MutSet::default(),
             type_variables: variables,
-            // TODO(opaques): replace when opaques are included in the stdlib
-            kind: AliasKind::Structural,
+            kind,
         };
 
         aliases.insert(symbol, alias);
@@ -201,11 +205,6 @@ impl Scope {
     }
 
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
-        println!(
-            "stats: string length: {}, ident len {}",
-            self.idents.string.len(),
-            self.idents.len()
-        );
         match self.idents.get_symbol(ident) {
             Some(symbol) => Ok(symbol),
             None => {
@@ -230,15 +229,14 @@ impl Scope {
     }
 
     /// Check if there is an opaque type alias referenced by `opaque_ref` referenced in the
-    /// current scope. E.g. `$Age` must reference an opaque `Age` declared in this module, not any
+    /// current scope. E.g. `@Age` must reference an opaque `Age` declared in this module, not any
     /// other!
-    // TODO(opaques): $->@ in the above comment
     pub fn lookup_opaque_ref(
         &self,
         opaque_ref: &str,
         lookup_region: Region,
     ) -> Result<(Symbol, &Alias), RuntimeError> {
-        debug_assert!(opaque_ref.starts_with('$'));
+        debug_assert!(opaque_ref.starts_with('@'));
         let opaque = opaque_ref[1..].into();
 
         match self.idents.get_symbol_and_region(&opaque) {

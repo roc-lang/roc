@@ -913,9 +913,6 @@ trait Backend<'a> {
                             TagName::Closure(sym) => {
                                 self.set_last_seen(*sym, stmt);
                             }
-                            TagName::Private(sym) => {
-                                self.set_last_seen(*sym, stmt);
-                            }
                             TagName::Global(_) => {}
                         }
                         for sym in *arguments {

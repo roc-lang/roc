@@ -16,6 +16,12 @@ use ven_pretty::DocAllocator;
 const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
 
+const OPAQUE_NUM_SYMBOLS: &[Symbol] = &[
+    Symbol::NUM_NUM,
+    Symbol::NUM_INTEGER,
+    Symbol::NUM_FLOATINGPOINT,
+];
+
 pub fn type_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
@@ -1151,6 +1157,51 @@ fn to_expr_report<'b>(
                 )
             }
 
+            Reason::WhenBranches => {
+                let snippet = alloc.region_with_subregion(
+                    lines.convert_region(region),
+                    lines.convert_region(expr_region),
+                );
+
+                let this_is = alloc.concat([
+                    alloc.reflow("The "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" condition is"),
+                ]);
+
+                let wanted = alloc.reflow("But the branch patterns have type:");
+                let details = Some(alloc.concat([
+                    alloc.reflow("The branches must be cases of the "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" condition's type!"),
+                ]));
+
+                let lines = [
+                    alloc.concat([
+                        alloc.reflow("The branches of this "),
+                        alloc.keyword("when"),
+                        alloc.reflow(" expression don't match the condition:"),
+                    ]),
+                    snippet,
+                    type_comparison(
+                        alloc,
+                        found,
+                        expected_type,
+                        ExpectationContext::WhenCondition,
+                        add_category(alloc, this_is, &category),
+                        wanted,
+                        details,
+                    ),
+                ];
+
+                Report {
+                    title: "TYPE MISMATCH".to_string(),
+                    filename,
+                    doc: alloc.stack(lines),
+                    severity: Severity::RuntimeError,
+                }
+            }
+
             Reason::LowLevelOpArg { op, arg_index } => {
                 panic!(
                     "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
@@ -1224,7 +1275,10 @@ fn count_arguments(tipe: &ErrorType) -> usize {
 enum ExpectationContext<'a> {
     /// An expected type was discovered from a type annotation. Corresponds to
     /// [`Expected::FromAnnotation`](Expected::FromAnnotation).
-    Annotation { on: RocDocBuilder<'a> },
+    Annotation {
+        on: RocDocBuilder<'a>,
+    },
+    WhenCondition,
     /// When we don't know the context, or it's not relevant.
     Arbitrary,
 }
@@ -1233,6 +1287,7 @@ impl<'a> std::fmt::Debug for ExpectationContext<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExpectationContext::Annotation { .. } => f.write_str("Annotation"),
+            ExpectationContext::WhenCondition => f.write_str("WhenCondition"),
             ExpectationContext::Arbitrary => f.write_str("Arbitrary"),
         }
     }
@@ -1394,17 +1449,6 @@ fn format_category<'b>(
             ]),
             alloc.text(" has the type:"),
         ),
-        TagApply {
-            tag_name: TagName::Private(name),
-            args_count: 0,
-        } => (
-            alloc.concat([
-                alloc.text(format!("{}his ", t)),
-                alloc.private_tag_name(*name),
-                alloc.text(" private tag"),
-            ]),
-            alloc.text(" has the type:"),
-        ),
 
         TagApply {
             tag_name: TagName::Global(name),
@@ -1414,17 +1458,6 @@ fn format_category<'b>(
                 alloc.text(format!("{}his ", t)),
                 alloc.global_tag_name(name.to_owned()),
                 alloc.text(" global tag application"),
-            ]),
-            alloc.text(" has the type:"),
-        ),
-        TagApply {
-            tag_name: TagName::Private(name),
-            args_count: _,
-        } => (
-            alloc.concat([
-                alloc.text("This "),
-                alloc.private_tag_name(*name),
-                alloc.text(" private tag application"),
             ]),
             alloc.text(" has the type:"),
         ),
@@ -1594,14 +1627,17 @@ fn to_pattern_report<'b>(
                     severity: Severity::RuntimeError,
                 }
             }
-            PReason::WhenMatch { index } => {
-                if index == HumanIndex::FIRST {
-                    let doc = alloc.stack([
+            PReason::WhenMatch { index, sub_pattern } => {
+                let doc = match (index, sub_pattern) {
+                    (HumanIndex::FIRST, HumanIndex::FIRST) => alloc.stack([
                         alloc
                             .text("The 1st pattern in this ")
                             .append(alloc.keyword("when"))
                             .append(alloc.text(" is causing a mismatch:")),
-                        alloc.region(lines.convert_region(region)),
+                        alloc.region_with_subregion(
+                            lines.convert_region(region),
+                            lines.convert_region(expr_region),
+                        ),
                         pattern_type_comparison(
                             alloc,
                             found,
@@ -1620,44 +1656,55 @@ fn to_pattern_report<'b>(
                             ]),
                             vec![],
                         ),
-                    ]);
+                    ]),
+                    (index, sub_pattern) => {
+                        let (first, index) = match sub_pattern {
+                            HumanIndex::FIRST => {
+                                let doc = alloc
+                                    .string(format!("The {} pattern in this ", index.ordinal()))
+                                    .append(alloc.keyword("when"))
+                                    .append(alloc.text(" does not match the previous ones:"));
+                                (doc, index)
+                            }
 
-                    Report {
-                        filename,
-                        title: "TYPE MISMATCH".to_string(),
-                        doc,
-                        severity: Severity::RuntimeError,
-                    }
-                } else {
-                    let doc = alloc.stack([
-                        alloc
-                            .string(format!("The {} pattern in this ", index.ordinal()))
-                            .append(alloc.keyword("when"))
-                            .append(alloc.text(" does not match the previous ones:")),
-                        alloc.region(lines.convert_region(region)),
-                        pattern_type_comparison(
-                            alloc,
-                            found,
-                            expected_type,
-                            add_pattern_category(
-                                alloc,
-                                alloc.string(format!(
-                                    "The {} pattern is trying to match",
-                                    index.ordinal()
-                                )),
-                                &category,
+                            _ => {
+                                let doc = alloc.string(format!(
+                                    "The {} pattern in this branch does not match the previous ones:",
+                                    sub_pattern.ordinal()
+                                ));
+                                (doc, sub_pattern)
+                            }
+                        };
+
+                        alloc.stack([
+                            first,
+                            alloc.region_with_subregion(
+                                lines.convert_region(region),
+                                lines.convert_region(expr_region),
                             ),
-                            alloc.text("But all the previous branches match:"),
-                            vec![],
-                        ),
-                    ]);
-
-                    Report {
-                        filename,
-                        title: "TYPE MISMATCH".to_string(),
-                        doc,
-                        severity: Severity::RuntimeError,
+                            pattern_type_comparison(
+                                alloc,
+                                found,
+                                expected_type,
+                                add_pattern_category(
+                                    alloc,
+                                    alloc.string(format!(
+                                        "The {} pattern is trying to match",
+                                        index.ordinal()
+                                    )),
+                                    &category,
+                                ),
+                                alloc.text("But all the previous branches match:"),
+                                vec![],
+                            ),
+                        ])
                     }
+                };
+                Report {
+                    filename,
+                    title: "TYPE MISMATCH".to_string(),
+                    doc,
+                    severity: Severity::RuntimeError,
                 }
             }
             PReason::TagArg { .. } | PReason::PatternGuard => {
@@ -2255,7 +2302,11 @@ fn to_diff<'b>(
             }
         }
 
-        (Alias(_, _, _, AliasKind::Opaque), _) | (_, Alias(_, _, _, AliasKind::Opaque)) => {
+        (Alias(sym, _, _, AliasKind::Opaque), _) | (_, Alias(sym, _, _, AliasKind::Opaque))
+            // Skip the hint for numbers; it's not as useful as saying "this type is not a number"
+            if !OPAQUE_NUM_SYMBOLS.contains(&sym) =>
+        {
+            dbg!(&type1, &type2);
             let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
             let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
 
@@ -2636,22 +2687,24 @@ fn diff_tag_union<'b>(
     let all_fields_shared = left.peek().is_none() && right.peek().is_none();
 
     let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
-        (true, true) => match left.peek() {
-            Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
+        (true, true) => match (left.peek(), right.peek()) {
+            (Some((f, _, _, _)), Some(_)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
                 fields2.keys().cloned().collect(),
             )]),
-            None => {
-                if right.peek().is_none() {
-                    Status::Similar
-                } else {
-                    let result =
-                        Status::Different(vec![Problem::TagsMissing(right.map(|v| v.0).collect())]);
-                    // we just used the values in `right`.  in
-                    right = right_keys.iter().map(to_unknown_docs).peekable();
-                    result
-                }
+            (Some(_), None) => {
+                let status =
+                    Status::Different(vec![Problem::TagsMissing(left.map(|v| v.0).collect())]);
+                left = left_keys.iter().map(to_unknown_docs).peekable();
+                status
             }
+            (None, Some(_)) => {
+                let status =
+                    Status::Different(vec![Problem::TagsMissing(right.map(|v| v.0).collect())]);
+                right = right_keys.iter().map(to_unknown_docs).peekable();
+                status
+            }
+            (None, None) => Status::Similar,
         },
         (false, true) => match left.peek() {
             Some((f, _, _, _)) => Status::Different(vec![Problem::TagTypo(
@@ -3250,6 +3303,33 @@ fn type_problem_to_pretty<'b>(
             alloc.symbol_qualified(Symbol::NUM_ROUND),
             alloc.reflow("."),
         ])),
+
+        (TagsMissing(missing), ExpectationContext::WhenCondition) => match missing.split_last() {
+            None => alloc.nil(),
+            Some(split) => {
+                let missing_tags = match split {
+                    (f1, []) => alloc.tag_name(f1.clone()).append(alloc.reflow(" tag.")),
+                    (last, init) => alloc
+                        .intersperse(init.iter().map(|v| alloc.tag_name(v.clone())), ", ")
+                        .append(alloc.reflow(" and "))
+                        .append(alloc.tag_name(last.clone()))
+                        .append(alloc.reflow(" tags.")),
+                };
+
+                let tip1 = alloc
+                    .tip()
+                    .append(alloc.reflow("Looks like the branches are missing coverage of the "))
+                    .append(missing_tags);
+
+                let tip2 = alloc
+                    .tip()
+                    .append(alloc.reflow("Maybe you need to add a catch-all branch, like "))
+                    .append(alloc.keyword("_"))
+                    .append(alloc.reflow("?"));
+
+                alloc.stack([tip1, tip2])
+            }
+        },
 
         (TagsMissing(missing), _) => match missing.split_last() {
             None => alloc.nil(),

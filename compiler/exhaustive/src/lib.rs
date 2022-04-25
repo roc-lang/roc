@@ -2,7 +2,10 @@
 //! http://moscova.inria.fr/~maranget/papers/warn/warn.pdf
 
 use roc_collections::all::{HumanIndex, MutMap};
-use roc_module::ident::{Lowercase, TagIdIntType, TagName};
+use roc_module::{
+    ident::{Lowercase, TagIdIntType, TagName},
+    symbol::Symbol,
+};
 use roc_region::all::Region;
 use roc_std::RocDec;
 
@@ -15,9 +18,9 @@ pub struct Union {
 }
 
 impl Union {
-    pub fn newtype_wrapper(tag_name: TagName, arity: usize) -> Self {
+    pub fn newtype_wrapper(name: CtorName, arity: usize) -> Self {
         let alternatives = vec![Ctor {
-            name: tag_name,
+            name,
             tag_id: TagId(0),
             arity,
         }];
@@ -41,8 +44,23 @@ pub enum RenderAs {
 pub struct TagId(pub TagIdIntType);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CtorName {
+    Tag(TagName),
+    Opaque(Symbol),
+}
+
+impl CtorName {
+    pub fn is_tag(&self, tag_name: &TagName) -> bool {
+        match self {
+            Self::Tag(test) => test == tag_name,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Ctor {
-    pub name: TagName,
+    pub name: CtorName,
     pub tag_id: TagId,
     pub arity: usize,
 }

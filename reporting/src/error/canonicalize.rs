@@ -925,13 +925,10 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
 
-        BadPrivateTag(pos) | BadOpaqueRef(pos) => {
+        BadOpaqueRef(pos) => {
             use BadIdentNext::*;
-            let kind = if matches!(bad_ident, BadPrivateTag(..)) {
-                "a private tag"
-            } else {
-                "an opaque reference"
-            };
+            let kind = "an opaque reference";
+
             match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
                 LowercaseAccess(width) => {
                     let region = Region::new(pos, pos.bump_column(width));
@@ -983,7 +980,7 @@ fn to_bad_ident_expr_report<'b>(
                             alloc.reflow(r"But after the "),
                             alloc.keyword("@"),
                             alloc.reflow(r" symbol I found a lowercase letter. "),
-                            alloc.reflow(r"All tag names (global and private)"),
+                            alloc.reflow(r"All opaque references "),
                             alloc.reflow(r" must start with an uppercase letter, like "),
                             alloc.parser_suggestion("@UUID"),
                             alloc.reflow(" or "),
@@ -1256,9 +1253,9 @@ fn pretty_runtime_error<'b>(
                 EmptySingleQuote | MultipleCharsInSingleQuote | Unknown | BadIdent(_) => {
                     alloc.nil()
                 }
-                QualifiedIdentifier => alloc.tip().append(
-                    alloc.reflow("In patterns, only private and global tags can be qualified"),
-                ),
+                QualifiedIdentifier => alloc
+                    .tip()
+                    .append(alloc.reflow("In patterns, only global tags can be qualified")),
             };
 
             doc = alloc.stack([

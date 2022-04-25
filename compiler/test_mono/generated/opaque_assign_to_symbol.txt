@@ -1,0 +1,10 @@
+procedure : `#UserApp.fromUtf8` [C {}, C U8]
+procedure = `#UserApp.fromUtf8` (`#UserApp.char`):
+    let `#UserApp.3` : [C {}, C U8] = Ok `#UserApp.4`;
+    ret `#UserApp.3`;
+
+procedure : `#UserApp.out` [C {}, C U8]
+procedure = `#UserApp.out` ():
+    let `#UserApp.2` : U8 = 98i64;
+    let `#UserApp.1` : [C {}, C U8] = CallByName `#UserApp.fromUtf8` `#UserApp.2`;
+    ret `#UserApp.1`;

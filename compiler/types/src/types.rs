@@ -120,13 +120,15 @@ impl RecordField<Type> {
         }
     }
 
-    pub fn instantiate_aliases(
+    pub fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         introduced: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         use RecordField::*;
 
         match self {
@@ -168,13 +170,15 @@ impl LambdaSet {
         &mut self.0
     }
 
-    fn instantiate_aliases(
+    fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         introduced: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         self.0
             .instantiate_aliases(region, aliases, var_store, introduced)
     }
@@ -1064,13 +1068,28 @@ impl Type {
         result
     }
 
-    pub fn instantiate_aliases(
+    pub fn shallow_structural_dealias(&self) -> &Self {
+        let mut result = self;
+        while let Type::Alias {
+            actual,
+            kind: AliasKind::Structural,
+            ..
+        } = result
+        {
+            result = actual;
+        }
+        result
+    }
+
+    pub fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         new_lambda_set_variables: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         use Type::*;
 
         match self {
@@ -1138,7 +1157,7 @@ impl Type {
                 );
             }
             Apply(symbol, args, _) => {
-                if let Some(alias) = aliases.get(symbol) {
+                if let Some(alias) = aliases(*symbol) {
                     // TODO switch to this, but we still need to check for recursion with the
                     // `else` branch
                     if false {
@@ -1670,6 +1689,7 @@ pub enum PReason {
     },
     WhenMatch {
         index: HumanIndex,
+        sub_pattern: HumanIndex,
     },
     TagArg {
         tag_name: TagName,
@@ -1727,6 +1747,7 @@ pub enum Reason {
     IntLiteral,
     NumLiteral,
     StrInterpolation,
+    WhenBranches,
     WhenBranch {
         index: HumanIndex,
     },

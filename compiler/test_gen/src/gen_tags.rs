@@ -1055,10 +1055,10 @@ fn phantom_polymorphic() {
             r"#
                 Point coordinate : [ Point coordinate I64 I64 ]
 
-                World : [ @World ]
+                World := {}
 
                 zero : Point World
-                zero = Point @World 0 0
+                zero = Point (@World {}) 0 0
 
                 add : Point a -> Point a
                 add = \(Point c x y) -> (Point c x y)
@@ -1578,5 +1578,30 @@ fn issue_2725_alias_polymorphic_lambda() {
         ),
         42, // Tag is a newtype, it gets unwrapped
         i64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn opaque_assign_to_symbol() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ out ] to "./platform"
+
+            Variable := U8
+
+            fromUtf8 : U8 -> Result Variable [ InvalidVariableUtf8 ]
+            fromUtf8 = \char ->
+                Ok (@Variable char)
+
+            out =
+                when fromUtf8 98 is
+                    Ok (@Variable n) -> n
+                    _ -> 1
+            "#
+        ),
+        98,
+        u8
     )
 }

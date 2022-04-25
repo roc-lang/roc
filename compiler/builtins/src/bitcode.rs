@@ -68,13 +68,9 @@ impl FloatWidth {
 
     pub const fn try_from_symbol(symbol: Symbol) -> Option<Self> {
         match symbol {
-            Symbol::NUM_F64 | Symbol::NUM_BINARY64 | Symbol::NUM_AT_BINARY64 => {
-                Some(FloatWidth::F64)
-            }
+            Symbol::NUM_F64 | Symbol::NUM_BINARY64 => Some(FloatWidth::F64),
 
-            Symbol::NUM_F32 | Symbol::NUM_BINARY32 | Symbol::NUM_AT_BINARY32 => {
-                Some(FloatWidth::F32)
-            }
+            Symbol::NUM_F32 | Symbol::NUM_BINARY32 => Some(FloatWidth::F32),
 
             _ => None,
         }
@@ -136,26 +132,16 @@ impl IntWidth {
 
     pub const fn try_from_symbol(symbol: Symbol) -> Option<Self> {
         match symbol {
-            Symbol::NUM_I128 | Symbol::NUM_SIGNED128 | Symbol::NUM_AT_SIGNED128 => {
-                Some(IntWidth::I128)
-            }
-            Symbol::NUM_I64 | Symbol::NUM_SIGNED64 | Symbol::NUM_AT_SIGNED64 => Some(IntWidth::I64),
-            Symbol::NUM_I32 | Symbol::NUM_SIGNED32 | Symbol::NUM_AT_SIGNED32 => Some(IntWidth::I32),
-            Symbol::NUM_I16 | Symbol::NUM_SIGNED16 | Symbol::NUM_AT_SIGNED16 => Some(IntWidth::I16),
-            Symbol::NUM_I8 | Symbol::NUM_SIGNED8 | Symbol::NUM_AT_SIGNED8 => Some(IntWidth::I8),
-            Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 | Symbol::NUM_AT_UNSIGNED128 => {
-                Some(IntWidth::U128)
-            }
-            Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 | Symbol::NUM_AT_UNSIGNED64 => {
-                Some(IntWidth::U64)
-            }
-            Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 | Symbol::NUM_AT_UNSIGNED32 => {
-                Some(IntWidth::U32)
-            }
-            Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 | Symbol::NUM_AT_UNSIGNED16 => {
-                Some(IntWidth::U16)
-            }
-            Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 | Symbol::NUM_AT_UNSIGNED8 => Some(IntWidth::U8),
+            Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => Some(IntWidth::I128),
+            Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => Some(IntWidth::I64),
+            Symbol::NUM_I32 | Symbol::NUM_SIGNED32 => Some(IntWidth::I32),
+            Symbol::NUM_I16 | Symbol::NUM_SIGNED16 => Some(IntWidth::I16),
+            Symbol::NUM_I8 | Symbol::NUM_SIGNED8 => Some(IntWidth::I8),
+            Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 => Some(IntWidth::U128),
+            Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => Some(IntWidth::U64),
+            Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => Some(IntWidth::U32),
+            Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => Some(IntWidth::U16),
+            Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => Some(IntWidth::U8),
             _ => None,
         }
     }

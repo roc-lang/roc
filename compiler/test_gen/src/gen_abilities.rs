@@ -23,9 +23,9 @@ fn hash_specialization() {
 
             Id := U64
 
-            hash = \$Id n -> n
+            hash = \@Id n -> n
 
-            main = hash ($Id 1234)
+            main = hash (@Id 1234)
             "#
         ),
         1234,
@@ -46,13 +46,13 @@ fn hash_specialization_multiple_add() {
 
             Id := U64
 
-            hash = \$Id n -> n
+            hash = \@Id n -> n
 
             One := {}
 
-            hash = \$One _ -> 1
+            hash = \@One _ -> 1
 
-            main = hash ($Id 1234) + hash ($One {})
+            main = hash (@Id 1234) + hash (@One {})
             "#
         ),
         1235,
@@ -73,11 +73,11 @@ fn alias_member_specialization() {
 
             Id := U64
 
-            hash = \$Id n -> n
+            hash = \@Id n -> n
 
             main =
                 aliasedHash = hash
-                aliasedHash ($Id 1234)
+                aliasedHash (@Id 1234)
             "#
         ),
         1234,
@@ -100,9 +100,9 @@ fn ability_constrained_in_non_member_usage() {
             mulHashes = \x, y -> hash x * hash y
 
             Id := U64
-            hash = \$Id n -> n
+            hash = \@Id n -> n
 
-            result = mulHashes ($Id 5) ($Id 7)
+            result = mulHashes (@Id 5) (@Id 7)
             "#
         ),
         35,
@@ -124,9 +124,9 @@ fn ability_constrained_in_non_member_usage_inferred() {
             mulHashes = \x, y -> hash x * hash y
 
             Id := U64
-            hash = \$Id n -> n
+            hash = \@Id n -> n
 
-            result = mulHashes ($Id 5) ($Id 7)
+            result = mulHashes (@Id 5) (@Id 7)
             "#
         ),
         35,
@@ -149,12 +149,12 @@ fn ability_constrained_in_non_member_multiple_specializations() {
             mulHashes = \x, y -> hash x * hash y
 
             Id := U64
-            hash = \$Id n -> n
+            hash = \@Id n -> n
 
             Three := {}
-            hash = \$Three _ -> 3
+            hash = \@Three _ -> 3
 
-            result = mulHashes ($Id 100) ($Three {})
+            result = mulHashes (@Id 100) (@Three {})
             "#
         ),
         300,
@@ -176,12 +176,12 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
             mulHashes = \x, y -> hash x * hash y
 
             Id := U64
-            hash = \$Id n -> n
+            hash = \@Id n -> n
 
             Three := {}
-            hash = \$Three _ -> 3
+            hash = \@Three _ -> 3
 
-            result = mulHashes ($Id 100) ($Three {})
+            result = mulHashes (@Id 100) (@Three {})
             "#
         ),
         300,
@@ -204,12 +204,12 @@ fn ability_used_as_type_still_compiles() {
             mulHashes = \x, y -> hash x * hash y
 
             Id := U64
-            hash = \$Id n -> n
+            hash = \@Id n -> n
 
             Three := {}
-            hash = \$Three _ -> 3
+            hash = \@Three _ -> 3
 
-            result = mulHashes ($Id 100) ($Three {})
+            result = mulHashes (@Id 100) (@Three {})
             "#
         ),
         300,

@@ -87,6 +87,18 @@ impl<K: PartialEq, V> VecMap<K, V> {
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.values.iter()
     }
+
+    pub fn unzip(self) -> (Vec<K>, Vec<V>) {
+        (self.keys, self.values)
+    }
+
+    /// # Safety
+    ///
+    /// keys and values must have the same length, and there must not
+    /// be any duplicates in the keys vector
+    pub unsafe fn zip(keys: Vec<K>, values: Vec<V>) -> Self {
+        Self { keys, values }
+    }
 }
 
 impl<K: Ord, V> Extend<(K, V)> for VecMap<K, V> {

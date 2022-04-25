@@ -18,3 +18,4 @@ pub mod procedure;
 mod reference_matrix;
 pub mod scope;
 pub mod string;
+pub mod traverse;

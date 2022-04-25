@@ -196,6 +196,7 @@ fn parse_loc_term_or_underscore<'a>(
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(min_indent),
+        loc!(specialize(EExpr::If, if_expr_help(min_indent, options))),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
@@ -1509,8 +1510,8 @@ fn parse_expr_operator<'a>(
                     }
                 }
             }
-            Err((NoProgress, _, _)) => {
-                todo!()
+            Err((NoProgress, expr, e)) => {
+                todo!("{:?} {:?}", expr, e)
             }
         },
     }
@@ -1763,7 +1764,6 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         }
         Expr::Underscore(opt_name) => Ok(Pattern::Underscore(opt_name)),
         Expr::GlobalTag(value) => Ok(Pattern::GlobalTag(value)),
-        Expr::PrivateTag(value) => Ok(Pattern::PrivateTag(value)),
         Expr::OpaqueRef(value) => Ok(Pattern::OpaqueRef(value)),
         Expr::Apply(loc_val, loc_args, _) => {
             let region = loc_val.region;
@@ -2437,7 +2437,6 @@ where
 fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
         Ident::GlobalTag(string) => Expr::GlobalTag(string),
-        Ident::PrivateTag(string) => Expr::PrivateTag(string),
         Ident::OpaqueRef(string) => Expr::OpaqueRef(string),
         Ident::Access { module_name, parts } => {
             let mut iter = parts.iter();
@@ -2762,7 +2761,6 @@ where
         "&&" => good!(BinOp::And, 2),
         "||" => good!(BinOp::Or, 2),
         "//" => good!(BinOp::DoubleSlash, 2),
-        "%%" => good!(BinOp::DoublePercent, 2),
         "->" => {
             // makes no progress, so it does not interfere with `_ if isGood -> ...`
             Err((NoProgress, to_error("->", state.pos()), state))

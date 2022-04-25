@@ -66,10 +66,13 @@ interface Num
             isPositive,
             isNegative,
             rem,
+            remChecked,
             div,
             divChecked,
             sqrt,
+            sqrtChecked,
             log,
+            logChecked,
             round,
             ceiling,
             floor,
@@ -155,25 +158,25 @@ interface Num
             Bool.{ Bool }
         ]
 
-Num range : [ @Num range ]
+Num range := range
 Int range : Num (Integer range)
 Float range : Num (FloatingPoint range)
 
-Signed128 : [ @Signed128 ]
-Signed64 : [ @Signed64 ]
-Signed32 : [ @Signed32 ]
-Signed16 : [ @Signed16 ]
-Signed8 : [ @Signed8 ]
+Signed128 := []
+Signed64 := []
+Signed32 := []
+Signed16 := []
+Signed8 := []
 
-Unsigned128 : [ @Unsigned128 ]
-Unsigned64 : [ @Unsigned64 ]
-Unsigned32 : [ @Unsigned32 ]
-Unsigned16 : [ @Unsigned16 ]
-Unsigned8 : [ @Unsigned8 ]
+Unsigned128 := []
+Unsigned64 := []
+Unsigned32 := []
+Unsigned16 := []
+Unsigned8 := []
 
-Natural : [ @Natural ]
+Natural := []
 
-Integer range : [ @Integer range ]
+Integer range := range
 
 I128 : Num (Integer Signed128)
 I64 : Num (Integer Signed64)
@@ -189,11 +192,11 @@ U8 : Num (Integer Unsigned8)
 
 Nat : Num (Integer Natural)
 
-Decimal : [ @Decimal ]
-Binary64 : [ @Binary64 ]
-Binary32 : [ @Binary32 ]
+Decimal := []
+Binary64 := []
+Binary32 := []
 
-FloatingPoint range : [ @FloatingPoint range ]
+FloatingPoint range := range
 
 F64 : Num (FloatingPoint Binary64)
 F32 : Num (FloatingPoint Binary32)
@@ -239,19 +242,22 @@ asin : Float a -> Float a
 acos : Float a -> Float a
 atan : Float a -> Float a
 
-sqrt : Float a -> Result (Float a) [ SqrtOfNegative ]*
-log : Float a -> Result (Float a) [ LogNeedsPositive ]*
+sqrt : Float a -> Float a
+sqrtChecked : Float a -> Result (Float a) [ SqrtOfNegative ]*
+log : Float a -> Float a
+logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
+
 div : Float a, Float a -> Float a
 divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
-
 divCeil : Int a, Int a -> Int a
 divCeilChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+
 divTrunc : Int a, Int a -> Int a
 divTruncChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
-# mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
-rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
-# mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
+rem : Int a, Int a -> Int a
+remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+
 isMultipleOf : Int a, Int a -> Bool
 
 bitwiseAnd : Int a, Int a -> Int a

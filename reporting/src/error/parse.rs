@@ -38,17 +38,6 @@ fn hint_for_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     ])
 }
 
-fn hint_for_private_tag_name<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
-    alloc.concat([
-        alloc.hint("Private tag names "),
-        alloc.reflow("start with an `@` symbol followed by an uppercase letter, like "),
-        alloc.parser_suggestion("@UID"),
-        alloc.text(" or "),
-        alloc.parser_suggestion("@SecretKey"),
-        alloc.text("."),
-    ])
-}
-
 fn record_patterns_look_like<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.concat([
         alloc.reflow(r"Record pattern look like "),
@@ -2466,23 +2455,6 @@ fn to_ttag_union_report<'a>(
                         alloc.region_with_subregion(lines.convert_region(surroundings), region),
                         alloc.reflow(r"I was expecting to see a tag name."),
                         hint_for_tag_name(alloc),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "WEIRD TAG NAME".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
-                }
-                Next::Other(Some('@')) => {
-                    let doc = alloc.stack([
-                        alloc.reflow(
-                            r"I am partway through parsing a tag union type, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                        alloc.reflow(r"I was expecting to see a private tag name."),
-                        hint_for_private_tag_name(alloc),
                     ]);
 
                     Report {

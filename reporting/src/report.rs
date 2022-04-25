@@ -386,7 +386,6 @@ impl<'a> RocDocAllocator<'a> {
     pub fn tag_name(&'a self, tn: TagName) -> DocBuilder<'a, Self, Annotation> {
         match tn {
             TagName::Global(uppercase) => self.global_tag_name(uppercase),
-            TagName::Private(symbol) => self.private_tag_name(symbol),
             TagName::Closure(_symbol) => unreachable!("closure tags are internal only"),
         }
     }
@@ -418,21 +417,6 @@ impl<'a> RocDocAllocator<'a> {
         .annotate(Annotation::Symbol)
     }
 
-    pub fn private_tag_name(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
-        if symbol.module_id() == self.home {
-            // Render it unqualified if it's in the current module.
-            self.text(format!("{}", symbol.ident_str(self.interns)))
-                .annotate(Annotation::PrivateTag)
-        } else {
-            self.text(format!(
-                "{}.{}",
-                symbol.module_string(self.interns),
-                symbol.ident_str(self.interns),
-            ))
-            .annotate(Annotation::PrivateTag)
-        }
-    }
-
     pub fn global_tag_name(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
         self.text(format!("{}", uppercase))
             .annotate(Annotation::GlobalTag)
@@ -456,8 +440,7 @@ impl<'a> RocDocAllocator<'a> {
     pub fn wrapped_opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
         debug_assert_eq!(opaque.module_id(), self.home, "Opaque wrappings can only be defined in the same module they're defined in, but this one is defined elsewhere: {:?}", opaque);
 
-        // TODO(opaques): $->@
-        self.text(format!("${}", opaque.ident_str(self.interns)))
+        self.text(format!("@{}", opaque.ident_str(self.interns)))
             .annotate(Annotation::Opaque)
     }
 
@@ -808,7 +791,6 @@ pub enum Annotation {
     Url,
     Keyword,
     GlobalTag,
-    PrivateTag,
     RecordField,
     TypeVariable,
     Alias,
@@ -900,8 +882,7 @@ where
             Url => {
                 self.write_str("<")?;
             }
-            GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
-            | TypeVariable
+            GlobalTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion | TypeVariable
                 if !self.in_type_block && !self.in_code_block =>
             {
                 self.write_str("`")?;
@@ -931,7 +912,7 @@ where
                 Url => {
                     self.write_str(">")?;
                 }
-                GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
+                GlobalTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
                 | TypeVariable
                     if !self.in_type_block && !self.in_code_block =>
                 {
@@ -1024,7 +1005,7 @@ where
             ParserSuggestion => {
                 self.write_str(self.palette.parser_suggestion)?;
             }
-            TypeBlock | GlobalTag | PrivateTag | RecordField => { /* nothing yet */ }
+            TypeBlock | GlobalTag | RecordField => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -1042,7 +1023,7 @@ where
                     self.write_str(self.palette.reset)?;
                 }
 
-                TypeBlock | GlobalTag | PrivateTag | Opaque | RecordField => { /* nothing yet */ }
+                TypeBlock | GlobalTag | Opaque | RecordField => { /* nothing yet */ }
             },
         }
         Ok(())

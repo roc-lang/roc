@@ -18,7 +18,7 @@ interface Set
     imports []
 
 ## A Set is an unordered collection of unique elements.
-Set elem : [ @Set elem ]
+Set elem := [ Set elem ]
 
 ## An empty set.
 empty : Set *

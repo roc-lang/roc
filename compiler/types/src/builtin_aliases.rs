@@ -28,53 +28,58 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         aliases.insert(symbol, alias);
     };
 
-    // Int range : [ @Int range ]
+    // Int range : Num (Integer range)
     add_alias(
         Symbol::NUM_INT,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![Loc::at(Region::zero(), "range".into())],
             typ: int_alias_content(flex(TVAR1)),
+            kind: AliasKind::Structural,
         },
     );
 
-    // Float range : [ @Float range ]
+    // Float range : Num (FloatingPoint range)
     add_alias(
         Symbol::NUM_FLOAT,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![Loc::at(Region::zero(), "range".into())],
             typ: float_alias_content(flex(TVAR1)),
+            kind: AliasKind::Structural,
         },
     );
 
-    // Num range : [ @Num range ]
+    // Num range := range
     add_alias(
         Symbol::NUM_NUM,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![Loc::at(Region::zero(), "range".into())],
             typ: num_alias_content(flex(TVAR1)),
+            kind: AliasKind::Opaque,
         },
     );
 
-    // Integer range : [ @Integer range ]
+    // Integer range := range
     add_alias(
         Symbol::NUM_INTEGER,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![Loc::at(Region::zero(), "range".into())],
             typ: integer_alias_content(flex(TVAR1)),
+            kind: AliasKind::Opaque,
         },
     );
 
-    // Natural : [ @Natural ]
+    // Natural := []
     add_alias(
         Symbol::NUM_NATURAL,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![],
             typ: natural_alias_content(),
+            kind: AliasKind::Opaque,
         },
     );
 
@@ -85,16 +90,18 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: nat_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
-    // Signed128 : [ @Signed128 ]
+    // Signed128 := []
     add_alias(
         Symbol::NUM_SIGNED128,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![],
             typ: signed128_alias_content(),
+            kind: AliasKind::Opaque,
         },
     );
 
@@ -105,6 +112,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: i128_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
@@ -115,16 +123,18 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: u128_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
-    // Signed64 : [ @Signed64 ]
+    // Signed64 := []
     add_alias(
         Symbol::NUM_SIGNED64,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![],
             typ: signed64_alias_content(),
+            kind: AliasKind::Opaque,
         },
     );
 
@@ -135,6 +145,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: i64_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
@@ -145,16 +156,18 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: u64_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
-    // Signed32 : [ @Signed32 ]
+    // Signed32 := []
     add_alias(
         Symbol::NUM_SIGNED32,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![],
             typ: signed32_alias_content(),
+            kind: AliasKind::Opaque,
         },
     );
 
@@ -165,6 +178,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: i32_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
@@ -175,16 +189,18 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: u32_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
-    // Signed16 : [ @Signed16 ]
+    // Signed16 := []
     add_alias(
         Symbol::NUM_SIGNED16,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![],
             typ: signed16_alias_content(),
+            kind: AliasKind::Opaque,
         },
     );
 
@@ -195,6 +211,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: i16_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
@@ -205,16 +222,18 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: u16_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
-    // Signed8 : [ @Signed8 ]
+    // Signed8 := []
     add_alias(
         Symbol::NUM_SIGNED8,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![],
             typ: signed8_alias_content(),
+            kind: AliasKind::Opaque,
         },
     );
 
@@ -225,6 +244,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: i8_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
@@ -235,46 +255,51 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: u8_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
-    // Decimal : [ @Decimal ]
+    // Decimal := []
     add_alias(
         Symbol::NUM_DECIMAL,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![],
             typ: decimal_alias_content(),
+            kind: AliasKind::Opaque,
         },
     );
 
-    // Binary64 : [ @Binary64 ]
+    // Binary64 := []
     add_alias(
         Symbol::NUM_BINARY64,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![],
             typ: binary64_alias_content(),
+            kind: AliasKind::Opaque,
         },
     );
 
-    // Binary32 : [ @Binary32 ]
+    // Binary32 := []
     add_alias(
         Symbol::NUM_BINARY32,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![],
             typ: binary32_alias_content(),
+            kind: AliasKind::Opaque,
         },
     );
 
-    // FloatingPoint range : [ @FloatingPoint range ]
+    // FloatingPoint range := range
     add_alias(
         Symbol::NUM_FLOATINGPOINT,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![Loc::at(Region::zero(), "range".into())],
             typ: floatingpoint_alias_content(flex(TVAR1)),
+            kind: AliasKind::Opaque,
         },
     );
 
@@ -285,6 +310,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: dec_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
@@ -295,6 +321,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: f64_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
@@ -305,6 +332,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: f32_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
@@ -315,6 +343,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: bool_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
@@ -325,6 +354,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: str_utf8_byte_problem_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
@@ -335,6 +365,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: Vec::new(),
             typ: str_utf8_byte_problem_alias_content(),
+            kind: AliasKind::Structural,
         },
     );
 
@@ -353,13 +384,13 @@ pub fn num_type(range: SolvedType) -> SolvedType {
         vec![("range".into(), range.clone())],
         vec![],
         Box::new(num_alias_content(range)),
-        AliasKind::Structural,
+        AliasKind::Opaque,
     )
 }
 
 #[inline(always)]
 fn num_alias_content(range: SolvedType) -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_NUM, vec![range])
+    range
 }
 
 // FLOATING POINT
@@ -371,13 +402,13 @@ pub fn floatingpoint_type(range: SolvedType) -> SolvedType {
         vec![("range".into(), range.clone())],
         vec![],
         Box::new(floatingpoint_alias_content(range)),
-        AliasKind::Structural,
+        AliasKind::Opaque,
     )
 }
 
 #[inline(always)]
 fn floatingpoint_alias_content(range: SolvedType) -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_FLOATINGPOINT, vec![range])
+    range
 }
 
 // FLOAT
@@ -659,13 +690,13 @@ pub fn integer_type(range: SolvedType) -> SolvedType {
         vec![("range".into(), range.clone())],
         vec![],
         Box::new(integer_alias_content(range)),
-        AliasKind::Structural,
+        AliasKind::Opaque,
     )
 }
 
 #[inline(always)]
 fn integer_alias_content(range: SolvedType) -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_INTEGER, vec![range])
+    range
 }
 
 #[inline(always)]
@@ -681,7 +712,7 @@ pub fn binary64_type() -> SolvedType {
 
 #[inline(always)]
 pub fn binary64_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_BINARY64, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -697,7 +728,7 @@ pub fn binary32_type() -> SolvedType {
 
 #[inline(always)]
 fn binary32_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_BINARY32, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -713,7 +744,7 @@ pub fn natural_type() -> SolvedType {
 
 #[inline(always)]
 fn natural_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_NATURAL, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -729,7 +760,7 @@ pub fn signed128_type() -> SolvedType {
 
 #[inline(always)]
 fn signed128_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_SIGNED128, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -745,7 +776,7 @@ pub fn signed64_type() -> SolvedType {
 
 #[inline(always)]
 fn signed64_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_SIGNED64, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -761,7 +792,7 @@ pub fn signed32_type() -> SolvedType {
 
 #[inline(always)]
 fn signed32_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_SIGNED32, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -777,7 +808,7 @@ pub fn signed16_type() -> SolvedType {
 
 #[inline(always)]
 fn signed16_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_SIGNED16, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -793,7 +824,7 @@ pub fn signed8_type() -> SolvedType {
 
 #[inline(always)]
 fn signed8_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_SIGNED8, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -809,7 +840,7 @@ pub fn unsigned128_type() -> SolvedType {
 
 #[inline(always)]
 fn unsigned128_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_UNSIGNED128, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -825,7 +856,7 @@ pub fn unsigned64_type() -> SolvedType {
 
 #[inline(always)]
 fn unsigned64_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_UNSIGNED64, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -841,7 +872,7 @@ pub fn unsigned32_type() -> SolvedType {
 
 #[inline(always)]
 fn unsigned32_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_UNSIGNED32, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -857,7 +888,7 @@ pub fn unsigned16_type() -> SolvedType {
 
 #[inline(always)]
 fn unsigned16_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_UNSIGNED16, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
@@ -873,12 +904,12 @@ pub fn unsigned8_type() -> SolvedType {
 
 #[inline(always)]
 fn unsigned8_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_UNSIGNED8, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 #[inline(always)]
 fn decimal_alias_content() -> SolvedType {
-    single_private_tag(Symbol::NUM_AT_DECIMAL, vec![])
+    SolvedType::EmptyTagUnion
 }
 
 // Dec
@@ -1044,11 +1075,4 @@ pub fn set_type(a: SolvedType) -> SolvedType {
 #[inline(always)]
 pub fn dict_type(key: SolvedType, value: SolvedType) -> SolvedType {
     SolvedType::Apply(Symbol::DICT_DICT, vec![key, value])
-}
-
-pub fn single_private_tag(symbol: Symbol, type_arguments: Vec<SolvedType>) -> SolvedType {
-    SolvedType::TagUnion(
-        vec![(TagName::Private(symbol), type_arguments)],
-        Box::new(SolvedType::EmptyTagUnion),
-    )
 }

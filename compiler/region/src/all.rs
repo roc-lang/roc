@@ -377,6 +377,17 @@ impl LineInfo {
             end: self.convert_pos(region.end()),
         }
     }
+
+    pub fn convert_line_column(&self, lc: LineColumn) -> Position {
+        let offset = self.line_offsets[lc.line as usize] + lc.column;
+        Position::new(offset)
+    }
+
+    pub fn convert_line_column_region(&self, lc_region: LineColumnRegion) -> Region {
+        let start = self.convert_line_column(lc_region.start);
+        let end = self.convert_line_column(lc_region.end);
+        Region::new(start, end)
+    }
 }
 
 #[test]

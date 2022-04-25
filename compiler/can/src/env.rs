@@ -7,7 +7,7 @@ use roc_region::all::{Loc, Region};
 
 /// The canonicalization environment for a particular module.
 pub struct Env<'a> {
-    /// The module's path. Private tags and unqualified references to identifiers
+    /// The module's path. Opaques and unqualified references to identifiers
     /// are assumed to be relative to this path.
     pub home: ModuleId,
 
@@ -181,9 +181,5 @@ impl<'a> Env<'a> {
 
     pub fn problem(&mut self, problem: Problem) {
         self.problems.push(problem)
-    }
-
-    pub fn register_closure(&mut self, symbol: Symbol, references: References) {
-        self.closures.insert(symbol, references);
     }
 }

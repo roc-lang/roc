@@ -163,8 +163,7 @@ pub enum Expr {
         name: TagName,
     },
 
-    /// A wrapping of an opaque type, like `$Age 21`
-    // TODO(opaques): $->@ above when opaques land
+    /// A wrapping of an opaque type, like `@Age 21`
     OpaqueRef {
         opaque_var: Variable,
         name: Symbol,
@@ -291,6 +290,23 @@ pub struct WhenBranch {
     pub patterns: Vec<Loc<Pattern>>,
     pub value: Loc<Expr>,
     pub guard: Option<Loc<Expr>>,
+}
+
+impl WhenBranch {
+    pub fn pattern_region(&self) -> Region {
+        Region::span_across(
+            &self
+                .patterns
+                .first()
+                .expect("when branch has no pattern?")
+                .region,
+            &self
+                .patterns
+                .last()
+                .expect("when branch has no pattern?")
+                .region,
+        )
+    }
 }
 
 pub fn canonicalize_expr<'a>(
@@ -699,7 +715,9 @@ pub fn canonicalize_expr<'a>(
                 }
             }
 
-            env.register_closure(symbol, output.references.clone());
+            // store the references of this function in the Env. This information is used
+            // when we canonicalize a surrounding def (if it exists)
+            env.closures.insert(symbol, output.references.clone());
 
             let mut captured_symbols: Vec<_> = captured_symbols
                 .into_iter()
@@ -807,23 +825,6 @@ pub fn canonicalize_expr<'a>(
                     variant_var,
                     closure_name: symbol,
                     ext_var,
-                },
-                Output::default(),
-            )
-        }
-        ast::Expr::PrivateTag(tag) => {
-            let variant_var = var_store.fresh();
-            let ext_var = var_store.fresh();
-            let tag_ident = env.ident_ids.get_or_insert(&(*tag).into());
-            let symbol = Symbol::new(env.home, tag_ident);
-            let lambda_set_symbol = env.gen_unique_symbol();
-
-            (
-                ZeroArgumentTag {
-                    name: TagName::Private(symbol),
-                    variant_var,
-                    ext_var,
-                    closure_name: lambda_set_symbol,
                 },
                 Output::default(),
             )
