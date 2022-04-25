@@ -4,7 +4,7 @@ interface Variable
 
 # Variables in False can only be single letters. Thus, the valid variables are "a" to "z".
 # This opaque type deals with ensure we always have valid variables.
-Variable : [ @Variable U8 ]
+Variable := U8
 
 totalCount : Nat
 totalCount =

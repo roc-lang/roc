@@ -1055,10 +1055,10 @@ fn phantom_polymorphic() {
             r"#
                 Point coordinate : [ Point coordinate I64 I64 ]
 
-                World : [ @World ]
+                World := {}
 
                 zero : Point World
-                zero = Point @World 0 0
+                zero = Point (@World {}) 0 0
 
                 add : Point a -> Point a
                 add = \(Point c x y) -> (Point c x y)
@@ -1593,11 +1593,11 @@ fn opaque_assign_to_symbol() {
 
             fromUtf8 : U8 -> Result Variable [ InvalidVariableUtf8 ]
             fromUtf8 = \char ->
-                Ok ($Variable char)
+                Ok (@Variable char)
 
             out =
                 when fromUtf8 98 is
-                    Ok ($Variable n) -> n
+                    Ok (@Variable n) -> n
                     _ -> 1
             "#
         ),

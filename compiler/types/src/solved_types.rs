@@ -78,6 +78,7 @@ pub struct BuiltinAlias {
     pub region: Region,
     pub vars: Vec<Loc<Lowercase>>,
     pub typ: SolvedType,
+    pub kind: AliasKind,
 }
 
 #[derive(Debug, Clone, Default)]

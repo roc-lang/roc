@@ -151,7 +151,6 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | MalformedClosure
         | PrecedenceConflict { .. }
         | GlobalTag(_)
-        | PrivateTag(_)
         | OpaqueRef(_) => loc_expr,
 
         Access(sub_expr, paths) => {

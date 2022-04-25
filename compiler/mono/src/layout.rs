@@ -983,6 +983,16 @@ pub const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
     }
 }
 
+#[inline(always)]
+pub fn is_unresolved_var(subs: &Subs, var: Variable) -> bool {
+    use Content::*;
+    let content = subs.get_content_without_compacting(var);
+    matches!(
+        content,
+        FlexVar(..) | RigidVar(..) | FlexAbleVar(..) | RigidAbleVar(..),
+    )
+}
+
 impl<'a> Layout<'a> {
     pub const VOID: Self = Layout::Union(UnionLayout::NonRecursive(&[]));
     pub const UNIT: Self = Layout::Struct {
@@ -1015,12 +1025,24 @@ impl<'a> Layout<'a> {
                 }
 
                 match symbol {
-                    Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => {
-                        return Ok(Layout::Builtin(Builtin::Decimal))
+                    Symbol::NUM_DECIMAL => return Ok(Layout::Builtin(Builtin::Decimal)),
+
+                    Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
+                        return Ok(Layout::usize(env.target_info))
                     }
 
-                    Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
-                        return Ok(Layout::usize(env.target_info))
+                    Symbol::NUM_NUM | Symbol::NUM_INT | Symbol::NUM_INTEGER
+                        if is_unresolved_var(env.subs, actual_var) =>
+                    {
+                        // default to i64
+                        return Ok(Layout::i64());
+                    }
+
+                    Symbol::NUM_FLOAT | Symbol::NUM_FLOATINGPOINT
+                        if is_unresolved_var(env.subs, actual_var) =>
+                    {
+                        // default to f64
+                        return Ok(Layout::f64());
                     }
 
                     _ => Self::from_var(env, actual_var),
@@ -1689,7 +1711,7 @@ fn layout_from_flat_type<'a>(
                     Ok(Layout::f32())
                 }
 
-                Symbol::NUM_NUM | Symbol::NUM_AT_NUM => {
+                Symbol::NUM_NUM => {
                     // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
                     debug_assert_eq!(args.len(), 1);
 
@@ -2135,31 +2157,20 @@ fn union_sorted_tags_help_new<'a>(
             // just one tag in the union (but with arguments) can be a struct
             let mut layouts = Vec::with_capacity_in(tags_list.len(), env.arena);
 
-            // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
-            match tag_name {
-                TagName::Private(Symbol::NUM_AT_NUM) => {
-                    let var = arguments[0];
-                    layouts.push(
-                        unwrap_num_tag(env.subs, var, env.target_info).expect("invalid num layout"),
-                    );
-                }
-                _ => {
-                    for &var in arguments {
-                        match Layout::from_var(env, var) {
-                            Ok(layout) => {
-                                layouts.push(layout);
-                            }
-                            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-                                // If we encounter an unbound type var (e.g. `Ok *`)
-                                // then it's zero-sized; In the future we may drop this argument
-                                // completely, but for now we represent it with the empty tag union
-                                layouts.push(Layout::VOID)
-                            }
-                            Err(LayoutProblem::Erroneous) => {
-                                // An erroneous type var will code gen to a runtime
-                                // error, so we don't need to store any data for it.
-                            }
-                        }
+            for &var in arguments {
+                match Layout::from_var(env, var) {
+                    Ok(layout) => {
+                        layouts.push(layout);
+                    }
+                    Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                        // If we encounter an unbound type var (e.g. `Ok *`)
+                        // then it's zero-sized; In the future we may drop this argument
+                        // completely, but for now we represent it with the empty tag union
+                        layouts.push(Layout::VOID)
+                    }
+                    Err(LayoutProblem::Erroneous) => {
+                        // An erroneous type var will code gen to a runtime
+                        // error, so we don't need to store any data for it.
                     }
                 }
             }
@@ -2341,36 +2352,25 @@ pub fn union_sorted_tags_help<'a>(
             let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
             let mut contains_zero_sized = false;
 
-            // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
-            match tag_name {
-                TagName::Private(Symbol::NUM_AT_NUM) => {
-                    layouts.push(
-                        unwrap_num_tag(subs, arguments[0], target_info)
-                            .expect("invalid num layout"),
-                    );
-                }
-                _ => {
-                    for var in arguments {
-                        match Layout::from_var(&mut env, var) {
-                            Ok(layout) => {
-                                // Drop any zero-sized arguments like {}
-                                if !layout.is_dropped_because_empty() {
-                                    layouts.push(layout);
-                                } else {
-                                    contains_zero_sized = true;
-                                }
-                            }
-                            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-                                // If we encounter an unbound type var (e.g. `Ok *`)
-                                // then it's zero-sized; In the future we may drop this argument
-                                // completely, but for now we represent it with the empty tag union
-                                layouts.push(Layout::VOID)
-                            }
-                            Err(LayoutProblem::Erroneous) => {
-                                // An erroneous type var will code gen to a runtime
-                                // error, so we don't need to store any data for it.
-                            }
+            for var in arguments {
+                match Layout::from_var(&mut env, var) {
+                    Ok(layout) => {
+                        // Drop any zero-sized arguments like {}
+                        if !layout.is_dropped_because_empty() {
+                            layouts.push(layout);
+                        } else {
+                            contains_zero_sized = true;
                         }
+                    }
+                    Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                        // If we encounter an unbound type var (e.g. `Ok *`)
+                        // then it's zero-sized; In the future we may drop this argument
+                        // completely, but for now we represent it with the empty tag union
+                        layouts.push(Layout::VOID)
+                    }
+                    Err(LayoutProblem::Erroneous) => {
+                        // An erroneous type var will code gen to a runtime
+                        // error, so we don't need to store any data for it.
                     }
                 }
             }
@@ -2529,24 +2529,20 @@ pub fn union_sorted_tags_help<'a>(
 fn layout_from_newtype<'a>(env: &mut Env<'a, '_>, tags: &UnsortedUnionTags) -> Layout<'a> {
     debug_assert!(tags.is_newtype_wrapper(env.subs));
 
-    let (tag_name, var) = tags.get_newtype(env.subs);
+    let (_tag_name, var) = tags.get_newtype(env.subs);
 
-    if tag_name == &TagName::Private(Symbol::NUM_AT_NUM) {
-        unwrap_num_tag(env.subs, var, env.target_info).expect("invalid Num argument")
-    } else {
-        match Layout::from_var(env, var) {
-            Ok(layout) => layout,
-            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-                // If we encounter an unbound type var (e.g. `Ok *`)
-                // then it's zero-sized; In the future we may drop this argument
-                // completely, but for now we represent it with the empty tag union
-                Layout::VOID
-            }
-            Err(LayoutProblem::Erroneous) => {
-                // An erroneous type var will code gen to a runtime
-                // error, so we don't need to store any data for it.
-                todo!()
-            }
+    match Layout::from_var(env, var) {
+        Ok(layout) => layout,
+        Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+            // If we encounter an unbound type var (e.g. `Ok *`)
+            // then it's zero-sized; In the future we may drop this argument
+            // completely, but for now we represent it with the empty tag union
+            Layout::VOID
+        }
+        Err(LayoutProblem::Erroneous) => {
+            // An erroneous type var will code gen to a runtime
+            // error, so we don't need to store any data for it.
+            todo!()
         }
     }
 }
@@ -2560,76 +2556,65 @@ fn layout_from_tag_union<'a>(env: &mut Env<'a, '_>, tags: &UnsortedUnionTags) ->
 
     let tags_vec = &tags.tags;
 
-    match tags_vec.get(0) {
-        Some((tag_name, arguments)) if *tag_name == &TagName::Private(Symbol::NUM_AT_NUM) => {
-            debug_assert_eq!(arguments.len(), 1);
+    let opt_rec_var = None;
+    let variant = union_sorted_tags_help_new(env, tags_vec, opt_rec_var);
 
-            let &var = arguments.iter().next().unwrap();
+    match variant {
+        Never => Layout::VOID,
+        Unit | UnitWithArguments => Layout::UNIT,
+        BoolUnion { .. } => Layout::bool(),
+        ByteUnion(_) => Layout::u8(),
+        Newtype {
+            arguments: field_layouts,
+            ..
+        } => {
+            let answer1 = if field_layouts.len() == 1 {
+                field_layouts[0]
+            } else {
+                Layout::struct_no_name_order(field_layouts.into_bump_slice())
+            };
 
-            unwrap_num_tag(env.subs, var, env.target_info).expect("invalid Num argument")
+            answer1
         }
-        _ => {
-            let opt_rec_var = None;
-            let variant = union_sorted_tags_help_new(env, tags_vec, opt_rec_var);
+        Wrapped(variant) => {
+            use WrappedVariant::*;
 
             match variant {
-                Never => Layout::VOID,
-                Unit | UnitWithArguments => Layout::UNIT,
-                BoolUnion { .. } => Layout::bool(),
-                ByteUnion(_) => Layout::u8(),
-                Newtype {
-                    arguments: field_layouts,
-                    ..
+                NonRecursive {
+                    sorted_tag_layouts: tags,
                 } => {
-                    let answer1 = if field_layouts.len() == 1 {
-                        field_layouts[0]
-                    } else {
-                        Layout::struct_no_name_order(field_layouts.into_bump_slice())
-                    };
+                    let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
+                    tag_layouts.extend(tags.iter().map(|r| r.1));
 
-                    answer1
+                    Layout::Union(UnionLayout::NonRecursive(tag_layouts.into_bump_slice()))
                 }
-                Wrapped(variant) => {
-                    use WrappedVariant::*;
 
-                    match variant {
-                        NonRecursive {
-                            sorted_tag_layouts: tags,
-                        } => {
-                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
-                            tag_layouts.extend(tags.iter().map(|r| r.1));
+                Recursive {
+                    sorted_tag_layouts: tags,
+                } => {
+                    let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
+                    tag_layouts.extend(tags.iter().map(|r| r.1));
 
-                            Layout::Union(UnionLayout::NonRecursive(tag_layouts.into_bump_slice()))
-                        }
-
-                        Recursive {
-                            sorted_tag_layouts: tags,
-                        } => {
-                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
-                            tag_layouts.extend(tags.iter().map(|r| r.1));
-
-                            debug_assert!(tag_layouts.len() > 1);
-                            Layout::Union(UnionLayout::Recursive(tag_layouts.into_bump_slice()))
-                        }
-
-                        NullableWrapped {
-                            nullable_id,
-                            nullable_name: _,
-                            sorted_tag_layouts: tags,
-                        } => {
-                            let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
-                            tag_layouts.extend(tags.iter().map(|r| r.1));
-
-                            Layout::Union(UnionLayout::NullableWrapped {
-                                nullable_id,
-                                other_tags: tag_layouts.into_bump_slice(),
-                            })
-                        }
-
-                        NullableUnwrapped { .. } => todo!(),
-                        NonNullableUnwrapped { .. } => todo!(),
-                    }
+                    debug_assert!(tag_layouts.len() > 1);
+                    Layout::Union(UnionLayout::Recursive(tag_layouts.into_bump_slice()))
                 }
+
+                NullableWrapped {
+                    nullable_id,
+                    nullable_name: _,
+                    sorted_tag_layouts: tags,
+                } => {
+                    let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
+                    tag_layouts.extend(tags.iter().map(|r| r.1));
+
+                    Layout::Union(UnionLayout::NullableWrapped {
+                        nullable_id,
+                        other_tags: tag_layouts.into_bump_slice(),
+                    })
+                }
+
+                NullableUnwrapped { .. } => todo!(),
+                NonNullableUnwrapped { .. } => todo!(),
             }
         }
     }
@@ -2724,88 +2709,6 @@ fn layout_from_num_content<'a>(
             panic!("Invalid Num.Num type application: {:?}", content);
         }
         Error => Err(LayoutProblem::Erroneous),
-    }
-}
-
-fn unwrap_num_tag<'a>(
-    subs: &Subs,
-    var: Variable,
-    target_info: TargetInfo,
-) -> Result<Layout<'a>, LayoutProblem> {
-    match subs.get_content_without_compacting(var) {
-        Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
-            debug_assert!(args.len() == 1);
-
-            let precision_var = subs[args.all_variables().into_iter().next().unwrap()];
-
-            let precision = subs.get_content_without_compacting(precision_var);
-
-            match precision {
-                Content::Alias(symbol, args, _, _) => {
-                    debug_assert!(args.is_empty());
-
-                    let layout = match *symbol {
-                        Symbol::NUM_SIGNED128 => Layout::i128(),
-                        Symbol::NUM_SIGNED64 => Layout::i64(),
-                        Symbol::NUM_SIGNED32 => Layout::i32(),
-                        Symbol::NUM_SIGNED16 => Layout::i16(),
-                        Symbol::NUM_SIGNED8 => Layout::i8(),
-                        Symbol::NUM_UNSIGNED128 => Layout::u128(),
-                        Symbol::NUM_UNSIGNED64 => Layout::u64(),
-                        Symbol::NUM_UNSIGNED32 => Layout::u32(),
-                        Symbol::NUM_UNSIGNED16 => Layout::u16(),
-                        Symbol::NUM_UNSIGNED8 => Layout::u8(),
-                        Symbol::NUM_NATURAL => Layout::usize(target_info),
-
-                        _ => unreachable!("not a valid int variant: {:?} {:?}", symbol, args),
-                    };
-
-                    Ok(layout)
-                }
-                Content::FlexVar(_) | Content::RigidVar(_) => {
-                    // default to i64
-                    Ok(Layout::i64())
-                }
-                _ => unreachable!("not a valid int variant: {:?}", precision),
-            }
-        }
-        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _, _) => {
-            debug_assert!(args.len() == 1);
-
-            let precision_var = subs[args.all_variables().into_iter().next().unwrap()];
-
-            let precision = subs.get_content_without_compacting(precision_var);
-
-            match precision {
-                Content::Alias(Symbol::NUM_BINARY32, args, _, _) => {
-                    debug_assert!(args.is_empty());
-
-                    Ok(Layout::f32())
-                }
-                Content::Alias(Symbol::NUM_BINARY64, args, _, _) => {
-                    debug_assert!(args.is_empty());
-
-                    Ok(Layout::f64())
-                }
-                Content::Alias(Symbol::NUM_DECIMAL, args, _, _) => {
-                    debug_assert!(args.is_empty());
-
-                    Ok(Layout::Builtin(Builtin::Decimal))
-                }
-                Content::FlexVar(_) | Content::RigidVar(_) => {
-                    // default to f64
-                    Ok(Layout::f64())
-                }
-                _ => unreachable!("not a valid float variant: {:?}", precision),
-            }
-        }
-        Content::FlexVar(_) | Content::RigidVar(_) => {
-            // If this was still a (Num *) then default to compiling it to i64
-            Ok(Layout::default_integer())
-        }
-        other => {
-            todo!("TODO non structure Num.@Num flat_type {:?}", other);
-        }
     }
 }
 

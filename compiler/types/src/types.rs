@@ -1068,6 +1068,19 @@ impl Type {
         result
     }
 
+    pub fn shallow_structural_dealias(&self) -> &Self {
+        let mut result = self;
+        while let Type::Alias {
+            actual,
+            kind: AliasKind::Structural,
+            ..
+        } = result
+        {
+            result = actual;
+        }
+        result
+    }
+
     pub fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,

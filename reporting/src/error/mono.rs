@@ -145,7 +145,7 @@ fn pattern_to_doc_help<'b>(
 ) -> RocDocBuilder<'b> {
     use roc_exhaustive::Literal::*;
     use roc_exhaustive::Pattern::*;
-    use roc_exhaustive::RenderAs;
+    use roc_exhaustive::{CtorName, RenderAs};
 
     match pattern {
         Anything => alloc.text("_"),
@@ -163,10 +163,9 @@ fn pattern_to_doc_help<'b>(
             match union.render_as {
                 RenderAs::Guard => {
                     // #Guard <fake-condition-tag> <unexhausted-pattern>
-                    debug_assert_eq!(
-                        union.alternatives[tag_id.0 as usize].name,
-                        TagName::Global("#Guard".into())
-                    );
+                    debug_assert!(union.alternatives[tag_id.0 as usize]
+                        .name
+                        .is_tag(&TagName::Global("#Guard".into())),);
                     debug_assert!(args.len() == 2);
                     let tag = pattern_to_doc_help(alloc, args[1].clone(), in_type_param);
                     alloc.concat([
@@ -207,18 +206,17 @@ fn pattern_to_doc_help<'b>(
                         .into_iter()
                         .map(|v| pattern_to_doc_help(alloc, v, true));
 
-                    let tag = &union.alternatives[tag_id.0 as usize];
-                    let tag_name = match union.render_as {
-                        RenderAs::Tag => alloc.tag_name(tag.name.clone()),
-                        RenderAs::Opaque => match tag.name {
-                            TagName::Private(opaque) => alloc.wrapped_opaque_name(opaque),
-                            _ => unreachable!(),
-                        },
+                    let ctor = &union.alternatives[tag_id.0 as usize];
+                    let tag_name = match (union.render_as, &ctor.name) {
+                        (RenderAs::Tag, CtorName::Tag(tag)) => alloc.tag_name(tag.clone()),
+                        (RenderAs::Opaque, CtorName::Opaque(opaque)) => {
+                            alloc.wrapped_opaque_name(*opaque)
+                        }
                         _ => unreachable!(),
                     };
 
                     // We assume the alternatives are sorted. If not, this assert will trigger
-                    debug_assert!(tag_id == tag.tag_id);
+                    debug_assert!(tag_id == ctor.tag_id);
 
                     let docs = std::iter::once(tag_name).chain(arg_docs);
 

@@ -269,17 +269,6 @@ pub fn canonicalize_pattern<'a>(
                 arguments: vec![],
             }
         }
-        PrivateTag(name) => {
-            let ident_id = env.ident_ids.get_or_insert(&(*name).into());
-
-            // Canonicalize the tag's name.
-            Pattern::AppliedTag {
-                whole_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                tag_name: TagName::Private(Symbol::new(env.home, ident_id)),
-                arguments: vec![],
-            }
-        }
         OpaqueRef(name) => {
             // If this opaque ref had an argument, we would be in the "Apply" branch.
             let loc_name = Loc::at(region, (*name).into());
@@ -307,17 +296,6 @@ pub fn canonicalize_pattern<'a>(
             match tag.value {
                 GlobalTag(name) => {
                     let tag_name = TagName::Global(name.into());
-                    Pattern::AppliedTag {
-                        whole_var: var_store.fresh(),
-                        ext_var: var_store.fresh(),
-                        tag_name,
-                        arguments: can_patterns,
-                    }
-                }
-                PrivateTag(name) => {
-                    let ident_id = env.ident_ids.get_or_insert(&name.into());
-                    let tag_name = TagName::Private(Symbol::new(env.home, ident_id));
-
                     Pattern::AppliedTag {
                         whole_var: var_store.fresh(),
                         ext_var: var_store.fresh(),

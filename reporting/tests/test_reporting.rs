@@ -4528,30 +4528,6 @@ mod test_reporting {
     }
 
     #[test]
-    fn qualified_private_tag() {
-        report_problem_as(
-            indoc!(
-                r#"
-                @Foo.Bar
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am very confused by this expression:
-
-                1│  @Foo.Bar
-                        ^^^^
-
-                Looks like a private tag is treated like a module name. Maybe you
-                wanted a qualified name, like Json.Decode.string?
-            "#
-            ),
-        )
-    }
-
-    #[test]
     fn type_annotation_double_colon() {
         report_problem_as(
             indoc!(
@@ -5210,36 +5186,6 @@ mod test_reporting {
                                    ^
 
                 Note: I may be confused by indentation
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn invalid_private_tag_name() {
-        // TODO could do better by pointing out we're parsing a function type
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [ @Foo Str, @100 I64 ]
-                f = 0
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── WEIRD TAG NAME ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a tag union type, but I got stuck here:
-
-                1│  f : [ @Foo Str, @100 I64 ]
-                                    ^
-
-                I was expecting to see a private tag name.
-
-                Hint: Private tag names start with an `@` symbol followed by an
-                uppercase letter, like @UID or @SecretKey.
             "#
             ),
         )
@@ -6028,32 +5974,7 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn private_tag_not_uppercase() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Num.add @foo 23
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am trying to parse a private tag here:
-
-                1│  Num.add @foo 23
-                             ^
-
-                But after the `@` symbol I found a lowercase letter. All tag names
-                (global and private) must start with an uppercase letter, like @UUID
-                or @Secrets.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn private_tag_field_access() {
+    fn opaque_ref_field_access() {
         report_problem_as(
             indoc!(
                 r#"
@@ -6067,29 +5988,6 @@ I need all branches in an `if` to have the same type!
                 I am very confused by this field access:
 
                 1│  @UUID.bar
-                         ^^^^
-
-                It looks like a record field access on a private tag.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn opaque_ref_field_access() {
-        report_problem_as(
-            indoc!(
-                r#"
-                $UUID.bar
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am very confused by this field access:
-
-                1│  $UUID.bar
                          ^^^^
 
                 It looks like a record field access on an opaque reference.
@@ -7385,10 +7283,10 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Job : [ @Job { inputs : List Str } ]
+                Job : [ Job { inputs : List Str } ]
                 job : { inputs ? List Str } -> Job
                 job = \{ inputs } ->
-                    @Job { inputs }
+                    Job { inputs }
 
                 job { inputs: [ "build", "test" ] }
                 "#
@@ -7423,11 +7321,11 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Job : [ @Job { inputs : List Job } ]
+                Job : [ Job { inputs : List Job } ]
 
                 job : { inputs : List Str } -> Job
                 job = \{ inputs } ->
-                    @Job { inputs }
+                    Job { inputs }
 
                 job { inputs: [ "build", "test" ] }
                 "#
@@ -7440,16 +7338,16 @@ I need all branches in an `if` to have the same type!
 
                 3│  job : { inputs : List Str } -> Job
                 4│  job = \{ inputs } ->
-                5│      @Job { inputs }
-                        ^^^^^^^^^^^^^^^
+                5│      Job { inputs }
+                        ^^^^^^^^^^^^^^
 
-                This `@Job` private tag application has the type:
+                This `Job` global tag application has the type:
 
-                    [ @Job { inputs : List Str } ]
+                    [ Job { inputs : List Str } ]
 
                 But the type annotation on `job` says it should be:
 
-                    [ @Job { inputs : List a } ] as a
+                    [ Job { inputs : List a } ] as a
                 "#
             ),
         )
@@ -8339,7 +8237,7 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                $Age 21
+                @Age 21
                 "#
             ),
             indoc!(
@@ -8348,7 +8246,7 @@ I need all branches in an `if` to have the same type!
 
                 The opaque type Age referenced here is not defined:
 
-                1│  $Age 21
+                1│  @Age 21
                     ^^^^
 
                 Note: It looks like there are no opaque types declared in this scope yet!
@@ -8364,7 +8262,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 Age : Num.U8
 
-                $Age 21
+                @Age 21
                 "#
             ),
             indoc!(
@@ -8373,7 +8271,7 @@ I need all branches in an `if` to have the same type!
 
                 The opaque type Age referenced here is not defined:
 
-                3│  $Age 21
+                3│  @Age 21
                     ^^^^
 
                 Note: There is an alias of the same name:
@@ -8402,19 +8300,19 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                OtherModule.$Age 21
+                OtherModule.@Age 21
                 "#
             ),
-            // TODO: get rid of the first error. Consider parsing OtherModule.$Age to completion
+            // TODO: get rid of the first error. Consider parsing OtherModule.@Age to completion
             // and checking it during can. The reason the error appears is because it is parsed as
-            // Apply(Error(OtherModule), [ $Age, 21 ])
+            // Apply(Error(OtherModule), [ @Age, 21 ])
             indoc!(
                 r#"
                 ── OPAQUE TYPE NOT APPLIED ─────────────────────────────── /code/proj/Main.roc ─
 
                 This opaque type is not applied to an argument:
 
-                1│  OtherModule.$Age 21
+                1│  OtherModule.@Age 21
                                 ^^^^
 
                 Note: Opaque types always wrap exactly one argument!
@@ -8423,7 +8321,7 @@ I need all branches in an `if` to have the same type!
 
                 I am trying to parse a qualified name here:
 
-                1│  OtherModule.$Age 21
+                1│  OtherModule.@Age 21
                                 ^
 
                 I was expecting to see an identifier next, like height. A complete
@@ -8442,11 +8340,11 @@ I need all branches in an `if` to have the same type!
                     Age := Num.U8
                     21u8
 
-                $Age age
+                @Age age
                 "#
             ),
             // TODO(opaques): there is a potential for a better error message here, if the usage of
-            // `$Age` can be linked to the declaration of `Age` inside `age`, and a suggestion to
+            // `@Age` can be linked to the declaration of `Age` inside `age`, and a suggestion to
             // raise that declaration to the outer scope.
             indoc!(
                 r#"
@@ -8464,7 +8362,7 @@ I need all branches in an `if` to have the same type!
 
                 The opaque type Age referenced here is not defined:
 
-                5│  $Age age
+                5│  @Age age
                     ^^^^
 
                 Note: It looks like there are no opaque types declared in this scope yet!
@@ -8512,7 +8410,7 @@ I need all branches in an `if` to have the same type!
                 Age := Num.U8
 
                 n : Age
-                n = $Age ""
+                n = @Age ""
 
                 n
                 "#
@@ -8525,7 +8423,7 @@ I need all branches in an `if` to have the same type!
 
                 This expression is used in an unexpected way:
 
-                4│  n = $Age ""
+                4│  n = @Age ""
                              ^^
 
                 This argument to an opaque type has type:
@@ -8548,8 +8446,8 @@ I need all branches in an `if` to have the same type!
                 F n := n
 
                 if True
-                then $F ""
-                else $F {}
+                then @F ""
+                else @F {}
                 "#
             ),
             indoc!(
@@ -8558,7 +8456,7 @@ I need all branches in an `if` to have the same type!
 
                 This expression is used in an unexpected way:
 
-                5│  else $F {}
+                5│  else @F {}
                             ^^
 
                 This argument to an opaque type has type:
@@ -8663,8 +8561,8 @@ I need all branches in an `if` to have the same type!
 
                 \x ->
                     when x is
-                        $F A -> ""
-                        $F {} -> ""
+                        @F A -> ""
+                        @F {} -> ""
                 "#
             ),
             indoc!(
@@ -8673,7 +8571,7 @@ I need all branches in an `if` to have the same type!
 
                 The 2nd pattern in this `when` does not match the previous ones:
 
-                6│          $F {} -> ""
+                6│          @F {} -> ""
                             ^^^^^
 
                 The 2nd pattern is trying to matchF unwrappings of type:
@@ -8698,8 +8596,8 @@ I need all branches in an `if` to have the same type!
                 v : F [ A, B, C ]
 
                 when v is
-                    $F A -> ""
-                    $F B -> ""
+                    @F A -> ""
+                    @F B -> ""
                 "#
             ),
             indoc!(
@@ -8709,8 +8607,8 @@ I need all branches in an `if` to have the same type!
                 The branches of this `when` expression don't match the condition:
 
                 5│>  when v is
-                6│       $F A -> ""
-                7│       $F B -> ""
+                6│       @F A -> ""
+                7│       @F B -> ""
 
                 This `v` value is a:
 
@@ -8740,8 +8638,8 @@ I need all branches in an `if` to have the same type!
                 v : F Num.U8
 
                 when v is
-                    $F 1 -> ""
-                    $F 2 -> ""
+                    @F 1 -> ""
+                    @F 2 -> ""
                 "#
             ),
             indoc!(
@@ -8751,12 +8649,12 @@ I need all branches in an `if` to have the same type!
                 This `when` does not cover all the possibilities:
 
                 5│>  when v is
-                6│>      $F 1 -> ""
-                7│>      $F 2 -> ""
+                6│>      @F 1 -> ""
+                7│>      @F 2 -> ""
 
                 Other possibilities include:
 
-                    $F _
+                    @F _
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#
@@ -9592,7 +9490,7 @@ I need all branches in an `if` to have the same type!
 
                 Id := U32
 
-                hash = \$Id n -> n
+                hash = \@Id n -> n
                 "#
             ),
             indoc!(
@@ -9601,7 +9499,7 @@ I need all branches in an `if` to have the same type!
 
                 Something is off with this specialization of `hash`:
 
-                7│  hash = \$Id n -> n
+                7│  hash = \@Id n -> n
                     ^^^^
 
                 This value is a declared specialization of type:
@@ -9630,7 +9528,7 @@ I need all branches in an `if` to have the same type!
 
                 Id := U64
 
-                eq = \$Id m, $Id n -> m == n
+                eq = \@Id m, @Id n -> m == n
                 "#
             ),
             indoc!(
@@ -9649,7 +9547,7 @@ I need all branches in an `if` to have the same type!
 
                 `eq`, specialized here:
 
-                9│  eq = \$Id m, $Id n -> m == n
+                9│  eq = \@Id m, @Id n -> m == n
                     ^^
                 "#
             ),
@@ -9712,7 +9610,7 @@ I need all branches in an `if` to have the same type!
                 You := {}
                 AndI := {}
 
-                eq = \$You {}, $AndI {} -> False
+                eq = \@You {}, @AndI {} -> False
                 "#
             ),
             indoc!(
@@ -9721,7 +9619,7 @@ I need all branches in an `if` to have the same type!
 
                 Something is off with this specialization of `eq`:
 
-                9│  eq = \$You {}, $AndI {} -> False
+                9│  eq = \@You {}, @AndI {} -> False
                     ^^
 
                 This value is a declared specialization of type:
@@ -9755,7 +9653,7 @@ I need all branches in an `if` to have the same type!
                 Id := U64
 
                 hash : Id -> U32
-                hash = \$Id n -> n
+                hash = \@Id n -> n
                 "#
             ),
             indoc!(
@@ -9765,7 +9663,7 @@ I need all branches in an `if` to have the same type!
                 Something is off with the body of this definition:
 
                 8│  hash : Id -> U32
-                9│  hash = \$Id n -> n
+                9│  hash = \@Id n -> n
                                      ^
 
                 This `n` value is a:
@@ -9780,7 +9678,7 @@ I need all branches in an `if` to have the same type!
 
                 Something is off with this specialization of `hash`:
 
-                9│  hash = \$Id n -> n
+                9│  hash = \@Id n -> n
                     ^^^^
 
                 This value is a declared specialization of type:
@@ -9808,13 +9706,13 @@ I need all branches in an `if` to have the same type!
 
                 Id := U64
 
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
                 User := {}
 
                 noGoodVeryBadTerrible =
                     {
-                        nope: hash ($User {}),
+                        nope: hash (@User {}),
                         notYet: hash (A 1),
                     }
                 "#
@@ -9840,7 +9738,7 @@ I need all branches in an `if` to have the same type!
 
                 This expression has a type that does not implement the abilities it's expected to:
 
-                14│          nope: hash ($User {}),
+                14│          nope: hash (@User {}),
                                          ^^^^^^^^
 
                 This User opaque wrapping has the type:
@@ -9906,10 +9804,10 @@ I need all branches in an `if` to have the same type!
                     hash : a -> U64 | a has Hash
 
                 Id := U64
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
                 hashable : a | a has Hash
-                hashable = $Id 15
+                hashable = @Id 15
                 "#
             ),
             indoc!(
@@ -9919,7 +9817,7 @@ I need all branches in an `if` to have the same type!
                 Something is off with the body of the `hashable` definition:
 
                  9│  hashable : a | a has Hash
-                10│  hashable = $Id 15
+                10│  hashable = @Id 15
                                 ^^^^^^
 
                 This Id opaque wrapping has the type:
@@ -9955,12 +9853,12 @@ I need all branches in an `if` to have the same type!
                 mulHashes = \x, y -> hash x * hash y
 
                 Id := U64
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
                 Three := {}
-                hash = \$Three _ -> 3
+                hash = \@Three _ -> 3
 
-                result = mulHashes ($Id 100) ($Three {})
+                result = mulHashes (@Id 100) (@Three {})
                 "#
             ),
             indoc!(

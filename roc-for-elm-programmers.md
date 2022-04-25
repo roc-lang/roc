@@ -677,17 +677,19 @@ includes in its union."
 The tags discussed in the previous section are globally available, which means
 they cannot be used to create opaque types.
 
-*Private tags* let you create opaque types. They work just like the *global tags*
-from the previous section, except:
+Opaque types are like aliases, but with the following differences:
 
-* Private tags begin with an `@` (e.g. `@Foo` instead of `Foo`)
-* Private tags are scoped to the current module, rather than globally scoped
-* Private tags can only be instantiated in the current module
+* Opaque type are defined with `:=` (e.g. `Username := Str` instead of `Username : Str`)
+* You can create an instance of an opaque by wrapping it with the `@` syntax (e.g. `@Username "sasha"`)
+* You can unwrap opaque types to get their payload with the `@` syntax (e.g. `@Username nameStr = user`)
+* Opaque types can only be wrapped and unwrapped in the current module
+* Opaque type names can be imported by other modules, but not wrapped and unwrapped there
+* Opaque types are only equal if their qualified name (defining module name + type name) are equivalent
 
 For example, suppose I define these inside the `Username` module:
 
 ```elm
-Username : [ @Username Str ]
+Username := Str
 
 fromStr : Str -> Username
 fromStr = \str ->
@@ -699,14 +701,16 @@ toStr = \@Username str ->
 ```
 I can now expose the `Username` type alias, which other modules can use as an opaque type.
 
-It's not even syntactically possible for me to expose the `@Username` tag,
-because `@` tags are not allowed in the exposing list. Only code written in this
-`Username` module can instantiate a `@Username` value.
+It's not even syntactically possible for me to expose `@Username`,
+because `@`s allowed in the exposing list. Only code written in this
+`Username` module can use the `@Username` wrapper syntax.
 
-> If I were to write `@Username` inside another module (e.g. `Main`), it would compile,
-> but that `@Username` would be type-incompatible with the one created inside the `Username` module.
+> If I were to define `Username := Str` inside another module (e.g. `Main`) and use `@Username`,
+> it would compile, but that `Username` opaque type would have the qualified name `Main.Username`.
+> That means it would be type-incompatible with the one created inside the `Username` module, which
+> has the qualified name `Username.Username`.
 > Even trying to use `==` on them would be a type mismatch, because I would be comparing
-> a `[ Username.@Username Str ]*` with a `[ Main.@Username Str ]*`, which are incompatible.
+> a `Username.Username` with a `Main.Username`, which are incompatible.
 
 ## Modules and Shadowing
 

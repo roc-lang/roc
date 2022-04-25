@@ -163,8 +163,7 @@ pub enum Expr {
         name: TagName,
     },
 
-    /// A wrapping of an opaque type, like `$Age 21`
-    // TODO(opaques): $->@ above when opaques land
+    /// A wrapping of an opaque type, like `@Age 21`
     OpaqueRef {
         opaque_var: Variable,
         name: Symbol,
@@ -826,23 +825,6 @@ pub fn canonicalize_expr<'a>(
                     variant_var,
                     closure_name: symbol,
                     ext_var,
-                },
-                Output::default(),
-            )
-        }
-        ast::Expr::PrivateTag(tag) => {
-            let variant_var = var_store.fresh();
-            let ext_var = var_store.fresh();
-            let tag_ident = env.ident_ids.get_or_insert(&(*tag).into());
-            let symbol = Symbol::new(env.home, tag_ident);
-            let lambda_set_symbol = env.gen_unique_symbol();
-
-            (
-                ZeroArgumentTag {
-                    name: TagName::Private(symbol),
-                    variant_var,
-                    ext_var,
-                    closure_name: lambda_set_symbol,
                 },
                 Output::default(),
             )

@@ -93,7 +93,7 @@ interface Dict
 ##
 ## The [Dict.hasSameContents] function gives an alternative to `==` which ignores ordering
 ## and returns `True` if both dictionaries have the same keys and associated values.
-Dict k v : [ @Dict k v ] # TODO k should require a hashing and equating constraint
+Dict k v := [ Dict k v ] # TODO k should require a hashing and equating constraint
 
 ## An empty dictionary.
 empty : Dict * *

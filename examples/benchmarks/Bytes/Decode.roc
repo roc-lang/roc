@@ -4,7 +4,7 @@ State : { bytes : List U8, cursor : Nat }
 
 DecodeProblem : [ OutOfBytes ]
 
-Decoder a : [ @Decoder (State -> [ Good State a, Bad DecodeProblem ]) ]
+Decoder a := State -> [ Good State a, Bad DecodeProblem ]
 
 decode : List U8, Decoder a -> Result a DecodeProblem
 decode = \bytes, @Decoder decoder ->

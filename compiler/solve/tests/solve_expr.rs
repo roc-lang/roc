@@ -1508,18 +1508,6 @@ mod solve_expr {
     }
 
     #[test]
-    fn single_private_tag_pattern() {
-        infer_eq(
-            indoc!(
-                r#"
-                    \@Foo -> 42
-                "#
-            ),
-            "[ @Foo ] -> Num *",
-        );
-    }
-
-    #[test]
     fn two_tag_pattern() {
         infer_eq(
             indoc!(
@@ -1543,18 +1531,6 @@ mod solve_expr {
                 "#
             ),
             "[ Foo Str (Num *) ]*",
-        );
-    }
-
-    #[test]
-    fn private_tag_application() {
-        infer_eq(
-            indoc!(
-                r#"
-                    @Foo "happy" 2020
-                "#
-            ),
-            "[ @Foo Str (Num *) ]*",
         );
     }
 
@@ -1618,19 +1594,6 @@ mod solve_expr {
                 r#"
                     when Foo "blah" is
                         Foo x -> x
-                "#
-            ),
-            "Str",
-        );
-    }
-
-    #[test]
-    fn private_tag_with_field() {
-        infer_eq(
-            indoc!(
-                r#"
-                    when @Foo "blah" is
-                        @Foo x -> x
                 "#
             ),
             "Str",
@@ -4240,31 +4203,6 @@ mod solve_expr {
     }
 
     #[test]
-    fn double_tag_application_pattern_private() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                app "test" provides [ main ] to "./platform"
-
-                Foo : [ @Foo [ @Bar ] I64, @Empty ]
-
-                foo : Foo
-                foo = @Foo @Bar 1
-
-                main =
-                    when foo is
-                        @Foo @Bar 1 ->
-                            @Foo @Bar 2
-
-                        x ->
-                            x
-                "#
-            ),
-            "[ @Empty, @Foo [ @Bar ] I64 ]",
-        );
-    }
-
-    #[test]
     fn recursive_function_with_rigid() {
         infer_eq_without_problem(
             indoc!(
@@ -5542,7 +5480,7 @@ mod solve_expr {
                 r#"
                 Age := U32
 
-                $Age 21
+                @Age 21
                 "#
             ),
             r#"Age"#,
@@ -5557,7 +5495,7 @@ mod solve_expr {
                 Age := U32
 
                 a : Age
-                a = $Age 21
+                a = @Age 21
 
                 a
                 "#
@@ -5573,7 +5511,7 @@ mod solve_expr {
                 r#"
                 Id n := [ Id U32 n ]
 
-                $Id (Id 21 "sasha")
+                @Id (Id 21 "sasha")
                 "#
             ),
             r#"Id Str"#,
@@ -5588,7 +5526,7 @@ mod solve_expr {
                 Id n := [ Id U32 n ]
 
                 a : Id Str
-                a = $Id (Id 21 "sasha")
+                a = @Id (Id 21 "sasha")
 
                 a
                 "#
@@ -5606,8 +5544,8 @@ mod solve_expr {
                 condition : Bool
 
                 if condition
-                then $Id (Id 21 (Y "sasha"))
-                else $Id (Id 21 (Z "felix"))
+                then @Id (Id 21 (Y "sasha"))
+                else @Id (Id 21 (Z "felix"))
                 "#
             ),
             r#"Id [ Y Str, Z Str ]*"#,
@@ -5625,8 +5563,8 @@ mod solve_expr {
                 v : Id [ Y Str, Z Str ]
                 v =
                     if condition
-                    then $Id (Id 21 (Y "sasha"))
-                    else $Id (Id 21 (Z "felix"))
+                    then @Id (Id 21 (Y "sasha"))
+                    else @Id (Id 21 (Z "felix"))
 
                 v
                 "#
@@ -5642,7 +5580,7 @@ mod solve_expr {
                 r#"
                 Age := U32
 
-                \$Age n -> n
+                \@Age n -> n
                 "#
             ),
             r#"Age -> U32"#,
@@ -5657,7 +5595,7 @@ mod solve_expr {
                 Age := U32
 
                 v : Age -> U32
-                v = \$Age n -> n
+                v = \@Age n -> n
                 v
                 "#
             ),
@@ -5672,7 +5610,7 @@ mod solve_expr {
                 r#"
                 Id n := [ Id U32 n ]
 
-                \$Id (Id _ n) -> n
+                \@Id (Id _ n) -> n
                 "#
             ),
             r#"Id a -> a"#,
@@ -5687,7 +5625,7 @@ mod solve_expr {
                 Id n := [ Id U32 n ]
 
                 v : Id a -> a
-                v = \$Id (Id _ n) -> n
+                v = \@Id (Id _ n) -> n
 
                 v
                 "#
@@ -5705,7 +5643,7 @@ mod solve_expr {
 
                 strToBool : Str -> Bool
 
-                \$Id (Id _ n) -> strToBool n
+                \@Id (Id _ n) -> strToBool n
                 "#
             ),
             r#"Id Str -> Bool"#,
@@ -5722,7 +5660,7 @@ mod solve_expr {
                 strToBool : Str -> Bool
 
                 v : Id Str -> Bool
-                v = \$Id (Id _ n) -> strToBool n
+                v = \@Id (Id _ n) -> strToBool n
 
                 v
                 "#
@@ -5740,9 +5678,9 @@ mod solve_expr {
 
                 \id ->
                     when id is
-                        $Id (Id _ A) -> ""
-                        $Id (Id _ B) -> ""
-                        $Id (Id _ (C { a: "" })) -> ""
+                        @Id (Id _ A) -> ""
+                        @Id (Id _ B) -> ""
+                        @Id (Id _ (C { a: "" })) -> ""
                 "#
             ),
             r#"Id [ A, B, C { a : Str }* ] -> Str"#,
@@ -5759,9 +5697,9 @@ mod solve_expr {
                 f : Id [ A, B, C { a : Str }e ] -> Str
                 f = \id ->
                     when id is
-                        $Id (Id _ A) -> ""
-                        $Id (Id _ B) -> ""
-                        $Id (Id _ (C { a: "" })) -> ""
+                        @Id (Id _ A) -> ""
+                        @Id (Id _ B) -> ""
+                        @Id (Id _ (C { a: "" })) -> ""
 
                 f
                 "#
@@ -5777,7 +5715,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [ effectAlways ] to "./platform"
 
-                Effect a : [ @Effect ({} -> a) ]
+                Effect a := {} -> a
 
                 effectAlways : a -> Effect a
                 effectAlways = \x ->
@@ -5845,8 +5783,8 @@ mod solve_expr {
                 insert : Outer k, k -> Outer k
                 insert = \m, var ->
                     when m is
-                        $Outer Empty -> $Outer (Wrapped var)
-                        $Outer (Wrapped _) -> $Outer (Wrapped var)
+                        @Outer Empty -> @Outer (Wrapped var)
+                        @Outer (Wrapped _) -> @Outer (Wrapped var)
 
                 insert
                 "#
@@ -5862,9 +5800,9 @@ mod solve_expr {
                 r#"
                 Outer k := [ Empty, Wrapped k ]
 
-                when ($Outer Empty) is
-                    $Outer Empty -> $Outer (Wrapped "")
-                    $Outer (Wrapped k) -> $Outer (Wrapped k)
+                when (@Outer Empty) is
+                    @Outer Empty -> @Outer (Wrapped "")
+                    @Outer (Wrapped k) -> @Outer (Wrapped k)
                 "#
             ),
             r#"Outer Str"#,
@@ -5878,9 +5816,9 @@ mod solve_expr {
                 r#"
                 Outer := [ A, B ]
 
-                when ($Outer A) is
-                    $Outer A -> $Outer A
-                    $Outer B -> $Outer B
+                when (@Outer A) is
+                    @Outer A -> @Outer A
+                    @Outer B -> @Outer B
                 "#
             ),
             r#"Outer"#,
@@ -5937,7 +5875,7 @@ mod solve_expr {
 
                 Id := U64
 
-                hash = \$Id n -> n
+                hash = \@Id n -> n
                 "#
             ),
             [("Hash:hash", "Id")],
@@ -5957,8 +5895,8 @@ mod solve_expr {
 
                 Id := U64
 
-                hash = \$Id n -> n
-                hash32 = \$Id n -> Num.toU32 n
+                hash = \@Id n -> n
+                hash32 = \@Id n -> Num.toU32 n
                 "#
             ),
             [("Hash:hash", "Id"), ("Hash:hash32", "Id")],
@@ -5982,11 +5920,11 @@ mod solve_expr {
 
                 Id := U64
 
-                hash = \$Id n -> n
-                hash32 = \$Id n -> Num.toU32 n
+                hash = \@Id n -> n
+                hash32 = \@Id n -> Num.toU32 n
 
-                eq = \$Id m, $Id n -> m == n
-                le = \$Id m, $Id n -> m < n
+                eq = \@Id m, @Id n -> m == n
+                le = \@Id m, @Id n -> m < n
                 "#
             ),
             [
@@ -6011,7 +5949,7 @@ mod solve_expr {
                 Id := U64
 
                 hash : Id -> U64
-                hash = \$Id n -> n
+                hash = \@Id n -> n
                 "#
             ),
             [("Hash:hash", "Id")],
@@ -6049,9 +5987,9 @@ mod solve_expr {
 
                 Id := U64
 
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
-                zero = hash ($Id 0)
+                zero = hash (@Id 0)
                 "#
             ),
             "U64",
@@ -6142,9 +6080,9 @@ mod solve_expr {
                 hashEq = \x, y -> hash x == hash y
 
                 Id := U64
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
-                result = hashEq ($Id 100) ($Id 101)
+                result = hashEq (@Id 100) (@Id 101)
                 "#
             ),
             "Bool",
@@ -6164,12 +6102,12 @@ mod solve_expr {
                 mulHashes = \x, y -> hash x * hash y
 
                 Id := U64
-                hash = \$Id n -> n
+                hash = \@Id n -> n
 
                 Three := {}
-                hash = \$Three _ -> 3
+                hash = \@Three _ -> 3
 
-                result = mulHashes ($Id 100) ($Three {})
+                result = mulHashes (@Id 100) (@Three {})
                 "#
             ),
             "U64",
@@ -6228,5 +6166,24 @@ mod solve_expr {
             ),
             indoc!(r#"Expr -> Expr"#),
         )
+    }
+
+    #[test]
+    fn opaque_and_alias_unify() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ always ] to "./platform"
+
+                Effect a := {} -> a
+
+                Task a err : Effect (Result a err)
+
+                always : a -> Task a *
+                always = \x -> @Effect (\{} -> Ok x)
+                "#
+            ),
+            "a -> Task a *",
+        );
     }
 }

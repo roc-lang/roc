@@ -47,12 +47,6 @@ pub enum Pattern2 {
         tag_name: PoolStr,                         // 8B
         arguments: PoolVec<(Variable, PatternId)>, // 8B
     },
-    PrivateTag {
-        whole_var: Variable,                       // 4B
-        ext_var: Variable,                         // 4B
-        tag_name: Symbol,                          // 8B
-        arguments: PoolVec<(Variable, PatternId)>, // 8B
-    },
     RecordDestructure {
         whole_var: Variable,                // 4B
         ext_var: Variable,                  // 4B
@@ -280,17 +274,6 @@ pub fn to_pattern2<'a>(
                 arguments: PoolVec::empty(env.pool),
             }
         }
-        PrivateTag(name) => {
-            let ident_id = env.ident_ids.get_or_insert(&(*name).into());
-
-            // Canonicalize the tag's name.
-            Pattern2::PrivateTag {
-                whole_var: env.var_store.fresh(),
-                ext_var: env.var_store.fresh(),
-                tag_name: Symbol::new(env.home, ident_id),
-                arguments: PoolVec::empty(env.pool),
-            }
-        }
 
         OpaqueRef(..) => todo_opaques!(),
 
@@ -319,16 +302,6 @@ pub fn to_pattern2<'a>(
                     tag_name: PoolStr::new(name, env.pool),
                     arguments: can_patterns,
                 },
-                PrivateTag(name) => {
-                    let ident_id = env.ident_ids.get_or_insert(&name.into());
-
-                    Pattern2::PrivateTag {
-                        whole_var: env.var_store.fresh(),
-                        ext_var: env.var_store.fresh(),
-                        tag_name: Symbol::new(env.home, ident_id),
-                        arguments: can_patterns,
-                    }
-                }
                 _ => unreachable!("Other patterns cannot be applied"),
             }
         }
@@ -506,7 +479,7 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
                 symbols.push(*symbol);
             }
 
-            GlobalTag { arguments, .. } | PrivateTag { arguments, .. } => {
+            GlobalTag { arguments, .. } => {
                 for (_, pat_id) in arguments.iter(pool) {
                     let pat = pool.get(*pat_id);
                     stack.push(pat);
@@ -567,7 +540,7 @@ pub fn symbols_and_variables_from_pattern(
                 symbols.push((*symbol, variable));
             }
 
-            GlobalTag { arguments, .. } | PrivateTag { arguments, .. } => {
+            GlobalTag { arguments, .. } => {
                 for (var, pat_id) in arguments.iter(pool) {
                     let pat = pool.get(*pat_id);
                     stack.push((*var, pat));

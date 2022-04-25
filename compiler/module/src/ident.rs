@@ -53,10 +53,6 @@ pub enum TagName {
     /// into integers. (Record field labels work the same way, for the same reason.)
     Global(Uppercase),
 
-    /// Private tags are associated with a specific module, and as such use a
-    /// Symbol just like all other module-specific identifiers.
-    Private(Symbol),
-
     /// Used to connect the closure size to the function it corresponds to
     Closure(Symbol),
 }
@@ -69,9 +65,6 @@ impl TagName {
     pub fn as_ident_str(&self, interns: &Interns, home: ModuleId) -> IdentStr {
         match self {
             TagName::Global(uppercase) => uppercase.as_ident_str().clone(),
-            TagName::Private(symbol) => {
-                symbol.fully_qualified(interns, home).as_ident_str().clone()
-            }
             TagName::Closure(symbol) => {
                 symbol.fully_qualified(interns, home).as_ident_str().clone()
             }

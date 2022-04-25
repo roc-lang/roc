@@ -17,10 +17,7 @@ interface Parser
     exposes [ Parser ]
     imports []
 
-Parser a :
-    [
-        @Parser (Bytes -> Result { answer : a, rest : Bytes } Problem)
-    ]
+Parser a := Bytes -> Result { answer : a, rest : Bytes } Problem
 
 Problem :
     [

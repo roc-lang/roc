@@ -365,7 +365,7 @@ pub fn find_type_def_symbols(
 
                 while let Some(tag) = inner_stack.pop() {
                     match tag {
-                        Tag::Global { args, .. } | Tag::Private { args, .. } => {
+                        Tag::Global { args, .. } => {
                             for t in args.iter() {
                                 stack.push(&t.value);
                             }
@@ -1249,31 +1249,6 @@ fn can_tags<'a>(
                     }
 
                     let tag_name = TagName::Global(name);
-                    tag_types.push((tag_name.clone(), arg_types));
-
-                    break 'inner tag_name;
-                }
-                Tag::Private { name, args } => {
-                    let ident_id = env.ident_ids.get_or_insert(&name.value.into());
-                    let symbol = Symbol::new(env.home, ident_id);
-                    let mut arg_types = Vec::with_capacity(args.len());
-
-                    for arg in args.iter() {
-                        let ann = can_annotation_help(
-                            env,
-                            &arg.value,
-                            arg.region,
-                            scope,
-                            var_store,
-                            introduced_variables,
-                            local_aliases,
-                            references,
-                        );
-
-                        arg_types.push(ann);
-                    }
-
-                    let tag_name = TagName::Private(symbol);
                     tag_types.push((tag_name.clone(), arg_types));
 
                     break 'inner tag_name;

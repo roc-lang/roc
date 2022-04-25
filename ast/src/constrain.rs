@@ -264,25 +264,6 @@ pub fn constrain_expr<'a>(
                 *variant_var,
             )
         }
-        Expr2::PrivateTag {
-            name,
-            arguments,
-            ext_var,
-            variant_var,
-        } => {
-            let tag_name = TagName::Private(*name);
-
-            constrain_tag(
-                arena,
-                env,
-                expected,
-                region,
-                tag_name,
-                arguments,
-                *ext_var,
-                *variant_var,
-            )
-        }
         Expr2::Call {
             args,
             expr_var,
@@ -1644,27 +1625,6 @@ pub fn constrain_pattern<'a>(
                 destruct_position,
             );
         }
-        PrivateTag {
-            whole_var,
-            ext_var,
-            tag_name: name,
-            arguments,
-        } => {
-            let tag_name = TagName::Private(*name);
-
-            constrain_tag_pattern(
-                arena,
-                env,
-                region,
-                expected,
-                state,
-                *whole_var,
-                *ext_var,
-                arguments,
-                tag_name,
-                destruct_position,
-            );
-        }
     }
 }
 
@@ -1895,19 +1855,9 @@ fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
 fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_FLOATINGPOINT),
-                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = range_type.shallow_clone();
 
-    Type2::Alias(
+    Type2::Opaque(
         Symbol::NUM_FLOATINGPOINT,
         PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
         pool.add(alias_content),
@@ -1931,37 +1881,16 @@ fn num_int(pool: &mut Pool, range: TypeId) -> Type2 {
 
 #[inline(always)]
 fn _num_signed64(pool: &mut Pool) -> Type2 {
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_SIGNED64),
-                PoolVec::empty(pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
-
     Type2::Alias(
         Symbol::NUM_SIGNED64,
         PoolVec::empty(pool),
-        pool.add(alias_content),
+        pool.add(Type2::EmptyTagUnion),
     )
 }
 
 #[inline(always)]
 fn num_unsigned32(pool: &mut Pool) -> Type2 {
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            std::iter::once((
-                TagName::Private(Symbol::NUM_UNSIGNED32),
-                PoolVec::empty(pool),
-            )),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = Type2::EmptyTagUnion;
 
     Type2::Alias(
         Symbol::NUM_UNSIGNED32,
@@ -1974,19 +1903,9 @@ fn num_unsigned32(pool: &mut Pool) -> Type2 {
 fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_INTEGER),
-                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = range_type.shallow_clone();
 
-    Type2::Alias(
+    Type2::Opaque(
         Symbol::NUM_INTEGER,
         PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
         pool.add(alias_content),
@@ -1997,19 +1916,9 @@ fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
 fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
     let range_type = pool.get(type_id);
 
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_NUM),
-                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = range_type.shallow_clone();
 
-    Type2::Alias(
+    Type2::Opaque(
         Symbol::NUM_NUM,
         PoolVec::new(
             vec![(PoolStr::new("range", pool), type_id)].into_iter(),
@@ -2297,18 +2206,6 @@ pub mod test_constrain {
                 "#
             ),
             "[ Foo ]*",
-        )
-    }
-
-    #[test]
-    fn constrain_private_tag() {
-        infer_eq(
-            indoc!(
-                r#"
-                @Foo
-                "#
-            ),
-            "[ @Foo ]*",
         )
     }
 

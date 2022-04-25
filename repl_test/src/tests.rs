@@ -1026,7 +1026,7 @@ fn opaque_apply() {
             r#"
             Age := U32
 
-            $Age 23
+            @Age 23
             "#
         ),
         "23 : Age",
@@ -1040,7 +1040,7 @@ fn opaque_apply_polymorphic() {
             r#"
             F t u := [ Package t u ]
 
-            $F (Package "" { a: "" })
+            @F (Package "" { a: "" })
             "#
         ),
         r#"Package "" { a: "" } : F Str { a : Str }"#,
@@ -1054,9 +1054,9 @@ fn opaque_pattern_and_call() {
             r#"
             F t u := [ Package t u ]
 
-            f = \$F (Package A {}) -> $F (Package {} A)
+            f = \@F (Package A {}) -> @F (Package {} A)
 
-            f ($F (Package A {}))
+            f (@F (Package A {}))
             "#
         ),
         r#"Package {} A : F {} [ A ]*"#,

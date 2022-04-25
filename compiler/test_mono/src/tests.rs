@@ -1323,9 +1323,9 @@ fn specialize_ability_call() {
         Id := U64
 
         hash : Id -> U64
-        hash = \$Id n -> n
+        hash = \@Id n -> n
 
-        main = hash ($Id 1234)
+        main = hash (@Id 1234)
         "#
     )
 }
@@ -1340,7 +1340,7 @@ fn opaque_assign_to_symbol() {
 
         fromUtf8 : U8 -> Result Variable [ InvalidVariableUtf8 ]
         fromUtf8 = \char ->
-            Ok ($Variable char)
+            Ok (@Variable char)
 
         out = fromUtf8 98
         "#
