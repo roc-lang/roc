@@ -844,8 +844,8 @@ fn markdown_to_html(
                             }
                         }
                     }
-                    Ok((_, Ident::GlobalTag(type_name), _)) => {
-                        // This looks like a global tag name, but it could
+                    Ok((_, Ident::Tag(type_name), _)) => {
+                        // This looks like a tag name, but it could
                         // be a type alias that's in scope, e.g. [I64]
                         let DocUrl { url, title } = doc_url(
                             loaded_module.module_id,

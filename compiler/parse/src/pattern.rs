@@ -213,10 +213,10 @@ fn loc_ident_pattern_help<'a>(
             specialize(|_, pos| EPattern::Start(pos), loc!(parse_ident)).parse(arena, state)?;
 
         match loc_ident.value {
-            Ident::GlobalTag(tag) => {
+            Ident::Tag(tag) => {
                 let loc_tag = Loc {
                     region: loc_ident.region,
-                    value: Pattern::GlobalTag(tag),
+                    value: Pattern::Tag(tag),
                 };
 
                 // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`

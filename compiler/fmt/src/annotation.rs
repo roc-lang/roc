@@ -468,7 +468,7 @@ impl<'a> Formattable for Tag<'a> {
         use self::Tag::*;
 
         match self {
-            Global { args, .. } => args.iter().any(|arg| (&arg.value).is_multiline()),
+            Apply { args, .. } => args.iter().any(|arg| (&arg.value).is_multiline()),
             Tag::SpaceBefore(_, _) | Tag::SpaceAfter(_, _) => true,
             Malformed(text) => text.chars().any(|c| c == '\n'),
         }
@@ -484,7 +484,7 @@ impl<'a> Formattable for Tag<'a> {
         let is_multiline = self.is_multiline();
 
         match self {
-            Tag::Global { name, args } => {
+            Tag::Apply { name, args } => {
                 buf.indent(indent);
                 buf.push_str(name.value);
                 if is_multiline {

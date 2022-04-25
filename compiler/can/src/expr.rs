@@ -813,7 +813,7 @@ pub fn canonicalize_expr<'a>(
             }),
             Output::default(),
         ),
-        ast::Expr::GlobalTag(tag) => {
+        ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
 
@@ -821,7 +821,7 @@ pub fn canonicalize_expr<'a>(
 
             (
                 ZeroArgumentTag {
-                    name: TagName::Global((*tag).into()),
+                    name: TagName::Tag((*tag).into()),
                     variant_var,
                     closure_name: symbol,
                     ext_var,

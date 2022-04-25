@@ -88,7 +88,7 @@ pub fn expr2_to_markup<'a>(
                 mark_id_ast_id_map,
             )
         }
-        Expr2::GlobalTag { name, .. } => new_markup_node(
+        Expr2::Tag { name, .. } => new_markup_node(
             with_indent(indent_level, &get_string(env, name)),
             ast_node_id,
             HighlightStyle::Type,

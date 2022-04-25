@@ -955,8 +955,8 @@ pub fn bool_type() -> SolvedType {
 fn bool_alias_content() -> SolvedType {
     SolvedType::TagUnion(
         vec![
-            (TagName::Global("False".into()), vec![]),
-            (TagName::Global("True".into()), vec![]),
+            (TagName::Tag("False".into()), vec![]),
+            (TagName::Tag("True".into()), vec![]),
         ],
         Box::new(SolvedType::EmptyTagUnion),
     )
@@ -967,9 +967,9 @@ pub fn ordering_type() -> SolvedType {
     // [ LT, EQ, GT ]
     SolvedType::TagUnion(
         vec![
-            (TagName::Global("EQ".into()), vec![]),
-            (TagName::Global("GT".into()), vec![]),
-            (TagName::Global("LT".into()), vec![]),
+            (TagName::Tag("EQ".into()), vec![]),
+            (TagName::Tag("GT".into()), vec![]),
+            (TagName::Tag("LT".into()), vec![]),
         ],
         Box::new(SolvedType::EmptyTagUnion),
     )
@@ -995,8 +995,8 @@ pub fn box_type(a: SolvedType) -> SolvedType {
 fn result_alias_content(a: SolvedType, e: SolvedType) -> SolvedType {
     SolvedType::TagUnion(
         vec![
-            (TagName::Global("Err".into()), vec![e]),
-            (TagName::Global("Ok".into()), vec![a]),
+            (TagName::Tag("Err".into()), vec![e]),
+            (TagName::Tag("Ok".into()), vec![a]),
         ],
         Box::new(SolvedType::EmptyTagUnion),
     )
@@ -1056,12 +1056,12 @@ pub fn str_utf8_byte_problem_alias_content() -> SolvedType {
     // [ CodepointTooLarge, EncodesSurrogateHalf, OverlongEncoding, InvalidStartByte, UnexpectedEndOfSequence, ExpectedContinuation ]
     SolvedType::TagUnion(
         vec![
-            (TagName::Global("CodepointTooLarge".into()), vec![]),
-            (TagName::Global("EncodesSurrogateHalf".into()), vec![]),
-            (TagName::Global("ExpectedContinuation".into()), vec![]),
-            (TagName::Global("InvalidStartByte".into()), vec![]),
-            (TagName::Global("OverlongEncoding".into()), vec![]),
-            (TagName::Global("UnexpectedEndOfSequence".into()), vec![]),
+            (TagName::Tag("CodepointTooLarge".into()), vec![]),
+            (TagName::Tag("EncodesSurrogateHalf".into()), vec![]),
+            (TagName::Tag("ExpectedContinuation".into()), vec![]),
+            (TagName::Tag("InvalidStartByte".into()), vec![]),
+            (TagName::Tag("OverlongEncoding".into()), vec![]),
+            (TagName::Tag("UnexpectedEndOfSequence".into()), vec![]),
         ],
         Box::new(SolvedType::EmptyTagUnion),
     )
