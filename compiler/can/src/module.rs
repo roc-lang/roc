@@ -289,7 +289,7 @@ pub fn canonicalize_module_defs<'a>(
         &mut env,
         Output::default(),
         var_store,
-        &scope,
+        scope,
         &desugared,
         PatternType::TopLevelDef,
     );

@@ -9203,16 +9203,6 @@ I need all branches in an `if` to have the same type!
                     | a has Ability
 
                  at the end of the type.
-
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
-
-                `ab` is not used anywhere in your code.
-
-                3│  Ability has ab : a -> {} | a has Ability
-                                ^^
-
-                If you didn't intend on using `ab` then remove it so future readers of
-                your code don't wonder why it is there.
                 "#
             ),
         )
@@ -9289,16 +9279,6 @@ I need all branches in an `if` to have the same type!
 
                 If you didn't intend on using `Ability` then remove it so future readers
                 of your code don't wonder why it is there.
-
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
-
-                `ab` is not used anywhere in your code.
-
-                3│  Ability has ab : {} -> {}
-                                ^^
-
-                If you didn't intend on using `ab` then remove it so future readers of
-                your code don't wonder why it is there.
                 "#
             ),
         )
@@ -9330,16 +9310,6 @@ I need all branches in an `if` to have the same type!
                 are a part of.
 
                 Hint: Did you mean to bind the `Hash` ability instead?
-
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
-
-                `hash` is not used anywhere in your code.
-
-                4│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
-                             ^^^^
-
-                If you didn't intend on using `hash` then remove it so future readers of
-                your code don't wonder why it is there.
                 "#
             ),
         )
@@ -9371,16 +9341,6 @@ I need all branches in an `if` to have the same type!
                 looking at specializations!
 
                 Hint: Did you mean to only bind `a` to `Eq`?
-
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
-
-                `eq` is not used anywhere in your code.
-
-                3│  Eq has eq : a, b -> Bool.Bool | a has Eq, b has Eq
-                           ^^
-
-                If you didn't intend on using `eq` then remove it so future readers of
-                your code don't wonder why it is there.
                 "#
             ),
         )
@@ -9424,16 +9384,6 @@ I need all branches in an `if` to have the same type!
                     a has Hash
 
                 Otherwise, the function does not need to be part of the ability!
-
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
-
-                `hash` is not used anywhere in your code.
-
-                3│  Hash has hash : (a | a has Hash) -> Num.U64
-                             ^^^^
-
-                If you didn't intend on using `hash` then remove it so future readers of
-                your code don't wonder why it is there.
                 "#
             ),
         )
