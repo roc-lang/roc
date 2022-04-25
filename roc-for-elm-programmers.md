@@ -749,9 +749,9 @@ these expose is very important.
 
 All imports and exports in Roc are enumerated explicitly; there is no `..` syntax.
 
-> Since neither global tags nor private tags have a notion of "importing variants"
-> (global tags are always available in all modules, and private tags are
-> never available in other modules), there's also no `exposing (Foo(..))` equivalent.
+> Since tags are available in all modules, Roc does not have a notion of
+> "importing variants", and there's also no `exposing (Foo(..))` equivalent.
+> (Later on, we'll talk about how opaque types work in Roc.)
 
 Like Elm, Roc does not allow shadowing.
 
@@ -1279,7 +1279,7 @@ Roc's standard library has these modules:
 
 Some differences to note:
 
-* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `List`, `Result`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all global tags, so they do not need to be exposed; they are globally available regardless!)
+* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `List`, `Result`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all tags, so they do not need to be exposed; they are globally available regardless!)
 * In Roc it's called `Str` instead of `String`.
 * `List` refers to something more like Elm's `Array`, as noted earlier.
 * No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).
