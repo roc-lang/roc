@@ -1080,7 +1080,7 @@ impl Type {
         }
         result
     }
-  
+
     pub fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
