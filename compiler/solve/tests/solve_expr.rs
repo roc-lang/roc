@@ -1508,18 +1508,6 @@ mod solve_expr {
     }
 
     #[test]
-    fn single_private_tag_pattern() {
-        infer_eq(
-            indoc!(
-                r#"
-                    \@Foo -> 42
-                "#
-            ),
-            "[ @Foo ] -> Num *",
-        );
-    }
-
-    #[test]
     fn two_tag_pattern() {
         infer_eq(
             indoc!(
@@ -1543,18 +1531,6 @@ mod solve_expr {
                 "#
             ),
             "[ Foo Str (Num *) ]*",
-        );
-    }
-
-    #[test]
-    fn private_tag_application() {
-        infer_eq(
-            indoc!(
-                r#"
-                    @Foo "happy" 2020
-                "#
-            ),
-            "[ @Foo Str (Num *) ]*",
         );
     }
 
@@ -1618,19 +1594,6 @@ mod solve_expr {
                 r#"
                     when Foo "blah" is
                         Foo x -> x
-                "#
-            ),
-            "Str",
-        );
-    }
-
-    #[test]
-    fn private_tag_with_field() {
-        infer_eq(
-            indoc!(
-                r#"
-                    when @Foo "blah" is
-                        @Foo x -> x
                 "#
             ),
             "Str",
@@ -4236,31 +4199,6 @@ mod solve_expr {
                 "#
             ),
             "[ Empty, Foo Bar I64 ]",
-        );
-    }
-
-    #[test]
-    fn double_tag_application_pattern_private() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                app "test" provides [ main ] to "./platform"
-
-                Foo : [ @Foo [ @Bar ] I64, @Empty ]
-
-                foo : Foo
-                foo = @Foo @Bar 1
-
-                main =
-                    when foo is
-                        @Foo @Bar 1 ->
-                            @Foo @Bar 2
-
-                        x ->
-                            x
-                "#
-            ),
-            "[ @Empty, @Foo [ @Bar ] I64 ]",
         );
     }
 
