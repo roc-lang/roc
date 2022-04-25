@@ -440,7 +440,7 @@ impl Env {
 const DEFAULT_POOLS: usize = 8;
 
 #[derive(Clone, Debug)]
-struct Pools(Vec<Vec<Variable>>);
+pub struct Pools(Vec<Vec<Variable>>);
 
 impl Default for Pools {
     fn default() -> Self {
@@ -2868,7 +2868,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     }
 }
 
-fn deep_copy_var_in(
+pub fn deep_copy_var_in(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,

@@ -240,6 +240,9 @@ fn create_llvm_module<'a>(
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
+    env.module
+        .print_to_file(&std::path::PathBuf::from("/tmp/out.ll"))
+        .unwrap();
 
     (main_fn_name, delayed_errors.join("\n"), env.module)
 }

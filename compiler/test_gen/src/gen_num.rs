@@ -612,15 +612,12 @@ fn i64_abs() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic(
-    expected = r#"Roc failed with message: "integer absolute overflowed because its argument is the minimum value"#
-)]
 fn abs_min_int_overflow() {
     assert_evals_to!(
         indoc!(
             r#"
-                Num.abs Num.minI64
-                "#
+            Num.abs Num.minI64
+            "#
         ),
         0,
         i64
@@ -3072,7 +3069,7 @@ fn sub_saturated() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn monomorphized_ints() {
+fn monomorphized_ints1() {
     assert_evals_to!(
         indoc!(
             r#"
