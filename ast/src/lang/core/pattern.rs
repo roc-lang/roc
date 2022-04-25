@@ -47,12 +47,6 @@ pub enum Pattern2 {
         tag_name: PoolStr,                         // 8B
         arguments: PoolVec<(Variable, PatternId)>, // 8B
     },
-    PrivateTag {
-        whole_var: Variable,                       // 4B
-        ext_var: Variable,                         // 4B
-        tag_name: Symbol,                          // 8B
-        arguments: PoolVec<(Variable, PatternId)>, // 8B
-    },
     RecordDestructure {
         whole_var: Variable,                // 4B
         ext_var: Variable,                  // 4B
@@ -485,7 +479,7 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
                 symbols.push(*symbol);
             }
 
-            GlobalTag { arguments, .. } | PrivateTag { arguments, .. } => {
+            GlobalTag { arguments, .. } => {
                 for (_, pat_id) in arguments.iter(pool) {
                     let pat = pool.get(*pat_id);
                     stack.push(pat);
@@ -546,7 +540,7 @@ pub fn symbols_and_variables_from_pattern(
                 symbols.push((*symbol, variable));
             }
 
-            GlobalTag { arguments, .. } | PrivateTag { arguments, .. } => {
+            GlobalTag { arguments, .. } => {
                 for (var, pat_id) in arguments.iter(pool) {
                     let pat = pool.get(*pat_id);
                     stack.push((*var, pat));

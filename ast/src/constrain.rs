@@ -264,25 +264,6 @@ pub fn constrain_expr<'a>(
                 *variant_var,
             )
         }
-        Expr2::PrivateTag {
-            name,
-            arguments,
-            ext_var,
-            variant_var,
-        } => {
-            let tag_name = TagName::Private(*name);
-
-            constrain_tag(
-                arena,
-                env,
-                expected,
-                region,
-                tag_name,
-                arguments,
-                *ext_var,
-                *variant_var,
-            )
-        }
         Expr2::Call {
             args,
             expr_var,
@@ -1644,27 +1625,6 @@ pub fn constrain_pattern<'a>(
                 destruct_position,
             );
         }
-        PrivateTag {
-            whole_var,
-            ext_var,
-            tag_name: name,
-            arguments,
-        } => {
-            let tag_name = TagName::Private(*name);
-
-            constrain_tag_pattern(
-                arena,
-                env,
-                region,
-                expected,
-                state,
-                *whole_var,
-                *ext_var,
-                arguments,
-                tag_name,
-                destruct_position,
-            );
-        }
     }
 }
 
@@ -1930,16 +1890,7 @@ fn _num_signed64(pool: &mut Pool) -> Type2 {
 
 #[inline(always)]
 fn num_unsigned32(pool: &mut Pool) -> Type2 {
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            std::iter::once((
-                TagName::Private(Symbol::NUM_UNSIGNED32),
-                PoolVec::empty(pool),
-            )),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = Type2::EmptyTagUnion;
 
     Type2::Alias(
         Symbol::NUM_UNSIGNED32,
