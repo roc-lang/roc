@@ -39,7 +39,7 @@ use roc_solve::solve;
 use roc_target::TargetInfo;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types::{Alias, AliasCommon, TypeExtension};
+use roc_types::types::{Alias, AliasCommon, AliasKind, TypeExtension};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::io;
@@ -4715,50 +4715,35 @@ fn default_aliases() -> roc_solve::solve::Aliases {
 
     let mut var_store = VarStore::default();
 
+    // Num range := range
     {
         let symbol = Symbol::NUM_NUM;
         let tvar = var_store.fresh();
-
-        let typ = Type::TagUnion(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_NUM),
-                vec![Type::Variable(tvar)],
-            )],
-            TypeExtension::Closed,
-        );
 
         let alias = Alias {
             region: Region::zero(),
             type_variables: vec![Loc::at_zero(("range".into(), tvar))],
             lambda_set_variables: Default::default(),
             recursion_variables: Default::default(),
-            typ,
+            typ: Type::Variable(tvar),
             kind: roc_types::types::AliasKind::Structural,
         };
 
         solve_aliases.insert(symbol, alias);
     }
 
-    // FloatingPoint range : [ @FloatingPoint range ]
+    // FloatingPoint range := []
     {
         let symbol = Symbol::NUM_FLOATINGPOINT;
         let tvar = var_store.fresh();
-
-        let typ = Type::TagUnion(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_FLOATINGPOINT),
-                vec![Type::Variable(tvar)],
-            )],
-            TypeExtension::Closed,
-        );
 
         let alias = Alias {
             region: Region::zero(),
             type_variables: vec![Loc::at_zero(("range".into(), tvar))],
             lambda_set_variables: Default::default(),
             recursion_variables: Default::default(),
-            typ,
-            kind: roc_types::types::AliasKind::Structural,
+            typ: Type::Variable(tvar),
+            kind: roc_types::types::AliasKind::Opaque,
         };
 
         solve_aliases.insert(symbol, alias);
@@ -4773,11 +4758,13 @@ fn default_aliases() -> roc_solve::solve::Aliases {
             symbol: Symbol::NUM_NUM,
             type_arguments: vec![(
                 "range".into(),
-                Type::DelayedAlias(AliasCommon {
+                Type::Alias {
                     symbol: Symbol::NUM_INTEGER,
                     type_arguments: vec![("range".into(), Type::Variable(tvar))],
                     lambda_set_variables: vec![],
-                }),
+                    actual: Box::new(Type::Variable(tvar)),
+                    kind: AliasKind::Opaque,
+                },
             )],
             lambda_set_variables: vec![],
         });
@@ -4794,6 +4781,7 @@ fn default_aliases() -> roc_solve::solve::Aliases {
         solve_aliases.insert(symbol, alias);
     }
 
+    // Float range : Num (FloatingPoint range)
     {
         let symbol = Symbol::NUM_FLOAT;
         let tvar = var_store.fresh();
@@ -4802,11 +4790,13 @@ fn default_aliases() -> roc_solve::solve::Aliases {
             symbol: Symbol::NUM_NUM,
             type_arguments: vec![(
                 "range".into(),
-                Type::DelayedAlias(AliasCommon {
+                Type::Alias {
                     symbol: Symbol::NUM_FLOATINGPOINT,
                     type_arguments: vec![("range".into(), Type::Variable(tvar))],
                     lambda_set_variables: vec![],
-                }),
+                    actual: Box::new(Type::Variable(tvar)),
+                    kind: AliasKind::Opaque,
+                },
             )],
             lambda_set_variables: vec![],
         });
@@ -4823,24 +4813,17 @@ fn default_aliases() -> roc_solve::solve::Aliases {
         solve_aliases.insert(symbol, alias);
     }
 
+    // Integer range := range
     {
         let symbol = Symbol::NUM_INTEGER;
         let tvar = var_store.fresh();
-
-        let typ = Type::TagUnion(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_INTEGER),
-                vec![Type::Variable(tvar)],
-            )],
-            TypeExtension::Closed,
-        );
 
         let alias = Alias {
             region: Region::zero(),
             type_variables: vec![Loc::at_zero(("range".into(), tvar))],
             lambda_set_variables: Default::default(),
             recursion_variables: Default::default(),
-            typ,
+            typ: Type::Variable(tvar),
             kind: roc_types::types::AliasKind::Structural,
         };
 
@@ -4875,38 +4858,33 @@ fn default_aliases() -> roc_solve::solve::Aliases {
         solve_aliases.insert(symbol, alias);
     }
 
-    let mut unit_function = |alias_name: Symbol, at_tag_name: Symbol| {
-        let typ = Type::TagUnion(
-            vec![(TagName::Private(at_tag_name), vec![])],
-            TypeExtension::Closed,
-        );
-
+    let mut zero_opaque = |alias_name: Symbol| {
         let alias = Alias {
             region: Region::zero(),
             type_variables: vec![],
             lambda_set_variables: Default::default(),
             recursion_variables: Default::default(),
-            typ,
-            kind: roc_types::types::AliasKind::Structural,
+            typ: Type::EmptyTagUnion,
+            kind: AliasKind::Opaque,
         };
 
         solve_aliases.insert(alias_name, alias);
     };
 
-    unit_function(Symbol::NUM_SIGNED8, Symbol::NUM_AT_SIGNED8);
-    unit_function(Symbol::NUM_SIGNED16, Symbol::NUM_AT_SIGNED16);
-    unit_function(Symbol::NUM_SIGNED32, Symbol::NUM_AT_SIGNED32);
-    unit_function(Symbol::NUM_SIGNED64, Symbol::NUM_AT_SIGNED64);
-    unit_function(Symbol::NUM_SIGNED128, Symbol::NUM_AT_SIGNED128);
+    zero_opaque(Symbol::NUM_SIGNED8);
+    zero_opaque(Symbol::NUM_SIGNED16);
+    zero_opaque(Symbol::NUM_SIGNED32);
+    zero_opaque(Symbol::NUM_SIGNED64);
+    zero_opaque(Symbol::NUM_SIGNED128);
 
-    unit_function(Symbol::NUM_UNSIGNED8, Symbol::NUM_AT_UNSIGNED8);
-    unit_function(Symbol::NUM_UNSIGNED16, Symbol::NUM_AT_UNSIGNED16);
-    unit_function(Symbol::NUM_UNSIGNED32, Symbol::NUM_AT_UNSIGNED32);
-    unit_function(Symbol::NUM_UNSIGNED64, Symbol::NUM_AT_UNSIGNED64);
-    unit_function(Symbol::NUM_UNSIGNED128, Symbol::NUM_AT_UNSIGNED128);
+    zero_opaque(Symbol::NUM_UNSIGNED8);
+    zero_opaque(Symbol::NUM_UNSIGNED16);
+    zero_opaque(Symbol::NUM_UNSIGNED32);
+    zero_opaque(Symbol::NUM_UNSIGNED64);
+    zero_opaque(Symbol::NUM_UNSIGNED128);
 
-    unit_function(Symbol::NUM_BINARY32, Symbol::NUM_AT_BINARY32);
-    unit_function(Symbol::NUM_BINARY64, Symbol::NUM_AT_BINARY64);
+    zero_opaque(Symbol::NUM_BINARY32);
+    zero_opaque(Symbol::NUM_BINARY64);
 
     solve_aliases
 }

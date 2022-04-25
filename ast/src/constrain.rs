@@ -1895,17 +1895,7 @@ fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
 fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_FLOATINGPOINT),
-                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = range_type.shallow_clone();
 
     Type2::Alias(
         Symbol::NUM_FLOATINGPOINT,
@@ -1931,22 +1921,10 @@ fn num_int(pool: &mut Pool, range: TypeId) -> Type2 {
 
 #[inline(always)]
 fn _num_signed64(pool: &mut Pool) -> Type2 {
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_SIGNED64),
-                PoolVec::empty(pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
-
     Type2::Alias(
         Symbol::NUM_SIGNED64,
         PoolVec::empty(pool),
-        pool.add(alias_content),
+        pool.add(Type2::EmptyTagUnion),
     )
 }
 
@@ -1974,17 +1952,7 @@ fn num_unsigned32(pool: &mut Pool) -> Type2 {
 fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_INTEGER),
-                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = range_type.shallow_clone();
 
     Type2::Alias(
         Symbol::NUM_INTEGER,
@@ -1997,17 +1965,7 @@ fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
 fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
     let range_type = pool.get(type_id);
 
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_NUM),
-                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = range_type.shallow_clone();
 
     Type2::Alias(
         Symbol::NUM_NUM,

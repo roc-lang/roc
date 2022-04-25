@@ -120,6 +120,21 @@ impl Mode {
     fn as_eq(self) -> Self {
         (self - Mode::PRESENT) | Mode::EQ
     }
+
+    #[cfg(debug_assertions)]
+    fn pretty_print(&self) -> &str {
+        if self.contains(Mode::EQ | Mode::RIGID_AS_FLEX) {
+            "~*"
+        } else if self.contains(Mode::PRESENT | Mode::RIGID_AS_FLEX) {
+            "+=*"
+        } else if self.contains(Mode::EQ) {
+            "~"
+        } else if self.contains(Mode::PRESENT) {
+            "+="
+        } else {
+            unreachable!("Bad mode!")
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -309,7 +324,7 @@ fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option
         //        println!("\n --------------- \n");
         let content_1 = subs.get(ctx.first).content;
         let content_2 = subs.get(ctx.second).content;
-        let mode = if ctx.mode.is_eq() { "~" } else { "+=" };
+        let mode = ctx.mode.pretty_print();
         eprintln!(
             "{}{}({:?}-{:?}): {:?} {:?} {} {:?} {:?}",
             " ".repeat(use_depth),
@@ -573,7 +588,7 @@ fn unify_opaque(
             // Alias wins
             merge(subs, ctx, Alias(symbol, args, real_var, kind))
         }
-        RigidVar(_) | RigidAbleVar(..) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        // RigidVar(_) | RigidAbleVar(..) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
         FlexAbleVar(_, ability) if args.is_empty() => {
             // Opaque type wins
             let mut outcome = merge(subs, ctx, Alias(symbol, args, real_var, kind));
@@ -602,6 +617,15 @@ fn unify_opaque(
                 )
             } else {
                 mismatch!("{:?}", symbol)
+            }
+        }
+        RangedNumber(other_real_var, other_range_vars) => {
+            // This opaque might be a number, check if it unifies with the target ranged number var.
+            let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
+            if outcome.mismatches.is_empty() {
+                check_valid_range(subs, pool, ctx.first, *other_range_vars, ctx.mode)
+            } else {
+                outcome
             }
         }
         other => {

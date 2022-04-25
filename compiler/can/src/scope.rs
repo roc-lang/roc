@@ -36,7 +36,12 @@ fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
     let mut aliases = SendMap::default();
 
     for (symbol, builtin_alias) in solved_aliases {
-        let BuiltinAlias { region, vars, typ } = builtin_alias;
+        let BuiltinAlias {
+            region,
+            vars,
+            typ,
+            kind,
+        } = builtin_alias;
 
         let mut free_vars = FreeVars::default();
         let typ = roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
@@ -55,8 +60,7 @@ fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
             lambda_set_variables: Vec::new(),
             recursion_variables: MutSet::default(),
             type_variables: variables,
-            // TODO(opaques): replace when opaques are included in the stdlib
-            kind: AliasKind::Structural,
+            kind,
         };
 
         aliases.insert(symbol, alias);

@@ -283,12 +283,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     macro_rules! num_helper {
         ($ty:ty) => {
             app.call_function(main_fn_name, |_, num: $ty| {
-                num_to_ast(
-                    env,
-                    number_literal_to_ast(env.arena, num),
-                    // We determine the number from what the alias looks like.
-                    alias_content.unwrap_or(raw_content),
-                )
+                number_literal_to_ast(env.arena, num)
             })
         };
     }
@@ -299,10 +294,11 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 bool_to_ast(env, mem, num, raw_content)
             })),
         Layout::Builtin(Builtin::Int(int_width)) => {
+            use Content::*;
             use IntWidth::*;
 
-            let result = match (raw_content, int_width) {
-                (Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _)), U8) => num_helper!(u8),
+            let result = match (alias_content, int_width) {
+                (Some(Alias(Symbol::NUM_UNSIGNED8, ..)), U8) => num_helper!(u8),
                 (_, U8) => {
                     // This is not a number, it's a tag union or something else
                     app.call_function(main_fn_name, |mem: &A::Memory, num: u8| {
@@ -507,7 +503,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         ($method: ident, $ty: ty) => {{
             let num: $ty = mem.$method(addr);
 
-            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+            number_literal_to_ast(env.arena, num)
         }};
     }
 
@@ -1137,12 +1133,6 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
-                    // If this tag union represents a number, skip right to
-                    // returning it as an Expr::Num
-                    if let TagName::Private(Symbol::NUM_AT_NUM) = &tag_name {
-                        return Expr::Num(env.arena.alloc_str(&value.to_string()));
-                    }
-
                     let loc_tag_expr = {
                         let tag_name = &tag_name.as_ident_str(env.interns, env.home);
                         let tag_expr = if tag_name.starts_with('@') {
@@ -1203,7 +1193,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                     }
                 }
                 other => {
-                    unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
+                    unreachable!("Unexpected FlatType {:?} in byte_to_ast", other);
                 }
             }
         }
@@ -1213,79 +1203,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
             byte_to_ast(env, mem, value, content)
         }
         other => {
-            unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
-        }
-    }
-}
-
-fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> Expr<'a> {
-    use Content::*;
-
-    let arena = env.arena;
-
-    match content {
-        Structure(flat_type) => {
-            match flat_type {
-                FlatType::Apply(Symbol::NUM_NUM, _) => num_expr,
-                FlatType::TagUnion(tags, _) => {
-                    // This was a single-tag union that got unwrapped at runtime.
-                    debug_assert_eq!(tags.len(), 1);
-
-                    let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
-
-                    // If this tag union represents a number, skip right to
-                    // returning it as an Expr::Num
-                    if let TagName::Private(Symbol::NUM_AT_NUM) = &tag_name {
-                        return num_expr;
-                    }
-
-                    let loc_tag_expr = {
-                        let tag_name = &tag_name.as_ident_str(env.interns, env.home);
-                        let tag_expr = if tag_name.starts_with('@') {
-                            Expr::PrivateTag(arena.alloc_str(tag_name))
-                        } else {
-                            Expr::GlobalTag(arena.alloc_str(tag_name))
-                        };
-
-                        &*arena.alloc(Loc {
-                            value: tag_expr,
-                            region: Region::zero(),
-                        })
-                    };
-
-                    let payload = {
-                        // Since this has the layout of a number, there should be
-                        // exactly one payload in this tag.
-                        debug_assert_eq!(payload_vars.len(), 1);
-
-                        let var = *payload_vars.iter().next().unwrap();
-                        let content = env.subs.get_content_without_compacting(var);
-
-                        let loc_payload = &*arena.alloc(Loc {
-                            value: num_to_ast(env, num_expr, content),
-                            region: Region::zero(),
-                        });
-
-                        arena.alloc([loc_payload])
-                    };
-
-                    Expr::Apply(loc_tag_expr, payload, CalledVia::Space)
-                }
-                other => {
-                    panic!("Unexpected FlatType {:?} in num_to_ast", other);
-                }
-            }
-        }
-        Alias(_, _, var, _) => {
-            let content = env.subs.get_content_without_compacting(*var);
-
-            num_to_ast(env, num_expr, content)
-        }
-        RangedNumber(typ, _) => {
-            num_to_ast(env, num_expr, env.subs.get_content_without_compacting(*typ))
-        }
-        other => {
-            panic!("Unexpected FlatType {:?} in num_to_ast", other);
+            unreachable!("Unexpected FlatType {:?} in byte_to_ast", other);
         }
     }
 }

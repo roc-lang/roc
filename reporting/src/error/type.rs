@@ -16,6 +16,12 @@ use ven_pretty::DocAllocator;
 const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
 
+const OPAQUE_NUM_SYMBOLS: &[Symbol] = &[
+    Symbol::NUM_NUM,
+    Symbol::NUM_INTEGER,
+    Symbol::NUM_FLOATINGPOINT,
+];
+
 pub fn type_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
@@ -2318,7 +2324,11 @@ fn to_diff<'b>(
             }
         }
 
-        (Alias(_, _, _, AliasKind::Opaque), _) | (_, Alias(_, _, _, AliasKind::Opaque)) => {
+        (Alias(sym, _, _, AliasKind::Opaque), _) | (_, Alias(sym, _, _, AliasKind::Opaque))
+            // Skip the hint for numbers; it's not as useful as saying "this type is not a number"
+            if !OPAQUE_NUM_SYMBOLS.contains(&sym) =>
+        {
+            dbg!(&type1, &type2);
             let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
             let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
 

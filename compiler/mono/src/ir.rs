@@ -8640,9 +8640,9 @@ pub fn num_argument_to_int_or_float(
                     num_argument_to_int_or_float(subs, target_info, var, true)
                 }
 
-                Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => IntOrFloat::DecimalFloatType,
+                Symbol::NUM_DECIMAL => IntOrFloat::DecimalFloatType,
 
-                Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
+                Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
                     let int_width = match target_info.ptr_width() {
                         roc_target::PtrWidth::Bytes4 => IntWidth::U32,
                         roc_target::PtrWidth::Bytes8 => IntWidth::U64,
