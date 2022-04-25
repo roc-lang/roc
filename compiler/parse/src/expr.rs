@@ -2438,7 +2438,6 @@ where
 fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
         Ident::GlobalTag(string) => Expr::GlobalTag(string),
-        Ident::PrivateTag(string) => Expr::PrivateTag(string),
         Ident::OpaqueRef(string) => Expr::OpaqueRef(string),
         Ident::Access { module_name, parts } => {
             let mut iter = parts.iter();
