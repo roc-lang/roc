@@ -4528,30 +4528,6 @@ mod test_reporting {
     }
 
     #[test]
-    fn qualified_private_tag() {
-        report_problem_as(
-            indoc!(
-                r#"
-                @Foo.Bar
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am very confused by this expression:
-
-                1│  @Foo.Bar
-                        ^^^^
-
-                Looks like a private tag is treated like a module name. Maybe you
-                wanted a qualified name, like Json.Decode.string?
-            "#
-            ),
-        )
-    }
-
-    #[test]
     fn type_annotation_double_colon() {
         report_problem_as(
             indoc!(
@@ -5210,36 +5186,6 @@ mod test_reporting {
                                    ^
 
                 Note: I may be confused by indentation
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn invalid_private_tag_name() {
-        // TODO could do better by pointing out we're parsing a function type
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [ @Foo Str, @100 I64 ]
-                f = 0
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── WEIRD TAG NAME ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a tag union type, but I got stuck here:
-
-                1│  f : [ @Foo Str, @100 I64 ]
-                                    ^
-
-                I was expecting to see a private tag name.
-
-                Hint: Private tag names start with an `@` symbol followed by an
-                uppercase letter, like @UID or @SecretKey.
             "#
             ),
         )
@@ -6022,54 +5968,6 @@ I need all branches in an `if` to have the same type!
                              ^
 
                 So I expect to see a lowercase letter next, like .name or .height.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn private_tag_not_uppercase() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Num.add @foo 23
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am trying to parse a private tag here:
-
-                1│  Num.add @foo 23
-                             ^
-
-                But after the `@` symbol I found a lowercase letter. All tag names
-                (global and private) must start with an uppercase letter, like @UUID
-                or @Secrets.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn private_tag_field_access() {
-        report_problem_as(
-            indoc!(
-                r#"
-                @UUID.bar
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am very confused by this field access:
-
-                1│  @UUID.bar
-                         ^^^^
-
-                It looks like a record field access on a private tag.
             "#
             ),
         )
@@ -7385,10 +7283,10 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Job : [ @Job { inputs : List Str } ]
+                Job : [ Job { inputs : List Str } ]
                 job : { inputs ? List Str } -> Job
                 job = \{ inputs } ->
-                    @Job { inputs }
+                    Job { inputs }
 
                 job { inputs: [ "build", "test" ] }
                 "#
@@ -7423,11 +7321,11 @@ I need all branches in an `if` to have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Job : [ @Job { inputs : List Job } ]
+                Job : [ Job { inputs : List Job } ]
 
                 job : { inputs : List Str } -> Job
                 job = \{ inputs } ->
-                    @Job { inputs }
+                    Job { inputs }
 
                 job { inputs: [ "build", "test" ] }
                 "#
@@ -7440,16 +7338,16 @@ I need all branches in an `if` to have the same type!
 
                 3│  job : { inputs : List Str } -> Job
                 4│  job = \{ inputs } ->
-                5│      @Job { inputs }
-                        ^^^^^^^^^^^^^^^
+                5│      Job { inputs }
+                        ^^^^^^^^^^^^^^
 
-                This `@Job` private tag application has the type:
+                This `Job` global tag application has the type:
 
-                    [ @Job { inputs : List Str } ]
+                    [ Job { inputs : List Str } ]
 
                 But the type annotation on `job` says it should be:
 
-                    [ @Job { inputs : List a } ] as a
+                    [ Job { inputs : List a } ] as a
                 "#
             ),
         )
