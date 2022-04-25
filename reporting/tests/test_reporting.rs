@@ -3292,15 +3292,15 @@ mod test_reporting {
                 ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
 
                 This record type defines the `.foo` field twice!
-                
+
                 1│  a : { foo : Num.I64, bar : {}, foo : Str }
                           ^^^^^^^^^^^^^            ^^^^^^^^^
-                
+
                 In the rest of the program, I will only use the latter definition:
-                
+
                 1│  a : { foo : Num.I64, bar : {}, foo : Str }
                                                    ^^^^^^^^^
-                
+
                 For clarity, remove the previous `.foo` definitions from this record
                 type.
                 "#
@@ -3324,15 +3324,15 @@ mod test_reporting {
                 ── DUPLICATE TAG NAME ──────────────────────────────────── /code/proj/Main.roc ─
 
                 This tag union type defines the `Foo` tag twice!
-                
+
                 1│  a : [ Foo Num.I64, Bar {}, Foo Str ]
                           ^^^^^^^^^^^          ^^^^^^^
-                
+
                 In the rest of the program, I will only use the latter definition:
-                
+
                 1│  a : [ Foo Num.I64, Bar {}, Foo Str ]
                                                ^^^^^^^
-                
+
                 For clarity, remove the previous `Foo` definitions from this tag union
                 type.
                 "#
@@ -3461,10 +3461,10 @@ mod test_reporting {
                 ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
                 The `Num` alias expects 1 type argument, but it got 2 instead:
-                
+
                 1│  a : Num.Num Num.I64 Num.F64
                         ^^^^^^^^^^^^^^^^^^^^^^^
-                
+
                 Are there missing parentheses?
                 "#
             ),
@@ -3487,10 +3487,10 @@ mod test_reporting {
                 ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
                 The `Num` alias expects 1 type argument, but it got 2 instead:
-                
+
                 1│  f : Str -> Num.Num Num.I64 Num.F64
                                ^^^^^^^^^^^^^^^^^^^^^^^
-                
+
                 Are there missing parentheses?
                 "#
             ),
@@ -7026,20 +7026,20 @@ I need all branches in an `if` to have the same type!
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-                
+
                 Something is off with the body of the `inner` definition:
-                
+
                 3│      inner : * -> *
                 4│      inner = \y -> y
                                       ^
-                
+
                 The type annotation on `inner` says this `y` value should have the type:
-                
+
                     *
-                
+
                 However, the type of this `y` value is connected to another type in a
                 way that isn't reflected in this annotation.
-                
+
                 Tip: Any connection between types must use a named type variable, not
                 a `*`! Maybe the annotation  on `inner` should have a named type variable
                 in place of the `*`?
@@ -8810,21 +8810,21 @@ I need all branches in an `if` to have the same type!
                                          ^^^^^^^^^^^
 
                 Did you mean one of these?
-                
+
                     Type
                     True
                     Box
                     Ok
-                
+
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
                 I cannot find a `UnknownType` value
-                
+
                 3│  insertHelper : UnknownType, Type -> Type
                                    ^^^^^^^^^^^
-                
+
                 Did you mean one of these?
-                
+
                     Type
                     True
                     insertHelper
