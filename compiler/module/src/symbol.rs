@@ -542,11 +542,11 @@ pub struct IdentIds {
 }
 
 impl IdentIds {
-    pub fn idents(&self) -> impl Iterator<Item = (IdentId, &Ident)> {
+    pub fn ident_strs(&self) -> impl Iterator<Item = (IdentId, &str)> {
         self.by_id
             .iter()
             .enumerate()
-            .map(|(index, ident)| (IdentId(index as u32), ident))
+            .map(|(index, ident)| (IdentId(index as u32), ident.as_inline_str().as_str()))
     }
 
     pub fn add(&mut self, ident_name: Ident) -> IdentId {
@@ -639,8 +639,10 @@ impl IdentIds {
 
     #[inline(always)]
     pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
-        for (id, ident) in self.idents() {
-            if ident_name == ident {
+        let ident_name = ident_name.as_inline_str().as_str();
+
+        for (id, ident_str) in self.ident_strs() {
+            if ident_name == ident_str {
                 return Some(id);
             }
         }

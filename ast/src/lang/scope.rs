@@ -327,9 +327,9 @@ impl Scope {
     ) -> ASTResult<()> {
         let ident_ids = get_module_ident_ids(all_ident_ids, &env.home)?.clone();
 
-        for (_, ident_ref) in ident_ids.idents() {
+        for (_, ident_ref) in ident_ids.ident_strs() {
             self.introduce(
-                ident_ref.as_inline_str().as_str().into(),
+                ident_ref.into(),
                 &env.exposed_ident_ids,
                 get_module_ident_ids_mut(all_ident_ids, &env.home)?,
                 Region::zero(),

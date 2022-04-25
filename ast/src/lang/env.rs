@@ -129,8 +129,8 @@ impl<'a> Env<'a> {
                                 region,
                             },
                             self.ident_ids
-                                .idents()
-                                .map(|(_, string)| string.as_ref().into())
+                                .ident_strs()
+                                .map(|(_, string)| string.into())
                                 .collect(),
                         )),
                     }
@@ -146,9 +146,9 @@ impl<'a> Env<'a> {
                             }
                             None => {
                                 let exposed_values = exposed_ids
-                                    .idents()
+                                    .ident_strs()
                                     .filter(|(_, ident)| {
-                                        ident.as_ref().starts_with(|c: char| c.is_lowercase())
+                                        ident.starts_with(|c: char| c.is_lowercase())
                                     })
                                     .map(|(_, ident)| Lowercase::from(ident.as_ref()))
                                     .collect();
