@@ -5437,6 +5437,24 @@ mod solve_expr {
         )
     }
 
+    #[test]
+    fn issue_2458_swapped_order() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Bar a : Foo a
+                Foo a : [ Blah (Result (Bar a) { val: a }) ]
+
+                v : Bar U8
+                v = Blah (Ok (Blah (Err { val: 1 })))
+
+                v
+                "#
+            ),
+            "Bar U8",
+        )
+    }
+
     // https://github.com/rtfeldman/roc/issues/2379
     #[test]
     fn copy_vars_referencing_copied_vars() {
