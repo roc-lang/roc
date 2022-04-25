@@ -1728,12 +1728,14 @@ fn correct_mutual_recursive_type_alias<'a>(
         }
     }
 
-    let mut solved_aliases_bitvec = bitvec::vec::BitVec::<usize>::repeat(false, capacity);
+    let mut solved_aliases = bitvec::vec::BitVec::<usize>::repeat(false, capacity);
 
     let group: Vec<_> = (0u32..capacity as u32).collect();
     let sccs = matrix.strongly_connected_components(&group);
 
-    // sometimes we need to temporarily move some aliases somewhere
+    // scratchpad to store aliases that are modified in the current iteration.
+    // Only used when there is are more than one alias in a group. See below why
+    // this is needed.
     let scratchpad_capacity = sccs
         .groups()
         .map(|r| r.count_ones())
@@ -1752,36 +1754,62 @@ fn correct_mutual_recursive_type_alias<'a>(
         //
         // Hence, we only need to worry about symbols in the current SCC or any prior one.
         // It cannot be using any of the others, and we've already instantiated aliases coming from other modules.
-        let mut to_instantiate_bitvec = solved_aliases_bitvec | cycle;
+        let mut to_instantiate = solved_aliases | cycle;
 
         // Make sure we report only one error for the cycle, not an error for every
         // alias in the cycle.
         let mut can_still_report_error = true;
 
         for index in cycle.iter_ones() {
-            // Don't try to instantiate the alias itself in its definition.
-            to_instantiate_bitvec.set(index, false);
+            // Don't try to instantiate the alias itself in its own definition.
+            to_instantiate.set(index, false);
 
             // Within a recursive group, we must instantiate all aliases like how they came to the
-            // loop. So we cannot instantiate A into B, then the updated B into C in the same
-            // iteration. Hence, if we have more than one alias we sadly must clone and store
-            // the alias off to the side somewhere. After processing the group, we put the
-            // updated alias into the main `aliases` vector again, because for future groups
-            // we do need to use the instantiated version.
-            let alias = if cycle.count_ones() > 1 {
+            // loop. e.g. given
+            //
+            // A : [ ConsA B, NilA ]
+            // B : [ ConsB A, NilB ]
+            //
+            // Our goal is
+            //
+            // A : [ ConsA [ ConsB A, NilB ], NilA ]
+            // B : [ ConsB [ ConsA B, NilA ], NilB ]
+            //
+            // But if we would first instantiate B into A, then use the updated A to instantiate B,
+            // we get
+            //
+            // A : [ ConsA [ ConsB A, NilB ], NilA ]
+            // B : [ ConsB [ ConsA [ ConsB A, NilB ], NilA ], NilB ]
+            //
+            // Which is incorrect. We do need the instantiated version however.
+            // e.g. if in a next group we have:
+            //
+            // C : A
+            //
+            // Then we must use the instantiated version
+            //
+            // C : [ ConsA [ ConsB A, NilB ], NilA ]
+            //
+            // So, we cannot replace the original version of A with its instantiated version
+            // while we process A's group. We have to store the instantiated version until the
+            // current group is done, then move it to the `aliases` array. That is what the scratchpad is for.
+            let alias = if cycle.count_ones() == 1 {
+                // an optimization: we can modify the alias in the `aliases` list directly
+                // because it is the only alias in the group.
+                &mut aliases[index]
+            } else {
                 scratchpad.push((index, aliases[index].clone()));
 
                 &mut scratchpad.last_mut().unwrap().1
-            } else {
-                &mut aliases[index]
             };
 
-            // we run into a problem here where we want to modify an element in the aliases array,
-            // but also reference the other elements. The borrow checker, correctly, says no to that.
+            // Now, `alias` is possibly a mutable borrow from the `aliases` vector. But we also want
+            // to immutably borrow other elements from that vector to instantiate them into `alias`.
+            // The borrow checker disallows that.
             //
             // So we get creative: we swap out the element we want to modify with a dummy. We can
-            // then freely modify the type we moved out, and the `to_instantiate_bitvec` mask
-            // prevents our dummy from being used.
+            // then freely modify the type we moved out, and the `to_instantiate` mask
+            // makes sure that our dummy is not used.
 
             let alias_region = alias.region;
             let mut alias_type = Type::EmptyRec;
@@ -1789,7 +1817,7 @@ fn correct_mutual_recursive_type_alias<'a>(
             std::mem::swap(&mut alias_type, &mut alias.typ);
 
             let can_instantiate_symbol = |s| match symbols_introduced.iter().position(|i| *i == s) {
-                Some(s_index) if to_instantiate_bitvec[s_index] => aliases.get(s_index),
+                Some(s_index) if to_instantiate[s_index] => aliases.get(s_index),
                 _ => None,
             };
 
@@ -1811,7 +1839,7 @@ fn correct_mutual_recursive_type_alias<'a>(
             std::mem::swap(&mut alias_type, &mut alias.typ);
 
             // We can instantiate this alias in future iterations
-            to_instantiate_bitvec.set(index, true);
+            to_instantiate.set(index, true);
 
             // add any lambda sets that the instantiation created to the current alias
             alias.lambda_set_variables.extend(
@@ -1837,6 +1865,7 @@ fn correct_mutual_recursive_type_alias<'a>(
             }
         }
 
+        // the current group has instantiated. Now we can move the updated aliases to the `aliases` vector
         for (index, alias) in scratchpad.drain(..) {
             aliases[index] = alias;
         }
@@ -1870,7 +1899,7 @@ fn correct_mutual_recursive_type_alias<'a>(
         }
 
         // We've instantiated all we could, so all instantiatable aliases are solved now
-        solved_aliases_bitvec = to_instantiate_bitvec;
+        solved_aliases = to_instantiate;
     }
 
     // Safety: both vectors are equal length and there are no duplicates
