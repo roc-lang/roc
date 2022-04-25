@@ -1408,7 +1408,7 @@ mod test_reporting {
                 4│  f Blue
                       ^^^^
 
-                This `Blue` global tag has the type:
+                This `Blue` tag has the type:
 
                     [ Blue ]a
 
@@ -1446,7 +1446,7 @@ mod test_reporting {
                 4│  f (Blue 3.14)
                        ^^^^^^^^^
 
-                This `Blue` global tag application has the type:
+                This `Blue` tag application has the type:
 
                     [ Blue (Float a) ]b
 
@@ -2179,7 +2179,7 @@ mod test_reporting {
                 2│  f = \_ -> Foo
                               ^^^
 
-                This `Foo` global tag has the type:
+                This `Foo` tag has the type:
 
                     [ Foo ]a
 
@@ -2306,7 +2306,7 @@ mod test_reporting {
                 5│      Ok
                         ^^
 
-                This `Ok` global tag has the type:
+                This `Ok` tag has the type:
 
                     [ Ok ]a
 
@@ -3630,7 +3630,7 @@ mod test_reporting {
                 4│  x = Cons {} (Cons "foo" Nil)
                         ^^^^^^^^^^^^^^^^^^^^^^^^
 
-                This `Cons` global tag application has the type:
+                This `Cons` tag application has the type:
 
                     [ Cons {} [ Cons Str [ Cons {} a, Nil ] as a, Nil ], Nil ]
 
@@ -3671,7 +3671,7 @@ mod test_reporting {
                 5│  x = ACons 0 (BCons 1 (ACons "foo" BNil ))
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                This `ACons` global tag application has the type:
+                This `ACons` tag application has the type:
 
                     [ ACons (Num (Integer Signed64)) [
                     BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 a, BNil ],
@@ -4456,7 +4456,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn qualified_global_tag() {
+    fn qualified_tag() {
         report_problem_as(
             indoc!(
                 r#"
@@ -7141,7 +7141,7 @@ I need all branches in an `if` to have the same type!
                 6│  isEmpty (Name "boo")
                              ^^^^^^^^^^
 
-                This `Name` global tag application has the type:
+                This `Name` tag application has the type:
 
                     [ Name Str ]a
 
@@ -7341,7 +7341,7 @@ I need all branches in an `if` to have the same type!
                 5│      Job { inputs }
                         ^^^^^^^^^^^^^^
 
-                This `Job` global tag application has the type:
+                This `Job` tag application has the type:
 
                     [ Job { inputs : List Str } ]
 
@@ -9676,7 +9676,7 @@ I need all branches in an `if` to have the same type!
                 15│          notYet: hash (A 1),
                                            ^^^
 
-                This `A` global tag application has the type:
+                This `A` tag application has the type:
 
                     [ A (Num a) ]b
 

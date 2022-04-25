@@ -148,7 +148,7 @@ pub enum Expr2 {
     },
 
     // Sum Types
-    GlobalTag {
+    Tag {
         name: PoolStr,                          // 4B
         variant_var: Variable,                  // 4B
         ext_var: Variable,                      // 4B

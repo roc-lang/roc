@@ -10,7 +10,7 @@ BinOps(
     @4-25 If(
         [
             (
-                @7-11 GlobalTag(
+                @7-11 Tag(
                     "True",
                 ),
                 @17-18 Num(

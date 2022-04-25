@@ -1655,7 +1655,7 @@ impl<'a> Expr<'a> {
                 ..
             } => {
                 let doc_tag = match tag_name {
-                    TagName::Global(s) => alloc.text(s.as_str()),
+                    TagName::Tag(s) => alloc.text(s.as_str()),
                     TagName::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))
@@ -1676,7 +1676,7 @@ impl<'a> Expr<'a> {
                 ..
             } => {
                 let doc_tag = match tag_name {
-                    TagName::Global(s) => alloc.text(s.as_str()),
+                    TagName::Tag(s) => alloc.text(s.as_str()),
                     TagName::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))

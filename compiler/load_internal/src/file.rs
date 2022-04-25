@@ -4837,8 +4837,8 @@ fn default_aliases() -> roc_solve::solve::Aliases {
 
         let typ = Type::TagUnion(
             vec![
-                (TagName::Global("Ok".into()), vec![Type::Variable(tvar1)]),
-                (TagName::Global("Err".into()), vec![Type::Variable(tvar2)]),
+                (TagName::Tag("Ok".into()), vec![Type::Variable(tvar1)]),
+                (TagName::Tag("Err".into()), vec![Type::Variable(tvar2)]),
             ],
             TypeExtension::Closed,
         );

@@ -77,7 +77,7 @@ mod test_parse {
                 let pass_or_fail_names = list(&base);
                 let mut extra_test_files = std::collections::HashSet::new();
                 for res in pass_or_fail_names {
-                    assert!(res == "pass" || res == "fail");
+                    assert!(res == "pass" || res == "fail", "a pass or fail filename was neither \"pass\" nor \"fail\", but rather: {:?}", res);
                     let res_dir = base.join(&res);
                     for file in list(&res_dir) {
                         let test = if let Some(test) = file.strip_suffix(".roc") {
@@ -132,8 +132,8 @@ mod test_parse {
         pass/add_with_spaces.expr,
         pass/annotated_record_destructure.expr,
         pass/annotated_tag_destructure.expr,
-        pass/apply_global_tag.expr,
-        pass/apply_parenthetical_global_tag_args.expr,
+        pass/apply_tag.expr,
+        pass/apply_parenthetical_tag_args.expr,
         pass/apply_three_args.expr,
         pass/apply_two_args.expr,
         pass/apply_unary_negation.expr,
@@ -141,7 +141,7 @@ mod test_parse {
         pass/basic_apply.expr,
         pass/basic_docs.expr,
         pass/basic_field.expr,
-        pass/basic_global_tag.expr,
+        pass/basic_tag.expr,
         pass/basic_var.expr,
         pass/closure_with_underscores.expr,
         pass/comment_after_def.module,
@@ -233,7 +233,7 @@ mod test_parse {
         pass/positive_int.expr,
         pass/provides_type.header,
         pass/qualified_field.expr,
-        pass/qualified_global_tag.expr,
+        pass/qualified_tag.expr,
         pass/qualified_var.expr,
         pass/record_destructure_def.expr,
         pass/record_func_type_decl.expr,
@@ -654,17 +654,17 @@ mod test_parse {
     // }
 
     // #[test]
-    // fn ann_global_open_union() {
+    // fn ann_open_union() {
     //     let arena = Bump::new();
     //     let newline = bumpalo::vec![in &arena; Newline];
     //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
-    //     let tag1 = Tag::Global {
+    //     let tag1 = Tag::Apply {
     //         name: Located::new(0, 0, 8, 12, "True"),
     //         args: &[],
     //     };
     //     let tag2arg = Located::new(0, 0, 22, 27, TypeAnnotation::Apply("", "Thing", &[]));
     //     let tag2args = bumpalo::vec![in &arena; tag2arg];
-    //     let tag2 = Tag::Global {
+    //     let tag2 = Tag::Apply {
     //         name: Located::new(0, 0, 14, 21, "Perhaps"),
     //         args: tag2args.into_bump_slice(),
     //     };
@@ -683,7 +683,7 @@ mod test_parse {
     //     );
     //     let def = Def::Body(
     //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
+    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::Tag("True"))),
     //     );
     //     let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
     //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
@@ -708,17 +708,17 @@ mod test_parse {
     // }
 
     // #[test]
-    // fn ann_global_closed_union() {
+    // fn ann_closed_union() {
     //     let arena = Bump::new();
     //     let newline = bumpalo::vec![in &arena; Newline];
     //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
-    //     let tag1 = Tag::Global {
+    //     let tag1 = Tag::Apply {
     //         name: Located::new(0, 0, 8, 12, "True"),
     //         args: &[],
     //     };
     //     let tag2arg = Located::new(0, 0, 22, 27, TypeAnnotation::Apply("", "Thing", &[]));
     //     let tag2args = bumpalo::vec![in &arena; tag2arg];
-    //     let tag2 = Tag::Global {
+    //     let tag2 = Tag::Apply {
     //         name: Located::new(0, 0, 14, 21, "Perhaps"),
     //         args: tag2args.into_bump_slice(),
     //     };
@@ -736,7 +736,7 @@ mod test_parse {
     //     );
     //     let def = Def::Body(
     //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
+    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::Tag("True"))),
     //     );
     //     let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
     //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));

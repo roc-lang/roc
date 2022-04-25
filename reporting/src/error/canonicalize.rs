@@ -1255,7 +1255,7 @@ fn pretty_runtime_error<'b>(
                 }
                 QualifiedIdentifier => alloc
                     .tip()
-                    .append(alloc.reflow("In patterns, only global tags can be qualified")),
+                    .append(alloc.reflow("In patterns, only tags can be qualified")),
             };
 
             doc = alloc.stack([

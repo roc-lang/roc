@@ -185,7 +185,7 @@ mod solve_expr {
     fn promote_expr_to_module(src: &str) -> String {
         let mut buffer = String::from(indoc!(
             r#"
-            app "test" 
+            app "test"
                 imports []
                 provides [ main ] to "./platform"
 
@@ -1588,7 +1588,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn global_tag_with_field() {
+    fn tag_with_field() {
         infer_eq(
             indoc!(
                 r#"
@@ -4177,7 +4177,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn double_tag_application_pattern_global() {
+    fn double_tag_application_pattern() {
         infer_eq_without_problem(
             indoc!(
                 r#"

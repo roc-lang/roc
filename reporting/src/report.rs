@@ -385,7 +385,7 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn tag_name(&'a self, tn: TagName) -> DocBuilder<'a, Self, Annotation> {
         match tn {
-            TagName::Global(uppercase) => self.global_tag_name(uppercase),
+            TagName::Tag(uppercase) => self.tag(uppercase),
             TagName::Closure(_symbol) => unreachable!("closure tags are internal only"),
         }
     }
@@ -417,9 +417,9 @@ impl<'a> RocDocAllocator<'a> {
         .annotate(Annotation::Symbol)
     }
 
-    pub fn global_tag_name(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
+    pub fn tag(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
         self.text(format!("{}", uppercase))
-            .annotate(Annotation::GlobalTag)
+            .annotate(Annotation::Tag)
     }
 
     pub fn opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
@@ -790,7 +790,7 @@ pub enum Annotation {
     Emphasized,
     Url,
     Keyword,
-    GlobalTag,
+    Tag,
     RecordField,
     TypeVariable,
     Alias,
@@ -882,7 +882,7 @@ where
             Url => {
                 self.write_str("<")?;
             }
-            GlobalTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion | TypeVariable
+            Tag | Keyword | RecordField | Symbol | Typo | TypoSuggestion | TypeVariable
                 if !self.in_type_block && !self.in_code_block =>
             {
                 self.write_str("`")?;
@@ -912,8 +912,7 @@ where
                 Url => {
                     self.write_str(">")?;
                 }
-                GlobalTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
-                | TypeVariable
+                Tag | Keyword | RecordField | Symbol | Typo | TypoSuggestion | TypeVariable
                     if !self.in_type_block && !self.in_code_block =>
                 {
                     self.write_str("`")?;
@@ -1005,7 +1004,7 @@ where
             ParserSuggestion => {
                 self.write_str(self.palette.parser_suggestion)?;
             }
-            TypeBlock | GlobalTag | RecordField => { /* nothing yet */ }
+            TypeBlock | Tag | RecordField => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -1023,7 +1022,7 @@ where
                     self.write_str(self.palette.reset)?;
                 }
 
-                TypeBlock | GlobalTag | Opaque | RecordField => { /* nothing yet */ }
+                TypeBlock | Tag | Opaque | RecordField => { /* nothing yet */ }
             },
         }
         Ok(())
