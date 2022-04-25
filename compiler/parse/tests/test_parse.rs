@@ -77,7 +77,7 @@ mod test_parse {
                 let pass_or_fail_names = list(&base);
                 let mut extra_test_files = std::collections::HashSet::new();
                 for res in pass_or_fail_names {
-                    assert!(res == "pass" || res == "fail");
+                    assert!(res == "pass" || res == "fail", "a pass or fail filename was neither \"pass\" nor \"fail\", but rather: {:?}", res);
                     let res_dir = base.join(&res);
                     for file in list(&res_dir) {
                         let test = if let Some(test) = file.strip_suffix(".roc") {
