@@ -2506,7 +2506,10 @@ fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let get_sub = RunLowLevel {
         op: LowLevel::NumSubWrap,
-        args: vec![(len_var, get_list_len.clone()), (len_var, Var(Symbol::ARG_2))],
+        args: vec![
+            (len_var, get_list_len.clone()),
+            (len_var, Var(Symbol::ARG_2)),
+        ],
         ret_var: len_var,
     };
 
