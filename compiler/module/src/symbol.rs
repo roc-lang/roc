@@ -737,7 +737,10 @@ const fn offset_helper<const N: usize>(mut array: [u32; N]) -> [u32; N] {
 
     let mut i = 0;
     while i < N {
-        (array[i], sum) = (sum, sum + array[i]);
+        // In rust 1.60 change to: (array[i], sum) = (sum, sum + array[i]);
+        let temp = array[i];
+        array[i] = sum;
+        sum += temp;
 
         i += 1;
     }
