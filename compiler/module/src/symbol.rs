@@ -530,7 +530,7 @@ pub struct IdentId(u32);
 pub struct IdentIds {
     buffer: Vec<u8>,
 
-    lengths: Vec<u16>,
+    lengths: Vec<u8>,
     offsets: Vec<u32>,
 }
 
@@ -570,7 +570,7 @@ impl IdentIds {
 
     pub fn add_str(&mut self, string: &str) -> IdentId {
         let offset = self.buffer.len() as u32;
-        let length = string.len() as u16;
+        let length = string.len() as u8;
 
         let ident_id = IdentId(self.lengths.len() as u32);
 
@@ -613,7 +613,7 @@ impl IdentIds {
                         // `buffer`, we can update them in-place
                         self.buffer.extend(new_ident_name.bytes());
 
-                        self.lengths[key_index] = length as u16;
+                        self.lengths[key_index] = length as u8;
                         self.offsets[key_index] = offset as u32;
 
                         Ok(ident_id)
@@ -647,7 +647,7 @@ impl IdentIds {
         write!(self.buffer, "{}", index).unwrap();
         let length = self.buffer.len() - offset;
 
-        self.lengths.push(length as u16);
+        self.lengths.push(length as u8);
         self.offsets.push(offset as u32);
 
         IdentId(index as u32)
@@ -661,7 +661,7 @@ impl IdentIds {
 
     #[inline(always)]
     fn find_index(&self, string: &str) -> Option<usize> {
-        let target_length = string.len() as u16;
+        let target_length = string.len() as u8;
 
         let mut offset = 0;
         for (index, length) in self.lengths.iter().enumerate() {
@@ -816,7 +816,7 @@ macro_rules! define_builtins {
                     let ident_ids = {
                         const TOTAL : usize = [ $($ident_name),+ ].len();
                         const NAMES : [ &str; TOTAL] = [ $($ident_name),+ ];
-                        const LENGTHS: [ u16; TOTAL] = [ $($ident_name.len() as u16),+ ];
+                        const LENGTHS: [ u8; TOTAL] = [ $($ident_name.len() as u8),+ ];
                         const OFFSETS: [ u32; TOTAL] = offset_helper([ $($ident_name.len() as u32),+ ]);
                         const BUFFER: &str = concat!($($ident_name),+);
 
