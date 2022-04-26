@@ -6352,7 +6352,7 @@ impl<'ctx> FunctionSpec<'ctx> {
         }
     }
 
-    pub fn known_fastcc<'a, 'env>(fn_type: FunctionType<'ctx>) -> FunctionSpec<'ctx> {
+    pub fn known_fastcc(fn_type: FunctionType<'ctx>) -> FunctionSpec<'ctx> {
         Self {
             typ: fn_type,
             call_conv: FAST_CALL_CONV,
