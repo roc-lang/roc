@@ -564,11 +564,11 @@ impl IdentIds {
             .map(|(index, ident)| (IdentId(index as u32), ident))
     }
 
-    pub fn add(&mut self, ident_name: &Ident) -> IdentId {
+    pub fn add_ident(&mut self, ident_name: &Ident) -> IdentId {
         self.add_str(ident_name.as_inline_str().as_str())
     }
 
-    fn add_str(&mut self, string: &str) -> IdentId {
+    pub fn add_str(&mut self, string: &str) -> IdentId {
         let offset = self.buffer.len() as u32;
         let length = string.len() as u16;
 
@@ -585,7 +585,7 @@ impl IdentIds {
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
         match self.get_id(name) {
             Some(id) => id,
-            None => self.add(name),
+            None => self.add_ident(name),
         }
     }
 

@@ -183,7 +183,7 @@ impl<'a> WasmBackend<'a> {
             .get_mut(&self.env.module_id)
             .unwrap();
 
-        let ident_id = ident_ids.add(&Ident::from(debug_name));
+        let ident_id = ident_ids.add_ident(&Ident::from(debug_name));
         Symbol::new(self.env.module_id, ident_id)
     }
 

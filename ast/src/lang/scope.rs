@@ -245,7 +245,7 @@ impl Scope {
                 // use that existing IdentId. Otherwise, create a fresh one.
                 let ident_id = match exposed_ident_ids.get_id(&ident) {
                     Some(ident_id) => ident_id,
-                    None => all_ident_ids.add(&ident),
+                    None => all_ident_ids.add_ident(&ident),
                 };
 
                 let symbol = Symbol::new(self.home, ident_id);
@@ -262,7 +262,7 @@ impl Scope {
     ///
     /// Used for record guards like { x: Just _ }
     pub fn ignore(&mut self, ident: Ident, all_ident_ids: &mut IdentIds) -> Symbol {
-        let ident_id = all_ident_ids.add(&ident);
+        let ident_id = all_ident_ids.add_ident(&ident);
         Symbol::new(self.home, ident_id)
     }
 
