@@ -829,6 +829,7 @@ macro_rules! define_builtins {
                         module_id.register_debug_idents(&ident_ids);
                     }
 
+
                     exposed_idents_by_module.insert(
                         ModuleId($module_id),
                         ident_ids
