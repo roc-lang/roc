@@ -984,7 +984,7 @@ fn add_annotation_aliases(
     aliases: &mut VecMap<Symbol, Alias>,
 ) {
     for (name, alias) in type_annotation.aliases.iter() {
-        if !aliases.contains(name) {
+        if !aliases.contains_key(name) {
             aliases.insert(*name, alias.clone());
         }
     }

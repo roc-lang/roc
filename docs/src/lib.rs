@@ -6,13 +6,12 @@ use html::mark_node_to_html;
 use roc_can::scope::Scope;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::slow_pool::SlowPool;
-use roc_collections::all::MutMap;
 use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::DocEntry::DocDef;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{LoadedModule, LoadingProblem};
-use roc_module::symbol::{IdentIds, Interns, ModuleId};
+use roc_module::symbol::{IdentIdsByModule, Interns, ModuleId};
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::state::State;
 use roc_region::all::Region;
@@ -711,7 +710,7 @@ struct DocUrl {
 fn doc_url<'a>(
     home: ModuleId,
     exposed_values: &[&str],
-    dep_idents: &MutMap<ModuleId, IdentIds>,
+    dep_idents: &IdentIdsByModule,
     scope: &Scope,
     interns: &'a Interns,
     mut module_name: &'a str,

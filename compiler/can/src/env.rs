@@ -1,7 +1,7 @@
 use crate::procedure::References;
 use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 
@@ -11,7 +11,7 @@ pub struct Env<'a> {
     /// are assumed to be relative to this path.
     pub home: ModuleId,
 
-    pub dep_idents: &'a MutMap<ModuleId, IdentIds>,
+    pub dep_idents: &'a IdentIdsByModule,
 
     pub module_ids: &'a ModuleIds,
 
@@ -42,7 +42,7 @@ pub struct Env<'a> {
 impl<'a> Env<'a> {
     pub fn new(
         home: ModuleId,
-        dep_idents: &'a MutMap<ModuleId, IdentIds>,
+        dep_idents: &'a IdentIdsByModule,
         module_ids: &'a ModuleIds,
         exposed_ident_ids: IdentIds,
     ) -> Env<'a> {

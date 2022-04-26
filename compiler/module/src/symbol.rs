@@ -1,6 +1,6 @@
 use crate::ident::{Ident, ModuleName};
 use crate::module_err::{IdentIdNotFound, ModuleIdNotFound, ModuleResult};
-use roc_collections::all::{default_hasher, MutMap, SendMap};
+use roc_collections::{default_hasher, MutMap, SendMap, VecMap};
 use roc_ident::IdentStr;
 use roc_region::all::Region;
 use snafu::OptionExt;
@@ -207,7 +207,7 @@ lazy_static! {
 #[derive(Debug, Default)]
 pub struct Interns {
     pub module_ids: ModuleIds,
-    pub all_ident_ids: MutMap<ModuleId, IdentIds>,
+    pub all_ident_ids: IdentIdsByModule,
 }
 
 impl Interns {
@@ -249,7 +249,7 @@ impl Interns {
 }
 
 pub fn get_module_ident_ids<'a>(
-    all_ident_ids: &'a MutMap<ModuleId, IdentIds>,
+    all_ident_ids: &'a IdentIdsByModule,
     module_id: &ModuleId,
 ) -> ModuleResult<&'a IdentIds> {
     all_ident_ids
@@ -261,7 +261,7 @@ pub fn get_module_ident_ids<'a>(
 }
 
 pub fn get_module_ident_ids_mut<'a>(
-    all_ident_ids: &'a mut MutMap<ModuleId, IdentIds>,
+    all_ident_ids: &'a mut IdentIdsByModule,
     module_id: &ModuleId,
 ) -> ModuleResult<&'a mut IdentIds> {
     all_ident_ids
@@ -697,6 +697,35 @@ impl IdentIds {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct IdentIdsByModule(VecMap<ModuleId, IdentIds>);
+
+impl IdentIdsByModule {
+    pub fn get_or_insert(&mut self, module_id: ModuleId) -> &mut IdentIds {
+        self.0.get_or_insert(module_id, IdentIds::default)
+    }
+
+    pub fn get_mut(&mut self, key: &ModuleId) -> Option<&mut IdentIds> {
+        self.0.get_mut(key)
+    }
+
+    pub fn get(&self, key: &ModuleId) -> Option<&IdentIds> {
+        self.0.get(key)
+    }
+
+    pub fn insert(&mut self, key: ModuleId, value: IdentIds) -> Option<IdentIds> {
+        self.0.insert(key, value)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &ModuleId> {
+        self.0.keys()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 // BUILTINS
 
 const fn offset_helper<const N: usize>(mut array: [u32; N]) -> [u32; N] {
@@ -778,8 +807,8 @@ macro_rules! define_builtins {
         num_modules: $total:literal
     } => {
         impl IdentIds {
-            pub fn exposed_builtins(extra_capacity: usize) -> MutMap<ModuleId, IdentIds> {
-                let mut exposed_idents_by_module = HashMap::with_capacity_and_hasher(extra_capacity + $total, default_hasher());
+            pub fn exposed_builtins(extra_capacity: usize) -> IdentIdsByModule {
+                let mut exposed_idents_by_module = VecMap::with_capacity(extra_capacity + $total);
 
                 $(
                     debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), r"Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
@@ -838,7 +867,7 @@ macro_rules! define_builtins {
 
                 debug_assert!(exposed_idents_by_module.len() == $total, "Error setting up Builtins: `total:` is set to the wrong amount. It was set to {} but {} modules were set up.", $total, exposed_idents_by_module.len());
 
-                exposed_idents_by_module
+                IdentIdsByModule(exposed_idents_by_module)
             }
         }
 

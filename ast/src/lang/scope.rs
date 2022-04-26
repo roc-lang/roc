@@ -12,7 +12,8 @@ use crate::mem_pool::shallow_clone::ShallowClone;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{
-    get_module_ident_ids, get_module_ident_ids_mut, IdentIds, Interns, ModuleId, Symbol,
+    get_module_ident_ids, get_module_ident_ids_mut, IdentIds, IdentIdsByModule, Interns, ModuleId,
+    Symbol,
 };
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
@@ -320,11 +321,7 @@ impl Scope {
         self.aliases.contains_key(&name)
     }
 
-    pub fn fill_scope(
-        &mut self,
-        env: &Env,
-        all_ident_ids: &mut MutMap<ModuleId, IdentIds>,
-    ) -> ASTResult<()> {
+    pub fn fill_scope(&mut self, env: &Env, all_ident_ids: &mut IdentIdsByModule) -> ASTResult<()> {
         let ident_ids = get_module_ident_ids(all_ident_ids, &env.home)?.clone();
 
         for (_, ident_ref) in ident_ids.ident_strs() {

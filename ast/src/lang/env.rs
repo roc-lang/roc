@@ -2,7 +2,7 @@ use crate::mem_pool::pool::{NodeId, Pool};
 use bumpalo::{collections::Vec as BumpVec, Bump};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::VarStore;
@@ -19,7 +19,7 @@ pub struct Env<'a> {
 
     pub problems: BumpVec<'a, Problem>,
 
-    pub dep_idents: MutMap<ModuleId, IdentIds>,
+    pub dep_idents: IdentIdsByModule,
     pub module_ids: &'a ModuleIds,
     pub ident_ids: IdentIds,
     pub exposed_ident_ids: IdentIds,
@@ -41,7 +41,7 @@ impl<'a> Env<'a> {
         arena: &'a Bump,
         pool: &'a mut Pool,
         var_store: &'a mut VarStore,
-        dep_idents: MutMap<ModuleId, IdentIds>,
+        dep_idents: IdentIdsByModule,
         module_ids: &'a ModuleIds,
         exposed_ident_ids: IdentIds,
     ) -> Env<'a> {
