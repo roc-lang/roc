@@ -11,6 +11,7 @@ impl Ident {
         &self.0
     }
 
+    #[inline(always)]
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
