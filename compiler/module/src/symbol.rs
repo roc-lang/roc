@@ -528,28 +528,34 @@ pub struct IdentId(u32);
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
-    buffer: String,
+    buffer: Vec<u8>,
 
     lengths: Vec<u16>,
     offsets: Vec<u32>,
 }
 
 impl IdentIds {
-    fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             // guess: the average symbol length is 3
-            buffer: String::with_capacity(3 * capacity),
+            buffer: Vec::with_capacity(3 * capacity),
 
             lengths: Vec::with_capacity(capacity),
             offsets: Vec::with_capacity(capacity),
         }
     }
 
+    fn get_str(&self, index: usize) -> &str {
+        let length = self.lengths[index] as usize;
+        let offset = self.offsets[index] as usize;
+
+        let bytes = &self.buffer[offset..][..length];
+
+        unsafe { std::str::from_utf8_unchecked(bytes) }
+    }
+
     fn strs(&self) -> impl Iterator<Item = &str> {
-        self.offsets
-            .iter()
-            .zip(self.lengths.iter())
-            .map(move |(offset, length)| &self.buffer[*offset as usize..][..*length as usize])
+        (0..self.offsets.len()).map(move |index| self.get_str(index))
     }
 
     pub fn ident_strs(&self) -> impl Iterator<Item = (IdentId, &str)> {
@@ -571,7 +577,7 @@ impl IdentIds {
         self.lengths.push(length);
         self.offsets.push(offset);
 
-        self.buffer.push_str(string);
+        self.buffer.extend(string.bytes());
 
         ident_id
     }
@@ -602,7 +608,10 @@ impl IdentIds {
                     Some(key_index) => {
                         let length = new_ident_name.len();
                         let offset = self.buffer.len();
-                        self.buffer.push_str(new_ident_name);
+
+                        // future optimization idea: if the current name bytes are at the end of
+                        // `buffer`, we can update them in-place
+                        self.buffer.extend(new_ident_name.bytes());
 
                         self.lengths[key_index] = length as u16;
                         self.offsets[key_index] = offset as u32;
@@ -634,9 +643,14 @@ impl IdentIds {
 
         let index = self.lengths.len();
 
+        // "4294967296" is 10 characters
+        let mut buffer: arrayvec::ArrayString<10> = arrayvec::ArrayString::new();
+        write!(buffer, "{}", index).unwrap();
+
         let offset = self.buffer.len();
-        write!(self.buffer, "{}", index).unwrap();
-        let length = self.buffer.len() - offset;
+        let length = buffer.len();
+
+        self.buffer.extend(buffer.bytes());
 
         self.lengths.push(length as u16);
         self.offsets.push(offset as u32);
@@ -646,7 +660,7 @@ impl IdentIds {
 
     #[inline(always)]
     pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
-        self.find_index(ident_name.as_inline_str().as_str())
+        self.find_index(ident_name.as_str())
             .map(|i| IdentId(i as u32))
     }
 
@@ -654,16 +668,17 @@ impl IdentIds {
     fn find_index(&self, string: &str) -> Option<usize> {
         let target_length = string.len() as u16;
 
+        let mut offset = 0;
         for (index, length) in self.lengths.iter().enumerate() {
             if *length == target_length {
-                let offset = self.offsets[index] as usize;
-                let ident = &self.buffer[offset..][..*length as usize];
+                let slice = &self.buffer[offset..][..*length as usize];
 
-                // skip the length check
-                if string.bytes().eq(ident.bytes()) {
+                if string.as_bytes() == slice {
                     return Some(index);
                 }
             }
+
+            offset += *length as usize;
         }
 
         None
@@ -672,24 +687,89 @@ impl IdentIds {
     pub fn get_name(&self, id: IdentId) -> Option<&str> {
         let index = id.0 as usize;
 
-        match self.lengths.get(index) {
-            None => None,
-            Some(length) => {
-                let offset = self.offsets[index] as usize;
-                Some(&self.buffer[offset..][..*length as usize])
-            }
+        if index < self.lengths.len() {
+            Some(self.get_str(index))
+        } else {
+            None
         }
     }
 
     pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
-        Ok(self.get_name(ident_id).with_context(|| IdentIdNotFound {
+        self.get_name(ident_id).with_context(|| IdentIdNotFound {
             ident_id,
             ident_ids_str: format!("{:?}", self),
-        })?)
+        })
     }
 }
 
 // BUILTINS
+
+const fn offset_helper<const N: usize>(mut array: [u32; N]) -> [u32; N] {
+    let mut sum = 0u32;
+
+    let mut i = 0;
+    while i < N {
+        let temp = array[i];
+        array[i] = sum;
+        sum += temp;
+
+        i += 1;
+    }
+
+    array
+}
+
+const fn string_equality(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+
+    if a.len() != b.len() {
+        return false;
+    }
+
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+
+        i += 1;
+    }
+
+    true
+}
+
+const fn find_duplicates<const N: usize>(array: [&str; N]) -> Option<(usize, usize)> {
+    let mut i = 0;
+    while i < N {
+        let needle = array[i];
+        let mut j = i + 1;
+        while j < N {
+            if !string_equality(needle, array[i]) {
+                return Some((i, j));
+            }
+
+            j += 1;
+        }
+
+        i += 1;
+    }
+
+    None
+}
+
+const fn check_indices<const N: usize>(array: [u32; N]) -> Option<(u32, usize)> {
+    let mut i = 0;
+    while i < N {
+        if array[i] as usize != i {
+            return Some((array[i], i));
+        }
+
+        i += 1;
+    }
+
+    None
+}
 
 macro_rules! define_builtins {
     {
@@ -707,20 +787,44 @@ macro_rules! define_builtins {
                 let mut exposed_idents_by_module = HashMap::with_capacity_and_hasher(extra_capacity + $total, default_hasher());
 
                 $(
-                    debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), "Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
+                    debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), r"Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
 
-                    let ident_indexes = [ $($ident_id),+ ];
-                    let ident_names = [ $($ident_name),+ ];
+                    let ident_ids = {
+                        const TOTAL : usize = [ $($ident_name),+ ].len();
+                        const NAMES : [ &str; TOTAL] = [ $($ident_name),+ ];
+                        const LENGTHS: [ u16; TOTAL] = [ $($ident_name.len() as u16),+ ];
+                        const OFFSETS: [ u32; TOTAL] = offset_helper([ $($ident_name.len() as u32),+ ]);
+                        const BUFFER: &str = concat!($($ident_name),+);
 
-                    let mut ident_ids = IdentIds::with_capacity(ident_names.len());
+                        const LENGTH_CHECK: Option<(u32, usize)> = check_indices([ $($ident_id),+ ]);
+                        const DUPLICATE_CHECK: Option<(usize, usize)> = find_duplicates(NAMES);
 
-                    for (_expected_id, name) in ident_indexes.iter().zip(ident_names.iter()) {
-                        debug_assert!(!ident_ids.strs().any(|s| s == *name), "The Ident {} is already in IdentIds", name);
+                        if cfg!(debug_assertions) {
+                            match LENGTH_CHECK {
+                                None => (),
+                                Some((given, expected)) => panic!(
+                                    "Symbol {} : {} should have index {} based on the insertion order",
+                                    given, NAMES[expected], expected
+                                ),
+                            }
+                        };
 
-                        let _actual_id = ident_ids.add_str(name);
+                        if cfg!(debug_assertions) {
+                            match DUPLICATE_CHECK {
+                                None => (),
+                                Some((first, second)) => panic!(
+                                    "Symbol {} : {} is duplicated at position {}",
+                                    first, NAMES[first], second
+                                ),
+                            }
+                        };
 
-                        debug_assert_eq!(*_expected_id, _actual_id.0 as usize, "Error setting up Builtins: when inserting {} …: {} into module {} …: {} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {} to {} …: {} instead.", _expected_id, name, $module_id, $module_name, _expected_id, _actual_id.0, _expected_id, name, _actual_id.0, name );
-                    }
+                        IdentIds {
+                            buffer: BUFFER.as_bytes().to_vec(),
+                            lengths: LENGTHS.to_vec(),
+                            offsets: OFFSETS.to_vec(),
+                        }
+                    };
 
                     if cfg!(debug_assertions) {
                         let module_id = ModuleId($module_id);
@@ -729,7 +833,6 @@ macro_rules! define_builtins {
                         PackageModuleIds::insert_debug_name(module_id, &name);
                         module_id.register_debug_idents(&ident_ids);
                     }
-
 
                     exposed_idents_by_module.insert(
                         ModuleId($module_id),
