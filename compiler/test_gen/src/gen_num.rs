@@ -615,6 +615,7 @@ fn i64_abs() {
 #[should_panic(
     expected = r#"Roc failed with message: "integer absolute overflowed because its argument is the minimum value"#
 )]
+#[ignore]
 fn abs_min_int_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1391,6 +1392,7 @@ fn int_negate() {
 #[should_panic(
     expected = r#"Roc failed with message: "integer negation overflowed because its argument is the minimum value"#
 )]
+#[ignore]
 fn neg_min_int_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1582,6 +1584,7 @@ fn atan() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
+#[ignore]
 fn int_add_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1671,6 +1674,7 @@ fn float_add_checked_fail() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
+#[ignore]
 fn float_add_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1686,6 +1690,7 @@ fn float_add_overflow() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
+#[ignore]
 fn int_sub_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1715,6 +1720,7 @@ fn int_sub_wrap() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "float subtraction overflowed!"#)]
+#[ignore]
 fn float_sub_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1786,6 +1792,7 @@ fn float_sub_checked() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
+#[ignore]
 fn int_positive_mul_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1801,6 +1808,7 @@ fn int_positive_mul_overflow() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
+#[ignore]
 fn int_negative_mul_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1816,6 +1824,7 @@ fn int_negative_mul_overflow() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+#[ignore]
 fn float_positive_mul_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1831,6 +1840,7 @@ fn float_positive_mul_overflow() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+#[ignore]
 fn float_negative_mul_overflow() {
     assert_evals_to!(
         indoc!(

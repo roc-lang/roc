@@ -72,7 +72,9 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     let size = unsafe { roc_main_size() } as usize;
+    dbg!(size);
     let layout = Layout::array::<u8>(size).unwrap();
+    roc_fx_getLine();
 
     unsafe {
         // TODO allocate on the stack if it's under a certain size
@@ -115,7 +117,11 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
     let stdin = io::stdin();
     let line1 = stdin.lock().lines().next().unwrap().unwrap();
 
-    RocStr::from(line1.as_str())
+    dbg!(line1.clone());
+
+    let s = RocStr::from(line1.as_str());
+    dbg!(s.as_str());
+    s
 }
 
 #[no_mangle]

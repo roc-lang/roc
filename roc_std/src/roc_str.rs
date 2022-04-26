@@ -27,15 +27,30 @@ impl RocStr {
     /// # Safety
     ///
     /// `slice` must be valid UTF-8.
+    #[inline(never)]
     pub unsafe fn from_slice(slice: &[u8]) -> Self {
-        if let Some(small_string) = unsafe { SmallString::try_from(slice) } {
-            Self(RocStrInner { small_string })
-        } else {
-            let heap_allocated = RocList::from_slice(slice);
-            Self(RocStrInner {
-                heap_allocated: ManuallyDrop::new(heap_allocated),
-            })
-        }
+        println!("{:?}", slice);
+        let small = unsafe { SmallString::try_from(slice) };
+        dbg!(1);
+        let small_string = small.expect("small");
+        dbg!(2);
+        let inner = RocStrInner { small_string };
+        dbg!(3);
+        let r = Self(inner);
+        dbg!(4);
+        // let r = if let Some(small_string) =  {
+        //     println!("{:?}", 1);
+        //     println!("{:?}", small_string);
+        //     let r = Self(RocStrInner { small_string });
+        //     println!("{:?}", 2);
+        //     r
+        // } else {
+        //     let heap_allocated = RocList::from_slice(slice);
+        //     Self(RocStrInner {
+        //         heap_allocated: ManuallyDrop::new(heap_allocated),
+        //     })
+        // };
+        r
     }
 
     fn is_small_str(&self) -> bool {
@@ -182,17 +197,22 @@ impl SmallString {
     unsafe fn try_from(slice: &[u8]) -> Option<Self> {
         // Check the size of the slice.
         let len_as_u8 = u8::try_from(slice.len()).ok()?;
+        dbg!(len_as_u8);
         if (len_as_u8 as usize) > Self::CAPACITY {
             return None;
         }
 
         // Construct the small string.
         let mut bytes = [0; Self::CAPACITY];
+        dbg!(bytes);
         bytes[..slice.len()].copy_from_slice(slice);
-        Some(Self {
+        let it = Self {
             bytes,
             len: len_as_u8 | RocStr::MASK,
-        })
+        };
+        dbg!(it.is_small_str());
+        dbg!(it.len());
+        Some(it)
     }
 
     fn is_small_str(&self) -> bool {
