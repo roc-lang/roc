@@ -537,8 +537,8 @@ pub struct IdentIds {
 impl IdentIds {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            // guess: the average symbol length is 3
-            buffer: Vec::with_capacity(3 * capacity),
+            // guess: the average symbol length is 5
+            buffer: Vec::with_capacity(5 * capacity),
 
             lengths: Vec::with_capacity(capacity),
             offsets: Vec::with_capacity(capacity),
