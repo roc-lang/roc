@@ -522,19 +522,16 @@ impl ModuleIds {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IdentId(u32);
 
-/// Stores a mapping between IdentId and InlinableString.
-///
-/// Each module name is stored twice, for faster lookups.
-/// Since these are interned strings, this shouldn't result in many total allocations in practice.
+/// Collection of small (length < 256) strings, stored compactly.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct IdentIds {
+pub struct SmallStringInterner {
     buffer: Vec<u8>,
 
     lengths: Vec<u8>,
     offsets: Vec<u32>,
 }
 
-impl IdentIds {
+impl SmallStringInterner {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             // guess: the average symbol length is 5
@@ -545,100 +542,28 @@ impl IdentIds {
         }
     }
 
-    fn get_str(&self, index: usize) -> &str {
-        let length = self.lengths[index] as usize;
-        let offset = self.offsets[index] as usize;
-
-        let bytes = &self.buffer[offset..][..length];
-
-        unsafe { std::str::from_utf8_unchecked(bytes) }
-    }
-
     fn strs(&self) -> impl Iterator<Item = &str> {
-        (0..self.offsets.len()).map(move |index| self.get_str(index))
+        (0..self.offsets.len()).map(move |index| self.get(index))
     }
 
-    pub fn ident_strs(&self) -> impl Iterator<Item = (IdentId, &str)> {
-        self.strs()
-            .enumerate()
-            .map(|(index, ident)| (IdentId(index as u32), ident))
-    }
+    pub fn insert(&mut self, string: &str) -> usize {
+        assert!(string.len() < u8::MAX as usize);
 
-    pub fn add_ident(&mut self, ident_name: &Ident) -> IdentId {
-        self.add_str(ident_name.as_inline_str().as_str())
-    }
-
-    pub fn add_str(&mut self, string: &str) -> IdentId {
         let offset = self.buffer.len() as u32;
         let length = string.len() as u8;
 
-        let ident_id = IdentId(self.lengths.len() as u32);
+        let index = self.lengths.len();
 
         self.lengths.push(length);
         self.offsets.push(offset);
 
         self.buffer.extend(string.bytes());
 
-        ident_id
+        index
     }
 
-    pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
-        match self.get_id(name) {
-            Some(id) => id,
-            None => self.add_ident(name),
-        }
-    }
-
-    // necessary when the name of a value is changed in the editor
-    // TODO fix when same ident_name is present multiple times, see issue #2548
-    pub fn update_key(
-        &mut self,
-        old_ident_name: &str,
-        new_ident_name: &str,
-    ) -> Result<IdentId, String> {
-        let old_ident: Ident = old_ident_name.into();
-
-        let ident_id_ref_opt = self.get_id(&old_ident);
-
-        match ident_id_ref_opt {
-            Some(ident_id_ref) => {
-                let ident_id = ident_id_ref;
-
-                match self.find_index(old_ident_name) {
-                    Some(key_index) => {
-                        let length = new_ident_name.len();
-                        let offset = self.buffer.len();
-
-                        // future optimization idea: if the current name bytes are at the end of
-                        // `buffer`, we can update them in-place
-                        self.buffer.extend(new_ident_name.bytes());
-
-                        self.lengths[key_index] = length as u8;
-                        self.offsets[key_index] = offset as u32;
-
-                        Ok(ident_id)
-                    }
-                    None => Err(format!(
-                        r"Tried to find position of key {:?} in IdentIds.by_id but I could not find the key",
-                        old_ident_name
-                    )),
-                }
-            }
-            None => Err(format!(
-                "Tried to update key in IdentIds, but I could not find the key ({}).",
-                old_ident_name
-            )),
-        }
-    }
-
-    /// Generates a unique, new name that's just a strigified integer
-    /// (e.g. "1" or "5"), using an internal counter. Since valid Roc variable
-    /// names cannot begin with a number, this has no chance of colliding
-    /// with actual user-defined variables.
-    ///
-    /// This is used, for example, during canonicalization of an Expr::Closure
-    /// to generate a unique symbol to refer to that closure.
-    pub fn gen_unique(&mut self) -> IdentId {
+    /// Insert a string equal to the current length into the interner. This is used to create unique values.
+    fn insert_index_str(&mut self) -> usize {
         use std::io::Write;
 
         let index = self.lengths.len();
@@ -650,13 +575,7 @@ impl IdentIds {
         self.lengths.push(length as u8);
         self.offsets.push(offset as u32);
 
-        IdentId(index as u32)
-    }
-
-    #[inline(always)]
-    pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
-        self.find_index(ident_name.as_str())
-            .map(|i| IdentId(i as u32))
+        index
     }
 
     #[inline(always)]
@@ -679,14 +598,104 @@ impl IdentIds {
         None
     }
 
-    pub fn get_name(&self, id: IdentId) -> Option<&str> {
-        let index = id.0 as usize;
+    fn get(&self, index: usize) -> &str {
+        let length = self.lengths[index] as usize;
+        let offset = self.offsets[index] as usize;
 
+        let bytes = &self.buffer[offset..][..length];
+
+        unsafe { std::str::from_utf8_unchecked(bytes) }
+    }
+
+    fn try_get(&self, index: usize) -> Option<&str> {
         if index < self.lengths.len() {
-            Some(self.get_str(index))
+            Some(self.get(index))
         } else {
             None
         }
+    }
+
+    fn modify(&mut self, index: usize, new_string: &str) {
+        let length = new_string.len();
+        let offset = self.buffer.len();
+
+        // future optimization idea: if the current name bytes are at the end of
+        // `buffer`, we can update them in-place
+        self.buffer.extend(new_string.bytes());
+
+        self.lengths[index] = length as u8;
+        self.offsets[index] = offset as u32;
+    }
+}
+
+/// Stores a mapping between IdentId and InlinableString.
+///
+/// Each module name is stored twice, for faster lookups.
+/// Since these are interned strings, this shouldn't result in many total allocations in practice.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IdentIds {
+    interner: SmallStringInterner,
+}
+
+impl IdentIds {
+    pub fn ident_strs(&self) -> impl Iterator<Item = (IdentId, &str)> {
+        self.interner
+            .strs()
+            .enumerate()
+            .map(|(index, ident)| (IdentId(index as u32), ident))
+    }
+
+    pub fn add_ident(&mut self, ident_name: &Ident) -> IdentId {
+        IdentId(self.interner.insert(ident_name.as_str()) as u32)
+    }
+
+    pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
+        match self.get_id(name) {
+            Some(id) => id,
+            None => self.add_ident(name),
+        }
+    }
+
+    // necessary when the name of a value is changed in the editor
+    // TODO fix when same ident_name is present multiple times, see issue #2548
+    pub fn update_key(
+        &mut self,
+        old_ident_name: &str,
+        new_ident_name: &str,
+    ) -> Result<IdentId, String> {
+        match self.interner.find_index(old_ident_name) {
+            Some(index) => {
+                self.interner.modify(index, new_ident_name);
+
+                Ok(IdentId(index as u32))
+            }
+            None => Err(format!(
+                r"Tried to find position of key {:?} in IdentIds.by_id but I could not find the key",
+                old_ident_name
+            )),
+        }
+    }
+
+    /// Generates a unique, new name that's just a strigified integer
+    /// (e.g. "1" or "5"), using an internal counter. Since valid Roc variable
+    /// names cannot begin with a number, this has no chance of colliding
+    /// with actual user-defined variables.
+    ///
+    /// This is used, for example, during canonicalization of an Expr::Closure
+    /// to generate a unique symbol to refer to that closure.
+    pub fn gen_unique(&mut self) -> IdentId {
+        IdentId(self.interner.insert_index_str() as u32)
+    }
+
+    #[inline(always)]
+    pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
+        self.interner
+            .find_index(ident_name.as_str())
+            .map(|i| IdentId(i as u32))
+    }
+
+    pub fn get_name(&self, id: IdentId) -> Option<&str> {
+        self.interner.try_get(id.0 as usize)
     }
 
     pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
@@ -845,11 +854,13 @@ macro_rules! define_builtins {
                             }
                         };
 
-                        IdentIds {
+                        let interner = SmallStringInterner {
                             buffer: BUFFER.as_bytes().to_vec(),
                             lengths: LENGTHS.to_vec(),
                             offsets: OFFSETS.to_vec(),
-                        }
+                        };
+
+                        IdentIds{ interner }
                     };
 
                     if cfg!(debug_assertions) {
