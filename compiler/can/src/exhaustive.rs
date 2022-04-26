@@ -116,7 +116,7 @@ fn sketch_pattern(var: Variable, pattern: &crate::pattern::Pattern) -> SketchedP
             let union = Union {
                 render_as: RenderAs::Record(field_names),
                 alternatives: vec![Ctor {
-                    name: CtorName::Tag(TagName::Global("#Record".into())),
+                    name: CtorName::Tag(TagName::Tag("#Record".into())),
                     tag_id,
                     arity: destructs.len(),
                 }],
@@ -220,7 +220,7 @@ pub fn sketch_rows(target_var: Variable, region: Region, patterns: &[WhenBranch]
                     render_as: RenderAs::Guard,
                     alternatives: vec![Ctor {
                         tag_id,
-                        name: CtorName::Tag(TagName::Global(GUARD_CTOR.into())),
+                        name: CtorName::Tag(TagName::Tag(GUARD_CTOR.into())),
                         arity: 2,
                     }],
                 };
@@ -303,7 +303,7 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
             // be matched unless there's an `Anything` pattern.
             let opt_openness_tag = match subs.get_content_without_compacting(ext) {
                 FlexVar(_) | RigidVar(_) => {
-                    let openness_tag = TagName::Global(NONEXHAUSIVE_CTOR.into());
+                    let openness_tag = TagName::Tag(NONEXHAUSIVE_CTOR.into());
                     num_tags += 1;
                     Some((openness_tag, &[] as _))
                 }
