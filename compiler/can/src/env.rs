@@ -131,7 +131,7 @@ impl<'a> Env<'a> {
                                     .filter(|(_, ident)| {
                                         ident.starts_with(|c: char| c.is_lowercase())
                                     })
-                                    .map(|(_, ident)| Lowercase::from(ident.as_ref()))
+                                    .map(|(_, ident)| Lowercase::from(ident))
                                     .collect();
                                 Err(RuntimeError::ValueNotExposed {
                                     module_name,

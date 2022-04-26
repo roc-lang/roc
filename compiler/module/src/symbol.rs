@@ -724,6 +724,10 @@ impl IdentIdsByModule {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 // BUILTINS
@@ -827,8 +831,8 @@ macro_rules! define_builtins {
                             match LENGTH_CHECK {
                                 None => (),
                                 Some((given, expected)) => panic!(
-                                    "Symbol {} : {} should have index {} based on the insertion order",
-                                    given, NAMES[expected], expected
+                                    "Symbol {} : {} should have index {} based on the insertion order, try {} : {} instead",
+                                    given, NAMES[expected], expected, expected, NAMES[expected],
                                 ),
                             }
                         };
@@ -837,7 +841,7 @@ macro_rules! define_builtins {
                             match DUPLICATE_CHECK {
                                 None => (),
                                 Some((first, second)) => panic!(
-                                    "Symbol {} : {} is duplicated at position {}",
+                                    "Symbol {} : {} is duplicated at position {}, try removing the duplicate",
                                     first, NAMES[first], second
                                 ),
                             }
