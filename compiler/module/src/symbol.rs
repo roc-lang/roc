@@ -737,9 +737,7 @@ const fn offset_helper<const N: usize>(mut array: [u32; N]) -> [u32; N] {
 
     let mut i = 0;
     while i < N {
-        let temp = array[i];
-        array[i] = sum;
-        sum += temp;
+        (array[i], sum) = (sum, sum + array[i]);
 
         i += 1;
     }
@@ -747,10 +745,7 @@ const fn offset_helper<const N: usize>(mut array: [u32; N]) -> [u32; N] {
     array
 }
 
-const fn string_equality(a: &str, b: &str) -> bool {
-    let a = a.as_bytes();
-    let b = b.as_bytes();
-
+const fn byte_slice_equality(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -773,7 +768,7 @@ const fn find_duplicates<const N: usize>(array: [&str; N]) -> Option<(usize, usi
         let needle = array[i];
         let mut j = i + 1;
         while j < N {
-            if !string_equality(needle, array[i]) {
+            if byte_slice_equality(needle.as_bytes(), array[j].as_bytes()) {
                 return Some((i, j));
             }
 
