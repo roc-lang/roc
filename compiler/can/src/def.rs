@@ -487,7 +487,11 @@ pub(crate) fn canonicalize_defs<'a>(
             symbols_introduced.insert(s, r);
 
             debug_assert_eq!(env.home, s.module_id());
-            debug_assert!(!symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()));
+            debug_assert!(
+                !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
+                "{:?}",
+                s
+            );
 
             symbol_to_index.push((s.ident_id(), def_index as u32));
         }
