@@ -1197,6 +1197,7 @@ mod test_reporting {
                 when 1 is
                     2 -> "foo"
                     3 -> {}
+                    _ -> ""
                 "#
             ),
             indoc!(
@@ -1205,10 +1206,10 @@ mod test_reporting {
 
                 The 2nd branch of this `when` does not match all the previous branches:
 
-                1│  when 1 is
-                2│      2 -> "foo"
-                3│      3 -> {}
-                             ^^
+                1│   when 1 is
+                2│       2 -> "foo"
+                3│>      3 -> {}
+                4│       _ -> ""
 
                 The 2nd branch is a record of type:
 
@@ -1788,7 +1789,7 @@ mod test_reporting {
             indoc!(
                 r#"
                  when { foo: 1 } is
-                     { foo: 2 } -> foo
+                     { foo: _ } -> foo
                  "#
             ),
             indoc!(
@@ -1797,7 +1798,7 @@ mod test_reporting {
 
                 I cannot find a `foo` value
 
-                2│      { foo: 2 } -> foo
+                2│      { foo: _ } -> foo
                                       ^^^
 
                 Did you mean one of these?
@@ -2791,26 +2792,18 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                The branches of this `when` expression don't match the condition:
+                This `when` does not cover all the possibilities:
 
                 4│>  when x is
-                5│       Red -> 3
+                5│>      Red -> 3
 
-                This `x` value is a:
+                Other possibilities include:
 
-                    [ Green, Red ]
+                    Green
 
-                But the branch patterns have type:
-
-                    [ Red ]
-
-                The branches must be cases of the `when` condition's type!
-
-                Tip: Looks like the branches are missing coverage of the `Green` tag.
-
-                Tip: Maybe you need to add a catch-all branch, like `_`?
+                I would have to crash if I saw one of those! Add branches for them!
                 "#
             ),
         )
@@ -2831,27 +2824,19 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                The branches of this `when` expression don't match the condition:
+                This `when` does not cover all the possibilities:
 
                 4│>  when x is
-                5│       Red -> 0
-                6│       Green -> 1
+                5│>      Red -> 0
+                6│>      Green -> 1
 
-                This `x` value is a:
+                Other possibilities include:
 
-                    [ Blue, Green, Red ]
+                    Blue
 
-                But the branch patterns have type:
-
-                    [ Green, Red ]
-
-                The branches must be cases of the `when` condition's type!
-
-                Tip: Looks like the branches are missing coverage of the `Blue` tag.
-
-                Tip: Maybe you need to add a catch-all branch, like `_`?
+                I would have to crash if I saw one of those! Add branches for them!
                 "#
             ),
         )
@@ -2872,27 +2857,20 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                The branches of this `when` expression don't match the condition:
+                This `when` does not cover all the possibilities:
 
                 5│>  when x is
-                6│       NotAsked -> 3
+                6│>      NotAsked -> 3
 
-                This `x` value is a:
+                Other possibilities include:
 
-                    [ Failure I64, Loading, NotAsked, Success Str ]
+                    Failure _
+                    Loading
+                    Success _
 
-                But the branch patterns have type:
-
-                    [ NotAsked ]
-
-                The branches must be cases of the `when` condition's type!
-
-                Tip: Looks like the branches are missing coverage of the
-                `Success`, `Failure` and `Loading` tags.
-
-                Tip: Maybe you need to add a catch-all branch, like `_`?
+                I would have to crash if I saw one of those! Add branches for them!
                 "#
             ),
         )
@@ -2955,7 +2933,7 @@ mod test_reporting {
 
                 Other possibilities include:
 
-                    { a: Just _, b }
+                    { a: Just _ }
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#
@@ -9901,6 +9879,39 @@ I need all branches in an `if` to have the same type!
                 "#
             ),
             "",
+        )
+    }
+
+    #[test]
+    fn not_enough_cases_for_open_union() {
+        new_report_problem_as(
+            "branches_have_more_cases_than_condition",
+            indoc!(
+                r#"
+                foo : [A, B]a -> Str
+                foo = \it ->
+                    when it is
+                        A -> ""
+                foo
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                This `when` does not cover all the possibilities:
+
+                6│>          when it is
+                7│>              A -> ""
+
+                Other possibilities include:
+
+                    B
+                    _
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
         )
     }
 }

@@ -1815,6 +1815,9 @@ pub enum Category {
     DefaultValue(Lowercase), // for setting optional fields
 
     AbilityMemberSpecialization(Symbol),
+
+    Expect,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

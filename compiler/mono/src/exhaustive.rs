@@ -113,7 +113,7 @@ pub fn check(
     }
 }
 
-pub fn check_patterns<'a>(
+fn check_patterns<'a>(
     region: Region,
     context: Context,
     patterns: &[(Loc<crate::ir::Pattern<'a>>, Guard)],

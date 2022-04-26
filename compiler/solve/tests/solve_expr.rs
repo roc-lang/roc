@@ -2560,11 +2560,10 @@ mod solve_expr {
     }
 
     // this test is related to a bug where ext_var would have an incorrect rank.
-    // This match has duplicate cases, but that's not important because exhaustiveness happens
-    // after inference.
+    // This match has duplicate cases, but we ignore that.
     #[test]
     fn to_bit_record() {
-        infer_eq_without_problem(
+        infer_eq(
             indoc!(
                 r#"
                     foo = \rec ->
@@ -5261,95 +5260,123 @@ mod solve_expr {
                 {
                     u8:   (\n ->
                             when n is
-                              123u8 -> n),
+                              123u8 -> n
+                              _ -> n),
                     u16:  (\n ->
                             when n is
-                              123u16 -> n),
+                              123u16 -> n
+                              _ -> n),
                     u32:  (\n ->
                             when n is
-                              123u32 -> n),
+                              123u32 -> n
+                              _ -> n),
                     u64:  (\n ->
                             when n is
-                              123u64 -> n),
+                              123u64 -> n
+                              _ -> n),
                     u128: (\n ->
                             when n is
-                              123u128 -> n),
+                              123u128 -> n
+                              _ -> n),
 
                     i8:   (\n ->
                             when n is
-                              123i8 -> n),
+                              123i8 -> n
+                              _ -> n),
                     i16:  (\n ->
                             when n is
-                              123i16 -> n),
+                              123i16 -> n
+                              _ -> n),
                     i32:  (\n ->
                             when n is
-                              123i32 -> n),
+                              123i32 -> n
+                              _ -> n),
                     i64:  (\n ->
                             when n is
-                              123i64 -> n),
+                              123i64 -> n
+                              _ -> n),
                     i128: (\n ->
                             when n is
-                              123i128 -> n),
+                              123i128 -> n
+                              _ -> n),
 
                     nat:  (\n ->
                             when n is
-                              123nat -> n),
+                              123nat -> n
+                              _ -> n),
 
                     bu8:   (\n ->
                             when n is
-                              0b11u8 -> n),
+                              0b11u8 -> n
+                              _ -> n),
                     bu16:  (\n ->
                             when n is
-                              0b11u16 -> n),
+                              0b11u16 -> n
+                              _ -> n),
                     bu32:  (\n ->
                             when n is
-                              0b11u32 -> n),
+                              0b11u32 -> n
+                              _ -> n),
                     bu64:  (\n ->
                             when n is
-                              0b11u64 -> n),
+                              0b11u64 -> n
+                              _ -> n),
                     bu128: (\n ->
                             when n is
-                              0b11u128 -> n),
+                              0b11u128 -> n
+                              _ -> n),
 
                     bi8:   (\n ->
                             when n is
-                              0b11i8 -> n),
+                              0b11i8 -> n
+                              _ -> n),
                     bi16:  (\n ->
                             when n is
-                              0b11i16 -> n),
+                              0b11i16 -> n
+                              _ -> n),
                     bi32:  (\n ->
                             when n is
-                              0b11i32 -> n),
+                              0b11i32 -> n
+                              _ -> n),
                     bi64:  (\n ->
                             when n is
-                              0b11i64 -> n),
+                              0b11i64 -> n
+                              _ -> n),
                     bi128: (\n ->
                             when n is
-                              0b11i128 -> n),
+                              0b11i128 -> n
+                              _ -> n),
 
                     bnat:  (\n ->
                             when n is
-                              0b11nat -> n),
+                              0b11nat -> n
+                              _ -> n),
 
                     dec:  (\n ->
                             when n is
-                              123.0dec -> n),
+                              123.0dec -> n
+                              _ -> n),
                     f32:  (\n ->
                             when n is
-                              123.0f32 -> n),
+                              123.0f32 -> n
+                              _ -> n),
                     f64:  (\n ->
                             when n is
-                              123.0f64 -> n),
+                              123.0f64 -> n
+                              _ -> n),
 
                     fdec: (\n ->
                             when n is
-                              123dec -> n),
+                              123dec -> n
+                              _ -> n),
                     ff32: (\n ->
                             when n is
-                              123f32 -> n),
+                              123f32 -> n
+                              _ -> n),
                     ff64: (\n ->
                             when n is
-                              123f64 -> n),
+                              123f64 -> n
+                              _ -> n),
                 }
                 "#
             ),
@@ -5681,6 +5708,7 @@ mod solve_expr {
                         @Id (Id _ A) -> ""
                         @Id (Id _ B) -> ""
                         @Id (Id _ (C { a: "" })) -> ""
+                        @Id (Id _ (C { a: _ })) -> "" # any other string, for exhautiveness
                 "#
             ),
             r#"Id [ A, B, C { a : Str }* ] -> Str"#,
@@ -5700,6 +5728,7 @@ mod solve_expr {
                         @Id (Id _ A) -> ""
                         @Id (Id _ B) -> ""
                         @Id (Id _ (C { a: "" })) -> ""
+                        @Id (Id _ (C { a: _ })) -> "" # any other string, for exhautiveness
 
                 f
                 "#
@@ -6134,7 +6163,7 @@ mod solve_expr {
             ),
             &[
                 "ob : Bool",
-                "ob : [ False, True ]",
+                "ob : Bool",
                 "True : [ False, True ]",
                 "False : [ False, True ]",
             ],

@@ -1366,6 +1366,7 @@ fn build_effect_loop_inner_body(
         region: Region::zero(),
         loc_cond: Box::new(force_thunk_call),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     Expr::LetNonRec(
