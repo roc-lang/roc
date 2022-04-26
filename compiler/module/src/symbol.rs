@@ -639,18 +639,13 @@ impl IdentIds {
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique(&mut self) -> IdentId {
-        use std::fmt::Write;
+        use std::io::Write;
 
         let index = self.lengths.len();
 
-        // "4294967296" is 10 characters
-        let mut buffer: arrayvec::ArrayString<10> = arrayvec::ArrayString::new();
-        write!(buffer, "{}", index).unwrap();
-
         let offset = self.buffer.len();
-        let length = buffer.len();
-
-        self.buffer.extend(buffer.bytes());
+        write!(self.buffer, "{}", index).unwrap();
+        let length = self.buffer.len() - offset;
 
         self.lengths.push(length as u16);
         self.offsets.push(offset as u32);
