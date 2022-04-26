@@ -314,11 +314,11 @@ mod solve_expr {
             .into_iter()
             .map(|(member, typ)| {
                 let member_data = abilities_store.member_def(member).unwrap();
-                let member_str = member.ident_str(&interns).as_str();
-                let ability_str = member_data.parent_ability.ident_str(&interns).as_str();
+                let member_str = member.as_str(&interns);
+                let ability_str = member_data.parent_ability.as_str(&interns);
                 (
                     format!("{}:{}", ability_str, member_str),
-                    typ.ident_str(&interns).as_str(),
+                    typ.as_str(&interns),
                 )
             })
             .collect::<HashSet<_>>();
