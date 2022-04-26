@@ -3694,9 +3694,7 @@ fn pattern_to_doc_help<'b>(
                 RenderAs::Tag | RenderAs::Opaque => {
                     let ctor = &union.alternatives[tag_id.0 as usize];
                     match &ctor.name {
-                        CtorName::Tag(TagName::Tag(name))
-                            if name.as_str() == NONEXHAUSIVE_CTOR =>
-                        {
+                        CtorName::Tag(TagName::Tag(name)) if name.as_str() == NONEXHAUSIVE_CTOR => {
                             return pattern_to_doc_help(
                                 alloc,
                                 roc_exhaustive::Pattern::Anything,
