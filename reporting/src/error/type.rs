@@ -3656,7 +3656,7 @@ fn pattern_to_doc_help<'b>(
                     // #Guard <fake-condition-tag> <unexhausted-pattern>
                     debug_assert!(union.alternatives[tag_id.0 as usize]
                         .name
-                        .is_tag(&TagName::Global(GUARD_CTOR.into())));
+                        .is_tag(&TagName::Tag(GUARD_CTOR.into())));
                     debug_assert!(args.len() == 2);
                     let tag = pattern_to_doc_help(alloc, args[1].clone(), in_type_param);
                     alloc.concat([
@@ -3694,7 +3694,7 @@ fn pattern_to_doc_help<'b>(
                 RenderAs::Tag | RenderAs::Opaque => {
                     let ctor = &union.alternatives[tag_id.0 as usize];
                     match &ctor.name {
-                        CtorName::Tag(TagName::Global(name))
+                        CtorName::Tag(TagName::Tag(name))
                             if name.as_str() == NONEXHAUSIVE_CTOR =>
                         {
                             return pattern_to_doc_help(
