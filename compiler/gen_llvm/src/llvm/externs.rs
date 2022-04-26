@@ -1,6 +1,7 @@
-use crate::llvm::build::Env;
 use crate::llvm::build::{add_func, C_CALL_CONV};
+use crate::llvm::build::{CCReturn, Env, FunctionSpec};
 use inkwell::module::Linkage;
+use inkwell::types::BasicType;
 use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
 
@@ -82,21 +83,18 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     // roc_realloc
     {
         let libc_realloc_val = {
-            let fn_val = add_func(
-                module,
-                "realloc",
-                i8_ptr_type.fn_type(
-                    &[
-                        // ptr: *void
-                        i8_ptr_type.into(),
-                        // size: usize
-                        usize_type.into(),
-                    ],
-                    false,
-                ),
-                Linkage::External,
-                C_CALL_CONV,
+            let fn_spec = FunctionSpec::cconv(
+                env,
+                CCReturn::Return,
+                Some(i8_ptr_type.as_basic_type_enum()),
+                &[
+                    // ptr: *void
+                    i8_ptr_type.into(),
+                    // size: usize
+                    usize_type.into(),
+                ],
             );
+            let fn_val = add_func(env.context, module, "realloc", fn_spec, Linkage::External);
 
             let mut params = fn_val.get_param_iter();
             let ptr_arg = params.next().unwrap();
