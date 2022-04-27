@@ -155,7 +155,7 @@ mod test {
 
         interner.insert("main");
         interner.insert("a");
-        interner.find_and_update("a", "ab");
+        assert!(interner.find_and_update("a", "ab").is_some());
         interner.insert("c");
         assert!(interner.find_and_update("c", "cd").is_some());
     }
