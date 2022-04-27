@@ -1189,7 +1189,7 @@ fn canonicalize_pending_body<'a>(
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
 ) -> DefOutput {
-    // We treat closure definitions `foo = \a, b -> ...` differntly from other body expressions,
+    // We treat closure definitions `foo = \a, b -> ...` differently from other body expressions,
     // because they need more bookkeeping (for tail calls, closure captures, etc.)
     //
     // Only defs of the form `foo = ...` can be closure declarations or self tail calls.
