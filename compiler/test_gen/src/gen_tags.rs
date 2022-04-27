@@ -1201,6 +1201,7 @@ fn applied_tag_function_result() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+#[ignore = "This test has incorrect refcounts: https://github.com/rtfeldman/roc/issues/2968"]
 fn applied_tag_function_linked_list() {
     assert_evals_to!(
         indoc!(
@@ -1212,6 +1213,27 @@ fn applied_tag_function_linked_list() {
 
             when List.first x is
                 Ok (Cons "a" Nil) -> 1
+                _ -> 0
+            "#
+        ),
+        1,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn applied_tag_function_pair() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Pair a : [ Pair a a ]
+
+            x : List (Pair Str)
+            x = List.map2 [ "a", "b" ] [ "c", "d" ] Pair
+
+            when List.first x is
+                Ok (Pair "a" "c") -> 1
                 _ -> 0
             "#
         ),
