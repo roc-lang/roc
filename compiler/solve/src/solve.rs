@@ -1748,7 +1748,6 @@ fn type_to_variable<'a>(
                 type_arguments,
                 actual,
                 lambda_set_variables,
-                kind,
             } => {
                 debug_assert!(Variable::get_reserved(*symbol).is_none());
 

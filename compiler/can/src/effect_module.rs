@@ -6,11 +6,11 @@ use crate::pattern::Pattern;
 use crate::scope::Scope;
 use roc_collections::{SendMap, VecSet};
 use roc_module::called_via::CalledVia;
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{AliasKind, LambdaSet, Type, TypeExtension};
+use roc_types::types::{LambdaSet, Type, TypeExtension};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct HostedGeneratedFunctions {
@@ -170,13 +170,11 @@ fn build_effect_always(
     // \value -> @Effect \{} -> value
     let (function_var, always_closure) = {
         // `@Effect \{} -> value`
-        let (specialized_def_type, type_arguments, lambda_set_variables) =
-            build_fresh_opaque_variables(var_store);
+        let (type_arguments, lambda_set_variables) = build_fresh_opaque_variables(var_store);
         let body = Expr::OpaqueRef {
             opaque_var: var_store.fresh(),
             name: effect_symbol,
             argument: Box::new((var_store.fresh(), Loc::at_zero(const_closure))),
-            specialized_def_type,
             type_arguments,
             lambda_set_variables,
         };
@@ -351,8 +349,7 @@ fn build_effect_map(
     };
 
     // \@Effect thunk, mapper
-    let (specialized_def_type, type_arguments, lambda_set_variables) =
-        build_fresh_opaque_variables(var_store);
+    let (type_arguments, lambda_set_variables) = build_fresh_opaque_variables(var_store);
     let arguments = vec![
         (
             var_store.fresh(),
@@ -363,7 +360,6 @@ fn build_effect_map(
                     var_store.fresh(),
                     Loc::at_zero(Pattern::Identifier(thunk_symbol)),
                 )),
-                specialized_def_type,
                 type_arguments,
                 lambda_set_variables,
             }),
@@ -375,13 +371,11 @@ fn build_effect_map(
     ];
 
     // `@Effect \{} -> (mapper (thunk {}))`
-    let (specialized_def_type, type_arguments, lambda_set_variables) =
-        build_fresh_opaque_variables(var_store);
+    let (type_arguments, lambda_set_variables) = build_fresh_opaque_variables(var_store);
     let body = Expr::OpaqueRef {
         opaque_var: var_store.fresh(),
         name: effect_symbol,
         argument: Box::new((var_store.fresh(), Loc::at_zero(inner_closure))),
-        specialized_def_type,
         type_arguments,
         lambda_set_variables,
     };
@@ -534,8 +528,7 @@ fn build_effect_after(
         Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
     };
 
-    let (specialized_def_type, type_arguments, lambda_set_variables) =
-        build_fresh_opaque_variables(var_store);
+    let (type_arguments, lambda_set_variables) = build_fresh_opaque_variables(var_store);
 
     let arguments = vec![
         (
@@ -547,7 +540,6 @@ fn build_effect_after(
                     var_store.fresh(),
                     Loc::at_zero(Pattern::Identifier(thunk_symbol)),
                 )),
-                specialized_def_type,
                 type_arguments,
                 lambda_set_variables,
             }),
@@ -671,13 +663,11 @@ fn wrap_in_effect_thunk(
     };
 
     // `@Effect \{} -> value`
-    let (specialized_def_type, type_arguments, lambda_set_variables) =
-        build_fresh_opaque_variables(var_store);
+    let (type_arguments, lambda_set_variables) = build_fresh_opaque_variables(var_store);
     Expr::OpaqueRef {
         opaque_var: var_store.fresh(),
         name: effect_symbol,
         argument: Box::new((var_store.fresh(), Loc::at_zero(const_closure))),
-        specialized_def_type,
         type_arguments,
         lambda_set_variables,
     }
@@ -694,13 +684,11 @@ fn force_effect(
 
     let thunk_var = var_store.fresh();
 
-    let (specialized_def_type, type_arguments, lambda_set_variables) =
-        build_fresh_opaque_variables(var_store);
+    let (type_arguments, lambda_set_variables) = build_fresh_opaque_variables(var_store);
     let pattern = Pattern::UnwrappedOpaque {
         whole_var,
         opaque: effect_symbol,
         argument: Box::new((thunk_var, Loc::at_zero(Pattern::Identifier(thunk_symbol)))),
-        specialized_def_type,
         type_arguments,
         lambda_set_variables,
     };
@@ -961,13 +949,11 @@ fn build_effect_forever_inner_body(
 
         let thunk_var = var_store.fresh();
 
-        let (specialized_def_type, type_arguments, lambda_set_variables) =
-            build_fresh_opaque_variables(var_store);
+        let (type_arguments, lambda_set_variables) = build_fresh_opaque_variables(var_store);
         let pattern = Pattern::UnwrappedOpaque {
             whole_var,
             opaque: effect_symbol,
             argument: Box::new((thunk_var, Loc::at_zero(Pattern::Identifier(thunk1_symbol)))),
-            specialized_def_type,
             type_arguments,
             lambda_set_variables,
         };
@@ -1128,14 +1114,13 @@ fn build_effect_loop(
                 Box::new(state_type.clone()),
             );
 
-            Type::Alias {
+            Type::OpaqueDef {
                 symbol: effect_symbol,
                 type_arguments: vec![("a".into(), state_type)],
                 lambda_set_variables: vec![roc_types::types::LambdaSet(Type::Variable(
                     closure_var,
                 ))],
                 actual: Box::new(actual),
-                kind: AliasKind::Opaque,
             }
         };
 
@@ -1262,13 +1247,11 @@ fn build_effect_loop_inner_body(
 
         let thunk_var = var_store.fresh();
 
-        let (specialized_def_type, type_arguments, lambda_set_variables) =
-            build_fresh_opaque_variables(var_store);
+        let (type_arguments, lambda_set_variables) = build_fresh_opaque_variables(var_store);
         let pattern = Pattern::UnwrappedOpaque {
             whole_var,
             opaque: effect_symbol,
             argument: Box::new((thunk_var, Loc::at_zero(Pattern::Identifier(thunk1_symbol)))),
-            specialized_def_type,
             type_arguments,
             lambda_set_variables,
         };
@@ -1462,13 +1445,12 @@ pub fn build_host_exposed_def(
                     loc_body: Box::new(Loc::at_zero(low_level_call)),
                 });
 
-                let (specialized_def_type, type_arguments, lambda_set_variables) =
+                let (type_arguments, lambda_set_variables) =
                     build_fresh_opaque_variables(var_store);
                 let body = Expr::OpaqueRef {
                     opaque_var: var_store.fresh(),
                     name: effect_symbol,
                     argument: Box::new((var_store.fresh(), Loc::at_zero(effect_closure))),
-                    specialized_def_type,
                     type_arguments,
                     lambda_set_variables,
                 };
@@ -1527,13 +1509,12 @@ pub fn build_host_exposed_def(
                     loc_body: Box::new(Loc::at_zero(low_level_call)),
                 });
 
-                let (specialized_def_type, type_arguments, lambda_set_variables) =
+                let (type_arguments, lambda_set_variables) =
                     build_fresh_opaque_variables(var_store);
                 Expr::OpaqueRef {
                     opaque_var: var_store.fresh(),
                     name: effect_symbol,
                     argument: Box::new((var_store.fresh(), Loc::at_zero(effect_closure))),
-                    specialized_def_type,
                     type_arguments,
                     lambda_set_variables,
                 }
@@ -1585,33 +1566,26 @@ fn build_effect_opaque(
         Box::new(a_type),
     );
 
-    Type::Alias {
+    Type::OpaqueDef {
         symbol: effect_symbol,
         type_arguments: vec![(a_name.into(), Type::Variable(a_var))],
         lambda_set_variables: vec![roc_types::types::LambdaSet(Type::Variable(closure_var))],
         actual: Box::new(actual),
-        kind: AliasKind::Opaque,
     }
 }
 
-fn build_fresh_opaque_variables(
-    var_store: &mut VarStore,
-) -> (Box<Type>, Vec<(Lowercase, Type)>, Vec<LambdaSet>) {
+fn build_fresh_opaque_variables(var_store: &mut VarStore) -> (Vec<Variable>, Vec<LambdaSet>) {
     let closure_var = var_store.fresh();
 
     // NB: if there are bugs, check whether not introducing variables is a problem!
+    // They should be introduced during constraint gen, not here.
     // introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
 
     let a_var = var_store.fresh();
-    let actual = Type::Function(
-        vec![Type::EmptyRec],
-        Box::new(Type::Variable(closure_var)),
-        Box::new(Type::Variable(a_var)),
-    );
-    let type_arguments = vec![("a".into(), Type::Variable(a_var))];
+    let type_arguments = vec![a_var];
     let lambda_set_variables = vec![roc_types::types::LambdaSet(Type::Variable(closure_var))];
 
-    (Box::new(actual), type_arguments, lambda_set_variables)
+    (type_arguments, lambda_set_variables)
 }
 
 #[inline(always)]

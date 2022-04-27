@@ -165,12 +165,19 @@ fn builtin_alias(
     actual: Box<Type>,
     kind: AliasKind,
 ) -> Type {
-    Type::Alias {
-        symbol,
-        type_arguments,
-        actual,
-        lambda_set_variables: vec![],
-        kind,
+    match kind {
+        AliasKind::Structural => Type::Alias {
+            symbol,
+            type_arguments,
+            actual,
+            lambda_set_variables: vec![],
+        },
+        AliasKind::Opaque => Type::OpaqueDef {
+            symbol,
+            type_arguments,
+            actual,
+            lambda_set_variables: vec![],
+        },
     }
 }
 

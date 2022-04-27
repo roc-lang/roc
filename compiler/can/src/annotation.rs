@@ -508,50 +508,38 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    let is_structural = alias.kind == AliasKind::Structural;
-                    if is_structural {
-                        let mut type_var_to_arg = Vec::new();
+                    let mut lambda_set_variables =
+                        Vec::with_capacity(alias.lambda_set_variables.len());
 
-                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
-                            let name = loc_var.value.0.clone();
+                    for _ in 0..alias.lambda_set_variables.len() {
+                        let lvar = var_store.fresh();
 
-                            type_var_to_arg.push((name, arg_ann));
+                        introduced_variables.insert_lambda_set(lvar);
+
+                        lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
+                    }
+
+                    match alias.kind {
+                        AliasKind::Structural => {
+                            let mut type_var_to_arg = Vec::new();
+
+                            for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
+                                let name = loc_var.value.0.clone();
+
+                                type_var_to_arg.push((name, arg_ann));
+                            }
+
+                            Type::DelayedAlias(AliasCommon {
+                                symbol,
+                                type_arguments: type_var_to_arg,
+                                lambda_set_variables,
+                            })
                         }
-
-                        let mut lambda_set_variables =
-                            Vec::with_capacity(alias.lambda_set_variables.len());
-
-                        for _ in 0..alias.lambda_set_variables.len() {
-                            let lvar = var_store.fresh();
-
-                            introduced_variables.insert_lambda_set(lvar);
-
-                            lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
-                        }
-
-                        Type::DelayedAlias(AliasCommon {
+                        AliasKind::Opaque => Type::Opaque {
                             symbol,
-                            type_arguments: type_var_to_arg,
+                            type_arguments: args,
                             lambda_set_variables,
-                        })
-                    } else {
-                        let (type_arguments, lambda_set_variables, actual) =
-                            instantiate_and_freshen_alias_type(
-                                var_store,
-                                introduced_variables,
-                                &alias.type_variables,
-                                args,
-                                &alias.lambda_set_variables,
-                                alias.typ.clone(),
-                            );
-
-                        Type::Alias {
-                            symbol,
-                            type_arguments,
-                            lambda_set_variables,
-                            actual: Box::new(actual),
-                            kind: alias.kind,
-                        }
+                        },
                     }
                 }
                 None => Type::Apply(symbol, args, region),
@@ -715,7 +703,6 @@ fn can_annotation_help(
                     type_arguments: vars,
                     lambda_set_variables: alias.lambda_set_variables.clone(),
                     actual: Box::new(alias.typ.clone()),
-                    kind: alias.kind,
                 }
             }
         }
@@ -1045,31 +1032,6 @@ pub fn instantiate_and_freshen_alias_type(
     actual_type.substitute(&substitutions);
 
     (type_var_to_arg, new_lambda_set_variables, actual_type)
-}
-
-pub fn freshen_opaque_def(
-    var_store: &mut VarStore,
-    opaque: &Alias,
-) -> (Vec<(Lowercase, Type)>, Vec<LambdaSet>, Type) {
-    debug_assert!(opaque.kind == AliasKind::Opaque);
-
-    let fresh_arguments = opaque
-        .type_variables
-        .iter()
-        .map(|_| Type::Variable(var_store.fresh()))
-        .collect();
-
-    // TODO this gets ignored; is that a problem
-    let mut introduced_variables = IntroducedVariables::default();
-
-    instantiate_and_freshen_alias_type(
-        var_store,
-        &mut introduced_variables,
-        &opaque.type_variables,
-        fresh_arguments,
-        &opaque.lambda_set_variables,
-        opaque.typ.clone(),
-    )
 }
 
 fn insertion_sort_by<T, F>(arr: &mut [T], mut compare: F)

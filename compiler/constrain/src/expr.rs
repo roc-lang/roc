@@ -16,9 +16,7 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
-use roc_types::types::{
-    AliasKind, AnnotationSource, Category, PReason, Reason, RecordField, TypeExtension,
-};
+use roc_types::types::{AnnotationSource, Category, PReason, Reason, RecordField, TypeExtension};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
@@ -984,19 +982,16 @@ pub fn constrain_expr(
             opaque_var,
             name,
             argument,
-            specialized_def_type,
             type_arguments,
             lambda_set_variables,
         } => {
             let (arg_var, arg_loc_expr) = &**argument;
             let arg_type = Type::Variable(*arg_var);
 
-            let opaque_type = Type::Alias {
+            let opaque_type = Type::Opaque {
                 symbol: *name,
-                type_arguments: type_arguments.clone(),
+                type_arguments: type_arguments.iter().copied().map(Type::Variable).collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
-                actual: Box::new(arg_type.clone()),
-                kind: AliasKind::Opaque,
             };
 
             // Constrain the argument
@@ -1021,23 +1016,30 @@ pub fn constrain_expr(
             // Link the entire wrapped opaque type (with the now-constrained argument) to the type
             // variables of the opaque type
             // TODO: better expectation here
-            let link_type_variables_con = constraints.equal_types(
-                arg_type,
-                Expected::NoExpectation((**specialized_def_type).clone()),
-                Category::OpaqueArg,
-                arg_loc_expr.region,
-            );
+            // TODO(fast opaques): link to opaque type!
+            // let link_type_variables_con = constraints.equal_types(
+            //     arg_type,
+            //     Expected::NoExpectation((**specialized_def_type).clone()),
+            //     Category::OpaqueArg,
+            //     arg_loc_expr.region,
+            // );
 
             let mut vars = vec![*arg_var, *opaque_var];
             // Also add the fresh variables we created for the type argument and lambda sets
-            vars.extend(type_arguments.iter().map(|(_, t)| {
-                t.expect_variable("all type arguments should be fresh variables here")
-            }));
+            vars.extend(type_arguments);
             vars.extend(lambda_set_variables.iter().map(|v| {
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));
 
-            constraints.exists_many(vars, [arg_con, opaque_con, link_type_variables_con])
+            constraints.exists_many(
+                vars,
+                [
+                    arg_con,
+                    opaque_con,
+                    // TODO(fast opaques): link to opaque type!
+                    // link_type_variables_con
+                ],
+            )
         }
 
         RunLowLevel { args, ret_var, op } => {

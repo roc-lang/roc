@@ -10,7 +10,7 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{
-    AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type, TypeExtension,
+    Category, PReason, PatternCategory, Reason, RecordField, Type, TypeExtension,
 };
 
 #[derive(Default)]
@@ -131,14 +131,11 @@ fn headers_from_annotation_help(
             whole_var: _,
             opaque,
             argument,
-            specialized_def_type: _,
             type_arguments: pat_type_arguments,
             lambda_set_variables: pat_lambda_set_variables,
         } => match &annotation.value {
-            Type::Alias {
+            Type::Opaque {
                 symbol,
-                kind: AliasKind::Opaque,
-                actual,
                 type_arguments,
                 lambda_set_variables,
             } if symbol == opaque
@@ -149,11 +146,13 @@ fn headers_from_annotation_help(
                 headers.insert(*opaque, typ);
 
                 let (_, argument_pat) = &**argument;
-                headers_from_annotation_help(
-                    &argument_pat.value,
-                    &Loc::at(annotation.region, actual),
-                    headers,
-                )
+                true
+                // TODO cleanup
+                // headers_from_annotation_help(
+                //     &argument_pat.value,
+                //     &Loc::at(annotation.region, actual),
+                //     headers,
+                // )
             }
             _ => false,
         },
@@ -504,7 +503,6 @@ pub fn constrain_pattern(
             whole_var,
             opaque,
             argument,
-            specialized_def_type,
             type_arguments,
             lambda_set_variables,
         } => {
@@ -512,12 +510,10 @@ pub fn constrain_pattern(
             let (arg_pattern_var, loc_arg_pattern) = &**argument;
             let arg_pattern_type = Type::Variable(*arg_pattern_var);
 
-            let opaque_type = Type::Alias {
+            let opaque_type = Type::Opaque {
                 symbol: *opaque,
-                type_arguments: type_arguments.clone(),
+                type_arguments: type_arguments.iter().copied().map(Type::Variable).collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
-                actual: Box::new(arg_pattern_type.clone()),
-                kind: AliasKind::Opaque,
             };
 
             // First, add a constraint for the argument "who"
@@ -552,12 +548,13 @@ pub fn constrain_pattern(
             // This must **always** be a presence constraint, that is enforcing
             // `[ A k1, B k1 ] += typeof (A s)`, because we are in a destructure position and not
             // all constructors are covered in this branch!
-            let link_type_variables_con = constraints.pattern_presence(
-                arg_pattern_type,
-                PExpected::NoExpectation((**specialized_def_type).clone()),
-                PatternCategory::Opaque(*opaque),
-                loc_arg_pattern.region,
-            );
+            // TODO(fast opaques): link to opaque type!
+            // let link_type_variables_con = constraints.pattern_presence(
+            //     arg_pattern_type,
+            //     PExpected::NoExpectation((**specialized_def_type).clone()),
+            //     PatternCategory::Opaque(*opaque),
+            //     loc_arg_pattern.region,
+            // );
 
             // Next, link `whole_var` (the type of "@Id who") to the expected type
             let opaque_pattern_con = constraints.pattern_presence(
@@ -571,16 +568,15 @@ pub fn constrain_pattern(
                 .vars
                 .extend_from_slice(&[*arg_pattern_var, *whole_var]);
             // Also add the fresh variables we created for the type argument and lambda sets
-            state.vars.extend(type_arguments.iter().map(|(_, t)| {
-                t.expect_variable("all type arguments should be fresh variables here")
-            }));
+            state.vars.extend(type_arguments);
             state.vars.extend(lambda_set_variables.iter().map(|v| {
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));
 
             state.constraints.extend_from_slice(&[
                 whole_con,
-                link_type_variables_con,
+                // TODO(fast opaques): link to opaque type!
+                // link_type_variables_con,
                 opaque_pattern_con,
             ]);
         }

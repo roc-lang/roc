@@ -58,7 +58,13 @@ pub enum SolvedType {
         Vec<(Lowercase, SolvedType)>,
         Vec<SolvedLambdaSet>,
         Box<SolvedType>,
-        AliasKind,
+    ),
+
+    Opaque(
+        Symbol,
+        Vec<(Lowercase, SolvedType)>,
+        Vec<SolvedLambdaSet>,
+        Box<SolvedType>,
     ),
 
     HostExposedAlias {
@@ -209,7 +215,7 @@ pub fn to_type(
 
             Type::RecursiveTagUnion(*rec_var, new_tags, ext)
         }
-        Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual, kind) => {
+        Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
 
             for (lowercase, solved_arg) in solved_type_variables {
@@ -232,7 +238,31 @@ pub fn to_type(
                 type_arguments: type_variables,
                 lambda_set_variables,
                 actual: Box::new(actual),
-                kind: *kind,
+            }
+        }
+        Opaque(symbol, solved_type_variables, solved_lambda_sets, solved_actual) => {
+            let mut type_variables = Vec::with_capacity(solved_type_variables.len());
+
+            for (lowercase, solved_arg) in solved_type_variables {
+                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
+            }
+
+            let mut lambda_set_variables = Vec::with_capacity(solved_lambda_sets.len());
+            for solved_set in solved_lambda_sets {
+                lambda_set_variables.push(crate::types::LambdaSet(to_type(
+                    &solved_set.0,
+                    free_vars,
+                    var_store,
+                )))
+            }
+
+            let actual = to_type(solved_actual, free_vars, var_store);
+
+            Type::OpaqueDef {
+                symbol: *symbol,
+                type_arguments: type_variables,
+                lambda_set_variables,
+                actual: Box::new(actual),
             }
         }
         HostExposedAlias {

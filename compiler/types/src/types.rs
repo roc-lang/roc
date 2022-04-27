@@ -219,9 +219,19 @@ pub enum Type {
         actual_var: Variable,
         actual: Box<Type>,
     },
+    /// An opaque type usage. The type variables are instantiated during solving.
     Opaque {
         symbol: Symbol,
         type_arguments: Vec<Type>,
+        lambda_set_variables: Vec<LambdaSet>,
+    },
+    /// Should only be used for the definition of an opaque type.
+    /// Types in usage position of an opaque should instead use [Self::Opaque].
+    OpaqueDef {
+        symbol: Symbol,
+        type_arguments: Vec<(Lowercase, Type)>,
+        lambda_set_variables: Vec<LambdaSet>,
+        actual: Box<Type>,
     },
     RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, TypeExtension),
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
@@ -271,20 +281,31 @@ impl Clone for Type {
                 type_arguments,
                 lambda_set_variables,
                 actual,
-                kind,
             } => Self::Alias {
                 symbol: *symbol,
                 type_arguments: type_arguments.clone(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: actual.clone(),
-                kind: *kind,
+            },
+            Self::OpaqueDef {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                actual,
+            } => Self::OpaqueDef {
+                symbol: *symbol,
+                type_arguments: type_arguments.clone(),
+                lambda_set_variables: lambda_set_variables.clone(),
+                actual: actual.clone(),
             },
             Self::Opaque {
                 symbol,
                 type_arguments,
+                lambda_set_variables,
             } => Self::Opaque {
                 symbol: *symbol,
                 type_arguments: type_arguments.clone(),
+                lambda_set_variables: lambda_set_variables.clone(),
             },
             Self::HostExposedAlias {
                 name,
@@ -436,14 +457,47 @@ impl fmt::Debug for Type {
 
                 Ok(())
             }
+            Type::OpaqueDef {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                actual: _actual,
+                ..
+            } => {
+                write!(f, "(OpaqueDef {:?}", symbol)?;
+
+                for (_, arg) in type_arguments {
+                    write!(f, " {:?}", arg)?;
+                }
+
+                for (lambda_set, greek_letter) in
+                    lambda_set_variables.iter().zip(GREEK_LETTERS.iter())
+                {
+                    write!(f, " {}@{:?}", greek_letter, lambda_set.0)?;
+                }
+
+                // Sometimes it's useful to see the expansion of the alias
+                write!(f, "[ but actually {:?} ]", _actual)?;
+
+                write!(f, ")")?;
+
+                Ok(())
+            }
             Type::Opaque {
                 symbol,
                 type_arguments,
+                lambda_set_variables,
             } => {
                 write!(f, "(Opaque {:?}", symbol)?;
 
                 for arg in type_arguments {
                     write!(f, " {:?}", arg)?;
+                }
+
+                for (lambda_set, greek_letter) in
+                    lambda_set_variables.iter().zip(GREEK_LETTERS.iter())
+                {
+                    write!(f, " {}@{:?}", greek_letter, lambda_set.0)?;
                 }
 
                 Ok(())
@@ -729,6 +783,12 @@ impl Type {
                     lambda_set_variables,
                     actual,
                     ..
+                }
+                | OpaqueDef {
+                    type_arguments,
+                    lambda_set_variables,
+                    actual,
+                    ..
                 } => {
                     for (_, value) in type_arguments.iter_mut() {
                         stack.push(value);
@@ -843,6 +903,12 @@ impl Type {
                     lambda_set_variables,
                     actual,
                     ..
+                }
+                | OpaqueDef {
+                    type_arguments,
+                    lambda_set_variables,
+                    actual,
+                    ..
                 } => {
                     for (_, value) in type_arguments.iter_mut() {
                         stack.push(value);
@@ -945,6 +1011,11 @@ impl Type {
                 type_arguments,
                 actual: alias_actual,
                 ..
+            }
+            | OpaqueDef {
+                type_arguments,
+                actual: alias_actual,
+                ..
             } => {
                 for (_, ta) in type_arguments {
                     ta.substitute_alias(rep_symbol, rep_args, actual)?;
@@ -1034,6 +1105,11 @@ impl Type {
                 symbol: alias_symbol,
                 actual: actual_type,
                 ..
+            }
+            | OpaqueDef {
+                symbol: alias_symbol,
+                actual: actual_type,
+                ..
             } => alias_symbol == &rep_symbol || actual_type.contains_symbol(rep_symbol),
             Opaque {
                 symbol,
@@ -1091,6 +1167,10 @@ impl Type {
             Alias {
                 actual: actual_type,
                 ..
+            }
+            | OpaqueDef {
+                actual: actual_type,
+                ..
             } => actual_type.contains_variable(rep_variable),
             Opaque { type_arguments, .. } => type_arguments
                 .iter()
@@ -1119,12 +1199,7 @@ impl Type {
 
     pub fn shallow_structural_dealias(&self) -> &Self {
         let mut result = self;
-        while let Type::Alias {
-            actual,
-            kind: AliasKind::Structural,
-            ..
-        } = result
-        {
+        while let Type::Alias { actual, .. } = result {
             result = actual;
         }
         result
@@ -1184,6 +1259,12 @@ impl Type {
                 ..
             }
             | Alias {
+                type_arguments: type_args,
+                lambda_set_variables,
+                actual: actual_type,
+                ..
+            }
+            | OpaqueDef {
                 type_arguments: type_args,
                 lambda_set_variables,
                 actual: actual_type,
@@ -1321,7 +1402,6 @@ impl Type {
                             type_arguments: named_args,
                             lambda_set_variables,
                             actual: Box::new(actual),
-                            kind: alias.kind,
                         };
 
                         *self = alias;
@@ -1440,6 +1520,11 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 stack.extend(type_arguments.iter().map(|v| &v.1));
             }
             Alias {
+                symbol: alias_symbol,
+                actual: actual_type,
+                ..
+            }
+            | OpaqueDef {
                 symbol: alias_symbol,
                 actual: actual_type,
                 ..
@@ -1562,6 +1647,11 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             }
         }
         Alias {
+            type_arguments,
+            actual,
+            ..
+        }
+        | OpaqueDef {
             type_arguments,
             actual,
             ..
@@ -1706,6 +1796,11 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             type_arguments,
             actual,
             ..
+        }
+        | OpaqueDef {
+            type_arguments,
+            actual,
+            ..
         } => {
             for (_, arg) in type_arguments {
                 variables_help_detailed(arg, accum);
@@ -1713,11 +1808,20 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             variables_help_detailed(actual, accum);
         }
         Opaque {
-            symbol: _,
             type_arguments,
+            lambda_set_variables,
+            ..
         } => {
             for arg in type_arguments {
                 variables_help_detailed(arg, accum);
+            }
+
+            for lambda_set in lambda_set_variables {
+                if let Type::Variable(v) = lambda_set.0 {
+                    accum.lambda_set_variables.push(v);
+                } else {
+                    variables_help_detailed(&lambda_set.0, accum);
+                }
             }
         }
         HostExposedAlias {

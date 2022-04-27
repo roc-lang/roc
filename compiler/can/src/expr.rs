@@ -1,4 +1,4 @@
-use crate::annotation::{freshen_opaque_def, IntroducedVariables};
+use crate::annotation::IntroducedVariables;
 use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
@@ -169,21 +169,7 @@ pub enum Expr {
         name: Symbol,
         argument: Box<(Variable, Loc<Expr>)>,
 
-        // The following help us link this opaque reference to the type specified by its
-        // definition, which we then use during constraint generation. For example
-        // suppose we have
-        //
-        //   Id n := [ Id U64 n ]
-        //   @Id "sasha"
-        //
-        // Then `opaque` is "Id", `argument` is "sasha", but this is not enough for us to
-        // infer the type of the expression as "Id Str" - we need to link the specialized type of
-        // the variable "n".
-        // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
-        // for the expression from the opaque definition. `type_arguments` is something like
-        // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
-        specialized_def_type: Box<Type>,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Variable>,
         lambda_set_variables: Vec<LambdaSet>,
     },
 
@@ -505,14 +491,29 @@ pub fn canonicalize_expr<'a>(
                             let argument = Box::new(args.pop().unwrap());
                             output.references.insert_type_lookup(name);
 
-                            let (type_arguments, lambda_set_variables, specialized_def_type) =
-                                freshen_opaque_def(var_store, opaque_def);
+                            let mut lambda_set_variables =
+                                Vec::with_capacity(opaque_def.lambda_set_variables.len());
+
+                            for _ in 0..opaque_def.lambda_set_variables.len() {
+                                let lvar = var_store.fresh();
+
+                                // NB: if there are bugs, check whether not introducing variables is a problem!
+                                // They should be introduced during constraint gen, not here.
+                                // output.introduced_variables.insert_lambda_set(lvar);
+
+                                lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
+                            }
+
+                            let type_arguments = opaque_def
+                                .type_variables
+                                .iter()
+                                .map(|_| var_store.fresh())
+                                .collect();
 
                             let opaque_ref = OpaqueRef {
                                 opaque_var: var_store.fresh(),
                                 name,
                                 argument,
-                                specialized_def_type: Box::new(specialized_def_type),
                                 type_arguments,
                                 lambda_set_variables,
                             };
@@ -1495,7 +1496,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             opaque_var,
             name,
             argument,
-            specialized_def_type,
             type_arguments,
             lambda_set_variables,
         } => {
@@ -1509,7 +1509,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 opaque_var,
                 name,
                 argument,
-                specialized_def_type,
                 type_arguments,
                 lambda_set_variables,
             }

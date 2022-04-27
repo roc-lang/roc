@@ -1,4 +1,3 @@
-use crate::annotation::freshen_opaque_def;
 use crate::env::Env;
 use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
 use crate::num::{
@@ -31,23 +30,7 @@ pub enum Pattern {
         opaque: Symbol,
         argument: Box<(Variable, Loc<Pattern>)>,
 
-        // The following help us link this opaque reference to the type specified by its
-        // definition, which we then use during constraint generation. For example
-        // suppose we have
-        //
-        //   Id n := [ Id U64 n ]
-        //   strToBool : Str -> Bool
-        //
-        //   f = \@Id who -> strToBool who
-        //
-        // Then `opaque` is "Id", `argument` is "who", but this is not enough for us to
-        // infer the type of the expression as "Id Str" - we need to link the specialized type of
-        // the variable "n".
-        // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
-        // for the expression from the opaque definition. `type_arguments` is something like
-        // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
-        specialized_def_type: Box<Type>,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Variable>,
         lambda_set_variables: Vec<LambdaSet>,
     },
     RecordDestructure {
@@ -315,18 +298,33 @@ pub fn canonicalize_pattern<'a>(
 
                             Pattern::UnsupportedPattern(region)
                         } else {
+                            output.references.insert_type_lookup(opaque);
+
                             let argument = Box::new(can_patterns.pop().unwrap());
 
-                            let (type_arguments, lambda_set_variables, specialized_def_type) =
-                                freshen_opaque_def(var_store, opaque_def);
+                            let mut lambda_set_variables =
+                                Vec::with_capacity(opaque_def.lambda_set_variables.len());
 
-                            output.references.insert_type_lookup(opaque);
+                            for _ in 0..opaque_def.lambda_set_variables.len() {
+                                let lvar = var_store.fresh();
+
+                                // NB: if there are bugs, check whether not introducing variables is a problem!
+                                // They should be introduced during constraint gen, not here.
+                                // output.introduced_variables.insert_lambda_set(lvar);
+
+                                lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
+                            }
+
+                            let type_arguments = opaque_def
+                                .type_variables
+                                .iter()
+                                .map(|_| var_store.fresh())
+                                .collect();
 
                             Pattern::UnwrappedOpaque {
                                 whole_var: var_store.fresh(),
                                 opaque,
                                 argument,
-                                specialized_def_type: Box::new(specialized_def_type),
                                 type_arguments,
                                 lambda_set_variables,
                             }
