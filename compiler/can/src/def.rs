@@ -12,6 +12,7 @@ use crate::scope::create_alias;
 use crate::scope::Scope;
 use roc_collections::VecMap;
 use roc_collections::{ImSet, MutMap, SendMap};
+use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::IdentId;
 use roc_module::symbol::ModuleId;
@@ -1371,7 +1372,7 @@ fn to_pending_type_def<'a>(
             let region = Region::span_across(&name.region, &ann.region);
 
             match scope.introduce_without_shadow_symbol(
-                name.value.into(),
+                &Ident::from(name.value),
                 &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 region,
@@ -1451,7 +1452,7 @@ fn to_pending_type_def<'a>(
             loc_has: _,
         } => {
             let name = match scope.introduce_without_shadow_symbol(
-                name.value.into(),
+                &Ident::from(name.value),
                 &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 name.region,

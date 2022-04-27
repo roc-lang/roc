@@ -32,7 +32,7 @@ impl IdentStore {
         };
 
         for (ident, (symbol, region)) in defaults {
-            this.insert_unchecked(ident, symbol, region);
+            this.insert_unchecked(&ident, symbol, region);
         }
 
         this
@@ -80,7 +80,7 @@ impl IdentStore {
     }
 
     /// Does not check that the ident is unique
-    fn insert_unchecked(&mut self, ident: Ident, symbol: Symbol, region: Region) {
+    fn insert_unchecked(&mut self, ident: &Ident, symbol: Symbol, region: Region) {
         let ident_str = ident.as_inline_str().as_str();
 
         let index = self.interner.insert(ident_str);
@@ -279,32 +279,27 @@ impl Scope {
         all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
-        match self.idents.get_index(&ident) {
-            Some(index) => {
-                let original_region = self.idents.regions[index];
-                let shadow = Loc {
-                    value: ident.clone(),
-                    region,
-                };
-
+        match self.introduce_without_shadow_symbol(&ident, exposed_ident_ids, all_ident_ids, region)
+        {
+            Ok(symbol) => Ok(symbol),
+            Err((original_region, shadow)) => {
                 let ident_id = all_ident_ids.add_ident(&ident);
                 let symbol = Symbol::new(self.home, ident_id);
 
                 Err((original_region, shadow, symbol))
             }
-            None => Ok(self.commit_introduction(ident, exposed_ident_ids, all_ident_ids, region)),
         }
     }
 
     /// Like [Self::introduce], but does not introduce a new symbol for the shadowing symbol.
     pub fn introduce_without_shadow_symbol(
         &mut self,
-        ident: Ident,
+        ident: &Ident,
         exposed_ident_ids: &IdentIds,
         all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>)> {
-        match self.idents.get_symbol_and_region(&ident) {
+        match self.idents.get_symbol_and_region(ident) {
             Some((_, original_region)) => {
                 let shadow = Loc {
                     value: ident.clone(),
@@ -344,7 +339,7 @@ impl Scope {
 
                     // Add a symbol for the shadow, but don't re-associate the member name.
                     let dummy = Ident::default();
-                    self.idents.insert_unchecked(dummy, shadow_symbol, region);
+                    self.idents.insert_unchecked(&dummy, shadow_symbol, region);
 
                     Ok((shadow_symbol, Some(original_symbol)))
                 } else {
@@ -363,7 +358,7 @@ impl Scope {
             }
             None => {
                 let new_symbol =
-                    self.commit_introduction(ident, exposed_ident_ids, all_ident_ids, region);
+                    self.commit_introduction(&ident, exposed_ident_ids, all_ident_ids, region);
                 Ok((new_symbol, None))
             }
         }
@@ -371,7 +366,7 @@ impl Scope {
 
     fn commit_introduction(
         &mut self,
-        ident: Ident,
+        ident: &Ident,
         exposed_ident_ids: &IdentIds,
         all_ident_ids: &mut IdentIds,
         region: Region,
@@ -412,7 +407,7 @@ impl Scope {
         match self.idents.get_symbol_and_region(&ident) {
             Some(shadowed) => Err(shadowed),
             None => {
-                self.idents.insert_unchecked(ident, symbol, region);
+                self.idents.insert_unchecked(&ident, symbol, region);
 
                 Ok(())
             }
