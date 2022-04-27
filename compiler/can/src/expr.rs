@@ -1099,22 +1099,16 @@ fn canonicalize_when_branch<'a>(
         }
     };
 
-    // Now that we've collected all the references for this branch, check to see if
-    // any of the new idents it defined were unused. If any were, report it.
-    for (symbol, region) in scope.symbols() {
-        let symbol = *symbol;
-
-        if !output.references.has_type_or_value_lookup(symbol)
-            && !branch_output.references.has_type_or_value_lookup(symbol)
-            && !original_scope.contains_symbol(symbol)
-            && !scope.abilities_store.is_specialization_name(symbol)
-        {
-            env.problem(Problem::UnusedDef(symbol, *region));
-        }
-    }
-
     let references = branch_output.references.clone();
     output.union(branch_output);
+
+    // Now that we've collected all the references for this branch, check to see if
+    // any of the new idents it defined were unused. If any were, report it.
+    for (symbol, region) in bindings_from_patterns(patterns.iter()) {
+        if !output.references.has_value_lookup(symbol) {
+            env.problem(Problem::UnusedDef(symbol, region));
+        }
+    }
 
     (
         WhenBranch {

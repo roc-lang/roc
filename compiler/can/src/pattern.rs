@@ -687,12 +687,15 @@ fn add_bindings_from_patterns(
             add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
         }
         RecordDestructure { destructs, .. } => {
-            for Loc {
-                region,
-                value: RecordDestruct { symbol, .. },
-            } in destructs
-            {
-                answer.push((*symbol, *region));
+            for loc_destruct in destructs {
+                match loc_destruct.value.typ {
+                    DestructType::Required | DestructType::Optional(_, _) => {
+                        answer.push((loc_destruct.value.symbol, loc_destruct.region));
+                    }
+                    DestructType::Guard(_, _) => {
+                        // a guard does not introduce the symbol
+                    }
+                }
             }
         }
         NumLiteral(..)
