@@ -644,39 +644,40 @@ fn malformed_pattern(env: &mut Env, problem: MalformedPatternProblem, region: Re
     Pattern::MalformedPattern(problem, region)
 }
 
-enum BindingsFromPatternWork<'a> {
+/// An iterator over the bindings made by a pattern.
+///
+/// We attempt to make no allocations when we can.
+pub enum BindingsFromPattern<'a> {
+    Empty,
+    One(&'a Loc<Pattern>),
+    Many(Vec<BindingsFromPatternWork<'a>>),
+}
+
+pub enum BindingsFromPatternWork<'a> {
     Pattern(&'a Loc<Pattern>),
     Destruct(&'a Loc<RecordDestruct>),
 }
 
-pub struct BindingsFromPattern<'a> {
-    stack: Vec<BindingsFromPatternWork<'a>>,
-}
-
 impl<'a> BindingsFromPattern<'a> {
     pub fn new(initial: &'a Loc<Pattern>) -> Self {
-        Self {
-            stack: vec![BindingsFromPatternWork::Pattern(initial)],
-        }
+        Self::One(initial)
     }
 
-    pub fn new_many<I>(it: I) -> Self
+    pub fn new_many<I>(mut it: I) -> Self
     where
         I: Iterator<Item = &'a Loc<Pattern>>,
     {
-        Self {
-            stack: it.map(BindingsFromPatternWork::Pattern).collect(),
+        if let (1, Some(1)) = it.size_hint() {
+            Self::new(it.next().unwrap())
+        } else {
+            Self::Many(it.map(BindingsFromPatternWork::Pattern).collect())
         }
     }
-}
 
-impl<'a> Iterator for BindingsFromPattern<'a> {
-    type Item = (Symbol, Region);
-
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next_many(stack: &mut Vec<BindingsFromPatternWork<'a>>) -> Option<(Symbol, Region)> {
         use Pattern::*;
 
-        while let Some(work) = self.stack.pop() {
+        while let Some(work) = stack.pop() {
             match work {
                 BindingsFromPatternWork::Pattern(loc_pattern) => {
                     use BindingsFromPatternWork::*;
@@ -695,15 +696,15 @@ impl<'a> Iterator for BindingsFromPattern<'a> {
                             ..
                         } => {
                             let it = loc_args.iter().rev().map(|(_, p)| Pattern(p));
-                            self.stack.extend(it);
+                            stack.extend(it);
                         }
                         UnwrappedOpaque { argument, .. } => {
                             let (_, loc_arg) = &**argument;
-                            self.stack.push(Pattern(loc_arg));
+                            stack.push(Pattern(loc_arg));
                         }
                         RecordDestructure { destructs, .. } => {
                             let it = destructs.iter().rev().map(Destruct);
-                            self.stack.extend(it);
+                            stack.extend(it);
                         }
                         NumLiteral(..)
                         | IntLiteral(..)
@@ -730,6 +731,35 @@ impl<'a> Iterator for BindingsFromPattern<'a> {
         }
 
         None
+    }
+}
+
+impl<'a> Iterator for BindingsFromPattern<'a> {
+    type Item = (Symbol, Region);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use Pattern::*;
+
+        match self {
+            BindingsFromPattern::Empty => None,
+            BindingsFromPattern::One(loc_pattern) => match &loc_pattern.value {
+                Identifier(symbol)
+                | Shadowed(_, _, symbol)
+                | AbilityMemberSpecialization {
+                    ident: symbol,
+                    specializes: _,
+                } => {
+                    let region = loc_pattern.region;
+                    *self = Self::Empty;
+                    Some((*symbol, region))
+                }
+                _ => {
+                    *self = Self::Many(vec![BindingsFromPatternWork::Pattern(loc_pattern)]);
+                    self.next()
+                }
+            },
+            BindingsFromPattern::Many(stack) => Self::next_many(stack),
+        }
     }
 }
 
