@@ -1211,17 +1211,17 @@ fn canonicalize_pending_body<'a>(
             let outer_identifier = env.tailcallable_symbol;
             env.tailcallable_symbol = Some(*defined_symbol);
 
-            // register the name of this closure, to make sure the closure won't capture it's own name
-            env.closure_name_symbol = Some(*defined_symbol);
-
-            let (mut closure_data, can_output) =
-                crate::expr::canonicalize_closure(env, var_store, scope, arguments, body);
+            let (mut closure_data, can_output) = crate::expr::canonicalize_closure(
+                env,
+                var_store,
+                scope,
+                arguments,
+                body,
+                Some(*defined_symbol),
+            );
 
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
-
-            let closure_references = can_output.references.clone();
-            output.references.union_mut(&can_output.references);
 
             // The closure is self tail recursive iff it tail calls itself (by defined name).
             let is_recursive = match can_output.tail_call {
@@ -1242,6 +1242,7 @@ fn canonicalize_pending_body<'a>(
                 vars_by_symbol,
             );
 
+            let closure_references = can_output.references.clone();
             output.union(can_output);
 
             DefOutput {

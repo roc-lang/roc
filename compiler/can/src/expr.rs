@@ -669,7 +669,7 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             let (closure_data, output) =
-                canonicalize_closure(env, var_store, scope, loc_arg_patterns, loc_body_expr);
+                canonicalize_closure(env, var_store, scope, loc_arg_patterns, loc_body_expr, None);
 
             (Closure(closure_data), output)
         }
@@ -949,15 +949,11 @@ pub fn canonicalize_closure<'a>(
     scope: &mut Scope,
     loc_arg_patterns: &'a [Loc<ast::Pattern<'a>>],
     loc_body_expr: &'a Loc<ast::Expr<'a>>,
+    opt_def_name: Option<Symbol>,
 ) -> (ClosureData, Output) {
     // The globally unique symbol that will refer to this closure once it gets converted
     // into a top-level procedure for code gen.
-    //
-    // In the Foo module, this will look something like Foo.$1 or Foo.$2.
-    let symbol = env
-        .closure_name_symbol
-        .unwrap_or_else(|| env.gen_unique_symbol());
-    env.closure_name_symbol = None;
+    let symbol = opt_def_name.unwrap_or_else(|| env.gen_unique_symbol());
 
     // The body expression gets a new scope for canonicalization.
     // Shadow `scope` to make sure we don't accidentally use the original one for the

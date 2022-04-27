@@ -24,9 +24,6 @@ pub struct Env<'a> {
     /// current tail-callable symbol
     pub tailcallable_symbol: Option<Symbol>,
 
-    /// current closure name (if any)
-    pub closure_name_symbol: Option<Symbol>,
-
     /// Symbols of values/functions which were referenced by qualified lookups.
     pub qualified_value_lookups: VecSet<Symbol>,
 
@@ -57,7 +54,6 @@ impl<'a> Env<'a> {
             qualified_value_lookups: VecSet::default(),
             qualified_type_lookups: VecSet::default(),
             tailcallable_symbol: None,
-            closure_name_symbol: None,
             top_level_symbols: VecSet::default(),
         }
     }
