@@ -6,10 +6,10 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumericBound,
 };
-use crate::pattern::{canonicalize_pattern, Pattern};
+use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::{MutSet, SendMap, VecMap, VecSet};
+use roc_collections::{SendMap, VecMap, VecSet};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -682,6 +682,7 @@ pub fn canonicalize_expr<'a>(
             // rest of this block, but keep the original around for later diffing.
             let original_scope = scope;
             let mut scope = original_scope.clone();
+
             let mut can_args = Vec::with_capacity(loc_arg_patterns.len());
             let mut output = Output::default();
 
@@ -699,8 +700,7 @@ pub fn canonicalize_expr<'a>(
                 can_args.push((var_store.fresh(), can_argument_pattern));
             }
 
-            let bound_by_argument_patterns: Vec<_> =
-                output.references.bound_symbols().copied().collect();
+            let bound_by_argument_patterns = bindings_from_patterns(can_args.iter().map(|x| &x.1));
 
             let (loc_body_expr, new_output) = canonicalize_expr(
                 env,
@@ -710,61 +710,44 @@ pub fn canonicalize_expr<'a>(
                 &loc_body_expr.value,
             );
 
-            let mut captured_symbols: MutSet<Symbol> =
-                new_output.references.value_lookups().copied().collect();
-
-            // filter out the closure's name itself
-            captured_symbols.remove(&symbol);
-
-            // symbols bound either in this pattern or deeper down are not captured!
-            captured_symbols.retain(|s| !new_output.references.bound_symbols().any(|x| x == s));
-            captured_symbols.retain(|s| !bound_by_argument_patterns.contains(s));
-
-            // filter out top-level symbols
-            // those will be globally available, and don't need to be captured
-            captured_symbols.retain(|s| !env.top_level_symbols.contains(s));
-
-            // filter out imported symbols
-            // those will be globally available, and don't need to be captured
-            captured_symbols.retain(|s| s.module_id() == env.home);
-
-            // TODO any Closure that has an empty `captured_symbols` list could be excluded!
+            let mut captured_symbols: Vec<_> = new_output
+                .references
+                .value_lookups()
+                .copied()
+                // filter out the closure's name itself
+                .filter(|s| *s != symbol)
+                // symbols bound either in this pattern or deeper down are not captured!
+                .filter(|s| !new_output.references.bound_symbols().any(|x| x == s))
+                .filter(|s| bound_by_argument_patterns.iter().all(|(k, _)| s != k))
+                // filter out top-level symbols those will be globally available, and don't need to be captured
+                .filter(|s| !env.top_level_symbols.contains(s))
+                // filter out imported symbols those will be globally available, and don't need to be captured
+                .filter(|s| s.module_id() == env.home)
+                // filter out functions that don't close over anything
+                .filter(|s| !new_output.non_closures.contains(s))
+                .filter(|s| !output.non_closures.contains(s))
+                .map(|s| (s, var_store.fresh()))
+                .collect();
 
             output.union(new_output);
 
-            // filter out aliases
-            debug_assert!(captured_symbols
-                .iter()
-                .all(|s| !output.references.references_type_def(*s)));
-            // captured_symbols.retain(|s| !output.references.referenced_type_defs.contains(s));
-
-            // filter out functions that don't close over anything
-            captured_symbols.retain(|s| !output.non_closures.contains(s));
-
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
-            for (sub_symbol, region) in scope.symbols() {
-                if !original_scope.contains_symbol(*sub_symbol) {
-                    if !output.references.has_value_lookup(*sub_symbol) {
-                        // The body never referenced this argument we declared. It's an unused argument!
-                        env.problem(Problem::UnusedArgument(symbol, *sub_symbol, *region));
-                    }
-
+            for (sub_symbol, region) in bound_by_argument_patterns {
+                if !output.references.has_value_lookup(sub_symbol) {
+                    // The body never referenced this argument we declared. It's an unused argument!
+                    env.problem(Problem::UnusedArgument(symbol, sub_symbol, region));
+                } else {
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
                     // references the (nonexistent) local variable x!
-                    output.references.remove_value_lookup(sub_symbol);
+                    output.references.remove_value_lookup(&sub_symbol);
                 }
             }
 
             // store the references of this function in the Env. This information is used
             // when we canonicalize a surrounding def (if it exists)
             env.closures.insert(symbol, output.references.clone());
-
-            let mut captured_symbols: Vec<_> = captured_symbols
-                .into_iter()
-                .map(|s| (s, var_store.fresh()))
-                .collect();
 
             // sort symbols, so we know the order in which they're stored in the closure record
             captured_symbols.sort();
