@@ -106,10 +106,6 @@ impl IdentStore {
         self.symbols.push(symbol);
         self.regions.push(region);
     }
-
-    fn len(&self) -> usize {
-        self.idents.len()
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -186,18 +182,6 @@ impl Scope {
             // TODO(abilities): default abilities in scope
             abilities_store: AbilitiesStore::default(),
         }
-    }
-
-    pub fn symbols(&self) -> impl Iterator<Item = (&Symbol, &Region)> {
-        self.idents.symbols.iter().zip(self.idents.regions.iter())
-    }
-
-    pub fn contains_ident(&self, ident: &Ident) -> bool {
-        self.idents.get_index(ident).is_some()
-    }
-
-    pub fn num_idents(&self) -> usize {
-        self.idents.len()
     }
 
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
@@ -369,7 +353,7 @@ impl Scope {
                 let original_symbol = self.idents.symbols[index];
                 let original_region = self.idents.regions[index];
 
-                let shadow_ident_id = all_ident_ids.add(ident.clone());
+                let shadow_ident_id = all_ident_ids.add_ident(&ident);
                 let shadow_symbol = Symbol::new(self.home, shadow_ident_id);
 
                 if self.abilities_store.is_ability_member_name(original_symbol) {
