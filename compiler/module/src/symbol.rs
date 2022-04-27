@@ -707,7 +707,7 @@ macro_rules! define_builtins {
                     let ident_ids = {
                         const TOTAL : usize = [ $($ident_name),+ ].len();
                         const NAMES : [ &str; TOTAL] = [ $($ident_name),+ ];
-                        const LENGTHS: [ u8; TOTAL] = [ $($ident_name.len() as u8),+ ];
+                        const LENGTHS: [ u16; TOTAL] = [ $($ident_name.len() as u16),+ ];
                         const OFFSETS: [ u32; TOTAL] = offset_helper([ $($ident_name.len() as u32),+ ]);
                         const BUFFER: &str = concat!($($ident_name),+);
 

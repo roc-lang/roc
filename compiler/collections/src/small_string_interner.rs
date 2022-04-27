@@ -1,9 +1,11 @@
-/// Collection of small (length < 256) strings, stored compactly.
+/// Collection of small (length < u16::MAX) strings, stored compactly.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct SmallStringInterner {
     buffer: Vec<u8>,
 
-    lengths: Vec<u8>,
+    // lengths could be Vec<u8>, but the mono refcount generation
+    // stringifies Layout's and that creates > 256 character strings
+    lengths: Vec<u16>,
     offsets: Vec<u32>,
 }
 
@@ -31,7 +33,7 @@ impl SmallStringInterner {
         }
     }
 
-    pub const fn from_parts(buffer: Vec<u8>, lengths: Vec<u8>, offsets: Vec<u32>) -> Self {
+    pub const fn from_parts(buffer: Vec<u8>, lengths: Vec<u16>, offsets: Vec<u32>) -> Self {
         Self {
             buffer,
             lengths,
@@ -46,10 +48,10 @@ impl SmallStringInterner {
     pub fn insert(&mut self, string: &str) -> usize {
         let bytes = string.as_bytes();
 
-        assert!(bytes.len() < u8::MAX as usize);
+        assert!(bytes.len() < u16::MAX as usize);
 
         let offset = self.buffer.len() as u32;
-        let length = bytes.len() as u8;
+        let length = bytes.len() as u16;
 
         let index = self.lengths.len();
 
@@ -76,7 +78,7 @@ impl SmallStringInterner {
         write!(self.buffer, "{}", index).unwrap();
         let length = self.buffer.len() - offset;
 
-        self.lengths.push(length as u8);
+        self.lengths.push(length as u16);
         self.offsets.push(offset as u32);
 
         index
@@ -84,7 +86,7 @@ impl SmallStringInterner {
 
     #[inline(always)]
     pub fn find_index(&self, string: &str) -> Option<usize> {
-        let target_length = string.len() as u8;
+        let target_length = string.len() as u16;
 
         // there can be gaps in the parts of the string that we use (because of updates)
         // hence we can't just sum the lengths we've seen so far to get the next offset
@@ -127,7 +129,7 @@ impl SmallStringInterner {
         // `buffer`, we can update them in-place
         self.buffer.extend(new_string.bytes());
 
-        self.lengths[index] = length as u8;
+        self.lengths[index] = length as u16;
         self.offsets[index] = offset as u32;
     }
 
