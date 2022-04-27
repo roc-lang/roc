@@ -682,12 +682,9 @@ fn add_bindings_from_patterns(
                 add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
             }
         }
-        UnwrappedOpaque {
-            argument, opaque, ..
-        } => {
+        UnwrappedOpaque { argument, .. } => {
             let (_, loc_arg) = &**argument;
             add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
-            answer.push((*opaque, *region));
         }
         RecordDestructure { destructs, .. } => {
             for Loc {
