@@ -549,21 +549,10 @@ impl IdentIds {
 
     // necessary when the name of a value is changed in the editor
     // TODO fix when same ident_name is present multiple times, see issue #2548
-    pub fn update_key(
-        &mut self,
-        old_ident_name: &str,
-        new_ident_name: &str,
-    ) -> Result<IdentId, String> {
-        match self.interner.find_index(old_ident_name) {
-            Some(index) => {
-                self.interner.update(index, new_ident_name);
-
-                Ok(IdentId(index as u32))
-            }
-            None => Err(format!(
-                r"Tried to find position of key {:?} in IdentIds.by_id but I could not find the key",
-                old_ident_name
-            )),
+    pub fn update_key(&mut self, old_name: &str, new_name: &str) -> Result<IdentId, String> {
+        match self.interner.find_and_update(old_name, new_name) {
+            Some(index) => Ok(IdentId(index as u32)),
+            None => Err(format!("The identifier {:?} is not in IdentIds", old_name)),
         }
     }
 

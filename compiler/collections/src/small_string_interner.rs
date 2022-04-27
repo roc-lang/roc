@@ -1,10 +1,23 @@
 /// Collection of small (length < 256) strings, stored compactly.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct SmallStringInterner {
     buffer: Vec<u8>,
 
     lengths: Vec<u8>,
     offsets: Vec<u32>,
+}
+
+impl std::fmt::Debug for SmallStringInterner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let strings: Vec<_> = self.iter().collect();
+
+        f.debug_struct("SmallStringInterner")
+            .field("buffer", &self.buffer)
+            .field("lengths", &self.lengths)
+            .field("offsets", &self.offsets)
+            .field("strings", &strings)
+            .finish()
+    }
 }
 
 impl SmallStringInterner {
@@ -31,17 +44,19 @@ impl SmallStringInterner {
     }
 
     pub fn insert(&mut self, string: &str) -> usize {
-        assert!(string.len() < u8::MAX as usize);
+        let bytes = string.as_bytes();
+
+        assert!(bytes.len() < u8::MAX as usize);
 
         let offset = self.buffer.len() as u32;
-        let length = string.len() as u8;
+        let length = bytes.len() as u8;
 
         let index = self.lengths.len();
 
         self.lengths.push(length);
         self.offsets.push(offset);
 
-        self.buffer.extend(string.bytes());
+        self.buffer.extend(bytes);
 
         index
     }
@@ -71,17 +86,17 @@ impl SmallStringInterner {
     pub fn find_index(&self, string: &str) -> Option<usize> {
         let target_length = string.len() as u8;
 
-        let mut offset = 0;
+        // there can be gaps in the parts of the string that we use (because of updates)
+        // hence we can't just sum the lengths we've seen so far to get the next offset
         for (index, length) in self.lengths.iter().enumerate() {
             if *length == target_length {
-                let slice = &self.buffer[offset..][..*length as usize];
+                let offset = self.offsets[index];
+                let slice = &self.buffer[offset as usize..][..*length as usize];
 
                 if string.as_bytes() == slice {
                     return Some(index);
                 }
             }
-
-            offset += *length as usize;
         }
 
         None
@@ -114,5 +129,32 @@ impl SmallStringInterner {
 
         self.lengths[index] = length as u8;
         self.offsets[index] = offset as u32;
+    }
+
+    pub fn find_and_update(&mut self, old_string: &str, new_string: &str) -> Option<usize> {
+        match self.find_index(old_string) {
+            Some(index) => {
+                self.update(index, new_string);
+
+                Some(index)
+            }
+            None => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::SmallStringInterner;
+
+    #[test]
+    fn update_key() {
+        let mut interner = SmallStringInterner::default();
+
+        interner.insert("main");
+        interner.insert("a");
+        interner.find_and_update("a", "ab");
+        interner.insert("c");
+        assert!(interner.find_and_update("c", "cd").is_some());
     }
 }
