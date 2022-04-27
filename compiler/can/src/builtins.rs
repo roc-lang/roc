@@ -9,7 +9,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, VarStore, Variable};
 
 macro_rules! macro_magic {
     (@single $($x:tt)*) => (());
@@ -4728,6 +4728,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark(var_store.fresh()),
     };
 
     defn(
@@ -4826,6 +4827,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark(var_store.fresh()),
     };
 
     defn(
@@ -4890,6 +4892,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark(var_store.fresh()),
     };
 
     defn(
@@ -4968,6 +4971,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark(var_store.fresh()),
     };
 
     defn(
@@ -5046,6 +5050,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark(var_store.fresh()),
     };
 
     defn(
@@ -5139,6 +5144,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark(var_store.fresh()),
     };
 
     defn(

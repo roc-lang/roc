@@ -15,7 +15,7 @@ use roc_collections::all::{HumanIndex, MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::Variable;
+use roc_types::subs::{ExhaustiveMark, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
     AliasKind, AnnotationSource, Category, PReason, Reason, RecordField, TypeExtension,
@@ -585,6 +585,7 @@ pub fn constrain_expr(
             loc_cond,
             branches,
             branches_cond_var,
+            exhaustive,
             ..
         } => {
             let branches_cond_var = *branches_cond_var;
@@ -650,7 +651,7 @@ pub fn constrain_expr(
             // constraints.
             let mut pattern_vars = Vec::with_capacity(branches.len());
             let mut pattern_headers = SendMap::default();
-            let mut pattern_cons = Vec::with_capacity(branches.len() + 1);
+            let mut pattern_cons = Vec::with_capacity(branches.len() + 2);
             let mut branch_cons = Vec::with_capacity(branches.len());
 
             for (index, when_branch) in branches.iter().enumerate() {
@@ -718,6 +719,15 @@ pub fn constrain_expr(
             );
             pattern_cons.push(cond_constraint);
 
+            // Mark the `when` as exhaustive initially. We'll refine this if the condition
+            // disagrees.
+            pattern_cons.push(constraints.store(
+                ExhaustiveMark::EXHAUSTIVE_TYPE,
+                exhaustive.0,
+                file!(),
+                line!(),
+            ));
+
             // Now check the condition against the type expected by the branches.
             let sketched_rows = sketch_rows(real_cond_var, branches_region, branches);
             let cond_matches_branches_constraint = constraints.exhaustive(
@@ -727,6 +737,7 @@ pub fn constrain_expr(
                 Expected::ForReason(Reason::WhenBranches, branches_cond_type, branches_region),
                 sketched_rows,
                 ExhaustiveContext::BadCase,
+                *exhaustive,
             );
             pattern_cons.push(cond_matches_branches_constraint);
 
@@ -749,7 +760,7 @@ pub fn constrain_expr(
             let branch_constraints = constraints.and_constraint(total_cons);
 
             constraints.exists(
-                [branches_cond_var, real_cond_var, *expr_var],
+                [exhaustive.0, branches_cond_var, real_cond_var, *expr_var],
                 branch_constraints,
             )
         }

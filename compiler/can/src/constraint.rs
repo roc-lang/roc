@@ -4,7 +4,7 @@ use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::Variable;
+use roc_types::subs::{ExhaustiveMark, Variable};
 use roc_types::types::{Category, PatternCategory, Type};
 
 #[derive(Debug)]
@@ -614,6 +614,7 @@ impl Constraints {
         expected_branches: Expected<Type>,
         sketched_rows: SketchedRows,
         context: ExhaustiveContext,
+        exhaustive: ExhaustiveMark,
     ) -> Constraint {
         let real_var = Self::push_type_variable(real_var);
         let real_category = Index::push_new(&mut self.categories, real_category);
@@ -622,7 +623,7 @@ impl Constraints {
         let equality = Index::push_new(&mut self.eq, equality);
         let sketched_rows = Index::push_new(&mut self.sketched_rows, sketched_rows);
 
-        Constraint::Exhaustive(equality, sketched_rows, context)
+        Constraint::Exhaustive(equality, sketched_rows, context, exhaustive)
     }
 }
 
@@ -672,7 +673,12 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
-    Exhaustive(Index<Eq>, Index<SketchedRows>, ExhaustiveContext),
+    Exhaustive(
+        Index<Eq>,
+        Index<SketchedRows>,
+        ExhaustiveContext,
+        ExhaustiveMark,
+    ),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -727,8 +733,12 @@ impl std::fmt::Debug for Constraint {
                     arg0, arg1, arg2, arg3
                 )
             }
-            Self::Exhaustive(arg0, arg1, arg2) => {
-                write!(f, "Exhaustive({:?}, {:?}, {:?})", arg0, arg1, arg2)
+            Self::Exhaustive(arg0, arg1, arg2, arg3) => {
+                write!(
+                    f,
+                    "Exhaustive({:?}, {:?}, {:?}, {:?})",
+                    arg0, arg1, arg2, arg3
+                )
             }
         }
     }

@@ -18,7 +18,7 @@ use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, LambdaSet, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
@@ -84,12 +84,18 @@ pub enum Expr {
     Var(Symbol),
     // Branching
     When {
+        /// The actual condition of the when expression.
+        loc_cond: Box<Loc<Expr>>,
         cond_var: Variable,
+        /// Result type produced by the branches.
         expr_var: Variable,
         region: Region,
-        loc_cond: Box<Loc<Expr>>,
+        /// The branches of the when, and the type of the condition that they expect to be matched
+        /// against.
         branches: Vec<WhenBranch>,
         branches_cond_var: Variable,
+        /// Whether the branches are exhaustive.
+        exhaustive: ExhaustiveMark,
     },
     If {
         cond_var: Variable,
@@ -711,6 +717,7 @@ pub fn canonicalize_expr<'a>(
                 loc_cond: Box::new(can_cond),
                 branches: can_branches,
                 branches_cond_var: var_store.fresh(),
+                exhaustive: ExhaustiveMark(var_store.fresh()),
             };
 
             (expr, output)
@@ -1342,6 +1349,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             loc_cond,
             branches,
             branches_cond_var,
+            exhaustive,
         } => {
             let loc_cond = Box::new(Loc {
                 region: loc_cond.region,
@@ -1378,6 +1386,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 loc_cond,
                 branches: new_branches,
                 branches_cond_var,
+                exhaustive,
             }
         }
         If {

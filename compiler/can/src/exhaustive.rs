@@ -7,13 +7,19 @@ use roc_exhaustive::{
 };
 use roc_module::ident::{TagIdIntType, TagName};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{Content, FlatType, Subs, SubsFmtContent, Variable};
+use roc_types::subs::{Content, FlatType, RedundantMark, Subs, SubsFmtContent, Variable};
 use roc_types::types::AliasKind;
 
 pub use roc_exhaustive::Context as ExhaustiveContext;
 
 pub const GUARD_CTOR: &str = "#Guard";
 pub const NONEXHAUSIVE_CTOR: &str = "#Open";
+
+pub struct ErrorSummary {
+    errors: Vec<Error>,
+    exhaustive: bool,
+    redundant: Vec<RedundantMark>,
+}
 
 pub fn check(
     subs: &Subs,

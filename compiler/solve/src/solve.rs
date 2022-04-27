@@ -11,8 +11,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
-    SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    AliasVariables, Content, Descriptor, ExhaustiveMark, FlatType, Mark, OptVariable, Rank,
+    RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
@@ -1172,7 +1172,7 @@ fn solve(
                     }
                 }
             }
-            &Exhaustive(eq, sketched_rows, context) => {
+            &Exhaustive(eq, sketched_rows, context, exhaustive_mark) => {
                 // A few cases:
                 //  1. Either condition or branch types already have a type error. In this case just
                 //     propagate it.
@@ -1286,8 +1286,21 @@ fn solve(
                 let sketched_rows = constraints.sketched_rows[sketched_rows.index()].clone();
 
                 if should_check_exhaustiveness {
+                    use roc_can::exhaustive::check;
+                    use roc_exhaustive::Error;
+
                     let checked = roc_can::exhaustive::check(subs, sketched_rows, context);
                     if let Err(errors) = checked {
+                        for error in errors.iter() {
+                            match error {
+                                Error::Incomplete(..) => subs
+                                    .set_content(exhaustive_mark.0, ExhaustiveMark::NON_EXHAUSTIVE),
+                                Error::Redundant { index, .. } => {
+                                    //
+                                }
+                            }
+                        }
+
                         problems.extend(errors.into_iter().map(TypeError::Exhaustive));
                     }
                 }

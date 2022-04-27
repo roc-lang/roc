@@ -1,6 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{
-    name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt,
+    name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, Type, TypeExt,
 };
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_error_macros::internal_error;
@@ -963,6 +963,24 @@ impl From<OptVariable> for Option<Variable> {
     fn from(opt_var: OptVariable) -> Self {
         opt_var.into_variable()
     }
+}
+
+/// Marks whether a when expression is exhaustive using a variable.
+#[derive(Clone, Copy, Debug)]
+pub struct ExhaustiveMark(pub Variable);
+
+impl ExhaustiveMark {
+    pub const EXHAUSTIVE_TYPE: Type = Type::EmptyTagUnion;
+    pub const EXHAUSTIVE: Content = Content::Structure(FlatType::EmptyTagUnion);
+    pub const NON_EXHAUSTIVE: Content = Content::Error;
+}
+
+/// Marks whether a when branch is redundant using a variable.
+pub struct RedundantMark(Variable);
+
+impl RedundantMark {
+    pub const REDUNDANT: Content = Content::Structure(FlatType::EmptyTagUnion);
+    pub const NON_REDUNDANT: Content = Content::Error;
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -8,7 +8,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, VarStore, Variable};
 use roc_types::types::{AliasKind, LambdaSet, Type, TypeExtension};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -1232,6 +1232,7 @@ fn build_effect_loop_inner_body(
         loc_cond: Box::new(force_thunk_call),
         branches,
         branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark(var_store.fresh()),
     };
 
     Expr::LetNonRec(
