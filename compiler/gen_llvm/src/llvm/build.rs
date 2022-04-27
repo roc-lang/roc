@@ -3712,9 +3712,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
             let ptr_int_ptr = get_panic_msg_ptr(env);
 
             // u8* again
-            let ptr_int = builder.build_load(ptr_int_ptr, "ptr_int");
-
-            ptr_int
+            builder.build_load(ptr_int_ptr, "ptr_int")
         };
 
         let return_value = {
