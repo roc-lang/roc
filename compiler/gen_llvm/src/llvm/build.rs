@@ -6271,7 +6271,7 @@ pub struct FunctionSpec<'ctx> {
     /// ownership of a register due to the convention. For example, on AArch64,
     /// values returned-by-pointer use the x8 register.
     /// But for internal functions we don't need to worry about that and we don't
-    /// the convention, since it might eat a register and cause a spill!
+    /// want the convention, since it might eat a register and cause a spill!
     cconv_sret_parameter: Option<u32>,
 }
 
