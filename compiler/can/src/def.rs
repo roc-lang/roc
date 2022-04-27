@@ -107,7 +107,7 @@ enum PendingTypeDef<'a> {
     },
 
     /// An invalid alias, that is ignored in the rest of the pipeline
-    /// e.g. a shadowed alias, or a definition like `MyAlias 1 : Int`
+    /// e.g. a definition like `MyAlias 1 : Int`
     /// with an incorrect pattern
     InvalidAlias {
         #[allow(dead_code)]
@@ -115,6 +115,9 @@ enum PendingTypeDef<'a> {
         symbol: Symbol,
         region: Region,
     },
+
+    /// An alias with a name that shadows another symbol
+    ShadowedAlias,
 
     /// An invalid ability, that is ignored in the rest of the pipeline.
     /// E.g. a shadowed ability, or with a bad definition.
@@ -137,6 +140,7 @@ impl PendingTypeDef<'_> {
             }
             PendingTypeDef::Ability { name, .. } => Some((name.value, name.region)),
             PendingTypeDef::InvalidAlias { symbol, region, .. } => Some((*symbol, *region)),
+            PendingTypeDef::ShadowedAlias { .. } => None,
             PendingTypeDef::InvalidAbility { symbol, region } => Some((*symbol, *region)),
             PendingTypeDef::AbilityNotOnToplevel => None,
             PendingTypeDef::AbilityShadows => None,
@@ -302,6 +306,7 @@ pub(crate) fn canonicalize_defs<'a>(
             PendingTypeDef::InvalidAlias { .. }
             | PendingTypeDef::InvalidAbility { .. }
             | PendingTypeDef::AbilityShadows
+            | PendingTypeDef::ShadowedAlias { .. }
             | PendingTypeDef::AbilityNotOnToplevel => { /* ignore */ }
         }
     }
@@ -1365,7 +1370,7 @@ fn to_pending_type_def<'a>(
 
             let region = Region::span_across(&name.region, &ann.region);
 
-            match scope.introduce(
+            match scope.introduce_without_shadow_symbol(
                 name.value.into(),
                 &env.exposed_ident_ids,
                 &mut env.ident_ids,
@@ -1415,18 +1420,14 @@ fn to_pending_type_def<'a>(
                     }
                 }
 
-                Err((original_region, loc_shadowed_symbol, new_symbol)) => {
+                Err((original_region, loc_shadowed_symbol)) => {
                     env.problem(Problem::Shadowing {
                         original_region,
                         shadow: loc_shadowed_symbol,
                         kind: shadow_kind,
                     });
 
-                    PendingTypeDef::InvalidAlias {
-                        kind,
-                        symbol: new_symbol,
-                        region,
-                    }
+                    PendingTypeDef::ShadowedAlias
                 }
             }
         }

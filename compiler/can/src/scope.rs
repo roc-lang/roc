@@ -1,5 +1,5 @@
 use roc_collections::all::{MutSet, SendMap};
-use roc_collections::soa;
+use roc_collections::SmallStringInterner;
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -11,11 +11,7 @@ use crate::abilities::AbilitiesStore;
 
 #[derive(Clone, Debug)]
 struct IdentStore {
-    /// One big byte array that stores all `Ident`s
-    string: Vec<u8>,
-
-    /// Slices into `string` to get an individual `Ident`
-    idents: Vec<soa::Slice<u8>>,
+    interner: SmallStringInterner,
 
     /// A Symbol for each Ident
     symbols: Vec<Symbol>,
@@ -30,8 +26,7 @@ impl IdentStore {
         let capacity = defaults.len();
 
         let mut this = Self {
-            string: Vec::with_capacity(capacity),
-            idents: Vec::with_capacity(capacity),
+            interner: SmallStringInterner::with_capacity(capacity),
             symbols: Vec::with_capacity(capacity),
             regions: Vec::with_capacity(capacity),
         };
@@ -44,46 +39,34 @@ impl IdentStore {
     }
 
     fn iter_idents(&self) -> impl Iterator<Item = Ident> + '_ {
-        self.idents.iter().filter_map(move |slice| {
-            // empty slice is used when ability members are shadowed
-            if slice.is_empty() {
+        self.interner.iter().filter_map(move |string| {
+            // empty string is used when ability members are shadowed
+            if string.is_empty() {
                 None
             } else {
-                let bytes = &self.string[slice.indices()];
-                let string = unsafe { std::str::from_utf8_unchecked(bytes) };
-
                 Some(Ident::from(string))
             }
         })
     }
 
     fn iter_idents_symbols(&self) -> impl Iterator<Item = (Ident, Symbol)> + '_ {
-        self.idents
+        self.interner
             .iter()
             .zip(self.symbols.iter())
-            .filter_map(move |(slice, symbol)| {
+            .filter_map(move |(string, symbol)| {
                 // empty slice is used when ability members are shadowed
-                if slice.is_empty() {
+                if string.is_empty() {
                     None
                 } else {
-                    let bytes = &self.string[slice.indices()];
-                    let string = unsafe { std::str::from_utf8_unchecked(bytes) };
-
                     Some((Ident::from(string), *symbol))
                 }
             })
     }
 
     fn get_index(&self, ident: &Ident) -> Option<usize> {
-        let ident_bytes = ident.as_inline_str().as_str().as_bytes();
+        let ident_str = ident.as_inline_str().as_str();
 
-        for (i, slice) in self.idents.iter().enumerate() {
-            if slice.len() == ident_bytes.len() && &self.string[slice.indices()] == ident_bytes {
-                return Some(i);
-            }
-        }
-
-        None
+        self.interner.find_index(ident_str)
     }
 
     fn get_symbol(&self, ident: &Ident) -> Option<Symbol> {
@@ -98,11 +81,13 @@ impl IdentStore {
 
     /// Does not check that the ident is unique
     fn insert_unchecked(&mut self, ident: Ident, symbol: Symbol, region: Region) {
-        let ident_bytes = ident.as_inline_str().as_str().as_bytes();
+        let ident_str = ident.as_inline_str().as_str();
 
-        let slice = soa::Slice::extend_new(&mut self.string, ident_bytes.iter().copied());
+        let index = self.interner.insert(ident_str);
 
-        self.idents.push(slice);
+        debug_assert_eq!(index, self.symbols.len());
+        debug_assert_eq!(index, self.regions.len());
+
         self.symbols.push(symbol);
         self.regions.push(region);
     }
@@ -304,9 +289,6 @@ impl Scope {
 
                 let ident_id = all_ident_ids.add_ident(&ident);
                 let symbol = Symbol::new(self.home, ident_id);
-
-                self.idents.symbols[index] = symbol;
-                self.idents.regions[index] = region;
 
                 Err((original_region, shadow, symbol))
             }

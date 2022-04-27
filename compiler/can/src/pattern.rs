@@ -684,7 +684,6 @@ impl<'a> BindingsFromPattern<'a> {
 
                     match &loc_pattern.value {
                         Identifier(symbol)
-                        | Shadowed(_, _, symbol)
                         | AbilityMemberSpecialization {
                             ident: symbol,
                             specializes: _,
@@ -712,6 +711,7 @@ impl<'a> BindingsFromPattern<'a> {
                         | StrLiteral(_)
                         | SingleQuote(_)
                         | Underscore
+                        | Shadowed(_, _, _)
                         | MalformedPattern(_, _)
                         | UnsupportedPattern(_)
                         | OpaqueNotInScope(..) => (),
@@ -745,7 +745,6 @@ impl<'a> Iterator for BindingsFromPattern<'a> {
             BindingsFromPattern::Empty => None,
             BindingsFromPattern::One(loc_pattern) => match &loc_pattern.value {
                 Identifier(symbol)
-                | Shadowed(_, _, symbol)
                 | AbilityMemberSpecialization {
                     ident: symbol,
                     specializes: _,
