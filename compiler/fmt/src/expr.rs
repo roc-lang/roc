@@ -37,7 +37,7 @@ impl<'a> Formattable for Expr<'a> {
             | Underscore { .. }
             | MalformedIdent(_, _)
             | MalformedClosure
-            | GlobalTag(_)
+            | Tag(_)
             | OpaqueRef(_) => false,
 
             // These expressions always have newlines
@@ -272,7 +272,7 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 buf.push_str(string);
             }
-            GlobalTag(string) | OpaqueRef(string) => {
+            Tag(string) | OpaqueRef(string) => {
                 buf.indent(indent);
                 buf.push_str(string)
             }

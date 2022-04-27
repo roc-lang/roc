@@ -100,6 +100,7 @@ pub enum TypeError {
         ErrorType,
         Vec<IncompleteAbilityImplementation>,
     ),
+    Exhaustive(roc_exhaustive::Error),
 }
 
 use roc_types::types::Alias;
@@ -775,7 +776,7 @@ fn solve(
 
                 copy
             }
-            Eq(type_index, expectation_index, category_index, region) => {
+            Eq(roc_can::constraint::Eq(type_index, expectation_index, category_index, region)) => {
                 let category = &constraints.categories[category_index.index()];
 
                 let actual =
@@ -1104,32 +1105,7 @@ fn solve(
                 let actual =
                     either_type_index_to_var(constraints, subs, rank, pools, aliases, *type_index);
 
-                let mut stack = vec![actual];
-                while let Some(var) = stack.pop() {
-                    use {Content::*, FlatType::*};
-
-                    let mut desc = subs.get(var);
-                    if let Structure(TagUnion(tags, ext)) = desc.content {
-                        if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
-                            let new_ext = subs.fresh_unnamed_flex_var();
-                            subs.set_rank(new_ext, desc.rank);
-                            let new_union = Structure(TagUnion(tags, new_ext));
-                            desc.content = new_union;
-                            subs.set(var, desc);
-                        }
-
-                        // Also open up all nested tag unions.
-                        let all_vars = tags.variables().into_iter();
-                        stack.extend(all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]));
-                    }
-
-                    // Today, an "open" constraint doesn't affect any types
-                    // other than tag unions. Recursive tag unions are constructed
-                    // at a later time (during occurs checks after tag unions are
-                    // resolved), so that's not handled here either.
-                    // NB: Handle record types here if we add presence constraints
-                    // to their type inference as well.
-                }
+                open_tag_union(subs, actual);
 
                 state
             }
@@ -1196,10 +1172,161 @@ fn solve(
                     }
                 }
             }
+            &Exhaustive(eq, sketched_rows, context) => {
+                // A few cases:
+                //  1. Either condition or branch types already have a type error. In this case just
+                //     propagate it.
+                //  2. Types are correct, but there are redundancies. In this case we want
+                //     exhaustiveness checking to pull those out.
+                //  3. Condition and branch types are "almost equal", that is one or the other is
+                //     only missing a few more tags. In this case we want to run
+                //     exhaustiveness checking both ways, to see which one is missing tags.
+                //  4. Condition and branch types aren't "almost equal", this is just a normal type
+                //     error.
+
+                let roc_can::constraint::Eq(
+                    real_var,
+                    expected_branches,
+                    real_category,
+                    real_region,
+                ) = constraints.eq[eq.index()];
+
+                let real_var =
+                    either_type_index_to_var(constraints, subs, rank, pools, aliases, real_var);
+
+                let expected_branches = &constraints.expectations[expected_branches.index()];
+                let branches_var =
+                    type_to_var(subs, rank, pools, aliases, expected_branches.get_type_ref());
+
+                let real_content = subs.get_content_without_compacting(real_var);
+                let branches_content = subs.get_content_without_compacting(branches_var);
+                let already_have_error = matches!(
+                    (real_content, branches_content),
+                    (
+                        Content::Error | Content::Structure(FlatType::Erroneous(_)),
+                        _
+                    ) | (
+                        _,
+                        Content::Error | Content::Structure(FlatType::Erroneous(_))
+                    )
+                );
+
+                let snapshot = subs.snapshot();
+                let outcome = unify(subs, real_var, branches_var, Mode::EQ);
+
+                let should_check_exhaustiveness;
+                match outcome {
+                    Success {
+                        vars,
+                        must_implement_ability,
+                    } => {
+                        subs.commit_snapshot(snapshot);
+
+                        introduce(subs, rank, pools, &vars);
+                        if !must_implement_ability.is_empty() {
+                            internal_error!("Didn't expect ability vars to land here");
+                        }
+
+                        // Case 1: unify error types, but don't check exhaustiveness.
+                        // Case 2: run exhaustiveness to check for redundant branches.
+                        should_check_exhaustiveness = !already_have_error;
+                    }
+                    Failure(..) => {
+                        // Rollback and check for almost-equality.
+                        subs.rollback_to(snapshot);
+
+                        let almost_eq_snapshot = subs.snapshot();
+                        // TODO: turn this on for bidirectional exhaustiveness checking
+                        // open_tag_union(subs, real_var);
+                        open_tag_union(subs, branches_var);
+                        let almost_eq = matches!(
+                            unify(subs, real_var, branches_var, Mode::EQ),
+                            Success { .. }
+                        );
+
+                        subs.rollback_to(almost_eq_snapshot);
+
+                        if almost_eq {
+                            // Case 3: almost equal, check exhaustiveness.
+                            should_check_exhaustiveness = true;
+                        } else {
+                            // Case 4: incompatible types, report type error.
+                            // Re-run first failed unification to get the type diff.
+                            match unify(subs, real_var, branches_var, Mode::EQ) {
+                                Failure(vars, actual_type, expected_type, _bad_impls) => {
+                                    introduce(subs, rank, pools, &vars);
+
+                                    let real_category =
+                                        constraints.categories[real_category.index()].clone();
+                                    let problem = TypeError::BadExpr(
+                                        real_region,
+                                        real_category,
+                                        actual_type,
+                                        expected_branches.replace_ref(expected_type),
+                                    );
+
+                                    problems.push(problem);
+                                    should_check_exhaustiveness = false;
+                                }
+                                _ => internal_error!("Must be failure"),
+                            }
+                        }
+                    }
+                    BadType(vars, problem) => {
+                        subs.commit_snapshot(snapshot);
+
+                        introduce(subs, rank, pools, &vars);
+
+                        problems.push(TypeError::BadType(problem));
+
+                        should_check_exhaustiveness = false;
+                    }
+                }
+
+                let sketched_rows = constraints.sketched_rows[sketched_rows.index()].clone();
+
+                if should_check_exhaustiveness {
+                    let checked = roc_can::exhaustive::check(subs, sketched_rows, context);
+                    if let Err(errors) = checked {
+                        problems.extend(errors.into_iter().map(TypeError::Exhaustive));
+                    }
+                }
+
+                state
+            }
         };
     }
 
     state
+}
+
+fn open_tag_union(subs: &mut Subs, var: Variable) {
+    let mut stack = vec![var];
+    while let Some(var) = stack.pop() {
+        use {Content::*, FlatType::*};
+
+        let mut desc = subs.get(var);
+        if let Structure(TagUnion(tags, ext)) = desc.content {
+            if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
+                let new_ext = subs.fresh_unnamed_flex_var();
+                subs.set_rank(new_ext, desc.rank);
+                let new_union = Structure(TagUnion(tags, new_ext));
+                desc.content = new_union;
+                subs.set(var, desc);
+            }
+
+            // Also open up all nested tag unions.
+            let all_vars = tags.variables().into_iter();
+            stack.extend(all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]));
+        }
+
+        // Today, an "open" constraint doesn't affect any types
+        // other than tag unions. Recursive tag unions are constructed
+        // at a later time (during occurs checks after tag unions are
+        // resolved), so that's not handled here either.
+        // NB: Handle record types here if we add presence constraints
+        // to their type inference as well.
+    }
 }
 
 /// If a symbol claims to specialize an ability member, check that its solved type in fact
@@ -2048,7 +2175,7 @@ fn insert_tags_fast_path<'a>(
     tags: &'a [(TagName, Vec<Type>)],
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
-    if let [(TagName::Global(tag_name), arguments)] = tags {
+    if let [(TagName::Tag(tag_name), arguments)] = tags {
         let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, arguments);
         let new_variable_slices =
             SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);

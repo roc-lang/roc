@@ -5,7 +5,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::Position;
 
-/// A global tag, for example. Must start with an uppercase letter
+/// A tag, for example. Must start with an uppercase letter
 /// and then contain only letters and numbers afterwards - no dots allowed!
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct UppercaseIdent<'a>(&'a str);
@@ -35,7 +35,7 @@ impl<'a> From<&'a UppercaseIdent<'a>> for &'a str {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ident<'a> {
     /// Foo or Bar
-    GlobalTag(&'a str),
+    Tag(&'a str),
     /// @Foo or @Bar
     OpaqueRef(&'a str),
     /// foo or foo.bar or Foo.Bar.baz.qux
@@ -54,7 +54,7 @@ impl<'a> Ident<'a> {
         use self::Ident::*;
 
         match self {
-            GlobalTag(string) | OpaqueRef(string) => string.len(),
+            Tag(string) | OpaqueRef(string) => string.len(),
             Access { module_name, parts } => {
                 let mut len = if module_name.is_empty() {
                     0
@@ -105,7 +105,7 @@ pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
 ///
 /// * A module name
 /// * A type name
-/// * A global tag
+/// * A tag
 pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
     move |_, state: State<'a>| match chomp_uppercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
@@ -120,7 +120,7 @@ pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
 ///
 /// * A module name
 /// * A type name
-/// * A global tag
+/// * A tag
 pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>| match chomp_uppercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
@@ -418,9 +418,9 @@ fn chomp_identifier_chain<'a>(
             BadIdent::Underscore(pos.bump_column(chomped as u32 + 1)),
         ))
     } else if first_is_uppercase {
-        // just one segment, starting with an uppercase letter; that's a global tag
+        // just one segment, starting with an uppercase letter; that's a tag
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
-        Ok((chomped as u32, Ident::GlobalTag(value)))
+        Ok((chomped as u32, Ident::Tag(value)))
     } else {
         // just one segment, starting with a lowercase letter; that's a normal identifier
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };

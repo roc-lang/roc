@@ -45,7 +45,7 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
             let union = Union {
                 render_as: RenderAs::Record(field_names),
                 alternatives: vec![Ctor {
-                    name: CtorName::Tag(TagName::Global("#Record".into())),
+                    name: CtorName::Tag(TagName::Tag("#Record".into())),
                     tag_id,
                     arity: destructures.len(),
                 }],
@@ -113,7 +113,7 @@ pub fn check(
     }
 }
 
-pub fn check_patterns<'a>(
+fn check_patterns<'a>(
     region: Region,
     context: Context,
     patterns: &[(Loc<crate::ir::Pattern<'a>>, Guard)],
@@ -169,7 +169,7 @@ fn to_nonredundant_rows(
                 render_as: RenderAs::Guard,
                 alternatives: vec![Ctor {
                     tag_id,
-                    name: CtorName::Tag(TagName::Global("#Guard".into())),
+                    name: CtorName::Tag(TagName::Tag("#Guard".into())),
                     arity: 2,
                 }],
             };

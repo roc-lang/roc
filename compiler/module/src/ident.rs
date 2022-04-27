@@ -10,6 +10,11 @@ impl Ident {
     pub fn as_inline_str(&self) -> &IdentStr {
         &self.0
     }
+
+    #[inline(always)]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
 }
 
 pub struct QualifiedModuleName<'a> {
@@ -44,14 +49,14 @@ pub type TagIdIntType = u16;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TagName {
-    /// Global tags have no module, but tend to be short strings (since they're
+    /// Tags have no module, but tend to be short strings (since they're
     /// never qualified), so we store them as ident strings.
     ///
     /// This is allows canonicalization to happen in parallel without locks.
-    /// If global tags had a Symbol representation, then each module would have to
-    /// deal with contention on a global mutex around translating global tag strings
+    /// If tags had a Symbol representation, then each module would have to
+    /// deal with contention on a global mutex around translating tag strings
     /// into integers. (Record field labels work the same way, for the same reason.)
-    Global(Uppercase),
+    Tag(Uppercase),
 
     /// Used to connect the closure size to the function it corresponds to
     Closure(Symbol),
@@ -64,7 +69,7 @@ roc_error_macros::assert_sizeof_default!(TagName, 24);
 impl TagName {
     pub fn as_ident_str(&self, interns: &Interns, home: ModuleId) -> IdentStr {
         match self {
-            TagName::Global(uppercase) => uppercase.as_ident_str().clone(),
+            TagName::Tag(uppercase) => uppercase.as_ident_str().clone(),
             TagName::Closure(symbol) => {
                 symbol.fully_qualified(interns, home).as_ident_str().clone()
             }

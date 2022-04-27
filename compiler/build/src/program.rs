@@ -249,7 +249,7 @@ pub fn gen_from_mono_module_llvm(
     use inkwell::attributes::{Attribute, AttributeLoc};
     use inkwell::context::Context;
     use inkwell::module::Linkage;
-    use inkwell::targets::{CodeModel, FileType, RelocMode};
+    use inkwell::targets::{FileType, RelocMode};
 
     let code_gen_start = SystemTime::now();
 
@@ -437,10 +437,8 @@ pub fn gen_from_mono_module_llvm(
         match target.architecture {
             Architecture::X86_64 | Architecture::X86_32(_) | Architecture::Aarch64(_) => {
                 let reloc = RelocMode::PIC;
-                let model = CodeModel::Default;
                 let target_machine =
-                    target::target_machine(target, convert_opt_level(opt_level), reloc, model)
-                        .unwrap();
+                    target::target_machine(target, convert_opt_level(opt_level), reloc).unwrap();
 
                 target_machine
                     .write_to_file(env.module, FileType::Object, app_o_file)

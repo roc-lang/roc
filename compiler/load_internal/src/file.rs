@@ -18,8 +18,8 @@ use roc_constrain::module::{
 use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName, TagName};
 use roc_module::symbol::{
-    IdentIds, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds, PackageQualified,
-    Symbol,
+    IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
+    PackageQualified, Symbol,
 };
 use roc_mono::ir::{
     CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
@@ -168,6 +168,8 @@ impl Default for ModuleCache<'_> {
     }
 }
 
+type SharedIdentIdsByModule = Arc<Mutex<roc_module::symbol::IdentIdsByModule>>;
+
 fn start_phase<'a>(
     module_id: ModuleId,
     phase: Phase,
@@ -228,8 +230,7 @@ fn start_phase<'a>(
 
                 let deps_by_name = &parsed.deps_by_name;
                 let num_deps = deps_by_name.len();
-                let mut dep_idents: MutMap<ModuleId, IdentIds> =
-                    IdentIds::exposed_builtins(num_deps);
+                let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
 
                 let State {
                     ident_ids_by_module,
@@ -419,7 +420,7 @@ pub struct LoadedModule {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
-    pub dep_idents: MutMap<ModuleId, IdentIds>,
+    pub dep_idents: IdentIdsByModule,
     pub exposed_aliases: MutMap<Symbol, Alias>,
     pub exposed_values: Vec<Symbol>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -446,7 +447,7 @@ impl LoadedModule {
     pub fn exposed_values_str(&self) -> Vec<&str> {
         self.exposed_values
             .iter()
-            .map(|symbol| symbol.ident_str(&self.interns).as_str())
+            .map(|symbol| symbol.as_str(&self.interns))
             .collect()
     }
 }
@@ -483,7 +484,7 @@ struct ConstrainedModule {
     constraint: ConstraintSoa,
     ident_ids: IdentIds,
     var_store: VarStore,
-    dep_idents: MutMap<ModuleId, IdentIds>,
+    dep_idents: IdentIdsByModule,
     module_timing: ModuleTiming,
 }
 
@@ -587,7 +588,7 @@ enum Msg<'a> {
         solved_module: SolvedModule,
         solved_subs: Solved<Subs>,
         decls: Vec<Declaration>,
-        dep_idents: MutMap<ModuleId, IdentIds>,
+        dep_idents: IdentIdsByModule,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
     },
@@ -595,7 +596,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         exposed_aliases_by_symbol: MutMap<Symbol, (bool, Alias)>,
-        dep_idents: MutMap<ModuleId, IdentIds>,
+        dep_idents: IdentIdsByModule,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
         abilities_store: AbilitiesStore,
     },
@@ -668,13 +669,13 @@ struct State<'a> {
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
     /// have completed for a given module.
-    pub constrained_ident_ids: MutMap<ModuleId, IdentIds>,
+    pub constrained_ident_ids: IdentIdsByModule,
 
     /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     pub arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
     pub arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
 
-    pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    pub ident_ids_by_module: SharedIdentIdsByModule,
 
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
 
@@ -705,7 +706,7 @@ impl<'a> State<'a> {
         goal_phase: Phase,
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
-        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+        ident_ids_by_module: SharedIdentIdsByModule,
         cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
         render: RenderTarget,
     ) -> Self {
@@ -814,7 +815,7 @@ enum BuildTask<'a> {
         module_name: PQModuleName<'a>,
         module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
         shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
-        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+        ident_ids_by_module: SharedIdentIdsByModule,
     },
     Parse {
         header: ModuleHeader<'a>,
@@ -822,7 +823,7 @@ enum BuildTask<'a> {
     CanonicalizeAndConstrain {
         parsed: ParsedModule<'a>,
         module_ids: ModuleIds,
-        dep_idents: MutMap<ModuleId, IdentIds>,
+        dep_idents: IdentIdsByModule,
         exposed_symbols: VecSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
         skip_constraint_gen: bool,
@@ -837,7 +838,7 @@ enum BuildTask<'a> {
         constraint: ConstraintSoa,
         var_store: VarStore,
         declarations: Vec<Declaration>,
-        dep_idents: MutMap<ModuleId, IdentIds>,
+        dep_idents: IdentIdsByModule,
         cached_subs: CachedSubs,
     },
     BuildPendingSpecializations {
@@ -951,7 +952,7 @@ pub enum PrintTarget {
 
 pub struct LoadStart<'a> {
     arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
     root_id: ModuleId,
     root_msg: Msg<'a>,
 }
@@ -2403,7 +2404,7 @@ fn finish(
     solved: Solved<Subs>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-    dep_idents: MutMap<ModuleId, IdentIds>,
+    dep_idents: IdentIdsByModule,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
 ) -> LoadedModule {
@@ -2451,7 +2452,7 @@ fn load_pkg_config<'a>(
     shorthand: &'a str,
     app_module_id: ModuleId,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
 
@@ -2569,7 +2570,7 @@ fn load_builtin_module_help<'a>(
 fn load_builtin_module<'a>(
     arena: &'a Bump,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
     module_timing: ModuleTiming,
     module_id: ModuleId,
     module_name: &str,
@@ -2594,7 +2595,7 @@ fn load_module<'a>(
     module_name: PQModuleName<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
-    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
 
@@ -2781,7 +2782,7 @@ fn parse_header<'a>(
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
     src_bytes: &'a [u8],
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
@@ -2969,7 +2970,7 @@ fn load_filename<'a>(
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
     module_start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let file_io_start = SystemTime::now();
@@ -3003,7 +3004,7 @@ fn load_from_str<'a>(
     filename: PathBuf,
     src: &'a str,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
     module_start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let file_io_start = SystemTime::now();
@@ -3039,7 +3040,7 @@ fn send_header<'a>(
     info: HeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     use ModuleNameEnum::*;
@@ -3102,9 +3103,7 @@ fn send_header<'a>(
         home = module_ids.get_or_insert(&name);
 
         // Ensure this module has an entry in the exposed_ident_ids map.
-        ident_ids_by_module
-            .entry(home)
-            .or_insert_with(IdentIds::default);
+        ident_ids_by_module.get_or_insert(home);
 
         // For each of our imports, add an entry to deps_by_name
         //
@@ -3131,9 +3130,7 @@ fn send_header<'a>(
             // Add the new exposed idents to the dep module's IdentIds, so
             // once that module later gets loaded, its lookups will resolve
             // to the same symbols as the ones we're using here.
-            let ident_ids = ident_ids_by_module
-                .entry(module_id)
-                .or_insert_with(IdentIds::default);
+            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
             for ident in exposed_idents {
                 let ident_id = ident_ids.get_or_insert(&ident);
@@ -3255,7 +3252,7 @@ fn send_header_two<'a>(
     info: PlatformHeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     let PlatformHeaderInfo {
@@ -3314,9 +3311,7 @@ fn send_header_two<'a>(
         home = module_ids.get_or_insert(&name);
 
         // Ensure this module has an entry in the exposed_ident_ids map.
-        ident_ids_by_module
-            .entry(home)
-            .or_insert_with(IdentIds::default);
+        ident_ids_by_module.get_or_insert(home);
 
         // For each of our imports, add an entry to deps_by_name
         //
@@ -3338,9 +3333,7 @@ fn send_header_two<'a>(
             // Add the new exposed idents to the dep module's IdentIds, so
             // once that module later gets loaded, its lookups will resolve
             // to the same symbols as the ones we're using here.
-            let ident_ids = ident_ids_by_module
-                .entry(module_id)
-                .or_insert_with(IdentIds::default);
+            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
             for ident in exposed_idents {
                 let ident_id = ident_ids.get_or_insert(&ident);
@@ -3354,9 +3347,7 @@ fn send_header_two<'a>(
         }
 
         {
-            let ident_ids = ident_ids_by_module
-                .entry(app_module_id)
-                .or_insert_with(IdentIds::default);
+            let ident_ids = ident_ids_by_module.get_or_insert(app_module_id);
 
             for entry in requires {
                 let entry = entry.value;
@@ -3486,7 +3477,7 @@ impl<'a> BuildTask<'a> {
         var_store: VarStore,
         imported_modules: MutMap<ModuleId, Region>,
         exposed_types: &mut ExposedByModule,
-        dep_idents: MutMap<ModuleId, IdentIds>,
+        dep_idents: IdentIdsByModule,
         declarations: Vec<Declaration>,
         cached_subs: CachedSubs,
     ) -> Self {
@@ -3668,7 +3659,7 @@ fn run_solve<'a>(
     constraint: ConstraintSoa,
     var_store: VarStore,
     decls: Vec<Declaration>,
-    dep_idents: MutMap<ModuleId, IdentIds>,
+    dep_idents: IdentIdsByModule,
     cached_subs: CachedSubs,
 ) -> Msg<'a> {
     let solve_start = SystemTime::now();
@@ -3758,7 +3749,7 @@ fn fabricate_pkg_config_module<'a>(
     filename: PathBuf,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
@@ -3791,7 +3782,7 @@ fn fabricate_pkg_config_module<'a>(
 fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
-    dep_idents: MutMap<ModuleId, IdentIds>,
+    dep_idents: IdentIdsByModule,
     exposed_symbols: VecSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     parsed: ParsedModule<'a>,
@@ -4576,7 +4567,7 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
 fn to_parse_problem_report<'a>(
     problem: FileError<'a, SyntaxError<'a>>,
     mut module_ids: ModuleIds,
-    all_ident_ids: MutMap<ModuleId, IdentIds>,
+    all_ident_ids: IdentIdsByModule,
     render: RenderTarget,
 ) -> String {
     use roc_reporting::report::{parse_problem, RocDocAllocator, DEFAULT_PALETTE};
@@ -4837,8 +4828,8 @@ fn default_aliases() -> roc_solve::solve::Aliases {
 
         let typ = Type::TagUnion(
             vec![
-                (TagName::Global("Ok".into()), vec![Type::Variable(tvar1)]),
-                (TagName::Global("Err".into()), vec![Type::Variable(tvar2)]),
+                (TagName::Tag("Ok".into()), vec![Type::Variable(tvar1)]),
+                (TagName::Tag("Err".into()), vec![Type::Variable(tvar2)]),
             ],
             TypeExtension::Closed,
         );

@@ -203,7 +203,7 @@ impl Subs {
 
         for tag_name in tag_names {
             let serialized = match tag_name {
-                TagName::Global(uppercase) => {
+                TagName::Tag(uppercase) => {
                     let slice = SubsSlice::extend_new(
                         &mut buf,
                         uppercase.as_str().as_bytes().iter().copied(),
@@ -350,7 +350,7 @@ impl Subs {
                     offset += bytes.len();
                     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
 
-                    TagName::Global(string.into())
+                    TagName::Tag(string.into())
                 }
                 SerializedTagName::Closure(symbol) => TagName::Closure(*symbol),
             };
@@ -400,7 +400,7 @@ pub struct TagNameCache {
 impl TagNameCache {
     pub fn get_mut(&mut self, tag_name: &TagName) -> Option<&mut SubsSlice<TagName>> {
         match tag_name {
-            TagName::Global(uppercase) => {
+            TagName::Tag(uppercase) => {
                 // force into block
                 match self.globals.iter().position(|u| u == uppercase) {
                     Some(index) => Some(&mut self.globals_slices[index]),
@@ -416,7 +416,7 @@ impl TagNameCache {
 
     pub fn push(&mut self, tag_name: &TagName, slice: SubsSlice<TagName>) {
         match tag_name {
-            TagName::Global(uppercase) => {
+            TagName::Tag(uppercase) => {
                 self.globals.push(uppercase.clone());
                 self.globals_slices.push(slice);
             }
@@ -642,7 +642,7 @@ impl SubsSlice<TagName> {
         let start = subs.tag_names.len() as u32;
 
         subs.tag_names
-            .extend(std::iter::repeat(TagName::Global(Uppercase::default())).take(length));
+            .extend(std::iter::repeat(TagName::Tag(Uppercase::default())).take(length));
 
         Self::new(start, length as u16)
     }
@@ -1477,12 +1477,12 @@ impl Subs {
 
         let mut tag_names = Vec::with_capacity(32);
 
-        tag_names.push(TagName::Global("Err".into()));
-        tag_names.push(TagName::Global("Ok".into()));
+        tag_names.push(TagName::Tag("Err".into()));
+        tag_names.push(TagName::Tag("Ok".into()));
 
-        tag_names.push(TagName::Global("InvalidNumStr".into()));
-        tag_names.push(TagName::Global("BadUtf8".into()));
-        tag_names.push(TagName::Global("OutOfBounds".into()));
+        tag_names.push(TagName::Tag("InvalidNumStr".into()));
+        tag_names.push(TagName::Tag("BadUtf8".into()));
+        tag_names.push(TagName::Tag("OutOfBounds".into()));
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
@@ -1522,8 +1522,8 @@ impl Subs {
         let bool_union_tags = UnionTags::insert_into_subs(
             &mut subs,
             [
-                (TagName::Global("False".into()), []),
-                (TagName::Global("True".into()), []),
+                (TagName::Tag("False".into()), []),
+                (TagName::Tag("True".into()), []),
             ],
         );
 
@@ -2211,10 +2211,10 @@ impl UnionTags {
         slice.length == 1
     }
 
-    pub fn is_newtype_wrapper_of_global_tag(&self, subs: &Subs) -> bool {
+    pub fn is_newtype_wrapper_of_tag(&self, subs: &Subs) -> bool {
         self.is_newtype_wrapper(subs) && {
             let tags = &subs.tag_names[self.tag_names().indices()];
-            matches!(tags[0], TagName::Global(_))
+            matches!(tags[0], TagName::Tag(_))
         }
     }
 
@@ -2333,7 +2333,8 @@ impl UnionTags {
 
     pub fn iter_all(
         &self,
-    ) -> impl Iterator<Item = (SubsIndex<TagName>, SubsIndex<VariableSubsSlice>)> {
+    ) -> impl Iterator<Item = (SubsIndex<TagName>, SubsIndex<VariableSubsSlice>)> + ExactSizeIterator
+    {
         self.tag_names()
             .into_iter()
             .zip(self.variables().into_iter())
@@ -2436,7 +2437,7 @@ impl<'a> UnsortedUnionTags<'a> {
     }
 }
 
-pub type SortedTagsIterator<'a> = Box<dyn Iterator<Item = (TagName, &'a [Variable])> + 'a>;
+pub type SortedTagsIterator<'a> = Box<dyn ExactSizeIterator<Item = (TagName, &'a [Variable])> + 'a>;
 pub type SortedTagsSlicesIterator<'a> = Box<dyn Iterator<Item = (TagName, VariableSubsSlice)> + 'a>;
 
 pub fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {

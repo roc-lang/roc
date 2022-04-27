@@ -19,7 +19,7 @@ use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, LambdaSet, Type};
+use roc_types::types::{Alias, Category, LambdaSet, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
 
@@ -89,6 +89,7 @@ pub enum Expr {
         region: Region,
         loc_cond: Box<Loc<Expr>>,
         branches: Vec<WhenBranch>,
+        branches_cond_var: Variable,
     },
     If {
         cond_var: Variable,
@@ -193,6 +194,47 @@ pub enum Expr {
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
+
+impl Expr {
+    pub fn category(&self) -> Category {
+        match self {
+            Self::Num(..) => Category::Num,
+            Self::Int(..) => Category::Int,
+            Self::Float(..) => Category::Float,
+            Self::Str(..) => Category::Str,
+            Self::SingleQuote(..) => Category::Character,
+            Self::List { .. } => Category::List,
+            &Self::Var(sym) => Category::Lookup(sym),
+            Self::When { .. } => Category::When,
+            Self::If { .. } => Category::If,
+            Self::LetRec(_, expr, _) => expr.value.category(),
+            Self::LetNonRec(_, expr, _) => expr.value.category(),
+            &Self::Call(_, _, called_via) => Category::CallResult(None, called_via),
+            &Self::RunLowLevel { op, .. } => Category::LowLevelOpResult(op),
+            Self::ForeignCall { .. } => Category::ForeignCall,
+            Self::Closure(..) => Category::Lambda,
+            Self::Record { .. } => Category::Record,
+            Self::EmptyRecord => Category::Record,
+            Self::Access { field, .. } => Category::Access(field.clone()),
+            Self::Accessor(data) => Category::Accessor(data.field.clone()),
+            Self::Update { .. } => Category::Record,
+            Self::Tag {
+                name, arguments, ..
+            } => Category::TagApply {
+                tag_name: name.clone(),
+                args_count: arguments.len(),
+            },
+            Self::ZeroArgumentTag { name, .. } => Category::TagApply {
+                tag_name: name.clone(),
+                args_count: 0,
+            },
+            &Self::OpaqueRef { name, .. } => Category::OpaqueWrap(name),
+            Self::Expect(..) => Category::Expect,
+            Self::RuntimeError(..) => Category::Unknown,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ClosureData {
     pub function_type: Variable,
@@ -782,6 +824,7 @@ pub fn canonicalize_expr<'a>(
                 region,
                 loc_cond: Box::new(can_cond),
                 branches: can_branches,
+                branches_cond_var: var_store.fresh(),
             };
 
             (expr, output)
@@ -813,7 +856,7 @@ pub fn canonicalize_expr<'a>(
             }),
             Output::default(),
         ),
-        ast::Expr::GlobalTag(tag) => {
+        ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
 
@@ -821,7 +864,7 @@ pub fn canonicalize_expr<'a>(
 
             (
                 ZeroArgumentTag {
-                    name: TagName::Global((*tag).into()),
+                    name: TagName::Tag((*tag).into()),
                     variant_var,
                     closure_name: symbol,
                     ext_var,
@@ -1298,6 +1341,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             region,
             loc_cond,
             branches,
+            branches_cond_var,
         } => {
             let loc_cond = Box::new(Loc {
                 region: loc_cond.region,
@@ -1333,6 +1377,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 region,
                 loc_cond,
                 branches: new_branches,
+                branches_cond_var,
             }
         }
         If {

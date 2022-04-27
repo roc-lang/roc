@@ -72,12 +72,13 @@ pub enum Pattern {
     Ctor(Union, TagId, std::vec::Vec<Pattern>),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Literal {
     Int(i128),
     U128(u128),
     Bit(bool),
     Byte(u8),
+    /// Stores the float bits
     Float(u64),
     Decimal(RocDec),
     Str(Box<str>),
@@ -95,14 +96,14 @@ pub enum Error {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Context {
     BadArg,
     BadDestruct,
     BadCase,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Guard {
     HasGuard,
     NoGuard,

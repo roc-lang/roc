@@ -1106,8 +1106,8 @@ fn build_effect_loop(
         );
 
         let state_type = {
-            let step_tag_name = TagName::Global("Step".into());
-            let done_tag_name = TagName::Global("Done".into());
+            let step_tag_name = TagName::Tag("Step".into());
+            let done_tag_name = TagName::Tag("Done".into());
 
             Type::TagUnion(
                 vec![
@@ -1336,7 +1336,7 @@ fn build_effect_loop_inner_body(
     let force_thunk2 = force_effect(loop_new_state_step, effect_symbol, thunk2_symbol, var_store);
 
     let step_branch = {
-        let step_tag_name = TagName::Global("Step".into());
+        let step_tag_name = TagName::Tag("Step".into());
 
         let step_pattern = applied_tag_pattern(step_tag_name, &[new_state_symbol], var_store);
 
@@ -1348,7 +1348,7 @@ fn build_effect_loop_inner_body(
     };
 
     let done_branch = {
-        let done_tag_name = TagName::Global("Done".into());
+        let done_tag_name = TagName::Tag("Done".into());
         let done_pattern = applied_tag_pattern(done_tag_name, &[done_symbol], var_store);
 
         crate::expr::WhenBranch {
@@ -1366,6 +1366,7 @@ fn build_effect_loop_inner_body(
         region: Region::zero(),
         loc_cond: Box::new(force_thunk_call),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     Expr::LetNonRec(

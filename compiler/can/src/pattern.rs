@@ -260,12 +260,12 @@ pub fn canonicalize_pattern<'a>(
                 Pattern::Shadowed(original_region, shadow, new_symbol)
             }
         },
-        GlobalTag(name) => {
+        Tag(name) => {
             // Canonicalize the tag's name.
             Pattern::AppliedTag {
                 whole_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
-                tag_name: TagName::Global((*name).into()),
+                tag_name: TagName::Tag((*name).into()),
                 arguments: vec![],
             }
         }
@@ -294,8 +294,8 @@ pub fn canonicalize_pattern<'a>(
             }
 
             match tag.value {
-                GlobalTag(name) => {
-                    let tag_name = TagName::Global(name.into());
+                Tag(name) => {
+                    let tag_name = TagName::Tag(name.into());
                     Pattern::AppliedTag {
                         whole_var: var_store.fresh(),
                         ext_var: var_store.fresh(),
@@ -501,7 +501,7 @@ pub fn canonicalize_pattern<'a>(
 
                     RequiredField(label, loc_guard) => {
                         // a guard does not introduce the label into scope!
-                        let symbol = scope.ignore(label.into(), &mut env.ident_ids);
+                        let symbol = scope.ignore(&Ident::from(label), &mut env.ident_ids);
                         let can_guard = canonicalize_pattern(
                             env,
                             var_store,

@@ -18,7 +18,7 @@ use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
-use super::build::load_roc_value;
+use super::build::{load_roc_value, FunctionSpec};
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 
 pub struct PointerToRefcount<'ctx> {
@@ -143,11 +143,11 @@ impl<'ctx> PointerToRefcount<'ctx> {
                 );
 
                 let function_value = add_func(
+                    env.context,
                     env.module,
                     fn_name,
-                    fn_type,
+                    FunctionSpec::known_fastcc(fn_type),
                     Linkage::Internal,
-                    FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
                 );
 
                 let subprogram = env.new_subprogram(fn_name);
@@ -1138,11 +1138,11 @@ pub fn build_header_help<'a, 'ctx, 'env>(
     };
 
     let fn_val = add_func(
+        env.context,
         env.module,
         fn_name,
-        fn_type,
+        FunctionSpec::known_fastcc(fn_type),
         Linkage::Private,
-        FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
     );
 
     let subprogram = env.new_subprogram(fn_name);

@@ -903,38 +903,31 @@ fn parse_problem() {
 #[test]
 fn exhaustiveness_problem() {
     expect_failure(
-        r#"
+        indoc!(
+            r#"
             t : [A, B, C]
             t = A
 
             when t is
                 A -> "a"
-            "#,
+            "#
+        ),
         indoc!(
             r#"
-            ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+            ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
-            The branches of this when expression don't match the condition:
-
-            7│>                  when t is
-            8│                       A -> "a"
-
-            This t value is a:
-
-                [ A, B, C ]
+            This when does not cover all the possibilities:
             
-            But the branch patterns have type:
+            7│>      when t is
+            8│>          A -> "a"
             
-                [ A ]
-
-            The branches must be cases of the when condition's type!
+            Other possibilities include:
             
-            Tip: Looks like the branches are missing coverage of the C and B tags.
+                B
+                C
             
-            Tip: Maybe you need to add a catch-all branch, like _?
-            
-            
-            Enter an expression, or :help, or :exit/:q."#
+            I would have to crash if I saw one of those! Add branches for them!
+            "#
         ),
     );
 }

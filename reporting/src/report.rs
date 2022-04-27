@@ -385,25 +385,25 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn tag_name(&'a self, tn: TagName) -> DocBuilder<'a, Self, Annotation> {
         match tn {
-            TagName::Global(uppercase) => self.global_tag_name(uppercase),
+            TagName::Tag(uppercase) => self.tag(uppercase),
             TagName::Closure(_symbol) => unreachable!("closure tags are internal only"),
         }
     }
 
     pub fn symbol_unqualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!("{}", symbol.ident_str(self.interns)))
+        self.text(symbol.as_str(self.interns))
             .annotate(Annotation::Symbol)
     }
     pub fn symbol_foreign_qualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
         if symbol.module_id() == self.home || symbol.module_id().is_builtin() {
             // Render it unqualified if it's in the current module or a builtin
-            self.text(format!("{}", symbol.ident_str(self.interns)))
+            self.text(symbol.as_str(self.interns))
                 .annotate(Annotation::Symbol)
         } else {
             self.text(format!(
                 "{}.{}",
                 symbol.module_string(self.interns),
-                symbol.ident_str(self.interns),
+                symbol.as_str(self.interns),
             ))
             .annotate(Annotation::Symbol)
         }
@@ -412,25 +412,25 @@ impl<'a> RocDocAllocator<'a> {
         self.text(format!(
             "{}.{}",
             symbol.module_string(self.interns),
-            symbol.ident_str(self.interns),
+            symbol.as_str(self.interns),
         ))
         .annotate(Annotation::Symbol)
     }
 
-    pub fn global_tag_name(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
+    pub fn tag(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
         self.text(format!("{}", uppercase))
-            .annotate(Annotation::GlobalTag)
+            .annotate(Annotation::Tag)
     }
 
     pub fn opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
         let fmt = if opaque.module_id() == self.home {
             // Render it unqualified if it's in the current module.
-            format!("{}", opaque.ident_str(self.interns))
+            opaque.as_str(self.interns).to_string()
         } else {
             format!(
                 "{}.{}",
                 opaque.module_string(self.interns),
-                opaque.ident_str(self.interns),
+                opaque.as_str(self.interns),
             )
         };
 
@@ -440,7 +440,7 @@ impl<'a> RocDocAllocator<'a> {
     pub fn wrapped_opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
         debug_assert_eq!(opaque.module_id(), self.home, "Opaque wrappings can only be defined in the same module they're defined in, but this one is defined elsewhere: {:?}", opaque);
 
-        self.text(format!("@{}", opaque.ident_str(self.interns)))
+        self.text(format!("@{}", opaque.as_str(self.interns)))
             .annotate(Annotation::Opaque)
     }
 
@@ -790,7 +790,7 @@ pub enum Annotation {
     Emphasized,
     Url,
     Keyword,
-    GlobalTag,
+    Tag,
     RecordField,
     TypeVariable,
     Alias,
@@ -882,7 +882,7 @@ where
             Url => {
                 self.write_str("<")?;
             }
-            GlobalTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion | TypeVariable
+            Tag | Keyword | RecordField | Symbol | Typo | TypoSuggestion | TypeVariable
                 if !self.in_type_block && !self.in_code_block =>
             {
                 self.write_str("`")?;
@@ -912,8 +912,7 @@ where
                 Url => {
                     self.write_str(">")?;
                 }
-                GlobalTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
-                | TypeVariable
+                Tag | Keyword | RecordField | Symbol | Typo | TypoSuggestion | TypeVariable
                     if !self.in_type_block && !self.in_code_block =>
                 {
                     self.write_str("`")?;
@@ -1005,7 +1004,7 @@ where
             ParserSuggestion => {
                 self.write_str(self.palette.parser_suggestion)?;
             }
-            TypeBlock | GlobalTag | RecordField => { /* nothing yet */ }
+            TypeBlock | Tag | RecordField => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -1023,7 +1022,7 @@ where
                     self.write_str(self.palette.reset)?;
                 }
 
-                TypeBlock | GlobalTag | Opaque | RecordField => { /* nothing yet */ }
+                TypeBlock | Tag | Opaque | RecordField => { /* nothing yet */ }
             },
         }
         Ok(())

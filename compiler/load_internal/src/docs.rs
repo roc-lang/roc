@@ -373,7 +373,7 @@ fn record_field_to_doc(
 // The Option here represents if it is malformed.
 fn tag_to_doc(in_func_ann: bool, tag: ast::Tag) -> Option<Tag> {
     match tag {
-        ast::Tag::Global { name, args } => Some(Tag {
+        ast::Tag::Apply { name, args } => Some(Tag {
             name: name.value.to_string(),
             values: {
                 let mut type_vars = Vec::new();

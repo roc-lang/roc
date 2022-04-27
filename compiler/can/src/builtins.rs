@@ -4662,7 +4662,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         // ok branch
         let ok = Tag {
@@ -4693,7 +4693,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -4727,6 +4727,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(
@@ -4759,7 +4760,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         // ok branch
         let ok = Tag {
@@ -4790,7 +4791,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -4824,6 +4825,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(
@@ -4843,7 +4845,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4863,7 +4865,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4887,6 +4889,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(
@@ -4906,7 +4909,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4918,7 +4921,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let false_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("False".into()),
+            name: TagName::Tag("False".into()),
             arguments: vec![],
         };
 
@@ -4933,7 +4936,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4945,7 +4948,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let true_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("True".into()),
+            name: TagName::Tag("True".into()),
             arguments: vec![],
         };
 
@@ -4964,6 +4967,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(
@@ -4983,7 +4987,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4995,7 +4999,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let true_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("True".into()),
+            name: TagName::Tag("True".into()),
             arguments: vec![],
         };
 
@@ -5010,7 +5014,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -5022,7 +5026,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let false_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("False".into()),
+            name: TagName::Tag("False".into()),
             arguments: vec![],
         };
 
@@ -5041,6 +5045,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(
@@ -5073,7 +5078,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         // ok branch
         let ok = call_func;
@@ -5099,7 +5104,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -5133,6 +5138,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
     };
 
     defn(
@@ -5157,7 +5163,7 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
     Expr::Tag {
         variant_var: var_store.fresh(),
         ext_var: var_store.fresh(),
-        name: TagName::Global(name.into()),
+        name: TagName::Tag(name.into()),
         arguments: args
             .into_iter()
             .map(|expr| (var_store.fresh(), no_region(expr)))

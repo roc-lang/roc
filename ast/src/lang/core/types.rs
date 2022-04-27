@@ -694,14 +694,14 @@ fn can_tags<'a>(
         // a duplicate
         let new_name = 'inner: loop {
             match tag {
-                Tag::Global { name, args } => {
+                Tag::Apply { name, args } => {
                     let arg_types = PoolVec::with_capacity(args.len() as u32, env.pool);
 
                     for (type_id, loc_arg) in arg_types.iter_node_ids().zip(args.iter()) {
                         as_type_id(env, scope, rigids, type_id, &loc_arg.value, loc_arg.region);
                     }
 
-                    let tag_name = TagName::Global(name.value.into());
+                    let tag_name = TagName::Tag(name.value.into());
                     tag_types.push((tag_name.clone(), arg_types));
 
                     break 'inner tag_name;

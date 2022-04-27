@@ -5,6 +5,7 @@ use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::{Declaration, Def};
+use roc_can::exhaustive::{sketch_rows, ExhaustiveContext};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
@@ -579,17 +580,18 @@ pub fn constrain_expr(
             }
         }
         When {
-            cond_var,
+            cond_var: real_cond_var,
             expr_var,
             loc_cond,
             branches,
+            branches_cond_var,
             ..
         } => {
-            let cond_var = *cond_var;
-            let cond_type = Variable(cond_var);
+            let branches_cond_var = *branches_cond_var;
+            let branches_cond_type = Variable(branches_cond_var);
 
-            let branch_var = *expr_var;
-            let branch_type = Variable(branch_var);
+            let body_var = *expr_var;
+            let body_type = Variable(body_var);
 
             let branches_region = {
                 debug_assert!(!branches.is_empty());
@@ -614,13 +616,13 @@ pub fn constrain_expr(
                                 index,
                                 region: ann_source.region(),
                             },
-                            branch_type.clone(),
+                            body_type.clone(),
                         )
                     }
 
                     _ => ForReason(
                         Reason::WhenBranch { index },
-                        branch_type.clone(),
+                        body_type.clone(),
                         branch_region,
                     ),
                 };
@@ -658,7 +660,7 @@ pub fn constrain_expr(
                             index: HumanIndex::zero_based(index),
                             sub_pattern,
                         },
-                        cond_type.clone(),
+                        branches_cond_type.clone(),
                         sub_region,
                     )
                 };
@@ -702,17 +704,30 @@ pub fn constrain_expr(
 
             // After solving the condition variable with what's expected from the branch patterns,
             // check it against the condition expression.
-            // TODO: when we have exhaustiveness checking during the typechecking phase, perform
-            // exhaustiveness checking when this expectation fails. That will produce better error
-            // messages.
+            //
+            // First, solve the condition type.
+            let real_cond_var = *real_cond_var;
+            let real_cond_type = Type::Variable(real_cond_var);
             let cond_constraint = constrain_expr(
                 constraints,
                 env,
                 loc_cond.region,
                 &loc_cond.value,
-                Expected::ForReason(Reason::WhenBranches, cond_type, branches_region),
+                Expected::NoExpectation(real_cond_type),
             );
             pattern_cons.push(cond_constraint);
+
+            // Now check the condition against the type expected by the branches.
+            let sketched_rows = sketch_rows(real_cond_var, branches_region, branches);
+            let cond_matches_branches_constraint = constraints.exhaustive(
+                real_cond_var,
+                loc_cond.region,
+                loc_cond.value.category(),
+                Expected::ForReason(Reason::WhenBranches, branches_cond_type, branches_region),
+                sketched_rows,
+                ExhaustiveContext::BadCase,
+            );
+            pattern_cons.push(cond_matches_branches_constraint);
 
             // Solve all the pattern constraints together, introducing variables in the pattern as
             // need be before solving the bodies.
@@ -727,14 +742,15 @@ pub fn constrain_expr(
             );
 
             let result_con =
-                constraints.equal_types_var(branch_var, expected, Category::When, region);
+                constraints.equal_types_var(body_var, expected, Category::When, region);
 
             let total_cons = [when_body_con, result_con];
             let branch_constraints = constraints.and_constraint(total_cons);
 
-            // exhautiveness checking happens when converting to mono::Expr
-            // ...for now
-            constraints.exists([cond_var, *expr_var], branch_constraints)
+            constraints.exists(
+                [branches_cond_var, real_cond_var, *expr_var],
+                branch_constraints,
+            )
         }
         Access {
             record_var,

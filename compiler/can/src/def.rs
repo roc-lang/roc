@@ -203,7 +203,7 @@ pub(crate) fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
     var_store: &mut VarStore,
-    original_scope: &Scope,
+    mut scope: Scope,
     loc_defs: &'a [&'a Loc<ast::Def<'a>>],
     pattern_type: PatternType,
 ) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
@@ -224,29 +224,18 @@ pub(crate) fn canonicalize_defs<'a>(
     // This naturally handles recursion too, because a given expr which refers
     // to itself won't be processed until after its def has been added to scope.
 
-    // Record both the original and final idents from the scope,
-    // so we can diff them while detecting unused defs.
-    let mut scope = original_scope.clone();
     let num_defs = loc_defs.len();
-
-    let mut type_defs = Vec::with_capacity(num_defs);
+    let mut pending_type_defs = Vec::with_capacity(num_defs);
     let mut value_defs = Vec::with_capacity(num_defs);
 
     for loc_def in loc_defs {
         match loc_def.value.unroll_def() {
-            Ok(type_def) => type_defs.push(Loc::at(loc_def.region, type_def)),
+            Ok(type_def) => {
+                pending_type_defs.push(to_pending_type_def(env, type_def, &mut scope, pattern_type))
+            }
             Err(value_def) => value_defs.push(Loc::at(loc_def.region, value_def)),
         }
     }
-
-    // We need to canonicalize all the type defs first.
-    // Clippy is wrong - we do need the collect, otherwise "env" and "scope" are captured for
-    // longer than we'd like.
-    #[allow(clippy::needless_collect)]
-    let pending_type_defs = type_defs
-        .into_iter()
-        .map(|loc_def| to_pending_type_def(env, loc_def.value, &mut scope, pattern_type))
-        .collect::<Vec<_>>();
 
     if cfg!(debug_assertions) {
         env.home.register_debug_idents(&env.ident_ids);
@@ -452,7 +441,6 @@ pub(crate) fn canonicalize_defs<'a>(
         &mut output,
         var_store,
         &mut scope,
-        &mut symbols_introduced,
         abilities,
         &abilities_in_scope,
         pattern_type,
@@ -499,7 +487,11 @@ pub(crate) fn canonicalize_defs<'a>(
             symbols_introduced.insert(s, r);
 
             debug_assert_eq!(env.home, s.module_id());
-            debug_assert!(!symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()));
+            debug_assert!(
+                !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
+                "{:?}",
+                s
+            );
 
             symbol_to_index.push((s.ident_id(), def_index as u32));
         }
@@ -554,7 +546,6 @@ fn resolve_abilities<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    symbols_introduced: &mut MutMap<Symbol, Region>,
     abilities: MutMap<Symbol, (Loc<Symbol>, &[AbilityMember])>,
     abilities_in_scope: &[Symbol],
     pattern_type: PatternType,
@@ -597,8 +588,6 @@ fn resolve_abilities<'a>(
                     continue;
                 }
             };
-
-            symbols_introduced.insert(member_sym, name_region);
 
             if pattern_type == PatternType::TopLevelDef {
                 env.top_level_symbols.insert(member_sym);
@@ -1402,7 +1391,7 @@ pub fn can_defs_with_return<'a>(
         env,
         Output::default(),
         var_store,
-        &scope,
+        scope,
         loc_defs,
         PatternType::DefExpr,
     );
