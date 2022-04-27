@@ -3415,6 +3415,25 @@ fn to_imports_report<'a>(
             }
         }
 
+        EImports::ListEnd(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a imports list, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([alloc.reflow("I am expecting a comma or end of list, like")]),
+                alloc.parser_suggestion("imports [ Math, Util ]").indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD IMPORTS".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
 }
