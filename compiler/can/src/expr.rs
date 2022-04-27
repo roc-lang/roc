@@ -6,7 +6,7 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumericBound,
 };
-use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
+use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::{SendMap, VecMap, VecSet};
@@ -984,7 +984,8 @@ pub fn canonicalize_closure<'a>(
         can_args.push((var_store.fresh(), can_argument_pattern));
     }
 
-    let bound_by_argument_patterns = bindings_from_patterns(can_args.iter().map(|x| &x.1));
+    let bound_by_argument_patterns: Vec<_> =
+        BindingsFromPattern::new_many(can_args.iter().map(|x| &x.1)).collect();
 
     let (loc_body_expr, new_output) = canonicalize_expr(
         env,
@@ -1107,7 +1108,7 @@ fn canonicalize_when_branch<'a>(
 
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
-    for (symbol, region) in bindings_from_patterns(patterns.iter()) {
+    for (symbol, region) in BindingsFromPattern::new_many(patterns.iter()) {
         if !output.references.has_value_lookup(symbol) {
             env.problem(Problem::UnusedDef(symbol, region));
         }

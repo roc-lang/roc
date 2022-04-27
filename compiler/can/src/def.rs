@@ -5,7 +5,7 @@ use crate::env::Env;
 use crate::expr::ClosureData;
 use crate::expr::Expr::{self, *};
 use crate::expr::{canonicalize_expr, Output, Recursive};
-use crate::pattern::{bindings_from_patterns, canonicalize_def_header_pattern, Pattern};
+use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
 use crate::reference_matrix::ReferenceMatrix;
 use crate::scope::create_alias;
@@ -478,7 +478,7 @@ pub(crate) fn canonicalize_defs<'a>(
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        for (s, r) in bindings_from_patterns(std::iter::once(pending_def.loc_pattern())) {
+        for (s, r) in BindingsFromPattern::new(pending_def.loc_pattern()) {
             // store the top-level defs, used to ensure that closures won't capture them
             if let PatternType::TopLevelDef = pattern_type {
                 env.top_level_symbols.insert(s);
