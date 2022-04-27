@@ -718,12 +718,13 @@ impl<'a> BindingsFromPattern<'a> {
                     }
                 }
                 BindingsFromPatternWork::Destruct(loc_destruct) => {
-                    match loc_destruct.value.typ {
+                    match &loc_destruct.value.typ {
                         DestructType::Required | DestructType::Optional(_, _) => {
                             return Some((loc_destruct.value.symbol, loc_destruct.region));
                         }
-                        DestructType::Guard(_, _) => {
+                        DestructType::Guard(_, inner) => {
                             // a guard does not introduce the symbol
+                            stack.push(BindingsFromPatternWork::Pattern(inner))
                         }
                     }
                 }
