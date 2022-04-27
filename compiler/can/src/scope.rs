@@ -349,10 +349,6 @@ impl Scope {
                         region,
                     };
 
-                    // overwrite the data for this ident with the shadowed values
-                    self.idents.symbols[index] = shadow_symbol;
-                    self.idents.regions[index] = region;
-
                     Err((original_region, shadow, shadow_symbol))
                 }
             }
@@ -374,9 +370,9 @@ impl Scope {
         // If this IdentId was already added previously
         // when the value was exposed in the module header,
         // use that existing IdentId. Otherwise, create a fresh one.
-        let ident_id = match exposed_ident_ids.get_id(&ident) {
+        let ident_id = match exposed_ident_ids.get_id(ident) {
             Some(ident_id) => ident_id,
-            None => all_ident_ids.add_ident(&ident),
+            None => all_ident_ids.add_ident(ident),
         };
 
         let symbol = Symbol::new(self.home, ident_id);
