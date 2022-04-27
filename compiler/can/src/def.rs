@@ -1181,16 +1181,8 @@ fn canonicalize_pending_value_def<'a>(
                     // reset the tailcallable_symbol
                     env.tailcallable_symbol = outer_identifier;
 
+                    let closure_references = can_output.references.clone();
                     output.references.union_mut(&can_output.references);
-
-                    // Since everywhere in the code it'll be referred to by its defined name,
-                    // remove its generated name from the closure map. (We'll re-insert it later.)
-                    let closure_references  = env.closures.remove(&closure_data.name).unwrap_or_else(|| {
-                            panic!(
-                                "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                                closure_data.name, env.closures
-                            )
-                            });
 
                     // The closure is self tail recursive iff it tail calls itself (by defined name).
                     let is_recursive = match can_output.tail_call {
