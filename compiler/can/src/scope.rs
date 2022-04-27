@@ -10,90 +10,6 @@ use roc_types::types::{Alias, AliasKind, Type};
 use crate::abilities::AbilitiesStore;
 
 #[derive(Clone, Debug)]
-struct IdentStore {
-    interner: SmallStringInterner,
-
-    /// A Symbol for each Ident
-    symbols: Vec<Symbol>,
-
-    /// A Region for each Ident
-    regions: Vec<Region>,
-}
-
-impl IdentStore {
-    fn new() -> Self {
-        let defaults = Symbol::default_in_scope();
-        let capacity = defaults.len();
-
-        let mut this = Self {
-            interner: SmallStringInterner::with_capacity(capacity),
-            symbols: Vec::with_capacity(capacity),
-            regions: Vec::with_capacity(capacity),
-        };
-
-        for (ident, (symbol, region)) in defaults {
-            this.insert_unchecked(&ident, symbol, region);
-        }
-
-        this
-    }
-
-    fn iter_idents(&self) -> impl Iterator<Item = Ident> + '_ {
-        self.interner.iter().filter_map(move |string| {
-            // empty string is used when ability members are shadowed
-            if string.is_empty() {
-                None
-            } else {
-                Some(Ident::from(string))
-            }
-        })
-    }
-
-    fn iter_idents_symbols(&self) -> impl Iterator<Item = (Ident, Symbol)> + '_ {
-        self.interner
-            .iter()
-            .zip(self.symbols.iter())
-            .filter_map(move |(string, symbol)| {
-                // empty slice is used when ability members are shadowed
-                if string.is_empty() {
-                    None
-                } else {
-                    Some((Ident::from(string), *symbol))
-                }
-            })
-    }
-
-    fn get_index(&self, ident: &Ident) -> Option<usize> {
-        let ident_str = ident.as_inline_str().as_str();
-
-        self.interner.find_index(ident_str)
-    }
-
-    fn get_symbol(&self, ident: &Ident) -> Option<Symbol> {
-        Some(self.symbols[self.get_index(ident)?])
-    }
-
-    fn get_symbol_and_region(&self, ident: &Ident) -> Option<(Symbol, Region)> {
-        let index = self.get_index(ident)?;
-
-        Some((self.symbols[index], self.regions[index]))
-    }
-
-    /// Does not check that the ident is unique
-    fn insert_unchecked(&mut self, ident: &Ident, symbol: Symbol, region: Region) {
-        let ident_str = ident.as_inline_str().as_str();
-
-        let index = self.interner.insert(ident_str);
-
-        debug_assert_eq!(index, self.symbols.len());
-        debug_assert_eq!(index, self.regions.len());
-
-        self.symbols.push(symbol);
-        self.regions.push(region);
-    }
-}
-
-#[derive(Clone, Debug)]
 pub struct Scope {
     idents: IdentStore,
 
@@ -469,5 +385,89 @@ pub fn create_alias(
         recursion_variables,
         typ,
         kind,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct IdentStore {
+    interner: SmallStringInterner,
+
+    /// A Symbol for each Ident
+    symbols: Vec<Symbol>,
+
+    /// A Region for each Ident
+    regions: Vec<Region>,
+}
+
+impl IdentStore {
+    fn new() -> Self {
+        let defaults = Symbol::default_in_scope();
+        let capacity = defaults.len();
+
+        let mut this = Self {
+            interner: SmallStringInterner::with_capacity(capacity),
+            symbols: Vec::with_capacity(capacity),
+            regions: Vec::with_capacity(capacity),
+        };
+
+        for (ident, (symbol, region)) in defaults {
+            this.insert_unchecked(&ident, symbol, region);
+        }
+
+        this
+    }
+
+    fn iter_idents(&self) -> impl Iterator<Item = Ident> + '_ {
+        self.interner.iter().filter_map(move |string| {
+            // empty string is used when ability members are shadowed
+            if string.is_empty() {
+                None
+            } else {
+                Some(Ident::from(string))
+            }
+        })
+    }
+
+    fn iter_idents_symbols(&self) -> impl Iterator<Item = (Ident, Symbol)> + '_ {
+        self.interner
+            .iter()
+            .zip(self.symbols.iter())
+            .filter_map(move |(string, symbol)| {
+                // empty slice is used when ability members are shadowed
+                if string.is_empty() {
+                    None
+                } else {
+                    Some((Ident::from(string), *symbol))
+                }
+            })
+    }
+
+    fn get_index(&self, ident: &Ident) -> Option<usize> {
+        let ident_str = ident.as_inline_str().as_str();
+
+        self.interner.find_index(ident_str)
+    }
+
+    fn get_symbol(&self, ident: &Ident) -> Option<Symbol> {
+        Some(self.symbols[self.get_index(ident)?])
+    }
+
+    fn get_symbol_and_region(&self, ident: &Ident) -> Option<(Symbol, Region)> {
+        let index = self.get_index(ident)?;
+
+        Some((self.symbols[index], self.regions[index]))
+    }
+
+    /// Does not check that the ident is unique
+    fn insert_unchecked(&mut self, ident: &Ident, symbol: Symbol, region: Region) {
+        let ident_str = ident.as_inline_str().as_str();
+
+        let index = self.interner.insert(ident_str);
+
+        debug_assert_eq!(index, self.symbols.len());
+        debug_assert_eq!(index, self.regions.len());
+
+        self.symbols.push(symbol);
+        self.regions.push(region);
     }
 }
