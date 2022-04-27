@@ -521,33 +521,9 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
     let i32_type = ctx.i32_type();
     let i64_type = ctx.i64_type();
-    let void_type = ctx.void_type();
 
     if let Some(func) = module.get_function("__muloti4") {
         func.set_linkage(Linkage::WeakAny);
-    }
-
-    add_intrinsic(
-        ctx,
-        module,
-        LLVM_SETJMP,
-        i32_type.fn_type(&[i8_ptr_type.into()], false),
-    );
-
-    if true {
-        add_intrinsic(
-            ctx,
-            module,
-            LLVM_LONGJMP,
-            void_type.fn_type(&[i8_ptr_type.into()], false),
-        );
-    } else {
-        add_intrinsic(
-            ctx,
-            module,
-            LLVM_LONGJMP,
-            void_type.fn_type(&[i8_ptr_type.into(), i32_type.into()], false),
-        );
     }
 
     add_intrinsic(
@@ -627,9 +603,6 @@ static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
 // static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress";
 static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0i8";
 static LLVM_STACK_SAVE: &str = "llvm.stacksave";
-
-static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";
-pub static LLVM_LONGJMP: &str = "llvm.eh.sjlj.longjmp";
 
 const LLVM_ADD_WITH_OVERFLOW: IntrinsicName =
     llvm_int_intrinsic!("llvm.sadd.with.overflow", "llvm.uadd.with.overflow");
@@ -3677,10 +3650,15 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 }
 
 pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
+    // The size of jump_buf is platform-dependent.
+    // AArch64 needs 3 64-bit words, x86 seemingly needs less than that. Let's just make it 3
+    // 64-bit words.
+    // We can always increase the size, since we hand it off opaquely to both `setjmp` and `longjmp`.
+    // The unused space won't be touched.
     let type_ = env
         .context
-        .i8_type()
-        .array_type(5 * env.target_info.ptr_width() as u32);
+        .i32_type()
+        .array_type(6 * env.target_info.ptr_width() as u32);
 
     let global = match env.module.get_global("roc_sjlj_buffer") {
         Some(global) => global,
@@ -3692,10 +3670,24 @@ pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValu
     env.builder
         .build_bitcast(
             global.as_pointer_value(),
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            env.context.i32_type().ptr_type(AddressSpace::Generic),
             "cast_sjlj_buffer",
         )
         .into_pointer_value()
+}
+
+/// Pointer to pointer of the panic message.
+pub fn get_panic_msg_ptr<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
+    let ptr_to_u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let global_name = "roc_panic_msg_ptr";
+    let global = env.module.get_global(global_name).unwrap_or_else(|| {
+        let global = env.module.add_global(ptr_to_u8_ptr, None, global_name);
+        global.set_initializer(&ptr_to_u8_ptr.const_zero());
+        global
+    });
+
+    global.as_pointer_value()
 }
 
 fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
@@ -3718,51 +3710,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
 
     let buffer = get_sjlj_buffer(env);
 
-    let cast = env
-        .builder
-        .build_bitcast(
-            buffer,
-            env.context
-                .i8_type()
-                .ptr_type(AddressSpace::Generic)
-                .array_type(5)
-                .ptr_type(AddressSpace::Generic),
-            "to [5 x i8*]",
-        )
-        .into_pointer_value();
-
-    let zero = env.context.i32_type().const_zero();
-
-    let index = env.context.i32_type().const_zero();
-    let fa = unsafe {
-        env.builder
-            .build_in_bounds_gep(cast, &[zero, index], "name")
-    };
-
-    let index = env.context.i32_type().const_int(2, false);
-    let ss = unsafe {
-        env.builder
-            .build_in_bounds_gep(cast, &[zero, index], "name")
-    };
-
-    let index = env.context.i32_type().const_int(3, false);
-    let error_msg = unsafe {
-        env.builder
-            .build_in_bounds_gep(cast, &[zero, index], "name")
-    };
-
-    let frame_address = env.call_intrinsic(
-        LLVM_FRAME_ADDRESS,
-        &[env.context.i32_type().const_zero().into()],
-    );
-
-    env.builder.build_store(fa, frame_address);
-
-    let stack_save = env.call_intrinsic(LLVM_STACK_SAVE, &[]);
-
-    env.builder.build_store(ss, stack_save);
-
-    let panicked_u32 = env.call_intrinsic(LLVM_SETJMP, &[buffer.into()]);
+    let panicked_u32 = call_bitcode_fn(env, &[buffer.into()], bitcode::UTILS_SETJMP);
     let panicked_bool = env.builder.build_int_compare(
         IntPredicate::NE,
         panicked_u32.into_int_value(),
@@ -3792,17 +3740,10 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
 
         let error_msg = {
             // u8**
-            let ptr_int_ptr = builder.build_bitcast(
-                error_msg,
-                env.context
-                    .i8_type()
-                    .ptr_type(AddressSpace::Generic)
-                    .ptr_type(AddressSpace::Generic),
-                "cast",
-            );
+            let ptr_int_ptr = get_panic_msg_ptr(env);
 
             // u8* again
-            let ptr_int = builder.build_load(ptr_int_ptr.into_pointer_value(), "ptr_int");
+            let ptr_int = builder.build_load(ptr_int_ptr, "ptr_int");
 
             ptr_int
         };

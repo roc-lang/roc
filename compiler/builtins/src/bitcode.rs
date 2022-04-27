@@ -365,6 +365,9 @@ pub const UTILS_EXPECT_FAILED: &str = "roc_builtins.expect.expect_failed";
 pub const UTILS_GET_EXPECT_FAILURES: &str = "roc_builtins.expect.get_expect_failures";
 pub const UTILS_DEINIT_FAILURES: &str = "roc_builtins.expect.deinit_failures";
 
+pub const UTILS_LONGJMP: &str = "longjmp";
+pub const UTILS_SETJMP: &str = "setjmp";
+
 #[derive(Debug, Default)]
 pub struct IntToIntrinsicName {
     pub options: [IntrinsicName; 10],

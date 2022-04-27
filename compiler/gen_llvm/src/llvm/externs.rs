@@ -1,9 +1,11 @@
-use crate::llvm::build::{add_func, C_CALL_CONV};
+use crate::llvm::bitcode::call_void_bitcode_fn;
+use crate::llvm::build::{add_func, get_panic_msg_ptr, C_CALL_CONV};
 use crate::llvm::build::{CCReturn, Env, FunctionSpec};
 use inkwell::module::Linkage;
 use inkwell::types::BasicType;
 use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
+use roc_builtins::bitcode;
 
 /// Define functions for roc_alloc, roc_realloc, and roc_dealloc
 /// which use libc implementations (malloc, realloc, and free)
@@ -184,7 +186,7 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
     // roc_panic
     {
-        use crate::llvm::build::LLVM_LONGJMP;
+        // use crate::llvm::build::LLVM_LONGJMP;
 
         // The type of this function (but not the implementation) should have
         // already been defined by the builtins, which rely on it.
@@ -210,29 +212,10 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
         let buffer = crate::llvm::build::get_sjlj_buffer(env);
 
         // write our error message pointer
-        let index = env
-            .ptr_int()
-            .const_int(3 * env.target_info.ptr_width() as u64, false);
-        let message_buffer_raw =
-            unsafe { builder.build_gep(buffer, &[index], "raw_msg_buffer_ptr") };
-        let message_buffer = builder.build_bitcast(
-            message_buffer_raw,
-            env.context
-                .i8_type()
-                .ptr_type(AddressSpace::Generic)
-                .ptr_type(AddressSpace::Generic),
-            "to **u8",
-        );
-
-        env.builder
-            .build_store(message_buffer.into_pointer_value(), ptr_arg);
+        env.builder.build_store(get_panic_msg_ptr(env), ptr_arg);
 
         let tag = env.context.i32_type().const_int(1, false);
-        if true {
-            let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[buffer.into()]);
-        } else {
-            let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[buffer.into(), tag.into()]);
-        }
+        let _call = call_void_bitcode_fn(env, &[buffer.into(), tag.into()], bitcode::UTILS_LONGJMP);
 
         builder.build_unreachable();
 
