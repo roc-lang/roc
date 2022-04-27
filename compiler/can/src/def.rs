@@ -1146,30 +1146,7 @@ fn canonicalize_pending_value_def<'a>(
                 .introduced_variables
                 .union(&type_annotation.introduced_variables);
 
-            // bookkeeping for tail-call detection. If we're assigning to an
-            // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
-            let outer_identifier = env.tailcallable_symbol;
-
-            if let Pattern::Identifier(ref defined_symbol) = &loc_can_pattern.value {
-                env.tailcallable_symbol = Some(*defined_symbol);
-            };
-
-            // register the name of this closure, to make sure the closure won't capture it's own name
-            if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
-                (&loc_can_pattern.value, &loc_expr.value)
-            {
-                env.closure_name_symbol = Some(*defined_symbol);
-            };
-
             pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
-
-            let (mut loc_can_expr, can_output) =
-                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
-
-            output.references.union_mut(&can_output.references);
-
-            // reset the tailcallable_symbol
-            env.tailcallable_symbol = outer_identifier;
 
             // First, make sure we are actually assigning an identifier instead of (for example) a tag.
             //
@@ -1177,31 +1154,43 @@ fn canonicalize_pending_value_def<'a>(
             // which also implies it's not a self tail call!
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-
-            match (&loc_can_pattern.value, &loc_can_expr.value) {
+            match (&loc_can_pattern.value, &loc_expr.value) {
                 (
                     Pattern::Identifier(symbol)
                     | Pattern::AbilityMemberSpecialization { ident: symbol, .. },
-                    Closure(ClosureData {
-                        function_type,
-                        closure_type,
-                        closure_ext_var,
-                        return_type,
-                        name: closure_name,
-                        arguments,
-                        loc_body: body,
-                        captured_symbols,
-                        ..
-                    }),
+                    ast::Expr::Closure(arguments, body),
                 ) => {
+                    // bookkeeping for tail-call detection. If we're assigning to an
+                    // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
+                    let outer_identifier = env.tailcallable_symbol;
+
+                    if let Pattern::Identifier(ref defined_symbol) = &loc_can_pattern.value {
+                        env.tailcallable_symbol = Some(*defined_symbol);
+                    };
+
+                    // register the name of this closure, to make sure the closure won't capture it's own name
+                    if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
+                        (&loc_can_pattern.value, &loc_expr.value)
+                    {
+                        env.closure_name_symbol = Some(*defined_symbol);
+                    };
+
+                    let (mut closure_data, can_output) =
+                        crate::expr::canonicalize_closure(env, var_store, scope, arguments, body);
+
+                    // reset the tailcallable_symbol
+                    env.tailcallable_symbol = outer_identifier;
+
+                    output.references.union_mut(&can_output.references);
+
                     // Since everywhere in the code it'll be referred to by its defined name,
                     // remove its generated name from the closure map. (We'll re-insert it later.)
-                    let closure_references  = env.closures.remove(closure_name).unwrap_or_else(|| {
-                        panic!(
-                            "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                            closure_name, env.closures
-                        )
-                    });
+                    let closure_references  = env.closures.remove(&closure_data.name).unwrap_or_else(|| {
+                            panic!(
+                                "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
+                                closure_data.name, env.closures
+                            )
+                            });
 
                     // The closure is self tail recursive iff it tail calls itself (by defined name).
                     let is_recursive = match can_output.tail_call {
@@ -1209,17 +1198,10 @@ fn canonicalize_pending_value_def<'a>(
                         _ => Recursive::NotRecursive,
                     };
 
-                    loc_can_expr.value = Closure(ClosureData {
-                        function_type: *function_type,
-                        closure_type: *closure_type,
-                        closure_ext_var: *closure_ext_var,
-                        return_type: *return_type,
-                        name: *symbol,
-                        captured_symbols: captured_symbols.clone(),
-                        recursive: is_recursive,
-                        arguments: arguments.clone(),
-                        loc_body: body.clone(),
-                    });
+                    closure_data.recursive = is_recursive;
+                    closure_data.name = *symbol;
+
+                    let loc_can_expr = Loc::at(loc_expr.region, Expr::Closure(closure_data));
 
                     let def = single_can_def(
                         loc_can_pattern,
@@ -1237,7 +1219,13 @@ fn canonicalize_pending_value_def<'a>(
                         def,
                     }
                 }
+
                 _ => {
+                    let (loc_can_expr, can_output) =
+                        canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+
+                    output.references.union_mut(&can_output.references);
+
                     let refs = can_output.references.clone();
 
                     let def = single_can_def(
