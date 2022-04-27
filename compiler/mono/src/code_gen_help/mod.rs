@@ -396,7 +396,7 @@ impl<'a> CodeGenHelp<'a> {
     }
 
     fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
-        let ident_id = ident_ids.add(Ident::from(debug_name));
+        let ident_id = ident_ids.add_ident(&Ident::from(debug_name));
         Symbol::new(self.home, ident_id)
     }
 

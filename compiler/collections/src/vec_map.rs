@@ -54,7 +54,7 @@ impl<K: PartialEq, V> VecMap<K, V> {
         }
     }
 
-    pub fn contains(&self, key: &K) -> bool {
+    pub fn contains_key(&self, key: &K) -> bool {
         self.keys.contains(key)
     }
 
@@ -65,6 +65,34 @@ impl<K: PartialEq, V> VecMap<K, V> {
             }
             Some(index) => {
                 self.swap_remove(index);
+            }
+        }
+    }
+
+    pub fn get(&self, key: &K) -> Option<&V> {
+        match self.keys.iter().position(|x| x == key) {
+            None => None,
+            Some(index) => Some(&self.values[index]),
+        }
+    }
+
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        match self.keys.iter().position(|x| x == key) {
+            None => None,
+            Some(index) => Some(&mut self.values[index]),
+        }
+    }
+
+    pub fn get_or_insert(&mut self, key: K, default_value: impl Fn() -> V) -> &mut V {
+        match self.keys.iter().position(|x| x == &key) {
+            Some(index) => &mut self.values[index],
+            None => {
+                let value = default_value();
+
+                self.keys.push(key);
+                self.values.push(value);
+
+                self.values.last_mut().unwrap()
             }
         }
     }

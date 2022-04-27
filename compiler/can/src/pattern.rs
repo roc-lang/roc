@@ -501,7 +501,7 @@ pub fn canonicalize_pattern<'a>(
 
                     RequiredField(label, loc_guard) => {
                         // a guard does not introduce the label into scope!
-                        let symbol = scope.ignore(label.into(), &mut env.ident_ids);
+                        let symbol = scope.ignore(&Ident::from(label), &mut env.ident_ids);
                         let can_guard = canonicalize_pattern(
                             env,
                             var_store,

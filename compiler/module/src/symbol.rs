@@ -1,6 +1,6 @@
 use crate::ident::{Ident, ModuleName};
 use crate::module_err::{IdentIdNotFound, ModuleIdNotFound, ModuleResult};
-use roc_collections::all::{default_hasher, MutMap, SendMap};
+use roc_collections::{default_hasher, MutMap, SendMap, SmallStringInterner, VecMap};
 use roc_ident::IdentStr;
 use roc_region::all::Region;
 use snafu::OptionExt;
@@ -68,10 +68,6 @@ impl Symbol {
     }
 
     pub fn as_str(self, interns: &Interns) -> &str {
-        self.ident_str(interns).as_str()
-    }
-
-    pub fn ident_str(self, interns: &Interns) -> &IdentStr {
         let ident_ids = interns
             .all_ident_ids
             .get(&self.module_id())
@@ -83,16 +79,13 @@ impl Symbol {
                 )
             });
 
-        ident_ids
-            .get_name(self.ident_id())
-            .unwrap_or_else(|| {
-                panic!(
-                    "ident_string's IdentIds did not contain an entry for {} in module {:?}",
-                    self.ident_id().0,
-                    self.module_id()
-                )
-            })
-            .into()
+        ident_ids.get_name(self.ident_id()).unwrap_or_else(|| {
+            panic!(
+                "ident_string's IdentIds did not contain an entry for {} in module {:?}",
+                self.ident_id().0,
+                self.module_id()
+            )
+        })
     }
 
     pub fn as_u64(self) -> u64 {
@@ -103,13 +96,13 @@ impl Symbol {
         let module_id = self.module_id();
 
         if module_id == home {
-            self.ident_str(interns).clone().into()
+            ModuleName::from(self.as_str(interns))
         } else {
             // TODO do this without format! to avoid allocation for short strings
             format!(
                 "{}.{}",
                 self.module_string(interns).as_str(),
-                self.ident_str(interns)
+                self.as_str(interns)
             )
             .into()
         }
@@ -214,7 +207,7 @@ lazy_static! {
 #[derive(Debug, Default)]
 pub struct Interns {
     pub module_ids: ModuleIds,
-    pub all_ident_ids: MutMap<ModuleId, IdentIds>,
+    pub all_ident_ids: IdentIdsByModule,
 }
 
 impl Interns {
@@ -256,7 +249,7 @@ impl Interns {
 }
 
 pub fn get_module_ident_ids<'a>(
-    all_ident_ids: &'a MutMap<ModuleId, IdentIds>,
+    all_ident_ids: &'a IdentIdsByModule,
     module_id: &ModuleId,
 ) -> ModuleResult<&'a IdentIds> {
     all_ident_ids
@@ -268,7 +261,7 @@ pub fn get_module_ident_ids<'a>(
 }
 
 pub fn get_module_ident_ids_mut<'a>(
-    all_ident_ids: &'a mut MutMap<ModuleId, IdentIds>,
+    all_ident_ids: &'a mut IdentIdsByModule,
     module_id: &ModuleId,
 ) -> ModuleResult<&'a mut IdentIds> {
     all_ident_ids
@@ -529,89 +522,37 @@ impl ModuleIds {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IdentId(u32);
 
-/// Stores a mapping between IdentId and InlinableString.
-///
-/// Each module name is stored twice, for faster lookups.
-/// Since these are interned strings, this shouldn't result in many total allocations in practice.
+/// Stores a mapping between Ident and IdentId.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
-    /// Each IdentId is an index into this Vec
-    by_id: Vec<Ident>,
-
-    next_generated_name: u32,
+    interner: SmallStringInterner,
 }
 
 impl IdentIds {
-    pub fn idents(&self) -> impl Iterator<Item = (IdentId, &Ident)> {
-        self.by_id
+    pub fn ident_strs(&self) -> impl Iterator<Item = (IdentId, &str)> {
+        self.interner
             .iter()
             .enumerate()
             .map(|(index, ident)| (IdentId(index as u32), ident))
     }
 
-    pub fn add(&mut self, ident_name: Ident) -> IdentId {
-        let by_id = &mut self.by_id;
-        let ident_id = IdentId(by_id.len() as u32);
-
-        by_id.push(ident_name);
-
-        ident_id
+    pub fn add_ident(&mut self, ident_name: &Ident) -> IdentId {
+        IdentId(self.interner.insert(ident_name.as_str()) as u32)
     }
 
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
         match self.get_id(name) {
             Some(id) => id,
-            None => {
-                let ident_id = IdentId(self.by_id.len() as u32);
-
-                self.by_id.push(name.clone());
-
-                ident_id
-            }
+            None => self.add_ident(name),
         }
     }
 
     // necessary when the name of a value is changed in the editor
     // TODO fix when same ident_name is present multiple times, see issue #2548
-    pub fn update_key(
-        &mut self,
-        old_ident_name: &str,
-        new_ident_name: &str,
-    ) -> Result<IdentId, String> {
-        let old_ident: Ident = old_ident_name.into();
-
-        let ident_id_ref_opt = self.get_id(&old_ident);
-
-        match ident_id_ref_opt {
-            Some(ident_id_ref) => {
-                let ident_id = ident_id_ref;
-
-                let by_id = &mut self.by_id;
-                let key_index_opt = by_id.iter().position(|x| *x == old_ident);
-
-                if let Some(key_index) = key_index_opt {
-                    if let Some(vec_elt) = by_id.get_mut(key_index) {
-                        *vec_elt = new_ident_name.into();
-                    } else {
-                        // we get the index from by_id
-                        unreachable!()
-                    }
-
-                    Ok(ident_id)
-                } else {
-                    Err(
-                        format!(
-                            "Tried to find position of key {:?} in IdentIds.by_id but I could not find the key. IdentIds.by_id: {:?}",
-                            old_ident_name,
-                            self.by_id
-                        )
-                    )
-                }
-            }
-            None => Err(format!(
-                "Tried to update key in IdentIds ({:?}) but I could not find the key ({}).",
-                self.by_id, old_ident_name
-            )),
+    pub fn update_key(&mut self, old_name: &str, new_name: &str) -> Result<IdentId, String> {
+        match self.interner.find_and_update(old_name, new_name) {
+            Some(index) => Ok(IdentId(index as u32)),
+            None => Err(format!("The identifier {:?} is not in IdentIds", old_name)),
         }
     }
 
@@ -623,48 +564,127 @@ impl IdentIds {
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique(&mut self) -> IdentId {
-        use std::fmt::Write;
-
-        let index: u32 = self.next_generated_name;
-        self.next_generated_name += 1;
-
-        // "4294967296" is 10 characters
-        let mut buffer: arrayvec::ArrayString<10> = arrayvec::ArrayString::new();
-
-        write!(buffer, "{}", index).unwrap();
-        let ident = Ident(IdentStr::from_str(buffer.as_str()));
-
-        self.add(ident)
+        IdentId(self.interner.insert_index_str() as u32)
     }
 
     #[inline(always)]
     pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
-        for (id, ident) in self.idents() {
-            if ident_name == ident {
-                return Some(id);
-            }
-        }
-
-        None
+        self.interner
+            .find_index(ident_name.as_str())
+            .map(|i| IdentId(i as u32))
     }
 
-    pub fn get_name(&self, id: IdentId) -> Option<&Ident> {
-        self.by_id.get(id.0 as usize)
+    pub fn get_name(&self, id: IdentId) -> Option<&str> {
+        self.interner.try_get(id.0 as usize)
     }
 
     pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
-        Ok(self
-            .get_name(ident_id)
-            .with_context(|| IdentIdNotFound {
-                ident_id,
-                ident_ids_str: format!("{:?}", self),
-            })?
-            .as_inline_str()
-            .as_str())
+        self.get_name(ident_id).with_context(|| IdentIdNotFound {
+            ident_id,
+            ident_ids_str: format!("{:?}", self),
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct IdentIdsByModule(VecMap<ModuleId, IdentIds>);
+
+impl IdentIdsByModule {
+    pub fn get_or_insert(&mut self, module_id: ModuleId) -> &mut IdentIds {
+        self.0.get_or_insert(module_id, IdentIds::default)
+    }
+
+    pub fn get_mut(&mut self, key: &ModuleId) -> Option<&mut IdentIds> {
+        self.0.get_mut(key)
+    }
+
+    pub fn get(&self, key: &ModuleId) -> Option<&IdentIds> {
+        self.0.get(key)
+    }
+
+    pub fn insert(&mut self, key: ModuleId, value: IdentIds) -> Option<IdentIds> {
+        self.0.insert(key, value)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &ModuleId> {
+        self.0.keys()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
 // BUILTINS
+
+const fn offset_helper<const N: usize>(mut array: [u32; N]) -> [u32; N] {
+    let mut sum = 0u32;
+
+    let mut i = 0;
+    while i < N {
+        // In rust 1.60 change to: (array[i], sum) = (sum, sum + array[i]);
+        let temp = array[i];
+        array[i] = sum;
+        sum += temp;
+
+        i += 1;
+    }
+
+    array
+}
+
+const fn byte_slice_equality(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+
+        i += 1;
+    }
+
+    true
+}
+
+const fn find_duplicates<const N: usize>(array: [&str; N]) -> Option<(usize, usize)> {
+    let mut i = 0;
+    while i < N {
+        let needle = array[i];
+        let mut j = i + 1;
+        while j < N {
+            if byte_slice_equality(needle.as_bytes(), array[j].as_bytes()) {
+                return Some((i, j));
+            }
+
+            j += 1;
+        }
+
+        i += 1;
+    }
+
+    None
+}
+
+const fn check_indices<const N: usize>(array: [u32; N]) -> Option<(u32, usize)> {
+    let mut i = 0;
+    while i < N {
+        if array[i] as usize != i {
+            return Some((array[i], i));
+        }
+
+        i += 1;
+    }
+
+    None
+}
 
 macro_rules! define_builtins {
     {
@@ -678,51 +698,50 @@ macro_rules! define_builtins {
         num_modules: $total:literal
     } => {
         impl IdentIds {
-            pub fn exposed_builtins(extra_capacity: usize) -> MutMap<ModuleId, IdentIds> {
-                let mut exposed_idents_by_module = HashMap::with_capacity_and_hasher(extra_capacity + $total, default_hasher());
+            pub fn exposed_builtins(extra_capacity: usize) -> IdentIdsByModule {
+                let mut exposed_idents_by_module = VecMap::with_capacity(extra_capacity + $total);
 
                 $(
-                    debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), "Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
+                    debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), r"Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
 
-                    let mut by_id : Vec<Ident> = Vec::new();
                     let ident_ids = {
-                            $(
-                                debug_assert!(by_id.len() == $ident_id, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {:?} to {} …: {:?} instead.", $ident_id, $ident_name, $module_id, $module_name, $ident_id, by_id.len(), $ident_id, $ident_name, by_id.len(), $ident_name);
+                        const TOTAL : usize = [ $($ident_name),+ ].len();
+                        const NAMES : [ &str; TOTAL] = [ $($ident_name),+ ];
+                        const LENGTHS: [ u16; TOTAL] = [ $($ident_name.len() as u16),+ ];
+                        const OFFSETS: [ u32; TOTAL] = offset_helper([ $($ident_name.len() as u32),+ ]);
+                        const BUFFER: &str = concat!($($ident_name),+);
 
-                                by_id.push($ident_name.into());
-                            )+
+                        const LENGTH_CHECK: Option<(u32, usize)> = check_indices([ $($ident_id),+ ]);
+                        const DUPLICATE_CHECK: Option<(usize, usize)> = find_duplicates(NAMES);
 
-                            #[cfg(debug_assertions)]
-                            {
-                                let mut cloned = by_id.clone();
-                                let before = cloned.len();
-                                cloned.sort();
-                                cloned.dedup();
-                                let after = cloned.len();
-
-
-                                if before != after {
-                                    let mut duplicates : Vec<&Ident> = Vec::new();
-                                    let mut temp : Vec<&Ident> = Vec::new();
-
-                                    for symbol in cloned.iter() {
-                                        if temp.contains(&&symbol) {
-                                            duplicates.push(symbol);
-                                        }
-
-                                        temp.push(&symbol);
-                                    }
-
-
-                                    panic!("duplicate symbols in IdentIds for module {:?}: {:?}", $module_name, duplicates);
-                                }
-                            }
-
-                            IdentIds {
-                                by_id,
-                                next_generated_name: 0,
+                        if cfg!(debug_assertions) {
+                            match LENGTH_CHECK {
+                                None => (),
+                                Some((given, expected)) => panic!(
+                                    "Symbol {} : {} should have index {} based on the insertion order, try {} : {} instead",
+                                    given, NAMES[expected], expected, expected, NAMES[expected],
+                                ),
                             }
                         };
+
+                        if cfg!(debug_assertions) {
+                            match DUPLICATE_CHECK {
+                                None => (),
+                                Some((first, second)) => panic!(
+                                    "Symbol {} : {} is duplicated at position {}, try removing the duplicate",
+                                    first, NAMES[first], second
+                                ),
+                            }
+                        };
+
+                        let interner = SmallStringInterner::from_parts (
+                            BUFFER.as_bytes().to_vec(),
+                            LENGTHS.to_vec(),
+                            OFFSETS.to_vec(),
+                        );
+
+                        IdentIds{ interner }
+                    };
 
                     if cfg!(debug_assertions) {
                         let module_id = ModuleId($module_id);
@@ -732,6 +751,7 @@ macro_rules! define_builtins {
                         module_id.register_debug_idents(&ident_ids);
                     }
 
+
                     exposed_idents_by_module.insert(
                         ModuleId($module_id),
                         ident_ids
@@ -740,7 +760,7 @@ macro_rules! define_builtins {
 
                 debug_assert!(exposed_idents_by_module.len() == $total, "Error setting up Builtins: `total:` is set to the wrong amount. It was set to {} but {} modules were set up.", $total, exposed_idents_by_module.len());
 
-                exposed_idents_by_module
+                IdentIdsByModule(exposed_idents_by_module)
             }
         }
 

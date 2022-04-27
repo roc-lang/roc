@@ -10,7 +10,7 @@ use bumpalo::Bump;
 use roc_collections::{MutMap, SendMap, VecSet};
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
-use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_parse::header::HeaderFor;
 use roc_parse::pattern::PatternType;
@@ -170,7 +170,7 @@ pub fn canonicalize_module_defs<'a>(
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
-    dep_idents: &'a MutMap<ModuleId, IdentIds>,
+    dep_idents: &'a IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &VecSet<Symbol>,
