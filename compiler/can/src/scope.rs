@@ -196,10 +196,6 @@ impl Scope {
         self.idents.get_index(ident).is_some()
     }
 
-    pub fn contains_symbol(&self, symbol: Symbol) -> bool {
-        self.idents.symbols.contains(&symbol)
-    }
-
     pub fn num_idents(&self) -> usize {
         self.idents.len()
     }
