@@ -1185,94 +1185,82 @@ fn canonicalize_pending_body<'a>(
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
 ) -> DefOutput {
-    // Make types for the body expr, even if we won't end up having a body.
+    // We treat closure definitions `foo = \a, b -> ...` differntly from other body expressions,
+    // because they need more bookkeeping (for tail calls, closure captures, etc.)
+    //
+    // Only defs of the form `foo = ...` can be closure declarations or self tail calls.
+    let (loc_can_expr, def_references) = {
+        match (&loc_can_pattern.value, &loc_expr.value) {
+            (
+                Pattern::Identifier(defined_symbol)
+                | Pattern::AbilityMemberSpecialization {
+                    ident: defined_symbol,
+                    ..
+                },
+                ast::Expr::Closure(arguments, body),
+            ) => {
+                // bookkeeping for tail-call detection.
+                let outer_tailcallable = env.tailcallable_symbol;
+                env.tailcallable_symbol = Some(*defined_symbol);
+
+                let (mut closure_data, can_output) = crate::expr::canonicalize_closure(
+                    env,
+                    var_store,
+                    scope,
+                    arguments,
+                    body,
+                    Some(*defined_symbol),
+                );
+
+                // reset the tailcallable_symbol
+                env.tailcallable_symbol = outer_tailcallable;
+
+                // The closure is self tail recursive iff it tail calls itself (by defined name).
+                let is_recursive = match can_output.tail_call {
+                    Some(tail_symbol) if tail_symbol == *defined_symbol => Recursive::TailRecursive,
+                    _ => Recursive::NotRecursive,
+                };
+
+                closure_data.recursive = is_recursive;
+                closure_data.name = *defined_symbol;
+
+                let loc_can_expr = Loc::at(loc_expr.region, Expr::Closure(closure_data));
+
+                let def_references = DefReferences::Function(can_output.references.clone());
+                output.union(can_output);
+
+                (loc_can_expr, def_references)
+            }
+
+            _ => {
+                let (loc_can_expr, can_output) =
+                    canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+
+                let def_references = DefReferences::Value(can_output.references.clone());
+                output.union(can_output);
+
+                (loc_can_expr, def_references)
+            }
+        }
+    };
+
     let expr_var = var_store.fresh();
     let mut vars_by_symbol = SendMap::default();
 
     pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
 
-    // First, make sure we are actually assigning an identifier instead of (for example) a tag.
-    //
-    // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
-    // which also implies it's not a self tail call!
-    //
-    // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-    match (&loc_can_pattern.value, &loc_expr.value) {
-        (
-            Pattern::Identifier(defined_symbol)
-            | Pattern::AbilityMemberSpecialization {
-                ident: defined_symbol,
-                ..
-            },
-            ast::Expr::Closure(arguments, body),
-        ) => {
-            // bookkeeping for tail-call detection. If we're assigning to an
-            // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
-            let outer_identifier = env.tailcallable_symbol;
-            env.tailcallable_symbol = Some(*defined_symbol);
+    let def = single_can_def(
+        loc_can_pattern,
+        loc_can_expr,
+        expr_var,
+        opt_loc_annotation,
+        vars_by_symbol,
+    );
 
-            let (mut closure_data, can_output) = crate::expr::canonicalize_closure(
-                env,
-                var_store,
-                scope,
-                arguments,
-                body,
-                Some(*defined_symbol),
-            );
-
-            // reset the tailcallable_symbol
-            env.tailcallable_symbol = outer_identifier;
-
-            // The closure is self tail recursive iff it tail calls itself (by defined name).
-            let is_recursive = match can_output.tail_call {
-                Some(tail_symbol) if tail_symbol == *defined_symbol => Recursive::TailRecursive,
-                _ => Recursive::NotRecursive,
-            };
-
-            closure_data.recursive = is_recursive;
-            closure_data.name = *defined_symbol;
-
-            let loc_can_expr = Loc::at(loc_expr.region, Expr::Closure(closure_data));
-
-            let def = single_can_def(
-                loc_can_pattern,
-                loc_can_expr,
-                expr_var,
-                opt_loc_annotation,
-                vars_by_symbol,
-            );
-
-            let closure_references = can_output.references.clone();
-            output.union(can_output);
-
-            DefOutput {
-                output,
-                references: DefReferences::Function(closure_references),
-                def,
-            }
-        }
-
-        _ => {
-            let (loc_can_expr, can_output) =
-                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
-
-            let def = single_can_def(
-                loc_can_pattern,
-                loc_can_expr,
-                expr_var,
-                opt_loc_annotation,
-                vars_by_symbol,
-            );
-
-            let refs = can_output.references.clone();
-            output.union(can_output);
-
-            DefOutput {
-                output,
-                references: DefReferences::Value(refs),
-                def,
-            }
-        }
+    DefOutput {
+        output,
+        references: def_references,
+        def,
     }
 }
 
