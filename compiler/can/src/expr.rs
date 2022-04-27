@@ -685,8 +685,14 @@ pub fn canonicalize_expr<'a>(
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches.iter() {
-                let (can_when_branch, branch_references) =
-                    canonicalize_when_branch(env, var_store, scope, region, *branch, &mut output);
+                let (can_when_branch, branch_references) = canonicalize_when_branch(
+                    env,
+                    var_store,
+                    scope.clone(),
+                    region,
+                    *branch,
+                    &mut output,
+                );
 
                 output.references.union_mut(&branch_references);
 
@@ -1055,15 +1061,12 @@ pub fn canonicalize_closure<'a>(
 fn canonicalize_when_branch<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
-    scope: &mut Scope,
+    mut scope: Scope,
     _region: Region,
     branch: &'a ast::WhenBranch<'a>,
     output: &mut Output,
 ) -> (WhenBranch, References) {
     let mut patterns = Vec::with_capacity(branch.patterns.len());
-
-    let original_scope = scope;
-    let mut scope = original_scope.clone();
 
     // TODO report symbols not bound in all patterns
     for loc_pattern in branch.patterns.iter() {
