@@ -515,37 +515,11 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
-    let f64_type = ctx.f64_type();
     let i1_type = ctx.bool_type();
-    let i8_type = ctx.i8_type();
-    let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
-    let i32_type = ctx.i32_type();
-    let i64_type = ctx.i64_type();
 
     if let Some(func) = module.get_function("__muloti4") {
         func.set_linkage(Linkage::WeakAny);
     }
-
-    add_intrinsic(
-        ctx,
-        module,
-        LLVM_FRAME_ADDRESS,
-        i8_ptr_type.fn_type(&[i32_type.into()], false),
-    );
-
-    add_intrinsic(
-        ctx,
-        module,
-        LLVM_STACK_SAVE,
-        i8_ptr_type.fn_type(&[], false),
-    );
-
-    add_intrinsic(
-        ctx,
-        module,
-        LLVM_LROUND_I64_F64,
-        i64_type.fn_type(&[f64_type.into()], false),
-    );
 
     add_float_intrinsic(ctx, module, &LLVM_LOG, |t| t.fn_type(&[t.into()], false));
     add_float_intrinsic(ctx, module, &LLVM_POW, |t| {
@@ -598,11 +572,6 @@ static LLVM_FLOOR: IntrinsicName = float_intrinsic!("llvm.floor");
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
-static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
-
-// static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress";
-static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0i8";
-static LLVM_STACK_SAVE: &str = "llvm.stacksave";
 
 const LLVM_ADD_WITH_OVERFLOW: IntrinsicName =
     llvm_int_intrinsic!("llvm.sadd.with.overflow", "llvm.uadd.with.overflow");
