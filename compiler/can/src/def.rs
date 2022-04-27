@@ -1020,12 +1020,12 @@ fn canonicalize_pending_value_def<'a>(
 ) -> DefOutput {
     use PendingValueDef::*;
 
-    // Make types for the body expr, even if we won't end up having a body.
-    let expr_var = var_store.fresh();
-    let mut vars_by_symbol = SendMap::default();
-
     match pending_def {
         AnnotationOnly(_, loc_can_pattern, loc_ann) => {
+            // Make types for the body expr, even if we won't end up having a body.
+            let expr_var = var_store.fresh();
+            let mut vars_by_symbol = SendMap::default();
+
             // annotation sans body cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
             let type_annotation = canonicalize_annotation(
@@ -1146,210 +1146,130 @@ fn canonicalize_pending_value_def<'a>(
                 .introduced_variables
                 .union(&type_annotation.introduced_variables);
 
-            pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
-
-            // First, make sure we are actually assigning an identifier instead of (for example) a tag.
-            //
-            // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
-            // which also implies it's not a self tail call!
-            //
-            // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            match (&loc_can_pattern.value, &loc_expr.value) {
-                (
-                    Pattern::Identifier(symbol)
-                    | Pattern::AbilityMemberSpecialization { ident: symbol, .. },
-                    ast::Expr::Closure(arguments, body),
-                ) => {
-                    // bookkeeping for tail-call detection. If we're assigning to an
-                    // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
-                    let outer_identifier = env.tailcallable_symbol;
-
-                    if let Pattern::Identifier(ref defined_symbol) = &loc_can_pattern.value {
-                        env.tailcallable_symbol = Some(*defined_symbol);
-                    };
-
-                    // register the name of this closure, to make sure the closure won't capture it's own name
-                    if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
-                        (&loc_can_pattern.value, &loc_expr.value)
-                    {
-                        env.closure_name_symbol = Some(*defined_symbol);
-                    };
-
-                    let (mut closure_data, can_output) =
-                        crate::expr::canonicalize_closure(env, var_store, scope, arguments, body);
-
-                    // reset the tailcallable_symbol
-                    env.tailcallable_symbol = outer_identifier;
-
-                    let closure_references = can_output.references.clone();
-                    output.references.union_mut(&can_output.references);
-
-                    // The closure is self tail recursive iff it tail calls itself (by defined name).
-                    let is_recursive = match can_output.tail_call {
-                        Some(tail_symbol) if tail_symbol == *symbol => Recursive::TailRecursive,
-                        _ => Recursive::NotRecursive,
-                    };
-
-                    closure_data.recursive = is_recursive;
-                    closure_data.name = *symbol;
-
-                    let loc_can_expr = Loc::at(loc_expr.region, Expr::Closure(closure_data));
-
-                    let def = single_can_def(
-                        loc_can_pattern,
-                        loc_can_expr,
-                        expr_var,
-                        Some(Loc::at(loc_ann.region, type_annotation)),
-                        vars_by_symbol.clone(),
-                    );
-
-                    output.union(can_output);
-
-                    DefOutput {
-                        output,
-                        references: DefReferences::Function(closure_references),
-                        def,
-                    }
-                }
-
-                _ => {
-                    let (loc_can_expr, can_output) =
-                        canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
-
-                    output.references.union_mut(&can_output.references);
-
-                    let refs = can_output.references.clone();
-
-                    let def = single_can_def(
-                        loc_can_pattern,
-                        loc_can_expr,
-                        expr_var,
-                        Some(Loc::at(loc_ann.region, type_annotation)),
-                        vars_by_symbol.clone(),
-                    );
-
-                    output.union(can_output);
-
-                    DefOutput {
-                        output,
-                        references: DefReferences::Value(refs),
-                        def,
-                    }
-                }
-            }
+            canonicalize_pending_body(
+                env,
+                output,
+                scope,
+                var_store,
+                loc_can_pattern,
+                loc_expr,
+                Some(Loc::at(loc_ann.region, type_annotation)),
+            )
         }
-        // If we have a pattern, then the def has a body (that is, it's not a
-        // standalone annotation), so we need to canonicalize the pattern and expr.
-        Body(loc_pattern, loc_can_pattern, loc_expr) => {
+        Body(_loc_pattern, loc_can_pattern, loc_expr) => {
+            //
+            canonicalize_pending_body(
+                env,
+                output,
+                scope,
+                var_store,
+                loc_can_pattern,
+                loc_expr,
+                None,
+            )
+        }
+    }
+}
+
+// TODO trim down these arguments!
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::cognitive_complexity)]
+fn canonicalize_pending_body<'a>(
+    env: &mut Env<'a>,
+    mut output: Output,
+    scope: &mut Scope,
+    var_store: &mut VarStore,
+
+    loc_can_pattern: Loc<Pattern>,
+    loc_expr: &'a Loc<ast::Expr>,
+
+    opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
+) -> DefOutput {
+    // Make types for the body expr, even if we won't end up having a body.
+    let expr_var = var_store.fresh();
+    let mut vars_by_symbol = SendMap::default();
+
+    pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
+
+    // First, make sure we are actually assigning an identifier instead of (for example) a tag.
+    //
+    // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
+    // which also implies it's not a self tail call!
+    //
+    // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
+    match (&loc_can_pattern.value, &loc_expr.value) {
+        (
+            Pattern::Identifier(defined_symbol)
+            | Pattern::AbilityMemberSpecialization {
+                ident: defined_symbol,
+                ..
+            },
+            ast::Expr::Closure(arguments, body),
+        ) => {
             // bookkeeping for tail-call detection. If we're assigning to an
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
             let outer_identifier = env.tailcallable_symbol;
-
-            if let (&ast::Pattern::Identifier(_name), &Pattern::Identifier(ref defined_symbol)) =
-                (&loc_pattern.value, &loc_can_pattern.value)
-            {
-                env.tailcallable_symbol = Some(*defined_symbol);
-
-                // TODO isn't types_by_symbol enough? Do we need vars_by_symbol too?
-                vars_by_symbol.insert(*defined_symbol, expr_var);
-            };
+            env.tailcallable_symbol = Some(*defined_symbol);
 
             // register the name of this closure, to make sure the closure won't capture it's own name
-            if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
-                (&loc_can_pattern.value, &loc_expr.value)
-            {
-                env.closure_name_symbol = Some(*defined_symbol);
-            };
+            env.closure_name_symbol = Some(*defined_symbol);
 
-            let (mut loc_can_expr, can_output) =
-                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+            let (mut closure_data, can_output) =
+                crate::expr::canonicalize_closure(env, var_store, scope, arguments, body);
 
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
 
-            // First, make sure we are actually assigning an identifier instead of (for example) a tag.
-            //
-            // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
-            // which also implies it's not a self tail call!
-            //
-            // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            match (&loc_can_pattern.value, &loc_can_expr.value) {
-                (
-                    Pattern::Identifier(symbol),
-                    Closure(ClosureData {
-                        function_type,
-                        closure_type,
-                        closure_ext_var,
-                        return_type,
-                        name: closure_name,
-                        arguments,
-                        loc_body: body,
-                        captured_symbols,
-                        ..
-                    }),
-                ) => {
-                    // Since everywhere in the code it'll be referred to by its defined name,
-                    // remove its generated name from the closure map. (We'll re-insert it later.)
-                    let closure_references  = env.closures.remove(closure_name).unwrap_or_else(|| {
-                            panic!(
-                                "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                                closure_name, env.closures
-                            )
-                        });
+            let closure_references = can_output.references.clone();
+            output.references.union_mut(&can_output.references);
 
-                    // The closure is self tail recursive iff it tail calls itself (by defined name).
-                    let is_recursive = match can_output.tail_call {
-                        Some(tail_symbol) if tail_symbol == *symbol => Recursive::TailRecursive,
-                        _ => Recursive::NotRecursive,
-                    };
+            // The closure is self tail recursive iff it tail calls itself (by defined name).
+            let is_recursive = match can_output.tail_call {
+                Some(tail_symbol) if tail_symbol == *defined_symbol => Recursive::TailRecursive,
+                _ => Recursive::NotRecursive,
+            };
 
-                    loc_can_expr.value = Closure(ClosureData {
-                        function_type: *function_type,
-                        closure_type: *closure_type,
-                        closure_ext_var: *closure_ext_var,
-                        return_type: *return_type,
-                        name: *symbol,
-                        captured_symbols: captured_symbols.clone(),
-                        recursive: is_recursive,
-                        arguments: arguments.clone(),
-                        loc_body: body.clone(),
-                    });
+            closure_data.recursive = is_recursive;
+            closure_data.name = *defined_symbol;
 
-                    let def = single_can_def(
-                        loc_can_pattern,
-                        loc_can_expr,
-                        expr_var,
-                        None,
-                        vars_by_symbol.clone(),
-                    );
+            let loc_can_expr = Loc::at(loc_expr.region, Expr::Closure(closure_data));
 
-                    output.union(can_output);
+            let def = single_can_def(
+                loc_can_pattern,
+                loc_can_expr,
+                expr_var,
+                opt_loc_annotation,
+                vars_by_symbol,
+            );
 
-                    DefOutput {
-                        output,
-                        references: DefReferences::Function(closure_references),
-                        def,
-                    }
-                }
-                _ => {
-                    let refs = can_output.references.clone();
+            output.union(can_output);
 
-                    let def = single_can_def(
-                        loc_can_pattern,
-                        loc_can_expr,
-                        expr_var,
-                        None,
-                        vars_by_symbol.clone(),
-                    );
+            DefOutput {
+                output,
+                references: DefReferences::Function(closure_references),
+                def,
+            }
+        }
 
-                    output.union(can_output);
+        _ => {
+            let (loc_can_expr, can_output) =
+                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
 
-                    DefOutput {
-                        output,
-                        references: DefReferences::Value(refs),
-                        def,
-                    }
-                }
+            let def = single_can_def(
+                loc_can_pattern,
+                loc_can_expr,
+                expr_var,
+                opt_loc_annotation,
+                vars_by_symbol,
+            );
+
+            let refs = can_output.references.clone();
+            output.union(can_output);
+
+            DefOutput {
+                output,
+                references: DefReferences::Value(refs),
+                def,
             }
         }
     }
