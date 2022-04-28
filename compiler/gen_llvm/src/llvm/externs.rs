@@ -224,7 +224,7 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
     }
 }
 
-pub fn build_longjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
+pub fn build_longjmp_call(env: &Env) {
     let jmp_buf = get_sjlj_buffer(env);
     if cfg!(target_arch = "aarch64") {
         // Call the Zig-linked longjmp: `void longjmp(i32*, i32)`
@@ -238,6 +238,6 @@ pub fn build_longjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
             env.context.i8_type().ptr_type(AddressSpace::Generic),
             "jmp_buf i8*",
         );
-        let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p.into()]);
+        let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p]);
     }
 }
