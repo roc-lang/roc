@@ -1657,3 +1657,25 @@ fn issue_2777_default_branch_codegen() {
         RocList<RocStr>
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(expected = "Erroneous")]
+fn issue_2900_unreachable_pattern() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            foo : [ Foo, Bar, Baz, Blah ] -> Str
+            foo = \arg ->
+                when arg is
+                    Foo -> "foo"
+                    AnUnreachableTag -> "blah"
+                    _ -> "other"
+
+            foo Foo
+            "#
+        ),
+        RocStr::from("foo"),
+        RocStr
+    )
+}
