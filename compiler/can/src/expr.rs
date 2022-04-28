@@ -407,7 +407,6 @@ pub fn canonicalize_expr<'a>(
             fields,
             update: loc_update,
         } => {
-            dbg!(&loc_update);
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
             if let Var(symbol) = &can_update.value {
@@ -438,7 +437,6 @@ pub fn canonicalize_expr<'a>(
                     ),
                 }
             } else {
-                dbg!(&can_update.value);
                 // only (optionally qualified) variables can be updated, not arbitrary expressions
 
                 let error = roc_problem::can::RuntimeError::InvalidRecordUpdate {

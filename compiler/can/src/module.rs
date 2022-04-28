@@ -362,7 +362,6 @@ pub fn canonicalize_module_defs<'a>(
 
                 // NOTE this currently builds all functions, not just the ones that the user requested
                 crate::effect_module::build_effect_builtins(
-                    &mut env,
                     &mut scope,
                     effect_symbol,
                     var_store,
@@ -417,7 +416,6 @@ pub fn canonicalize_module_defs<'a>(
                                     };
 
                                     let hosted_def = crate::effect_module::build_host_exposed_def(
-                                        &mut env,
                                         &mut scope,
                                         *symbol,
                                         &ident,
