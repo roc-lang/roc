@@ -751,7 +751,12 @@ pub fn constrain_expr(
             let branch_constraints = constraints.and_constraint(total_cons);
 
             constraints.exists(
-                [exhaustive.0, branches_cond_var, real_cond_var, *expr_var],
+                [
+                    exhaustive.variable_for_introduction(),
+                    branches_cond_var,
+                    real_cond_var,
+                    *expr_var,
+                ],
                 branch_constraints,
             )
         }
@@ -1172,6 +1177,10 @@ fn constrain_when_branch_help(
         constraints: Vec::with_capacity(2),
         delayed_is_open_constraints: Vec::new(),
     };
+
+    state
+        .vars
+        .push(when_branch.redundant.variable_for_introduction());
 
     // TODO investigate for error messages, is it better to unify all branches with a variable,
     // then unify that variable with the expectation?

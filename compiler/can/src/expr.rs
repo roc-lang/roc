@@ -719,7 +719,7 @@ pub fn canonicalize_expr<'a>(
                 loc_cond: Box::new(can_cond),
                 branches: can_branches,
                 branches_cond_var: var_store.fresh(),
-                exhaustive: ExhaustiveMark(var_store.fresh()),
+                exhaustive: ExhaustiveMark::new(var_store),
             };
 
             (expr, output)
@@ -1139,7 +1139,7 @@ fn canonicalize_when_branch<'a>(
             patterns,
             value,
             guard,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         },
         references,
     )
@@ -1377,7 +1377,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                     patterns: branch.patterns,
                     value,
                     guard,
-                    redundant: RedundantMark(var_store.fresh()),
+                    redundant: RedundantMark::new(var_store),
                 };
 
                 new_branches.push(new_branch);

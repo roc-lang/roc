@@ -1209,7 +1209,7 @@ fn build_effect_loop_inner_body(
             patterns: vec![Loc::at_zero(step_pattern)],
             value: Loc::at_zero(force_thunk2),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         }
     };
 
@@ -1221,7 +1221,7 @@ fn build_effect_loop_inner_body(
             patterns: vec![Loc::at_zero(done_pattern)],
             value: Loc::at_zero(Expr::Var(done_symbol)),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         }
     };
 
@@ -1234,7 +1234,7 @@ fn build_effect_loop_inner_body(
         loc_cond: Box::new(force_thunk_call),
         branches,
         branches_cond_var: var_store.fresh(),
-        exhaustive: ExhaustiveMark(var_store.fresh()),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     Expr::LetNonRec(

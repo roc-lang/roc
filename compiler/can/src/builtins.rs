@@ -4686,7 +4686,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4717,7 +4717,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4730,7 +4730,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
-        exhaustive: ExhaustiveMark(var_store.fresh()),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -4787,7 +4787,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4818,7 +4818,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4831,7 +4831,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
-        exhaustive: ExhaustiveMark(var_store.fresh()),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -4864,7 +4864,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_3)),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4885,7 +4885,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_2)),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4898,7 +4898,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
-        exhaustive: ExhaustiveMark(var_store.fresh()),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -4938,7 +4938,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4966,7 +4966,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4979,7 +4979,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
-        exhaustive: ExhaustiveMark(var_store.fresh()),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -5019,7 +5019,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -5047,7 +5047,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -5060,7 +5060,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
-        exhaustive: ExhaustiveMark(var_store.fresh()),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -5112,7 +5112,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -5143,7 +5143,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
-            redundant: RedundantMark(var_store.fresh()),
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -5156,7 +5156,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
         branches_cond_var: var_store.fresh(),
-        exhaustive: ExhaustiveMark(var_store.fresh()),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(

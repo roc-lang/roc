@@ -2093,12 +2093,12 @@ fn pattern_to_when<'a>(
                     patterns: vec![pattern],
                     value: body,
                     guard: None,
-                    // TODO(exhaustive): should come from real var!
-                    redundant: RedundantMark(Variable::EMPTY_TAG_UNION),
+                    // If this type-checked, it's non-redundant
+                    redundant: RedundantMark::known_non_redundant(),
                 }],
                 branches_cond_var: pattern_var,
-                // TODO(exhaustive): should come from real var!
-                exhaustive: ExhaustiveMark(Variable::EMPTY_TAG_UNION),
+                // If this type-checked, it's exhaustive
+                exhaustive: ExhaustiveMark::known_exhaustive(),
             };
 
             (symbol, Loc::at_zero(wrapped_body))
