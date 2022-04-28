@@ -12,6 +12,7 @@ use crate::scope::create_alias;
 use crate::scope::Scope;
 use roc_collections::VecMap;
 use roc_collections::{ImSet, MutMap, SendMap};
+use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::IdentId;
 use roc_module::symbol::ModuleId;
@@ -107,7 +108,7 @@ enum PendingTypeDef<'a> {
     },
 
     /// An invalid alias, that is ignored in the rest of the pipeline
-    /// e.g. a shadowed alias, or a definition like `MyAlias 1 : Int`
+    /// e.g. a definition like `MyAlias 1 : Int`
     /// with an incorrect pattern
     InvalidAlias {
         #[allow(dead_code)]
@@ -115,6 +116,9 @@ enum PendingTypeDef<'a> {
         symbol: Symbol,
         region: Region,
     },
+
+    /// An alias with a name that shadows another symbol
+    ShadowedAlias,
 
     /// An invalid ability, that is ignored in the rest of the pipeline.
     /// E.g. a shadowed ability, or with a bad definition.
@@ -137,6 +141,7 @@ impl PendingTypeDef<'_> {
             }
             PendingTypeDef::Ability { name, .. } => Some((name.value, name.region)),
             PendingTypeDef::InvalidAlias { symbol, region, .. } => Some((*symbol, *region)),
+            PendingTypeDef::ShadowedAlias { .. } => None,
             PendingTypeDef::InvalidAbility { symbol, region } => Some((*symbol, *region)),
             PendingTypeDef::AbilityNotOnToplevel => None,
             PendingTypeDef::AbilityShadows => None,
@@ -203,10 +208,10 @@ pub(crate) fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
     var_store: &mut VarStore,
-    mut scope: Scope,
+    scope: &mut Scope,
     loc_defs: &'a [&'a Loc<ast::Def<'a>>],
     pattern_type: PatternType,
-) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
+) -> (CanDefs, Output, MutMap<Symbol, Region>) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
     // 1. Go through each of the patterns.
@@ -231,14 +236,14 @@ pub(crate) fn canonicalize_defs<'a>(
     for loc_def in loc_defs {
         match loc_def.value.unroll_def() {
             Ok(type_def) => {
-                pending_type_defs.push(to_pending_type_def(env, type_def, &mut scope, pattern_type))
+                pending_type_defs.push(to_pending_type_def(env, type_def, scope, pattern_type))
             }
             Err(value_def) => value_defs.push(Loc::at(loc_def.region, value_def)),
         }
     }
 
     if cfg!(debug_assertions) {
-        env.home.register_debug_idents(&env.ident_ids);
+        scope.register_debug_idents();
     }
 
     enum TypeDef<'a> {
@@ -273,7 +278,8 @@ pub(crate) fn canonicalize_defs<'a>(
             } => {
                 let referenced_symbols = crate::annotation::find_type_def_symbols(
                     env.home,
-                    &mut env.ident_ids,
+                    // TODO IDENT_IDS
+                    &mut scope.ident_ids,
                     &ann.value,
                 );
 
@@ -290,7 +296,8 @@ pub(crate) fn canonicalize_defs<'a>(
                     // definition.
                     referenced_symbols.extend(crate::annotation::find_type_def_symbols(
                         env.home,
-                        &mut env.ident_ids,
+                        // TODO IDENT_IDS
+                        &mut scope.ident_ids,
                         &member.typ.value,
                     ));
                 }
@@ -302,6 +309,7 @@ pub(crate) fn canonicalize_defs<'a>(
             PendingTypeDef::InvalidAlias { .. }
             | PendingTypeDef::InvalidAbility { .. }
             | PendingTypeDef::AbilityShadows
+            | PendingTypeDef::ShadowedAlias { .. }
             | PendingTypeDef::AbilityNotOnToplevel => { /* ignore */ }
         }
     }
@@ -316,7 +324,7 @@ pub(crate) fn canonicalize_defs<'a>(
                 let symbol = name.value;
                 let can_ann = canonicalize_annotation(
                     env,
-                    &mut scope,
+                    scope,
                     &ann.value,
                     ann.region,
                     var_store,
@@ -440,7 +448,7 @@ pub(crate) fn canonicalize_defs<'a>(
         env,
         &mut output,
         var_store,
-        &mut scope,
+        scope,
         abilities,
         &abilities_in_scope,
         pattern_type,
@@ -459,7 +467,7 @@ pub(crate) fn canonicalize_defs<'a>(
             env,
             var_store,
             loc_def.value,
-            &mut scope,
+            scope,
             &mut new_output,
             pattern_type,
         ) {
@@ -506,7 +514,7 @@ pub(crate) fn canonicalize_defs<'a>(
             env,
             pending_def,
             output,
-            &mut scope,
+            scope,
             var_store,
             &mut aliases,
             &abilities_in_scope,
@@ -519,13 +527,6 @@ pub(crate) fn canonicalize_defs<'a>(
         def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
     }
 
-    // This returns both the defs info as well as the new scope.
-    //
-    // We have to return the new scope because we added defs to it
-    // (and those lookups shouldn't fail later, e.g. when canonicalizing
-    // the return expr), but we didn't want to mutate the original scope
-    // directly because we wanted to keep a clone of it around to diff
-    // when looking for unused idents.
     (
         CanDefs {
             defs,
@@ -533,7 +534,6 @@ pub(crate) fn canonicalize_defs<'a>(
             // The result needs a thread-safe `SendMap`
             aliases,
         },
-        scope,
         output,
         symbols_introduced,
     )
@@ -571,12 +571,7 @@ fn resolve_abilities<'a>(
             let name_region = member.name.region;
             let member_name = member.name.extract_spaces().item;
 
-            let member_sym = match scope.introduce(
-                member_name.into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                name_region,
-            ) {
+            let member_sym = match scope.introduce(member_name.into(), name_region) {
                 Ok(sym) => sym,
                 Err((original_region, shadow, _new_symbol)) => {
                     env.problem(roc_problem::can::Problem::Shadowing {
@@ -1078,7 +1073,7 @@ fn canonicalize_pending_value_def<'a>(
                     region: loc_ann.region,
                 }
             } else {
-                let symbol = env.gen_unique_symbol();
+                let symbol = scope.gen_unique_symbol();
 
                 // generate a fake pattern for each argument. this makes signatures
                 // that are functions only crash when they are applied.
@@ -1189,7 +1184,7 @@ fn canonicalize_pending_body<'a>(
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
 ) -> DefOutput {
-    // We treat closure definitions `foo = \a, b -> ...` differntly from other body expressions,
+    // We treat closure definitions `foo = \a, b -> ...` differently from other body expressions,
     // because they need more bookkeeping (for tail calls, closure captures, etc.)
     //
     // Only defs of the form `foo = ...` can be closure declarations or self tail calls.
@@ -1272,11 +1267,11 @@ fn canonicalize_pending_body<'a>(
 pub fn can_defs_with_return<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
-    scope: Scope,
+    scope: &mut Scope,
     loc_defs: &'a [&'a Loc<ast::Def<'a>>],
     loc_ret: &'a Loc<ast::Expr<'a>>,
 ) -> (Expr, Output) {
-    let (unsorted, mut scope, defs_output, symbols_introduced) = canonicalize_defs(
+    let (unsorted, defs_output, symbols_introduced) = canonicalize_defs(
         env,
         Output::default(),
         var_store,
@@ -1288,7 +1283,7 @@ pub fn can_defs_with_return<'a>(
     // The def as a whole is a tail call iff its return expression is a tail call.
     // Use its output as a starting point because its tail_call already has the right answer!
     let (ret_expr, mut output) =
-        canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
+        canonicalize_expr(env, var_store, scope, loc_ret.region, &loc_ret.value);
 
     output
         .introduced_variables
@@ -1365,12 +1360,7 @@ fn to_pending_type_def<'a>(
 
             let region = Region::span_across(&name.region, &ann.region);
 
-            match scope.introduce(
-                name.value.into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                region,
-            ) {
+            match scope.introduce_without_shadow_symbol(&Ident::from(name.value), region) {
                 Ok(symbol) => {
                     let mut can_rigids: Vec<Loc<Lowercase>> = Vec::with_capacity(vars.len());
 
@@ -1415,18 +1405,14 @@ fn to_pending_type_def<'a>(
                     }
                 }
 
-                Err((original_region, loc_shadowed_symbol, new_symbol)) => {
+                Err((original_region, loc_shadowed_symbol)) => {
                     env.problem(Problem::Shadowing {
                         original_region,
                         shadow: loc_shadowed_symbol,
                         kind: shadow_kind,
                     });
 
-                    PendingTypeDef::InvalidAlias {
-                        kind,
-                        symbol: new_symbol,
-                        region,
-                    }
+                    PendingTypeDef::ShadowedAlias
                 }
             }
         }
@@ -1449,12 +1435,9 @@ fn to_pending_type_def<'a>(
             members,
             loc_has: _,
         } => {
-            let name = match scope.introduce_without_shadow_symbol(
-                name.value.into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                name.region,
-            ) {
+            let name = match scope
+                .introduce_without_shadow_symbol(&Ident::from(name.value), name.region)
+            {
                 Ok(symbol) => Loc::at(name.region, symbol),
                 Err((original_region, shadowed_symbol)) => {
                     env.problem(Problem::Shadowing {

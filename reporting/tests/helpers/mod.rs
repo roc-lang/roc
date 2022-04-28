@@ -151,9 +151,9 @@ pub fn can_expr_with<'a>(
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
-    let mut scope = Scope::new_with_aliases(home, &mut var_store);
+    let mut scope = Scope::new_with_aliases(home, &mut var_store, IdentIds::default());
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(home, &dep_idents, &module_ids, IdentIds::default());
+    let mut env = Env::new(home, &dep_idents, &module_ids);
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,
@@ -184,7 +184,7 @@ pub fn can_expr_with<'a>(
         introduce_builtin_imports(&mut constraints, imports, constraint, &mut var_store);
 
     let mut all_ident_ids = IdentIds::exposed_builtins(1);
-    all_ident_ids.insert(home, env.ident_ids);
+    all_ident_ids.insert(home, scope.ident_ids);
 
     let interns = Interns {
         module_ids: env.module_ids.clone(),

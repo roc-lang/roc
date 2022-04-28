@@ -866,7 +866,7 @@ mod test_load {
                             Dict
                             Result
                             List
-                            Nat
+                            Box
                         "
                     )
                 )

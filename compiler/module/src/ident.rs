@@ -3,7 +3,7 @@ pub use roc_ident::IdentStr;
 use std::fmt;
 
 /// This could be uppercase or lowercase, qualified or unqualified.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct Ident(pub IdentStr);
 
 impl Ident {

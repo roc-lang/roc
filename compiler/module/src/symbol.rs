@@ -522,6 +522,12 @@ impl ModuleIds {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IdentId(u32);
 
+impl IdentId {
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// Stores a mapping between Ident and IdentId.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
@@ -583,6 +589,14 @@ impl IdentIds {
             ident_id,
             ident_ids_str: format!("{:?}", self),
         })
+    }
+
+    pub fn len(&self) -> usize {
+        self.interner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.interner.is_empty()
     }
 }
 

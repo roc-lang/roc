@@ -685,7 +685,8 @@ pub fn constrain_expr(
                         .clone()
                         .intersection(new_pattern_headers.clone())
                         .is_empty(),
-                    "Two patterns introduce the same symbols - that's a bug!"
+                    "Two patterns introduce the same symbols - that's a bug!\n{:?}",
+                    pattern_headers.clone().intersection(new_pattern_headers)
                 );
                 pattern_headers.extend(new_pattern_headers);
                 pattern_cons.push(pattern_con);

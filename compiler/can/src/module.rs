@@ -107,14 +107,7 @@ impl GeneratedInfo {
                     env.problem(Problem::UnknownGeneratesWith(unknown));
                 }
 
-                let effect_symbol = scope
-                    .introduce(
-                        name.into(),
-                        &env.exposed_ident_ids,
-                        &mut env.ident_ids,
-                        Region::zero(),
-                    )
-                    .unwrap();
+                let effect_symbol = scope.introduce(name.into(), Region::zero()).unwrap();
 
                 {
                     let a_var = var_store.fresh();
@@ -177,8 +170,8 @@ pub fn canonicalize_module_defs<'a>(
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home, var_store);
-    let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
+    let mut scope = Scope::new(home, var_store, exposed_ident_ids);
+    let mut env = Env::new(home, dep_idents, module_ids);
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
@@ -285,11 +278,11 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, mut scope, output, symbols_introduced) = canonicalize_defs(
+    let (defs, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
-        scope,
+        &mut scope,
         &desugared,
         PatternType::TopLevelDef,
     );
@@ -369,7 +362,6 @@ pub fn canonicalize_module_defs<'a>(
 
                 // NOTE this currently builds all functions, not just the ones that the user requested
                 crate::effect_module::build_effect_builtins(
-                    &mut env,
                     &mut scope,
                     effect_symbol,
                     var_store,
@@ -414,7 +406,7 @@ pub fn canonicalize_module_defs<'a>(
                                     let symbol = def.pattern_vars.iter().next().unwrap().0;
                                     let ident_id = symbol.ident_id();
                                     let ident =
-                                        env.ident_ids.get_name(ident_id).unwrap().to_string();
+                                        scope.ident_ids.get_name(ident_id).unwrap().to_string();
                                     let def_annotation = def.annotation.clone().unwrap();
                                     let annotation = crate::annotation::Annotation {
                                         typ: def_annotation.signature,
@@ -424,7 +416,6 @@ pub fn canonicalize_module_defs<'a>(
                                     };
 
                                     let hosted_def = crate::effect_module::build_host_exposed_def(
-                                        &mut env,
                                         &mut scope,
                                         *symbol,
                                         &ident,
@@ -542,6 +533,8 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
 
+            let ident_ids = scope.ident_ids.clone();
+
             let output = ModuleOutput {
                 scope,
                 aliases,
@@ -552,7 +545,7 @@ pub fn canonicalize_module_defs<'a>(
                 exposed_imports: can_exposed_imports,
                 problems: env.problems,
                 lookups,
-                ident_ids: env.ident_ids,
+                ident_ids,
             };
 
             Ok(output)

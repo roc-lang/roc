@@ -1,7 +1,8 @@
 use crate::procedure::References;
+use crate::scope::Scope;
 use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIdsByModule, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 
@@ -31,9 +32,6 @@ pub struct Env<'a> {
     pub qualified_type_lookups: VecSet<Symbol>,
 
     pub top_level_symbols: VecSet<Symbol>,
-
-    pub ident_ids: IdentIds,
-    pub exposed_ident_ids: IdentIds,
 }
 
 impl<'a> Env<'a> {
@@ -41,14 +39,11 @@ impl<'a> Env<'a> {
         home: ModuleId,
         dep_idents: &'a IdentIdsByModule,
         module_ids: &'a ModuleIds,
-        exposed_ident_ids: IdentIds,
     ) -> Env<'a> {
         Env {
             home,
             dep_idents,
             module_ids,
-            ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later
-            exposed_ident_ids,
             problems: Vec::new(),
             closures: MutMap::default(),
             qualified_value_lookups: VecSet::default(),
@@ -61,6 +56,7 @@ impl<'a> Env<'a> {
     /// Returns Err if the symbol resolved, but it was not exposed by the given module
     pub fn qualified_lookup(
         &mut self,
+        scope: &Scope,
         module_name_str: &str,
         ident: &str,
         region: Region,
@@ -81,7 +77,7 @@ impl<'a> Env<'a> {
                 // You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
                 if module_id == self.home {
-                    match self.ident_ids.get_id(&ident) {
+                    match scope.ident_ids.get_id(&ident) {
                         Some(ident_id) => {
                             let symbol = Symbol::new(module_id, ident_id);
 
@@ -99,7 +95,8 @@ impl<'a> Env<'a> {
                                     value: ident,
                                     region,
                                 },
-                                self.ident_ids
+                                scope
+                                    .ident_ids
                                     .ident_strs()
                                     .map(|(_, string)| string.into())
                                     .collect(),
@@ -162,17 +159,6 @@ impl<'a> Env<'a> {
                 module_exists: false,
             }),
         }
-    }
-
-    /// Generates a unique, new symbol like "$1" or "$5",
-    /// using the home module as the module_id.
-    ///
-    /// This is used, for example, during canonicalization of an Expr::Closure
-    /// to generate a unique symbol to refer to that closure.
-    pub fn gen_unique_symbol(&mut self) -> Symbol {
-        let ident_id = self.ident_ids.gen_unique();
-
-        Symbol::new(self.home, ident_id)
     }
 
     pub fn problem(&mut self, problem: Problem) {

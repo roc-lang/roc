@@ -373,11 +373,9 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
+        assert_eq!(problems.len(), 1);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            // Due to one of the shadows
-            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -396,11 +394,9 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
+        assert_eq!(problems.len(), 1);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            // Due to one of the shadows
-            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -419,12 +415,10 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
+        assert_eq!(problems.len(), 1);
         println!("{:#?}", problems);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            // Due to one of the shadows
-            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
