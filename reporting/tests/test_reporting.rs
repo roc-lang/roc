@@ -9942,4 +9942,23 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn issue_2778_specialization_is_not_a_redundant_pattern() {
+        new_report_problem_as(
+            "issue_2778_specialization_is_not_a_redundant_pattern",
+            indoc!(
+                r#"
+                formatColor = \color ->
+                  when color is
+                    Red -> "red"
+                    Yellow -> "yellow"
+                    _ -> "unknown"
+
+                Red |> formatColor |> Str.concat (formatColor Orange)
+                "#
+            ),
+            "", // no problem
+        )
+    }
 }
