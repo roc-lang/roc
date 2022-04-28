@@ -3310,24 +3310,6 @@ pub fn with_hole<'a>(
                         }
                     };
 
-                let context = roc_exhaustive::Context::BadDestruct;
-                match crate::exhaustive::check(
-                    def.loc_pattern.region,
-                    &[(
-                        Loc::at(def.loc_pattern.region, mono_pattern.clone()),
-                        roc_exhaustive::Guard::NoGuard,
-                    )],
-                    context,
-                ) {
-                    Ok(_) => {}
-                    Err(errors) => {
-                        for error in errors {
-                            env.problems.push(MonoProblem::PatternProblem(error))
-                        }
-                    } // TODO make all variables bound in the pattern evaluate to a runtime error
-                      // return Stmt::RuntimeError("TODO non-exhaustive pattern");
-                }
-
                 let mut hole = hole;
 
                 for (symbol, variable, expr) in assignments {
@@ -5720,25 +5702,6 @@ pub fn from_can<'a>(
                     hole,
                 )
             } else {
-                let context = roc_exhaustive::Context::BadDestruct;
-                match crate::exhaustive::check(
-                    def.loc_pattern.region,
-                    &[(
-                        Loc::at(def.loc_pattern.region, mono_pattern.clone()),
-                        roc_exhaustive::Guard::NoGuard,
-                    )],
-                    context,
-                ) {
-                    Ok(_) => {}
-                    Err(errors) => {
-                        for error in errors {
-                            env.problems.push(MonoProblem::PatternProblem(error))
-                        }
-
-                        return Stmt::RuntimeError("TODO non-exhaustive pattern");
-                    }
-                }
-
                 // convert the continuation
                 let mut stmt = from_can(env, variable, cont.value, procs, layout_cache);
 
