@@ -87,15 +87,13 @@ pub(crate) fn build_effect_builtins(
     // show up with their name. We have to register them like below to make the names show up in
     // debug prints
     if false {
-        env.home.register_debug_idents(&env.ident_ids);
+        scope.register_debug_idents();
     }
 }
 
 macro_rules! new_symbol {
     ($scope:expr, $env:expr, $name:expr) => {{
-        $scope
-            .introduce($name.into(), &mut $env.ident_ids, Region::zero())
-            .unwrap()
+        $scope.introduce($name.into(), Region::zero()).unwrap()
     }};
 }
 
@@ -109,29 +107,17 @@ fn build_effect_always(
 
     let value_symbol = {
         scope
-            .introduce(
-                "effect_always_value".into(),
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("effect_always_value".into(), Region::zero())
             .unwrap()
     };
 
     let inner_closure_symbol = {
         scope
-            .introduce(
-                "effect_always_inner".into(),
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("effect_always_inner".into(), Region::zero())
             .unwrap()
     };
 
-    let always_symbol = {
-        scope
-            .introduce("always".into(), &mut env.ident_ids, Region::zero())
-            .unwrap()
-    };
+    let always_symbol = { scope.introduce("always".into(), Region::zero()).unwrap() };
 
     // \{} -> value
     let const_closure = {
@@ -247,29 +233,17 @@ fn build_effect_map(
 
     let thunk_symbol = {
         scope
-            .introduce(
-                "effect_map_thunk".into(),
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("effect_map_thunk".into(), Region::zero())
             .unwrap()
     };
 
     let mapper_symbol = {
         scope
-            .introduce(
-                "effect_map_mapper".into(),
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("effect_map_mapper".into(), Region::zero())
             .unwrap()
     };
 
-    let map_symbol = {
-        scope
-            .introduce("map".into(), &mut env.ident_ids, Region::zero())
-            .unwrap()
-    };
+    let map_symbol = { scope.introduce("map".into(), Region::zero()).unwrap() };
 
     // `thunk {}`
     let force_thunk_call = {
@@ -299,11 +273,7 @@ fn build_effect_map(
 
     let inner_closure_symbol = {
         scope
-            .introduce(
-                "effect_map_inner".into(),
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("effect_map_inner".into(), Region::zero())
             .unwrap()
     };
 
@@ -457,29 +427,17 @@ fn build_effect_after(
 
     let thunk_symbol = {
         scope
-            .introduce(
-                "effect_after_thunk".into(),
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("effect_after_thunk".into(), Region::zero())
             .unwrap()
     };
 
     let to_effect_symbol = {
         scope
-            .introduce(
-                "effect_after_toEffect".into(),
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("effect_after_toEffect".into(), Region::zero())
             .unwrap()
     };
 
-    let after_symbol = {
-        scope
-            .introduce("after".into(), &mut env.ident_ids, Region::zero())
-            .unwrap()
-    };
+    let after_symbol = { scope.introduce("after".into(), Region::zero()).unwrap() };
 
     // `thunk {}`
     let force_thunk_call = {
@@ -762,17 +720,9 @@ fn build_effect_forever(
     //
     // Making `foreverInner` perfectly tail-call optimizable
 
-    let forever_symbol = {
-        scope
-            .introduce("forever".into(), &mut env.ident_ids, Region::zero())
-            .unwrap()
-    };
+    let forever_symbol = { scope.introduce("forever".into(), Region::zero()).unwrap() };
 
-    let effect = {
-        scope
-            .introduce("effect".into(), &mut env.ident_ids, Region::zero())
-            .unwrap()
-    };
+    let effect = { scope.introduce("effect".into(), Region::zero()).unwrap() };
 
     let body =
         build_effect_forever_body(env, scope, effect_symbol, forever_symbol, effect, var_store);
@@ -860,7 +810,7 @@ fn build_effect_forever_body(
 ) -> Expr {
     let closure_name = {
         scope
-            .introduce("forever_inner".into(), &mut env.ident_ids, Region::zero())
+            .introduce("forever_inner".into(), Region::zero())
             .unwrap()
     };
 
@@ -891,17 +841,9 @@ fn build_effect_forever_inner_body(
     effect: Symbol,
     var_store: &mut VarStore,
 ) -> Expr {
-    let thunk1_symbol = {
-        scope
-            .introduce("thunk1".into(), &mut env.ident_ids, Region::zero())
-            .unwrap()
-    };
+    let thunk1_symbol = { scope.introduce("thunk1".into(), Region::zero()).unwrap() };
 
-    let thunk2_symbol = {
-        scope
-            .introduce("thunk2".into(), &mut env.ident_ids, Region::zero())
-            .unwrap()
-    };
+    let thunk2_symbol = { scope.introduce("thunk2".into(), Region::zero()).unwrap() };
 
     // @Effect thunk1 = effect
     let thunk_from_effect = {
@@ -1138,7 +1080,7 @@ fn build_effect_loop_body(
 ) -> Expr {
     let closure_name = {
         scope
-            .introduce("loop_inner".into(), &mut env.ident_ids, Region::zero())
+            .introduce("loop_inner".into(), Region::zero())
             .unwrap()
     };
 
@@ -1352,9 +1294,7 @@ pub fn build_host_exposed_def(
 
                     let arg_symbol = {
                         let ident = name.clone().into();
-                        scope
-                            .introduce(ident, &mut env.ident_ids, Region::zero())
-                            .unwrap()
+                        scope.introduce(ident, Region::zero()).unwrap()
                     };
 
                     let arg_var = var_store.fresh();
@@ -1376,9 +1316,7 @@ pub fn build_host_exposed_def(
                     let name = format!("effect_closure_{}", ident);
 
                     let ident = name.into();
-                    scope
-                        .introduce(ident, &mut env.ident_ids, Region::zero())
-                        .unwrap()
+                    scope.introduce(ident, Region::zero()).unwrap()
                 };
 
                 let effect_closure = Expr::Closure(ClosureData {
@@ -1433,9 +1371,7 @@ pub fn build_host_exposed_def(
                     let name = format!("effect_closure_{}", ident);
 
                     let ident = name.into();
-                    scope
-                        .introduce(ident, &mut env.ident_ids, Region::zero())
-                        .unwrap()
+                    scope.introduce(ident, Region::zero()).unwrap()
                 };
 
                 let empty_record_pattern = Pattern::RecordDestructure {

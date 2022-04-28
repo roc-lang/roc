@@ -190,36 +190,34 @@ pub fn canonicalize_def_header_pattern<'a>(
 
     match pattern {
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
-        Identifier(name) => match scope.introduce_or_shadow_ability_member(
-            (*name).into(),
-            &mut env.ident_ids,
-            region,
-        ) {
-            Ok((symbol, shadowing_ability_member)) => {
-                output.references.insert_bound(symbol);
-                let can_pattern = match shadowing_ability_member {
-                    // A fresh identifier.
-                    None => Pattern::Identifier(symbol),
-                    // Likely a specialization of an ability.
-                    Some(ability_member_name) => Pattern::AbilityMemberSpecialization {
-                        ident: symbol,
-                        specializes: ability_member_name,
-                    },
-                };
-                Loc::at(region, can_pattern)
-            }
-            Err((original_region, shadow, new_symbol)) => {
-                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                    original_region,
-                    shadow: shadow.clone(),
-                    kind: ShadowKind::Variable,
-                }));
-                output.references.insert_bound(new_symbol);
+        Identifier(name) => {
+            match scope.introduce_or_shadow_ability_member((*name).into(), region) {
+                Ok((symbol, shadowing_ability_member)) => {
+                    output.references.insert_bound(symbol);
+                    let can_pattern = match shadowing_ability_member {
+                        // A fresh identifier.
+                        None => Pattern::Identifier(symbol),
+                        // Likely a specialization of an ability.
+                        Some(ability_member_name) => Pattern::AbilityMemberSpecialization {
+                            ident: symbol,
+                            specializes: ability_member_name,
+                        },
+                    };
+                    Loc::at(region, can_pattern)
+                }
+                Err((original_region, shadow, new_symbol)) => {
+                    env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                        original_region,
+                        shadow: shadow.clone(),
+                        kind: ShadowKind::Variable,
+                    }));
+                    output.references.insert_bound(new_symbol);
 
-                let can_pattern = Pattern::Shadowed(original_region, shadow, new_symbol);
-                Loc::at(region, can_pattern)
+                    let can_pattern = Pattern::Shadowed(original_region, shadow, new_symbol);
+                    Loc::at(region, can_pattern)
+                }
             }
-        },
+        }
         _ => canonicalize_pattern(env, var_store, scope, output, pattern_type, pattern, region),
     }
 }
@@ -237,7 +235,7 @@ pub fn canonicalize_pattern<'a>(
     use PatternType::*;
 
     let can_pattern = match pattern {
-        Identifier(name) => match scope.introduce((*name).into(), &mut env.ident_ids, region) {
+        Identifier(name) => match scope.introduce((*name).into(), region) {
             Ok(symbol) => {
                 output.references.insert_bound(symbol);
 
@@ -457,7 +455,7 @@ pub fn canonicalize_pattern<'a>(
             for loc_pattern in patterns.iter() {
                 match loc_pattern.value {
                     Identifier(label) => {
-                        match scope.introduce(label.into(), &mut env.ident_ids, region) {
+                        match scope.introduce(label.into(), region) {
                             Ok(symbol) => {
                                 output.references.insert_bound(symbol);
 
@@ -490,7 +488,7 @@ pub fn canonicalize_pattern<'a>(
 
                     RequiredField(label, loc_guard) => {
                         // a guard does not introduce the label into scope!
-                        let symbol = scope.ignore(&Ident::from(label), &mut env.ident_ids);
+                        let symbol = scope.ignore(&Ident::from(label));
                         let can_guard = canonicalize_pattern(
                             env,
                             var_store,
@@ -513,7 +511,7 @@ pub fn canonicalize_pattern<'a>(
                     }
                     OptionalField(label, loc_default) => {
                         // an optional DOES introduce the label into scope!
-                        match scope.introduce(label.into(), &mut env.ident_ids, region) {
+                        match scope.introduce(label.into(), region) {
                             Ok(symbol) => {
                                 let (can_default, expr_output) = canonicalize_expr(
                                     env,

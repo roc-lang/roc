@@ -24,7 +24,7 @@ pub struct Scope {
     home: ModuleId,
 
     exposed_ident_ids: IdentIds,
-    all_ident_ids: IdentIds,
+    pub ident_ids: IdentIds,
 }
 
 fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
@@ -71,7 +71,7 @@ impl Scope {
     pub fn new(home: ModuleId, _var_store: &mut VarStore, initial_ident_ids: IdentIds) -> Scope {
         Scope {
             home,
-            all_ident_ids: initial_ident_ids.clone(),
+            ident_ids: initial_ident_ids.clone(),
             exposed_ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: SendMap::default(),
@@ -87,7 +87,7 @@ impl Scope {
     ) -> Scope {
         Scope {
             home,
-            all_ident_ids: initial_ident_ids.clone(),
+            ident_ids: initial_ident_ids.clone(),
             exposed_ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: add_aliases(var_store),
@@ -202,13 +202,12 @@ impl Scope {
     pub fn introduce(
         &mut self,
         ident: Ident,
-        all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
-        match self.introduce_without_shadow_symbol(&ident, all_ident_ids, region) {
+        match self.introduce_without_shadow_symbol(&ident, region) {
             Ok(symbol) => Ok(symbol),
             Err((original_region, shadow)) => {
-                let ident_id = all_ident_ids.add_ident(&ident);
+                let ident_id = self.ident_ids.add_ident(&ident);
                 let symbol = Symbol::new(self.home, ident_id);
 
                 Err((original_region, shadow, symbol))
@@ -220,7 +219,6 @@ impl Scope {
     pub fn introduce_without_shadow_symbol(
         &mut self,
         ident: &Ident,
-        all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>)> {
         match self.idents.get_symbol_and_region(ident) {
@@ -231,7 +229,7 @@ impl Scope {
                 };
                 Err((original_region, shadow))
             }
-            None => Ok(self.commit_introduction(ident, all_ident_ids, region)),
+            None => Ok(self.commit_introduction(ident, region)),
         }
     }
 
@@ -245,7 +243,6 @@ impl Scope {
     pub fn introduce_or_shadow_ability_member(
         &mut self,
         ident: Ident,
-        all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
         match self.idents.get_index(&ident) {
@@ -253,7 +250,7 @@ impl Scope {
                 let original_symbol = self.idents.symbols[index];
                 let original_region = self.idents.regions[index];
 
-                let shadow_ident_id = all_ident_ids.add_ident(&ident);
+                let shadow_ident_id = self.ident_ids.add_ident(&ident);
                 let shadow_symbol = Symbol::new(self.home, shadow_ident_id);
 
                 if self.abilities_store.is_ability_member_name(original_symbol) {
@@ -276,24 +273,19 @@ impl Scope {
                 }
             }
             None => {
-                let new_symbol = self.commit_introduction(&ident, all_ident_ids, region);
+                let new_symbol = self.commit_introduction(&ident, region);
                 Ok((new_symbol, None))
             }
         }
     }
 
-    fn commit_introduction(
-        &mut self,
-        ident: &Ident,
-        all_ident_ids: &mut IdentIds,
-        region: Region,
-    ) -> Symbol {
+    fn commit_introduction(&mut self, ident: &Ident, region: Region) -> Symbol {
         // If this IdentId was already added previously
         // when the value was exposed in the module header,
         // use that existing IdentId. Otherwise, create a fresh one.
         let ident_id = match self.exposed_ident_ids.get_id(ident) {
             Some(ident_id) => ident_id,
-            None => all_ident_ids.add_ident(ident),
+            None => self.ident_ids.add_ident(ident),
         };
 
         let symbol = Symbol::new(self.home, ident_id);
@@ -306,8 +298,8 @@ impl Scope {
     /// Ignore an identifier.
     ///
     /// Used for record guards like { x: Just _ }
-    pub fn ignore(&mut self, ident: &Ident, all_ident_ids: &mut IdentIds) -> Symbol {
-        let ident_id = all_ident_ids.add_ident(ident);
+    pub fn ignore(&mut self, ident: &Ident) -> Symbol {
+        let ident_id = self.ident_ids.add_ident(ident);
         Symbol::new(self.home, ident_id)
     }
 
@@ -364,6 +356,21 @@ impl Scope {
         self.abilities_store = abilities_store;
 
         result
+    }
+
+    pub fn register_debug_idents(&self) {
+        self.home.register_debug_idents(&self.ident_ids)
+    }
+
+    /// Generates a unique, new symbol like "$1" or "$5",
+    /// using the home module as the module_id.
+    ///
+    /// This is used, for example, during canonicalization of an Expr::Closure
+    /// to generate a unique symbol to refer to that closure.
+    pub fn gen_unique_symbol(&mut self) -> Symbol {
+        let ident_id = self.ident_ids.gen_unique();
+
+        Symbol::new(self.home, ident_id)
     }
 }
 

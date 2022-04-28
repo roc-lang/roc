@@ -407,6 +407,7 @@ pub fn canonicalize_expr<'a>(
             fields,
             update: loc_update,
         } => {
+            dbg!(&loc_update);
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
             if let Var(symbol) = &can_update.value {
@@ -437,6 +438,7 @@ pub fn canonicalize_expr<'a>(
                     ),
                 }
             } else {
+                dbg!(&can_update.value);
                 // only (optionally qualified) variables can be updated, not arbitrary expressions
 
                 let error = roc_problem::can::RuntimeError::InvalidRecordUpdate {
@@ -731,7 +733,7 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::AccessorFunction(field) => (
             Accessor(AccessorData {
-                name: env.gen_unique_symbol(),
+                name: scope.gen_unique_symbol(),
                 function_var: var_store.fresh(),
                 record_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
@@ -746,7 +748,7 @@ pub fn canonicalize_expr<'a>(
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
 
-            let symbol = env.gen_unique_symbol();
+            let symbol = scope.gen_unique_symbol();
 
             (
                 ZeroArgumentTag {
@@ -976,7 +978,7 @@ fn canonicalize_closure_inner_scope<'a>(
 ) -> (ClosureData, Output) {
     // The globally unique symbol that will refer to this closure once it gets converted
     // into a top-level procedure for code gen.
-    let symbol = opt_def_name.unwrap_or_else(|| env.gen_unique_symbol());
+    let symbol = opt_def_name.unwrap_or_else(|| scope.gen_unique_symbol());
 
     let mut can_args = Vec::with_capacity(loc_arg_patterns.len());
     let mut output = Output::default();
@@ -1273,7 +1275,7 @@ fn canonicalize_var_lookup(
     } else {
         // Since module_name was nonempty, this is a qualified var.
         // Look it up in the env!
-        match env.qualified_lookup(module_name, ident, region) {
+        match env.qualified_lookup(scope, module_name, ident, region) {
             Ok(symbol) => {
                 output.references.insert_value_lookup(symbol);
 

@@ -1,4 +1,5 @@
 use crate::procedure::References;
+use crate::scope::Scope;
 use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
@@ -32,7 +33,7 @@ pub struct Env<'a> {
 
     pub top_level_symbols: VecSet<Symbol>,
 
-    pub ident_ids: IdentIds,
+    ident_ids: IdentIds,
 }
 
 impl<'a> Env<'a> {
@@ -59,6 +60,7 @@ impl<'a> Env<'a> {
     /// Returns Err if the symbol resolved, but it was not exposed by the given module
     pub fn qualified_lookup(
         &mut self,
+        scope: &Scope,
         module_name_str: &str,
         ident: &str,
         region: Region,
@@ -79,7 +81,7 @@ impl<'a> Env<'a> {
                 // You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
                 if module_id == self.home {
-                    match self.ident_ids.get_id(&ident) {
+                    match scope.ident_ids.get_id(&ident) {
                         Some(ident_id) => {
                             let symbol = Symbol::new(module_id, ident_id);
 
@@ -97,7 +99,8 @@ impl<'a> Env<'a> {
                                     value: ident,
                                     region,
                                 },
-                                self.ident_ids
+                                scope
+                                    .ident_ids
                                     .ident_strs()
                                     .map(|(_, string)| string.into())
                                     .collect(),
@@ -167,6 +170,7 @@ impl<'a> Env<'a> {
     ///
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
+    // TODO IDENT_IDS
     pub fn gen_unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 

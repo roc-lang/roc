@@ -184,7 +184,7 @@ pub fn can_expr_with<'a>(
         introduce_builtin_imports(&mut constraints, imports, constraint, &mut var_store);
 
     let mut all_ident_ids = IdentIds::exposed_builtins(1);
-    all_ident_ids.insert(home, env.ident_ids);
+    all_ident_ids.insert(home, scope.ident_ids);
 
     let interns = Interns {
         module_ids: env.module_ids.clone(),

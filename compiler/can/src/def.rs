@@ -243,7 +243,7 @@ pub(crate) fn canonicalize_defs<'a>(
     }
 
     if cfg!(debug_assertions) {
-        env.home.register_debug_idents(&env.ident_ids);
+        scope.register_debug_idents();
     }
 
     enum TypeDef<'a> {
@@ -278,7 +278,8 @@ pub(crate) fn canonicalize_defs<'a>(
             } => {
                 let referenced_symbols = crate::annotation::find_type_def_symbols(
                     env.home,
-                    &mut env.ident_ids,
+                    // TODO IDENT_IDS
+                    &mut scope.ident_ids,
                     &ann.value,
                 );
 
@@ -295,7 +296,8 @@ pub(crate) fn canonicalize_defs<'a>(
                     // definition.
                     referenced_symbols.extend(crate::annotation::find_type_def_symbols(
                         env.home,
-                        &mut env.ident_ids,
+                        // TODO IDENT_IDS
+                        &mut scope.ident_ids,
                         &member.typ.value,
                     ));
                 }
@@ -569,19 +571,18 @@ fn resolve_abilities<'a>(
             let name_region = member.name.region;
             let member_name = member.name.extract_spaces().item;
 
-            let member_sym =
-                match scope.introduce(member_name.into(), &mut env.ident_ids, name_region) {
-                    Ok(sym) => sym,
-                    Err((original_region, shadow, _new_symbol)) => {
-                        env.problem(roc_problem::can::Problem::Shadowing {
-                            original_region,
-                            shadow,
-                            kind: ShadowKind::Variable,
-                        });
-                        // Pretend the member isn't a part of the ability
-                        continue;
-                    }
-                };
+            let member_sym = match scope.introduce(member_name.into(), name_region) {
+                Ok(sym) => sym,
+                Err((original_region, shadow, _new_symbol)) => {
+                    env.problem(roc_problem::can::Problem::Shadowing {
+                        original_region,
+                        shadow,
+                        kind: ShadowKind::Variable,
+                    });
+                    // Pretend the member isn't a part of the ability
+                    continue;
+                }
+            };
 
             if pattern_type == PatternType::TopLevelDef {
                 env.top_level_symbols.insert(member_sym);
@@ -1072,7 +1073,7 @@ fn canonicalize_pending_value_def<'a>(
                     region: loc_ann.region,
                 }
             } else {
-                let symbol = env.gen_unique_symbol();
+                let symbol = scope.gen_unique_symbol();
 
                 // generate a fake pattern for each argument. this makes signatures
                 // that are functions only crash when they are applied.
@@ -1359,11 +1360,7 @@ fn to_pending_type_def<'a>(
 
             let region = Region::span_across(&name.region, &ann.region);
 
-            match scope.introduce_without_shadow_symbol(
-                &Ident::from(name.value),
-                &mut env.ident_ids,
-                region,
-            ) {
+            match scope.introduce_without_shadow_symbol(&Ident::from(name.value), region) {
                 Ok(symbol) => {
                     let mut can_rigids: Vec<Loc<Lowercase>> = Vec::with_capacity(vars.len());
 
@@ -1438,11 +1435,9 @@ fn to_pending_type_def<'a>(
             members,
             loc_has: _,
         } => {
-            let name = match scope.introduce_without_shadow_symbol(
-                &Ident::from(name.value),
-                &mut env.ident_ids,
-                name.region,
-            ) {
+            let name = match scope
+                .introduce_without_shadow_symbol(&Ident::from(name.value), name.region)
+            {
                 Ok(symbol) => Loc::at(name.region, symbol),
                 Err((original_region, shadowed_symbol)) => {
                     env.problem(Problem::Shadowing {

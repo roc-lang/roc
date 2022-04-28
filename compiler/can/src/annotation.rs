@@ -277,7 +277,7 @@ fn make_apply_symbol(
             }
         }
     } else {
-        match env.qualified_lookup(module_name, ident, region) {
+        match env.qualified_lookup(scope, module_name, ident, region) {
             Ok(symbol) => Ok(symbol),
             Err(problem) => {
                 // Either the module wasn't imported, or
@@ -579,7 +579,7 @@ fn can_annotation_help(
                 vars: loc_vars,
             },
         ) => {
-            let symbol = match scope.introduce(name.value.into(), &mut env.ident_ids, region) {
+            let symbol = match scope.introduce(name.value.into(), region) {
                 Ok(symbol) => symbol,
 
                 Err((original_region, shadow, _new_symbol)) => {
