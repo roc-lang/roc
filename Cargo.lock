@@ -3937,7 +3937,6 @@ dependencies = [
  "roc_exhaustive",
  "roc_load",
  "roc_module",
- "roc_mono",
  "roc_parse",
  "roc_problem",
  "roc_region",

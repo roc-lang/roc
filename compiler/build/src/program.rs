@@ -24,10 +24,6 @@ pub struct CodeGenTiming {
 #[cfg(feature = "llvm")]
 const LLVM_VERSION: &str = "12";
 
-// TODO instead of finding exhaustiveness problems in monomorphization, find
-// them after type checking (like Elm does) so we can complete the entire
-// `roc check` process without needing to monomorphize.
-/// Returns the number of problems reported.
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Problems {
     report_problems_help(
         loaded.total_problems(),
@@ -35,7 +31,6 @@ pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Proble
         &loaded.interns,
         &mut loaded.can_problems,
         &mut loaded.type_problems,
-        &mut loaded.mono_problems,
     )
 }
 
@@ -46,7 +41,6 @@ pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> Problems {
         &loaded.interns,
         &mut loaded.can_problems,
         &mut loaded.type_problems,
-        &mut Default::default(),
     )
 }
 
@@ -73,11 +67,9 @@ fn report_problems_help(
     interns: &Interns,
     can_problems: &mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: &mut MutMap<ModuleId, Vec<roc_solve::solve::TypeError>>,
-    mono_problems: &mut MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
 ) -> Problems {
     use roc_reporting::report::{
-        can_problem, mono_problem, type_problem, Report, RocDocAllocator, Severity::*,
-        DEFAULT_PALETTE,
+        can_problem, type_problem, Report, RocDocAllocator, Severity::*, DEFAULT_PALETTE,
     };
     let palette = DEFAULT_PALETTE;
 
@@ -131,25 +123,6 @@ fn report_problems_help(
                     RuntimeError => {
                         errors.push(buf);
                     }
-                }
-            }
-        }
-
-        let problems = mono_problems.remove(home).unwrap_or_default();
-
-        for problem in problems {
-            let report = mono_problem(&alloc, &lines, module_path.clone(), problem);
-            let severity = report.severity;
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            match severity {
-                Warning => {
-                    warnings.push(buf);
-                }
-                RuntimeError => {
-                    errors.push(buf);
                 }
             }
         }
