@@ -15,7 +15,7 @@ procedure Test.3 (Test.29):
                 let Test.15 : Int1 = true;
                 ret Test.15;
             else
-                let Test.7 : TODO = UnionAtIndex (Id 0) (Index 1) Test.4;
+                let Test.7 : [<rnu><null>, C [C I64, C ] *self] = UnionAtIndex (Id 0) (Index 1) Test.4;
                 jump Test.13 Test.7;
     in
     jump Test.13 Test.29;
@@ -23,8 +23,8 @@ procedure Test.3 (Test.29):
 procedure Test.0 ():
     let Test.28 : I64 = 3i64;
     let Test.26 : [C I64, C ] = Just Test.28;
-    let Test.27 : TODO = Nil ;
-    let Test.12 : TODO = Cons Test.26 Test.27;
+    let Test.27 : [<rnu><null>, C [C I64, C ] *self] = Nil ;
+    let Test.12 : [<rnu><null>, C [C I64, C ] *self] = Cons Test.26 Test.27;
     let Test.11 : Int1 = CallByName Test.3 Test.12;
     dec Test.12;
     ret Test.11;

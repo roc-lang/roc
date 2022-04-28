@@ -104,10 +104,6 @@ impl Scope {
         self.idents.contains_key(ident)
     }
 
-    pub fn contains_symbol(&self, symbol: Symbol) -> bool {
-        self.symbols.contains_key(&symbol)
-    }
-
     pub fn num_idents(&self) -> usize {
         self.idents.len()
     }

@@ -644,69 +644,123 @@ fn malformed_pattern(env: &mut Env, problem: MalformedPatternProblem, region: Re
     Pattern::MalformedPattern(problem, region)
 }
 
-pub fn bindings_from_patterns<'a, I>(loc_patterns: I) -> Vec<(Symbol, Region)>
-where
-    I: Iterator<Item = &'a Loc<Pattern>>,
-{
-    let mut answer = Vec::new();
-
-    for loc_pattern in loc_patterns {
-        add_bindings_from_patterns(&loc_pattern.region, &loc_pattern.value, &mut answer);
-    }
-
-    answer
+/// An iterator over the bindings made by a pattern.
+///
+/// We attempt to make no allocations when we can.
+pub enum BindingsFromPattern<'a> {
+    Empty,
+    One(&'a Loc<Pattern>),
+    Many(Vec<BindingsFromPatternWork<'a>>),
 }
 
-/// helper function for idents_from_patterns
-fn add_bindings_from_patterns(
-    region: &Region,
-    pattern: &Pattern,
-    answer: &mut Vec<(Symbol, Region)>,
-) {
-    use Pattern::*;
+pub enum BindingsFromPatternWork<'a> {
+    Pattern(&'a Loc<Pattern>),
+    Destruct(&'a Loc<RecordDestruct>),
+}
 
-    match pattern {
-        Identifier(symbol)
-        | Shadowed(_, _, symbol)
-        | AbilityMemberSpecialization {
-            ident: symbol,
-            specializes: _,
-        } => {
-            answer.push((*symbol, *region));
+impl<'a> BindingsFromPattern<'a> {
+    pub fn new(initial: &'a Loc<Pattern>) -> Self {
+        Self::One(initial)
+    }
+
+    pub fn new_many<I>(mut it: I) -> Self
+    where
+        I: Iterator<Item = &'a Loc<Pattern>>,
+    {
+        if let (1, Some(1)) = it.size_hint() {
+            Self::new(it.next().unwrap())
+        } else {
+            Self::Many(it.map(BindingsFromPatternWork::Pattern).collect())
         }
-        AppliedTag {
-            arguments: loc_args,
-            ..
-        } => {
-            for (_, loc_arg) in loc_args {
-                add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
+    }
+
+    fn next_many(stack: &mut Vec<BindingsFromPatternWork<'a>>) -> Option<(Symbol, Region)> {
+        use Pattern::*;
+
+        while let Some(work) = stack.pop() {
+            match work {
+                BindingsFromPatternWork::Pattern(loc_pattern) => {
+                    use BindingsFromPatternWork::*;
+
+                    match &loc_pattern.value {
+                        Identifier(symbol)
+                        | Shadowed(_, _, symbol)
+                        | AbilityMemberSpecialization {
+                            ident: symbol,
+                            specializes: _,
+                        } => {
+                            return Some((*symbol, loc_pattern.region));
+                        }
+                        AppliedTag {
+                            arguments: loc_args,
+                            ..
+                        } => {
+                            let it = loc_args.iter().rev().map(|(_, p)| Pattern(p));
+                            stack.extend(it);
+                        }
+                        UnwrappedOpaque { argument, .. } => {
+                            let (_, loc_arg) = &**argument;
+                            stack.push(Pattern(loc_arg));
+                        }
+                        RecordDestructure { destructs, .. } => {
+                            let it = destructs.iter().rev().map(Destruct);
+                            stack.extend(it);
+                        }
+                        NumLiteral(..)
+                        | IntLiteral(..)
+                        | FloatLiteral(..)
+                        | StrLiteral(_)
+                        | SingleQuote(_)
+                        | Underscore
+                        | MalformedPattern(_, _)
+                        | UnsupportedPattern(_)
+                        | OpaqueNotInScope(..) => (),
+                    }
+                }
+                BindingsFromPatternWork::Destruct(loc_destruct) => {
+                    match &loc_destruct.value.typ {
+                        DestructType::Required | DestructType::Optional(_, _) => {
+                            return Some((loc_destruct.value.symbol, loc_destruct.region));
+                        }
+                        DestructType::Guard(_, inner) => {
+                            // a guard does not introduce the symbol
+                            stack.push(BindingsFromPatternWork::Pattern(inner))
+                        }
+                    }
+                }
             }
         }
-        UnwrappedOpaque {
-            argument, opaque, ..
-        } => {
-            let (_, loc_arg) = &**argument;
-            add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
-            answer.push((*opaque, *region));
+
+        None
+    }
+}
+
+impl<'a> Iterator for BindingsFromPattern<'a> {
+    type Item = (Symbol, Region);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use Pattern::*;
+
+        match self {
+            BindingsFromPattern::Empty => None,
+            BindingsFromPattern::One(loc_pattern) => match &loc_pattern.value {
+                Identifier(symbol)
+                | Shadowed(_, _, symbol)
+                | AbilityMemberSpecialization {
+                    ident: symbol,
+                    specializes: _,
+                } => {
+                    let region = loc_pattern.region;
+                    *self = Self::Empty;
+                    Some((*symbol, region))
+                }
+                _ => {
+                    *self = Self::Many(vec![BindingsFromPatternWork::Pattern(loc_pattern)]);
+                    self.next()
+                }
+            },
+            BindingsFromPattern::Many(stack) => Self::next_many(stack),
         }
-        RecordDestructure { destructs, .. } => {
-            for Loc {
-                region,
-                value: RecordDestruct { symbol, .. },
-            } in destructs
-            {
-                answer.push((*symbol, *region));
-            }
-        }
-        NumLiteral(..)
-        | IntLiteral(..)
-        | FloatLiteral(..)
-        | StrLiteral(_)
-        | SingleQuote(_)
-        | Underscore
-        | MalformedPattern(_, _)
-        | UnsupportedPattern(_)
-        | OpaqueNotInScope(..) => (),
     }
 }
 
