@@ -9861,6 +9861,7 @@ I need all branches in an `if` to have the same type!
         )
     }
 
+    #[test]
     fn imports_missing_comma() {
         new_report_problem_as(
             "imports_missing_comma",
