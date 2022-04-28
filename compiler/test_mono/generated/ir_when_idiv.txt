@@ -1,14 +1,14 @@
 procedure Num.40 (#Attr.2, #Attr.3):
-    let Test.15 : I64 = 0i64;
-    let Test.12 : Int1 = lowlevel NotEq #Attr.3 Test.15;
-    if Test.12 then
-        let Test.14 : I64 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
-        let Test.13 : [C {}, C I64] = Ok Test.14;
-        ret Test.13;
+    let Num.233 : I64 = 0i64;
+    let Num.230 : Int1 = lowlevel NotEq #Attr.3 Num.233;
+    if Num.230 then
+        let Num.232 : I64 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
+        let Num.231 : [C {}, C I64] = Ok Num.232;
+        ret Num.231;
     else
-        let Test.11 : {} = Struct {};
-        let Test.10 : [C {}, C I64] = Err Test.11;
-        ret Test.10;
+        let Num.229 : {} = Struct {};
+        let Num.228 : [C {}, C I64] = Err Num.229;
+        ret Num.228;
 
 procedure Test.0 ():
     let Test.8 : I64 = 1000i64;
