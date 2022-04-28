@@ -207,7 +207,6 @@ impl<'a> PartialProc<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn from_named_function(
         env: &mut Env<'a, '_>,
-        layout_cache: &mut LayoutCache<'a>,
         annotation: Variable,
         loc_args: std::vec::Vec<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
         loc_body: Loc<roc_can::expr::Expr>,
@@ -3225,7 +3224,7 @@ pub fn with_hole<'a>(
         LetNonRec(def, cont, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
                 if let Closure(closure_data) = def.loc_expr.value {
-                    register_noncapturing_closure(env, procs, layout_cache, symbol, closure_data);
+                    register_noncapturing_closure(env, procs, symbol, closure_data);
 
                     return with_hole(
                         env,
@@ -3368,13 +3367,7 @@ pub fn with_hole<'a>(
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                     if let Closure(closure_data) = def.loc_expr.value {
-                        register_noncapturing_closure(
-                            env,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            closure_data,
-                        );
+                        register_noncapturing_closure(env, procs, *symbol, closure_data);
 
                         continue;
                     }
@@ -5245,7 +5238,6 @@ fn sorted_field_symbols<'a>(
 fn register_noncapturing_closure<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
     closure_name: Symbol,
     closure_data: ClosureData,
 ) {
@@ -5273,7 +5265,6 @@ fn register_noncapturing_closure<'a>(
 
     let partial_proc = PartialProc::from_named_function(
         env,
-        layout_cache,
         function_type,
         arguments,
         loc_body,
@@ -5357,7 +5348,6 @@ fn register_capturing_closure<'a>(
 
         let partial_proc = PartialProc::from_named_function(
             env,
-            layout_cache,
             function_type,
             arguments,
             loc_body,
@@ -5549,7 +5539,6 @@ pub fn from_can<'a>(
                         register_noncapturing_closure(
                             env,
                             procs,
-                            layout_cache,
                             *symbol,
                             accessor_data.to_closure_data(fresh_record_symbol),
                         );
