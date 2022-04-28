@@ -11,8 +11,6 @@ use crate::abilities::AbilitiesStore;
 
 #[derive(Clone, Debug)]
 pub struct Scope {
-    exposed_ident_ids: IdentIds,
-
     idents: IdentStore,
 
     /// The type aliases currently in scope
@@ -24,6 +22,9 @@ pub struct Scope {
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
     home: ModuleId,
+
+    exposed_ident_ids: IdentIds,
+    all_ident_ids: IdentIds,
 }
 
 fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
@@ -70,6 +71,7 @@ impl Scope {
     pub fn new(home: ModuleId, _var_store: &mut VarStore, initial_ident_ids: IdentIds) -> Scope {
         Scope {
             home,
+            all_ident_ids: initial_ident_ids.clone(),
             exposed_ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: SendMap::default(),
@@ -85,6 +87,7 @@ impl Scope {
     ) -> Scope {
         Scope {
             home,
+            all_ident_ids: initial_ident_ids.clone(),
             exposed_ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: add_aliases(var_store),
@@ -348,33 +351,19 @@ impl Scope {
     where
         F: FnOnce(&mut Scope) -> T,
     {
-        let snapshot = self.snapshot();
+        let idents = self.idents.clone();
+        let exposed_ident_ids = self.exposed_ident_ids.clone();
+        let aliases = self.aliases.clone();
+        let abilities_store = self.abilities_store.clone();
 
         let result = f(self);
 
-        *self = Self::rollback(snapshot);
+        self.idents = idents;
+        self.exposed_ident_ids = exposed_ident_ids;
+        self.aliases = aliases;
+        self.abilities_store = abilities_store;
 
         result
-    }
-
-    fn snapshot(&self) -> ScopeSnapshot {
-        ScopeSnapshot {
-            idents: self.idents.clone(),
-            exposed_ident_ids: self.exposed_ident_ids.clone(),
-            aliases: self.aliases.clone(),
-            abilities_store: self.abilities_store.clone(),
-            home: self.home,
-        }
-    }
-
-    fn rollback(snapshot: ScopeSnapshot) -> Scope {
-        Scope {
-            idents: snapshot.idents,
-            exposed_ident_ids: snapshot.exposed_ident_ids,
-            aliases: snapshot.aliases,
-            abilities_store: snapshot.abilities_store,
-            home: snapshot.home,
-        }
     }
 }
 
@@ -505,21 +494,4 @@ impl IdentStore {
         self.symbols.push(symbol);
         self.regions.push(region);
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct ScopeSnapshot {
-    exposed_ident_ids: IdentIds,
-
-    idents: IdentStore,
-
-    /// The type aliases currently in scope
-    aliases: SendMap<Symbol, Alias>,
-
-    /// The abilities currently in scope, and their implementors.
-    abilities_store: AbilitiesStore,
-
-    /// The current module being processed. This will be used to turn
-    /// unqualified idents into Symbols.
-    home: ModuleId,
 }
