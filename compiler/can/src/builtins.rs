@@ -1,5 +1,5 @@
 use crate::def::Def;
-use crate::expr::{self, ClosureData, Expr::*, IntValue};
+use crate::expr::{self, AnnotatedMark, ClosureData, Expr::*, IntValue};
 use crate::expr::{Expr, Field, Recursive};
 use crate::num::{FloatBound, IntBound, IntWidth, NumericBound};
 use crate::pattern::Pattern;
@@ -2622,8 +2622,16 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(sep_sym, sep_var)],
         arguments: vec![
-            (clos_acc_var, no_region(Pattern::Identifier(clos_acc_sym))),
-            (sep_var, no_region(Pattern::Identifier(clos_elem_sym))),
+            (
+                clos_acc_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(clos_acc_sym)),
+            ),
+            (
+                sep_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(clos_elem_sym)),
+            ),
         ],
         loc_body: {
             let append_sep = RunLowLevel {
@@ -2708,9 +2716,14 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
         arguments: vec![
             (
                 clos_start_var,
+                AnnotatedMark::new(var_store),
                 no_region(Pattern::Identifier(clos_start_sym)),
             ),
-            (clos_len_var, no_region(Pattern::Identifier(clos_len_sym))),
+            (
+                clos_len_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(clos_len_sym)),
+            ),
         ],
         loc_body: {
             Box::new(no_region(RunLowLevel {
@@ -2894,7 +2907,11 @@ fn list_drop_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
         name: Symbol::LIST_DROP_IF_PREDICATE,
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(sym_predicate, t_predicate)],
-        arguments: vec![(t_elem, no_region(Pattern::Identifier(Symbol::ARG_3)))],
+        arguments: vec![(
+            t_elem,
+            AnnotatedMark::new(var_store),
+            no_region(Pattern::Identifier(Symbol::ARG_3)),
+        )],
         loc_body: {
             let should_drop = Call(
                 Box::new((
@@ -3078,8 +3095,16 @@ fn list_join_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(Symbol::ARG_2, before2list_after)],
         arguments: vec![
-            (list_after, no_region(Pattern::Identifier(Symbol::ARG_3))),
-            (before, no_region(Pattern::Identifier(Symbol::ARG_4))),
+            (
+                list_after,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_3)),
+            ),
+            (
+                before,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_4)),
+            ),
         ],
         loc_body: {
             let mapper = Box::new((
@@ -3609,8 +3634,16 @@ fn list_sort_desc(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![],
         arguments: vec![
-            (num_var, no_region(Pattern::Identifier(Symbol::ARG_2))),
-            (num_var, no_region(Pattern::Identifier(Symbol::ARG_3))),
+            (
+                num_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_2)),
+            ),
+            (
+                num_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_3)),
+            ),
         ],
         loc_body: {
             Box::new(no_region(RunLowLevel {
@@ -4084,9 +4117,21 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(Symbol::ARG_3, func_var)],
         arguments: vec![
-            (accum_var, no_region(Pattern::Identifier(Symbol::ARG_5))),
-            (key_var, no_region(Pattern::Identifier(Symbol::ARG_6))),
-            (Variable::EMPTY_RECORD, no_region(Pattern::Underscore)),
+            (
+                accum_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_5)),
+            ),
+            (
+                key_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_6)),
+            ),
+            (
+                Variable::EMPTY_RECORD,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Underscore),
+            ),
         ],
         loc_body: Box::new(no_region(call_func)),
     });
@@ -5342,7 +5387,13 @@ fn defn_help(
 
     let closure_args = args
         .into_iter()
-        .map(|(var, symbol)| (var, no_region(Identifier(symbol))))
+        .map(|(var, symbol)| {
+            (
+                var,
+                AnnotatedMark::new(var_store),
+                no_region(Identifier(symbol)),
+            )
+        })
         .collect();
 
     Closure(ClosureData {

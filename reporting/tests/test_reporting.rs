@@ -8487,16 +8487,16 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This pattern is being used in an unexpected way:
+                The 1st argument to `f` is weird:
 
                 4│  f = \Age n -> n
                          ^^^^^
 
-                It is a `Age` tag of type:
+                The argument is a pattern that matches a `Age` tag of type:
 
                     [ Age a ]
 
-                But it needs to match:
+                But the annotation on `f` says the 1st argument should be:
 
                     Age
 

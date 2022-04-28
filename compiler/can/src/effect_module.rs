@@ -1,6 +1,6 @@
 use crate::annotation::IntroducedVariables;
 use crate::def::{Declaration, Def};
-use crate::expr::{ClosureData, Expr, Recursive};
+use crate::expr::{AnnotatedMark, ClosureData, Expr, Recursive};
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use roc_collections::{SendMap, VecSet};
@@ -120,6 +120,7 @@ fn build_effect_always(
     let const_closure = {
         let arguments = vec![(
             var_store.fresh(),
+            AnnotatedMark::new(var_store),
             Loc::at_zero(empty_record_pattern(var_store)),
         )];
 
@@ -154,6 +155,7 @@ fn build_effect_always(
 
         let arguments = vec![(
             var_store.fresh(),
+            AnnotatedMark::new(var_store),
             Loc::at_zero(Pattern::Identifier(value_symbol)),
         )];
 
@@ -277,6 +279,7 @@ fn build_effect_map(
     let inner_closure = {
         let arguments = vec![(
             var_store.fresh(),
+            AnnotatedMark::new(var_store),
             Loc::at_zero(empty_record_pattern(var_store)),
         )];
 
@@ -302,6 +305,7 @@ fn build_effect_map(
     let arguments = vec![
         (
             var_store.fresh(),
+            AnnotatedMark::new(var_store),
             Loc::at_zero(Pattern::UnwrappedOpaque {
                 opaque: effect_symbol,
                 whole_var: var_store.fresh(),
@@ -316,6 +320,7 @@ fn build_effect_map(
         ),
         (
             var_store.fresh(),
+            AnnotatedMark::new(var_store),
             Loc::at_zero(Pattern::Identifier(mapper_symbol)),
         ),
     ];
@@ -466,6 +471,7 @@ fn build_effect_after(
     let arguments = vec![
         (
             var_store.fresh(),
+            AnnotatedMark::new(var_store),
             Loc::at_zero(Pattern::UnwrappedOpaque {
                 opaque: effect_symbol,
                 whole_var: var_store.fresh(),
@@ -480,6 +486,7 @@ fn build_effect_after(
         ),
         (
             var_store.fresh(),
+            AnnotatedMark::new(var_store),
             Loc::at_zero(Pattern::Identifier(to_effect_symbol)),
         ),
     ];
@@ -579,6 +586,7 @@ fn wrap_in_effect_thunk(
     let const_closure = {
         let arguments = vec![(
             var_store.fresh(),
+            AnnotatedMark::new(var_store),
             Loc::at_zero(empty_record_pattern(var_store)),
         )];
 
@@ -720,7 +728,11 @@ fn build_effect_forever(
 
     let body = build_effect_forever_body(scope, effect_symbol, forever_symbol, effect, var_store);
 
-    let arguments = vec![(var_store.fresh(), Loc::at_zero(Pattern::Identifier(effect)))];
+    let arguments = vec![(
+        var_store.fresh(),
+        AnnotatedMark::new(var_store),
+        Loc::at_zero(Pattern::Identifier(effect)),
+    )];
 
     let function_var = var_store.fresh();
     let after_closure = Expr::Closure(ClosureData {
@@ -939,10 +951,12 @@ fn build_effect_loop(
     let arguments = vec![
         (
             var_store.fresh(),
+            AnnotatedMark::new(var_store),
             Loc::at_zero(Pattern::Identifier(state_symbol)),
         ),
         (
             var_store.fresh(),
+            AnnotatedMark::new(var_store),
             Loc::at_zero(Pattern::Identifier(step_symbol)),
         ),
     ];
@@ -1257,7 +1271,7 @@ pub fn build_host_exposed_def(
     let mut pattern_vars = SendMap::default();
     pattern_vars.insert(symbol, expr_var);
 
-    let mut arguments: Vec<(Variable, Loc<Pattern>)> = Vec::new();
+    let mut arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)> = Vec::new();
     let mut linked_symbol_arguments: Vec<(Variable, Expr)> = Vec::new();
     let mut captured_symbols: Vec<(Symbol, Variable)> = Vec::new();
 
@@ -1281,7 +1295,11 @@ pub fn build_host_exposed_def(
 
                     let arg_var = var_store.fresh();
 
-                    arguments.push((arg_var, Loc::at_zero(Pattern::Identifier(arg_symbol))));
+                    arguments.push((
+                        arg_var,
+                        AnnotatedMark::new(var_store),
+                        Loc::at_zero(Pattern::Identifier(arg_symbol)),
+                    ));
 
                     captured_symbols.push((arg_symbol, arg_var));
                     linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol)));
@@ -1311,6 +1329,7 @@ pub fn build_host_exposed_def(
                     recursive: Recursive::NotRecursive,
                     arguments: vec![(
                         var_store.fresh(),
+                        AnnotatedMark::new(var_store),
                         Loc::at_zero(empty_record_pattern(var_store)),
                     )],
                     loc_body: Box::new(Loc::at_zero(low_level_call)),
@@ -1370,7 +1389,11 @@ pub fn build_host_exposed_def(
                     name: effect_closure_symbol,
                     captured_symbols,
                     recursive: Recursive::NotRecursive,
-                    arguments: vec![(var_store.fresh(), Loc::at_zero(empty_record_pattern))],
+                    arguments: vec![(
+                        var_store.fresh(),
+                        AnnotatedMark::new(var_store),
+                        Loc::at_zero(empty_record_pattern),
+                    )],
                     loc_body: Box::new(Loc::at_zero(low_level_call)),
                 });
 

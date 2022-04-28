@@ -1204,6 +1204,43 @@ fn to_expr_report<'b>(
                 }
             }
 
+            Reason::TypedArg { name, arg_index } => {
+                let name = match name {
+                    Some(n) => alloc.symbol_unqualified(n),
+                    None => alloc.text(" this definition "),
+                };
+                let doc = alloc.stack([
+                    alloc
+                        .text("The ")
+                        .append(alloc.text(arg_index.ordinal()))
+                        .append(alloc.text(" argument to "))
+                        .append(name.clone())
+                        .append(alloc.text(" is weird:")),
+                    alloc.region(lines.convert_region(region)),
+                    pattern_type_comparison(
+                        alloc,
+                        expected_type,
+                        found,
+                        add_category(alloc, alloc.text("The argument matches"), &category),
+                        alloc.concat([
+                            alloc.text("But the annotation on "),
+                            name,
+                            alloc.text(" says the "),
+                            alloc.text(arg_index.ordinal()),
+                            alloc.text(" argument should be:"),
+                        ]),
+                        vec![],
+                    ),
+                ]);
+
+                Report {
+                    filename,
+                    title: "TYPE MISMATCH".to_string(),
+                    doc,
+                    severity: Severity::RuntimeError,
+                }
+            }
+
             Reason::LowLevelOpArg { op, arg_index } => {
                 panic!(
                     "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
@@ -2312,7 +2349,6 @@ fn to_diff<'b>(
             // Skip the hint for numbers; it's not as useful as saying "this type is not a number"
             if !OPAQUE_NUM_SYMBOLS.contains(&sym) =>
         {
-            dbg!(&type1, &type2);
             let (left, left_able) = to_doc(alloc, Parens::InFn, type1);
             let (right, right_able) = to_doc(alloc, Parens::InFn, type2);
 

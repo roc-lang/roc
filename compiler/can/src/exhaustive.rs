@@ -197,7 +197,11 @@ fn sketch_pattern(var: Variable, pattern: &crate::pattern::Pattern) -> SketchedP
     }
 }
 
-pub fn sketch_rows(target_var: Variable, region: Region, patterns: &[WhenBranch]) -> SketchedRows {
+pub fn sketch_when_branches(
+    target_var: Variable,
+    region: Region,
+    patterns: &[WhenBranch],
+) -> SketchedRows {
     let mut rows: Vec<SketchedRow> = Vec::with_capacity(patterns.len());
 
     // If any of the branches has a guard, e.g.
@@ -275,6 +279,24 @@ pub fn sketch_rows(target_var: Variable, region: Region, patterns: &[WhenBranch]
 
     SketchedRows {
         rows,
+        overall_region: region,
+    }
+}
+
+pub fn sketch_pattern_to_rows(
+    target_var: Variable,
+    region: Region,
+    pattern: &crate::pattern::Pattern,
+) -> SketchedRows {
+    let row = SketchedRow {
+        patterns: vec![sketch_pattern(target_var, pattern)],
+        region,
+        // A single row cannot be redundant!
+        redundant_mark: RedundantMark::known_non_redundant(),
+        guard: Guard::NoGuard,
+    };
+    SketchedRows {
+        rows: vec![row],
         overall_region: region,
     }
 }

@@ -1731,6 +1731,10 @@ pub enum Reason {
         name: Option<Symbol>,
         arg_index: HumanIndex,
     },
+    TypedArg {
+        name: Option<Symbol>,
+        arg_index: HumanIndex,
+    },
     FnCall {
         name: Option<Symbol>,
         arity: u8,

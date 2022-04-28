@@ -2,6 +2,7 @@ use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::IntroducedVariables;
 use crate::env::Env;
+use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
 use crate::expr::Expr::{self, *};
 use crate::expr::{canonicalize_expr, Output, Recursive};
@@ -1085,7 +1086,11 @@ fn canonicalize_pending_value_def<'a>(
                         region: Region::zero(),
                     };
 
-                    underscores.push((var_store.fresh(), underscore));
+                    underscores.push((
+                        var_store.fresh(),
+                        AnnotatedMark::known_exhaustive(),
+                        underscore,
+                    ));
                 }
 
                 let body_expr = Loc {

@@ -8,7 +8,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::AbilitiesStore;
-use roc_can::expr::{ClosureData, IntValue};
+use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -209,7 +209,7 @@ impl<'a> PartialProc<'a> {
         env: &mut Env<'a, '_>,
         layout_cache: &mut LayoutCache<'a>,
         annotation: Variable,
-        loc_args: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)>,
+        loc_args: std::vec::Vec<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
         loc_body: Loc<roc_can::expr::Expr>,
         captured_symbols: CapturedSymbols<'a>,
         is_self_recursive: bool,
@@ -858,7 +858,7 @@ impl<'a> Procs<'a> {
         env: &mut Env<'a, '_>,
         symbol: Symbol,
         annotation: Variable,
-        loc_args: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)>,
+        loc_args: std::vec::Vec<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
         loc_body: Loc<roc_can::expr::Expr>,
         captured_symbols: CapturedSymbols<'a>,
         ret_var: Variable,
@@ -1938,8 +1938,9 @@ impl<'a> Stmt<'a> {
 #[allow(clippy::type_complexity)]
 fn patterns_to_when<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &mut LayoutCache<'a>,
-    patterns: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)>,
+    // TODO REMOVE ME
+    _layout_cache: &mut LayoutCache<'a>,
+    patterns: std::vec::Vec<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
     body_var: Variable,
     body: Loc<roc_can::expr::Expr>,
 ) -> Result<(Vec<'a, Variable>, Vec<'a, Symbol>, Loc<roc_can::expr::Expr>), Loc<RuntimeError>> {
@@ -1954,66 +1955,26 @@ fn patterns_to_when<'a>(
     // NOTE this fails if the pattern contains rigid variables,
     // see https://github.com/rtfeldman/roc/issues/786
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
-    for (pattern_var, pattern) in patterns.into_iter() {
-        let context = roc_exhaustive::Context::BadArg;
-        let mono_pattern = match from_can_pattern(env, layout_cache, &pattern.value) {
-            Ok((pat, _assignments)) => {
-                // Don't apply any assignments (e.g. to initialize optional variables) yet.
-                // We'll take care of that later when expanding the new "when" branch.
-                pat
-            }
-            Err(runtime_error) => {
-                // Even if the body was Ok, replace it with this Err.
-                // If it was already an Err, leave it at that Err, so the first
-                // RuntimeError we encountered remains the first.
-                body = body.and({
-                    Err(Loc {
-                        region: pattern.region,
-                        value: runtime_error,
-                    })
-                });
+    for (pattern_var, annotated_mark, pattern) in patterns.into_iter() {
+        if annotated_mark.exhaustive.is_non_exhaustive(env.subs) {
+            // Even if the body was Ok, replace it with this Err.
+            // If it was already an Err, leave it at that Err, so the first
+            // RuntimeError we encountered remains the first.
+            let value = RuntimeError::UnsupportedPattern(pattern.region);
+            body = body.and({
+                Err(Loc {
+                    region: pattern.region,
+                    value,
+                })
+            });
+        } else if let Ok(unwrapped_body) = body {
+            let (new_symbol, new_body) =
+                pattern_to_when(env, pattern_var, pattern, body_var, unwrapped_body);
 
-                continue;
-            }
-        };
+            symbols.push(new_symbol);
+            arg_vars.push(pattern_var);
 
-        match crate::exhaustive::check(
-            pattern.region,
-            &[(
-                Loc::at(pattern.region, mono_pattern),
-                roc_exhaustive::Guard::NoGuard,
-            )],
-            context,
-        ) {
-            Ok(_) => {
-                // Replace the body with a new one, but only if it was Ok.
-                if let Ok(unwrapped_body) = body {
-                    let (new_symbol, new_body) =
-                        pattern_to_when(env, pattern_var, pattern, body_var, unwrapped_body);
-
-                    symbols.push(new_symbol);
-                    arg_vars.push(pattern_var);
-
-                    body = Ok(new_body)
-                }
-            }
-            Err(errors) => {
-                for error in errors {
-                    env.problems.push(MonoProblem::PatternProblem(error))
-                }
-
-                let value = RuntimeError::UnsupportedPattern(pattern.region);
-
-                // Even if the body was Ok, replace it with this Err.
-                // If it was already an Err, leave it at that Err, so the first
-                // RuntimeError we encountered remains the first.
-                body = body.and({
-                    Err(Loc {
-                        region: pattern.region,
-                        value,
-                    })
-                });
-            }
+            body = Ok(new_body)
         }
     }
 
@@ -5184,7 +5145,7 @@ fn tag_union_to_function<'a>(
 
         let loc_expr = Loc::at_zero(roc_can::expr::Expr::Var(arg_symbol));
 
-        loc_pattern_args.push((arg_var, loc_pattern));
+        loc_pattern_args.push((arg_var, AnnotatedMark::known_exhaustive(), loc_pattern));
         loc_expr_args.push((arg_var, loc_expr));
     }
 

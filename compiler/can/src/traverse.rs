@@ -82,9 +82,9 @@ fn walk_closure<V: Visitor>(visitor: &mut V, clos: &ClosureData) {
         ..
     } = clos;
 
-    arguments
-        .iter()
-        .for_each(|(var, arg)| visitor.visit_pattern(&arg.value, arg.region, Some(*var)));
+    arguments.iter().for_each(|(var, _exhaustive_mark, arg)| {
+        visitor.visit_pattern(&arg.value, arg.region, Some(*var))
+    });
 
     visitor.visit_expr(&loc_body.value, loc_body.region, *return_type);
 }

@@ -241,6 +241,32 @@ impl Expr {
     }
 }
 
+/// Stores exhaustiveness-checking metadata for a closure argument that may
+/// have an annotated type.
+#[derive(Clone, Copy, Debug)]
+pub struct AnnotatedMark {
+    pub annotation_var: Variable,
+    pub exhaustive: ExhaustiveMark,
+}
+
+impl AnnotatedMark {
+    pub fn new(var_store: &mut VarStore) -> Self {
+        Self {
+            annotation_var: var_store.fresh(),
+            exhaustive: ExhaustiveMark::new(var_store),
+        }
+    }
+
+    // NOTE: only ever use this if you *know* a pattern match is surely exhaustive!
+    // Otherwise you will get unpleasant unification errors.
+    pub fn known_exhaustive() -> Self {
+        Self {
+            annotation_var: Variable::EMPTY_TAG_UNION,
+            exhaustive: ExhaustiveMark::known_exhaustive(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ClosureData {
     pub function_type: Variable,
@@ -250,7 +276,7 @@ pub struct ClosureData {
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub recursive: Recursive,
-    pub arguments: Vec<(Variable, Loc<Pattern>)>,
+    pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
     pub loc_body: Box<Loc<Expr>>,
 }
 
@@ -302,7 +328,11 @@ impl AccessorData {
 
         let loc_body = Loc::at_zero(body);
 
-        let arguments = vec![(record_var, Loc::at_zero(Pattern::Identifier(record_symbol)))];
+        let arguments = vec![(
+            record_var,
+            AnnotatedMark::known_exhaustive(),
+            Loc::at_zero(Pattern::Identifier(record_symbol)),
+        )];
 
         ClosureData {
             function_type: function_var,
@@ -1001,11 +1031,15 @@ fn canonicalize_closure_inner_scope<'a>(
             loc_pattern.region,
         );
 
-        can_args.push((var_store.fresh(), can_argument_pattern));
+        can_args.push((
+            var_store.fresh(),
+            AnnotatedMark::new(var_store),
+            can_argument_pattern,
+        ));
     }
 
     let bound_by_argument_patterns: Vec<_> =
-        BindingsFromPattern::new_many(can_args.iter().map(|x| &x.1)).collect();
+        BindingsFromPattern::new_many(can_args.iter().map(|x| &x.2)).collect();
 
     let (loc_body_expr, new_output) = canonicalize_expr(
         env,
@@ -1620,7 +1654,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                         // Wrap the body in one LetNonRec for each argument,
                         // such that at the end we have all the arguments in
                         // scope with the values the caller provided.
-                        for ((_param_var, loc_pattern), (expr_var, loc_expr)) in
+                        for ((_param_var, _exhaustive_mark, loc_pattern), (expr_var, loc_expr)) in
                             params.iter().cloned().zip(args.into_iter()).rev()
                         {
                             // TODO get the correct vars into here.

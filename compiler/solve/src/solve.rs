@@ -1184,19 +1184,39 @@ fn solve(
                 //  4. Condition and branch types aren't "almost equal", this is just a normal type
                 //     error.
 
-                let roc_can::constraint::Eq(
-                    real_var,
-                    expected_branches,
-                    real_category,
-                    real_region,
-                ) = constraints.eq[eq.index()];
+                let (real_var, real_region, expected_type, category_and_expected) = match eq {
+                    Ok(eq) => {
+                        let roc_can::constraint::Eq(real_var, expected, category, real_region) =
+                            constraints.eq[eq.index()];
+                        let expected = &constraints.expectations[expected.index()];
+                        (
+                            real_var,
+                            real_region,
+                            expected.get_type_ref(),
+                            Ok((category, expected)),
+                        )
+                    }
+                    Err(peq) => {
+                        let roc_can::constraint::PatternEq(
+                            real_var,
+                            expected,
+                            category,
+                            real_region,
+                        ) = constraints.pattern_eq[peq.index()];
+                        let expected = &constraints.pattern_expectations[expected.index()];
+                        (
+                            real_var,
+                            real_region,
+                            expected.get_type_ref(),
+                            Err((category, expected)),
+                        )
+                    }
+                };
 
                 let real_var =
                     either_type_index_to_var(constraints, subs, rank, pools, aliases, real_var);
 
-                let expected_branches = &constraints.expectations[expected_branches.index()];
-                let branches_var =
-                    type_to_var(subs, rank, pools, aliases, expected_branches.get_type_ref());
+                let branches_var = type_to_var(subs, rank, pools, aliases, expected_type);
 
                 let real_content = subs.get_content_without_compacting(real_var);
                 let branches_content = subs.get_content_without_compacting(branches_var);
@@ -1256,14 +1276,32 @@ fn solve(
                                 Failure(vars, actual_type, expected_type, _bad_impls) => {
                                     introduce(subs, rank, pools, &vars);
 
-                                    let real_category =
-                                        constraints.categories[real_category.index()].clone();
-                                    let problem = TypeError::BadExpr(
-                                        real_region,
-                                        real_category,
-                                        actual_type,
-                                        expected_branches.replace_ref(expected_type),
-                                    );
+                                    // Figure out the problem - it might be pattern or value
+                                    // related.
+                                    let problem = match category_and_expected {
+                                        Ok((category, expected)) => {
+                                            let real_category =
+                                                constraints.categories[category.index()].clone();
+                                            TypeError::BadExpr(
+                                                real_region,
+                                                real_category,
+                                                actual_type,
+                                                expected.replace_ref(expected_type),
+                                            )
+                                        }
+
+                                        Err((category, expected)) => {
+                                            let real_category = constraints.pattern_categories
+                                                [category.index()]
+                                            .clone();
+                                            TypeError::BadPattern(
+                                                real_region,
+                                                real_category,
+                                                expected_type,
+                                                expected.replace_ref(actual_type),
+                                            )
+                                        }
+                                    };
 
                                     problems.push(problem);
                                     should_check_exhaustiveness = false;
