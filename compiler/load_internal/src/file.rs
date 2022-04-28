@@ -3844,7 +3844,6 @@ fn canonicalize_and_constrain<'a>(
                     let docs = crate::docs::generate_module_docs(
                         module_output.scope.clone(),
                         name.as_str().into(),
-                        &module_output.ident_ids,
                         parsed_defs,
                     );
 
@@ -3915,7 +3914,7 @@ fn canonicalize_and_constrain<'a>(
                 var_store,
                 constraints,
                 constraint,
-                ident_ids: module_output.ident_ids,
+                ident_ids: module_output.scope.ident_ids,
                 dep_idents,
                 module_timing,
             };
