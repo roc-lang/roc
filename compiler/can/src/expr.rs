@@ -955,7 +955,7 @@ pub fn canonicalize_closure<'a>(
     opt_def_name: Option<Symbol>,
 ) -> (ClosureData, Output) {
     scope.inner_scope(|inner_scope| {
-        canonicalize_closure_inner_scope(
+        canonicalize_closure_body(
             env,
             var_store,
             inner_scope,
@@ -966,7 +966,7 @@ pub fn canonicalize_closure<'a>(
     })
 }
 
-fn canonicalize_closure_inner_scope<'a>(
+fn canonicalize_closure_body<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
