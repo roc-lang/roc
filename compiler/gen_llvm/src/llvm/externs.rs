@@ -7,6 +7,8 @@ use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 
+use super::build::{get_sjlj_buffer, LLVM_LONGJMP};
+
 /// Define functions for roc_alloc, roc_realloc, and roc_dealloc
 /// which use libc implementations (malloc, realloc, and free)
 pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
@@ -209,18 +211,33 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
         builder.position_at_end(entry);
 
-        let buffer = crate::llvm::build::get_sjlj_buffer(env);
-
         // write our error message pointer
         env.builder.build_store(get_panic_msg_ptr(env), ptr_arg);
 
-        let tag = env.context.i32_type().const_int(1, false);
-        let _call = call_void_bitcode_fn(env, &[buffer.into(), tag.into()], bitcode::UTILS_LONGJMP);
+        build_longjmp_call(env);
 
         builder.build_unreachable();
 
         if cfg!(debug_assertions) {
             crate::llvm::build::verify_fn(fn_val);
         }
+    }
+}
+
+pub fn build_longjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
+    let jmp_buf = get_sjlj_buffer(env);
+    if cfg!(target_arch = "aarch64") {
+        // Call the Zig-linked longjmp: `void longjmp(i32*, i32)`
+        let tag = env.context.i32_type().const_int(1, false);
+        let _call =
+            call_void_bitcode_fn(env, &[jmp_buf.into(), tag.into()], bitcode::UTILS_LONGJMP);
+    } else {
+        // Call the LLVM-intrinsic longjmp: `void @llvm.eh.sjlj.longjmp(i8* %setjmp_buf)`
+        let jmp_buf_i8p = env.builder.build_bitcast(
+            jmp_buf,
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            "jmp_buf i8*",
+        );
+        let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p.into()]);
     }
 }

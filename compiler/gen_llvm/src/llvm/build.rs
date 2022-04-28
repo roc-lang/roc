@@ -64,7 +64,7 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
-use roc_target::TargetInfo;
+use roc_target::{PtrWidth, TargetInfo};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -516,10 +516,35 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
     let i1_type = ctx.bool_type();
+    let i8_type = ctx.i8_type();
+    let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
+    let i32_type = ctx.i32_type();
+    let void_type = ctx.void_type();
 
     if let Some(func) = module.get_function("__muloti4") {
         func.set_linkage(Linkage::WeakAny);
     }
+
+    add_intrinsic(
+        ctx,
+        module,
+        LLVM_SETJMP,
+        i32_type.fn_type(&[i8_ptr_type.into()], false),
+    );
+
+    add_intrinsic(
+        ctx,
+        module,
+        LLVM_LONGJMP,
+        void_type.fn_type(&[i8_ptr_type.into()], false),
+    );
+
+    add_intrinsic(
+        ctx,
+        module,
+        LLVM_FRAME_ADDRESS,
+        i8_ptr_type.fn_type(&[i32_type.into()], false),
+    );
 
     add_float_intrinsic(ctx, module, &LLVM_LOG, |t| t.fn_type(&[t.into()], false));
     add_float_intrinsic(ctx, module, &LLVM_POW, |t| {
@@ -572,6 +597,11 @@ static LLVM_FLOOR: IntrinsicName = float_intrinsic!("llvm.floor");
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
+
+static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0i8";
+
+static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";
+pub static LLVM_LONGJMP: &str = "llvm.eh.sjlj.longjmp";
 
 const LLVM_ADD_WITH_OVERFLOW: IntrinsicName =
     llvm_int_intrinsic!("llvm.sadd.with.overflow", "llvm.uadd.with.overflow");
@@ -3620,14 +3650,21 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 
 pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
     // The size of jump_buf is platform-dependent.
-    // AArch64 needs 3 64-bit words, x86 seemingly needs less than that. Let's just make it 3
-    // 64-bit words.
-    // We can always increase the size, since we hand it off opaquely to both `setjmp` and `longjmp`.
-    // The unused space won't be touched.
-    let type_ = env
-        .context
-        .i32_type()
-        .array_type(6 * env.target_info.ptr_width() as u32);
+    //   - AArch64 needs 3 machine-sized words
+    //   - LLVM says the following about the SJLJ intrinsic:
+    //
+    //     [It is] a five word buffer in which the calling context is saved.
+    //     The front end places the frame pointer in the first word, and the
+    //     target implementation of this intrinsic should place the destination
+    //     address for a llvm.eh.sjlj.longjmp in the second word.
+    //     The following three words are available for use in a target-specific manner.
+    //
+    // So, let's create a 5-word buffer.
+    let word_type = match env.target_info.ptr_width() {
+        PtrWidth::Bytes4 => env.context.i32_type(),
+        PtrWidth::Bytes8 => env.context.i64_type(),
+    };
+    let type_ = word_type.array_type(5);
 
     let global = match env.module.get_global("roc_sjlj_buffer") {
         Some(global) => global,
@@ -3643,6 +3680,44 @@ pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValu
             "cast_sjlj_buffer",
         )
         .into_pointer_value()
+}
+
+pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let jmp_buf = get_sjlj_buffer(env);
+    if cfg!(target_arch = "aarch64") {
+        // Due to https://github.com/rtfeldman/roc/issues/2965, we use a setjmp we linked in from Zig
+        call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_SETJMP)
+    } else {
+        // Anywhere else, use the LLVM intrinsic.
+        let jmp_buf_i8p = env
+            .builder
+            .build_bitcast(
+                jmp_buf,
+                env.context
+                    .i8_type()
+                    .ptr_type(AddressSpace::Generic)
+                    .array_type(5)
+                    .ptr_type(AddressSpace::Generic),
+                "jmp_buf [5 x i8*]",
+            )
+            .into_pointer_value();
+        // LLVM asks us to please store the frame pointer in the first word.
+        let frame_address = env.call_intrinsic(
+            LLVM_FRAME_ADDRESS,
+            &[env.context.i32_type().const_zero().into()],
+        );
+
+        let zero = env.context.i32_type().const_zero();
+        let fa_index = env.context.i32_type().const_zero();
+        let fa = unsafe {
+            env.builder
+                .build_in_bounds_gep(jmp_buf_i8p, &[zero, fa_index], "frame address index")
+        };
+
+        env.builder.build_store(fa, frame_address);
+
+        env.call_intrinsic(LLVM_SETJMP, &[jmp_buf_i8p.into()])
+    }
 }
 
 /// Pointer to pointer of the panic message.
@@ -3677,9 +3752,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
     let catch_block = context.append_basic_block(parent, "catch_block");
     let cont_block = context.append_basic_block(parent, "cont_block");
 
-    let buffer = get_sjlj_buffer(env);
-
-    let panicked_u32 = call_bitcode_fn(env, &[buffer.into()], bitcode::UTILS_SETJMP);
+    let panicked_u32 = build_setjmp_call(env);
     let panicked_bool = env.builder.build_int_compare(
         IntPredicate::NE,
         panicked_u32.into_int_value(),

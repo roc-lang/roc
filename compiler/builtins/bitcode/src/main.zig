@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const math = std.math;
 const utils = @import("utils.zig");
 const expect = @import("expect.zig");
@@ -161,6 +162,11 @@ comptime {
     exportExpectFn(expect.deinitFailuresC, "deinit_failures");
 
     @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
+
+    if (builtin.target.cpu.arch == .aarch64) {
+        @export(__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .Weak });
+        @export(__roc_force_longjmp, .{ .name = "__roc_force_longjmp", .linkage = .Weak });
+    }
 }
 
 // Utils continued - SJLJ
@@ -177,10 +183,10 @@ pub extern fn sigsetjmp([*c]c_int, c_int) c_int;
 pub extern fn siglongjmp([*c]c_int, c_int) noreturn;
 pub extern fn longjmperror() void;
 // Zig won't expose the externs (and hence link correctly) unless we force them to be used.
-pub export fn __roc_force_setjmp(it: [*c]c_int) c_int {
+fn __roc_force_setjmp(it: [*c]c_int) callconv(.C) c_int {
     return setjmp(it);
 }
-pub export fn __roc_force_longjmp(a0: [*c]c_int, a1: c_int) noreturn {
+fn __roc_force_longjmp(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
     longjmp(a0, a1);
 }
 
@@ -214,7 +220,6 @@ fn exportExpectFn(comptime func: anytype, comptime func_name: []const u8) void {
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
-    const builtin = @import("builtin");
     if (builtin.is_test) {
         std.debug.print("{s}: {?}", .{ message, stacktrace });
     } else {
