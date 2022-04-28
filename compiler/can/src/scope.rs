@@ -118,6 +118,11 @@ impl Scope {
         }
     }
 
+    #[cfg(test)]
+    fn idents_in_scope(&self) -> impl Iterator<Item = Ident> + '_ {
+        self.idents.iter_idents()
+    }
+
     pub fn lookup_alias(&self, symbol: Symbol) -> Option<&Alias> {
         self.aliases.get(&symbol)
     }
@@ -498,5 +503,138 @@ impl IdentStore {
 
         self.symbols.push(symbol);
         self.regions.push(region);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use roc_module::symbol::ModuleIds;
+    use roc_region::all::Position;
+
+    use pretty_assertions::{assert_eq, assert_ne};
+
+    #[test]
+    fn scope_contains_introduced() {
+        let _register_module_debug_names = ModuleIds::default();
+        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+
+        let region = Region::zero();
+        let ident = Ident::from("mezolit");
+
+        assert!(scope.lookup(&ident, region).is_err());
+
+        assert!(scope.introduce(ident.clone(), region).is_ok());
+
+        assert!(scope.lookup(&ident, region).is_ok());
+    }
+
+    #[test]
+    fn second_introduce_shadows() {
+        let _register_module_debug_names = ModuleIds::default();
+        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+
+        let region1 = Region::from_pos(Position { offset: 10 });
+        let region2 = Region::from_pos(Position { offset: 20 });
+        let ident = Ident::from("mezolit");
+
+        assert!(scope.lookup(&ident, Region::zero()).is_err());
+
+        let first = scope.introduce(ident.clone(), region1).unwrap();
+        let (original_region, _ident, shadow_symbol) =
+            scope.introduce(ident.clone(), region2).unwrap_err();
+
+        scope.register_debug_idents();
+
+        assert_ne!(first, shadow_symbol);
+        assert_eq!(original_region, region1);
+
+        let lookup = scope.lookup(&ident, Region::zero()).unwrap();
+
+        assert_eq!(first, lookup);
+    }
+
+    #[test]
+    fn inner_scope_does_not_influence_outer() {
+        let _register_module_debug_names = ModuleIds::default();
+        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+
+        let region = Region::zero();
+        let ident = Ident::from("uránia");
+
+        assert!(scope.lookup(&ident, region).is_err());
+
+        scope.inner_scope(|inner| {
+            assert!(inner.introduce(ident.clone(), region).is_ok());
+        });
+
+        assert!(scope.lookup(&ident, region).is_err());
+    }
+
+    #[test]
+    fn idents_with_inner_scope() {
+        let _register_module_debug_names = ModuleIds::default();
+        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+
+        let idents: Vec<_> = scope.idents_in_scope().collect();
+
+        assert_eq!(
+            &idents,
+            &[
+                Ident::from("Box"),
+                Ident::from("Set"),
+                Ident::from("Dict"),
+                Ident::from("Str"),
+                Ident::from("Ok"),
+                Ident::from("False"),
+                Ident::from("List"),
+                Ident::from("True"),
+                Ident::from("Err"),
+            ]
+        );
+
+        let builtin_count = idents.len();
+
+        let region = Region::zero();
+
+        let ident1 = Ident::from("uránia");
+        let ident2 = Ident::from("malmok");
+        let ident3 = Ident::from("Járnak");
+
+        scope.introduce(ident1.clone(), region).unwrap();
+        scope.introduce(ident2.clone(), region).unwrap();
+        scope.introduce(ident3.clone(), region).unwrap();
+
+        let idents: Vec<_> = scope.idents_in_scope().collect();
+
+        assert_eq!(
+            &idents[builtin_count..],
+            &[ident1.clone(), ident2.clone(), ident3.clone(),]
+        );
+
+        scope.inner_scope(|inner| {
+            let ident4 = Ident::from("Ångström");
+            let ident5 = Ident::from("Sirály");
+
+            inner.introduce(ident4.clone(), region).unwrap();
+            inner.introduce(ident5.clone(), region).unwrap();
+
+            let idents: Vec<_> = inner.idents_in_scope().collect();
+
+            assert_eq!(
+                &idents[builtin_count..],
+                &[
+                    ident1.clone(),
+                    ident2.clone(),
+                    ident3.clone(),
+                    ident4,
+                    ident5
+                ]
+            );
+        });
+
+        let idents: Vec<_> = scope.idents_in_scope().collect();
+
+        assert_eq!(&idents[builtin_count..], &[ident1, ident2, ident3,]);
     }
 }
