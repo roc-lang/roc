@@ -5,8 +5,7 @@ use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
-    RecordFields, Subs, SubsFmtContent, SubsIndex, SubsSlice, UnionTags, Variable,
-    VariableSubsSlice,
+    RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField};
 
@@ -295,6 +294,8 @@ pub fn unify_pool(
 /// NOTE: Only run this on individual tests! Run on multiple threads, this would clobber each others' output.
 #[cfg(debug_assertions)]
 fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option<&Outcome>) {
+    use roc_types::subs::SubsFmtContent;
+
     static mut UNIFICATION_DEPTH: usize = 0;
 
     if std::env::var("ROC_PRINT_UNIFICATIONS").is_ok() {
