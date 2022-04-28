@@ -108,12 +108,7 @@ impl GeneratedInfo {
                 }
 
                 let effect_symbol = scope
-                    .introduce(
-                        name.into(),
-                        &env.exposed_ident_ids,
-                        &mut env.ident_ids,
-                        Region::zero(),
-                    )
+                    .introduce(name.into(), &mut env.ident_ids, Region::zero())
                     .unwrap();
 
                 {
@@ -177,7 +172,7 @@ pub fn canonicalize_module_defs<'a>(
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home, var_store);
+    let mut scope = Scope::new(home, var_store, exposed_ident_ids.clone());
     let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
     let num_deps = dep_idents.len();
 

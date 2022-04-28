@@ -192,7 +192,6 @@ pub fn canonicalize_def_header_pattern<'a>(
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
         Identifier(name) => match scope.introduce_or_shadow_ability_member(
             (*name).into(),
-            &env.exposed_ident_ids,
             &mut env.ident_ids,
             region,
         ) {
@@ -238,12 +237,7 @@ pub fn canonicalize_pattern<'a>(
     use PatternType::*;
 
     let can_pattern = match pattern {
-        Identifier(name) => match scope.introduce(
-            (*name).into(),
-            &env.exposed_ident_ids,
-            &mut env.ident_ids,
-            region,
-        ) {
+        Identifier(name) => match scope.introduce((*name).into(), &mut env.ident_ids, region) {
             Ok(symbol) => {
                 output.references.insert_bound(symbol);
 
@@ -463,12 +457,7 @@ pub fn canonicalize_pattern<'a>(
             for loc_pattern in patterns.iter() {
                 match loc_pattern.value {
                     Identifier(label) => {
-                        match scope.introduce(
-                            label.into(),
-                            &env.exposed_ident_ids,
-                            &mut env.ident_ids,
-                            region,
-                        ) {
+                        match scope.introduce(label.into(), &mut env.ident_ids, region) {
                             Ok(symbol) => {
                                 output.references.insert_bound(symbol);
 
@@ -524,12 +513,7 @@ pub fn canonicalize_pattern<'a>(
                     }
                     OptionalField(label, loc_default) => {
                         // an optional DOES introduce the label into scope!
-                        match scope.introduce(
-                            label.into(),
-                            &env.exposed_ident_ids,
-                            &mut env.ident_ids,
-                            region,
-                        ) {
+                        match scope.introduce(label.into(), &mut env.ident_ids, region) {
                             Ok(symbol) => {
                                 let (can_default, expr_output) = canonicalize_expr(
                                     env,

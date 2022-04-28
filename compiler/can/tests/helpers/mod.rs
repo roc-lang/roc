@@ -55,7 +55,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
-    let mut scope = Scope::new(home, &mut var_store);
+    let mut scope = Scope::new(home, &mut var_store, dep_idents.clone());
     scope.add_alias(
         Symbol::NUM_INT,
         Region::zero(),

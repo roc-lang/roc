@@ -11,6 +11,8 @@ use crate::abilities::AbilitiesStore;
 
 #[derive(Clone, Debug)]
 pub struct Scope {
+    exposed_ident_ids: IdentIds,
+
     idents: IdentStore,
 
     /// The type aliases currently in scope
@@ -65,9 +67,10 @@ fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
 }
 
 impl Scope {
-    pub fn new(home: ModuleId, _var_store: &mut VarStore) -> Scope {
+    pub fn new(home: ModuleId, _var_store: &mut VarStore, exposed_ident_ids: IdentIds) -> Scope {
         Scope {
             home,
+            exposed_ident_ids,
             idents: IdentStore::new(),
             aliases: SendMap::default(),
             // TODO(abilities): default abilities in scope
@@ -75,9 +78,14 @@ impl Scope {
         }
     }
 
-    pub fn new_with_aliases(home: ModuleId, var_store: &mut VarStore) -> Scope {
+    pub fn new_with_aliases(
+        home: ModuleId,
+        var_store: &mut VarStore,
+        exposed_ident_ids: IdentIds,
+    ) -> Scope {
         Scope {
             home,
+            exposed_ident_ids,
             idents: IdentStore::new(),
             aliases: add_aliases(var_store),
             // TODO(abilities): default abilities in scope
@@ -191,12 +199,10 @@ impl Scope {
     pub fn introduce(
         &mut self,
         ident: Ident,
-        exposed_ident_ids: &IdentIds,
         all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
-        match self.introduce_without_shadow_symbol(&ident, exposed_ident_ids, all_ident_ids, region)
-        {
+        match self.introduce_without_shadow_symbol(&ident, all_ident_ids, region) {
             Ok(symbol) => Ok(symbol),
             Err((original_region, shadow)) => {
                 let ident_id = all_ident_ids.add_ident(&ident);
@@ -211,7 +217,6 @@ impl Scope {
     pub fn introduce_without_shadow_symbol(
         &mut self,
         ident: &Ident,
-        exposed_ident_ids: &IdentIds,
         all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>)> {
@@ -223,7 +228,7 @@ impl Scope {
                 };
                 Err((original_region, shadow))
             }
-            None => Ok(self.commit_introduction(ident, exposed_ident_ids, all_ident_ids, region)),
+            None => Ok(self.commit_introduction(ident, all_ident_ids, region)),
         }
     }
 
@@ -237,7 +242,6 @@ impl Scope {
     pub fn introduce_or_shadow_ability_member(
         &mut self,
         ident: Ident,
-        exposed_ident_ids: &IdentIds,
         all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
@@ -269,8 +273,7 @@ impl Scope {
                 }
             }
             None => {
-                let new_symbol =
-                    self.commit_introduction(&ident, exposed_ident_ids, all_ident_ids, region);
+                let new_symbol = self.commit_introduction(&ident, all_ident_ids, region);
                 Ok((new_symbol, None))
             }
         }
@@ -279,14 +282,13 @@ impl Scope {
     fn commit_introduction(
         &mut self,
         ident: &Ident,
-        exposed_ident_ids: &IdentIds,
         all_ident_ids: &mut IdentIds,
         region: Region,
     ) -> Symbol {
         // If this IdentId was already added previously
         // when the value was exposed in the module header,
         // use that existing IdentId. Otherwise, create a fresh one.
-        let ident_id = match exposed_ident_ids.get_id(ident) {
+        let ident_id = match self.exposed_ident_ids.get_id(ident) {
             Some(ident_id) => ident_id,
             None => all_ident_ids.add_ident(ident),
         };
@@ -358,6 +360,7 @@ impl Scope {
     fn snapshot(&self) -> ScopeSnapshot {
         ScopeSnapshot {
             idents: self.idents.clone(),
+            exposed_ident_ids: self.exposed_ident_ids.clone(),
             aliases: self.aliases.clone(),
             abilities_store: self.abilities_store.clone(),
             home: self.home,
@@ -367,6 +370,7 @@ impl Scope {
     fn rollback(snapshot: ScopeSnapshot) -> Scope {
         Scope {
             idents: snapshot.idents,
+            exposed_ident_ids: snapshot.exposed_ident_ids,
             aliases: snapshot.aliases,
             abilities_store: snapshot.abilities_store,
             home: snapshot.home,
@@ -505,6 +509,8 @@ impl IdentStore {
 
 #[derive(Clone, Debug)]
 pub struct ScopeSnapshot {
+    exposed_ident_ids: IdentIds,
+
     idents: IdentStore,
 
     /// The type aliases currently in scope

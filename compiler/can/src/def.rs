@@ -569,23 +569,19 @@ fn resolve_abilities<'a>(
             let name_region = member.name.region;
             let member_name = member.name.extract_spaces().item;
 
-            let member_sym = match scope.introduce(
-                member_name.into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                name_region,
-            ) {
-                Ok(sym) => sym,
-                Err((original_region, shadow, _new_symbol)) => {
-                    env.problem(roc_problem::can::Problem::Shadowing {
-                        original_region,
-                        shadow,
-                        kind: ShadowKind::Variable,
-                    });
-                    // Pretend the member isn't a part of the ability
-                    continue;
-                }
-            };
+            let member_sym =
+                match scope.introduce(member_name.into(), &mut env.ident_ids, name_region) {
+                    Ok(sym) => sym,
+                    Err((original_region, shadow, _new_symbol)) => {
+                        env.problem(roc_problem::can::Problem::Shadowing {
+                            original_region,
+                            shadow,
+                            kind: ShadowKind::Variable,
+                        });
+                        // Pretend the member isn't a part of the ability
+                        continue;
+                    }
+                };
 
             if pattern_type == PatternType::TopLevelDef {
                 env.top_level_symbols.insert(member_sym);
@@ -1365,7 +1361,6 @@ fn to_pending_type_def<'a>(
 
             match scope.introduce_without_shadow_symbol(
                 &Ident::from(name.value),
-                &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 region,
             ) {
@@ -1445,7 +1440,6 @@ fn to_pending_type_def<'a>(
         } => {
             let name = match scope.introduce_without_shadow_symbol(
                 &Ident::from(name.value),
-                &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 name.region,
             ) {

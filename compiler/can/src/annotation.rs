@@ -579,12 +579,7 @@ fn can_annotation_help(
                 vars: loc_vars,
             },
         ) => {
-            let symbol = match scope.introduce(
-                name.value.into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                region,
-            ) {
+            let symbol = match scope.introduce(name.value.into(), &mut env.ident_ids, region) {
                 Ok(symbol) => symbol,
 
                 Err((original_region, shadow, _new_symbol)) => {

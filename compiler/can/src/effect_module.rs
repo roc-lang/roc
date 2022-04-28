@@ -94,12 +94,7 @@ pub(crate) fn build_effect_builtins(
 macro_rules! new_symbol {
     ($scope:expr, $env:expr, $name:expr) => {{
         $scope
-            .introduce(
-                $name.into(),
-                &$env.exposed_ident_ids,
-                &mut $env.ident_ids,
-                Region::zero(),
-            )
+            .introduce($name.into(), &mut $env.ident_ids, Region::zero())
             .unwrap()
     }};
 }
@@ -116,7 +111,6 @@ fn build_effect_always(
         scope
             .introduce(
                 "effect_always_value".into(),
-                &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 Region::zero(),
             )
@@ -127,7 +121,6 @@ fn build_effect_always(
         scope
             .introduce(
                 "effect_always_inner".into(),
-                &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 Region::zero(),
             )
@@ -136,12 +129,7 @@ fn build_effect_always(
 
     let always_symbol = {
         scope
-            .introduce(
-                "always".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("always".into(), &mut env.ident_ids, Region::zero())
             .unwrap()
     };
 
@@ -261,7 +249,6 @@ fn build_effect_map(
         scope
             .introduce(
                 "effect_map_thunk".into(),
-                &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 Region::zero(),
             )
@@ -272,7 +259,6 @@ fn build_effect_map(
         scope
             .introduce(
                 "effect_map_mapper".into(),
-                &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 Region::zero(),
             )
@@ -281,12 +267,7 @@ fn build_effect_map(
 
     let map_symbol = {
         scope
-            .introduce(
-                "map".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("map".into(), &mut env.ident_ids, Region::zero())
             .unwrap()
     };
 
@@ -320,7 +301,6 @@ fn build_effect_map(
         scope
             .introduce(
                 "effect_map_inner".into(),
-                &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 Region::zero(),
             )
@@ -479,7 +459,6 @@ fn build_effect_after(
         scope
             .introduce(
                 "effect_after_thunk".into(),
-                &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 Region::zero(),
             )
@@ -490,7 +469,6 @@ fn build_effect_after(
         scope
             .introduce(
                 "effect_after_toEffect".into(),
-                &env.exposed_ident_ids,
                 &mut env.ident_ids,
                 Region::zero(),
             )
@@ -499,12 +477,7 @@ fn build_effect_after(
 
     let after_symbol = {
         scope
-            .introduce(
-                "after".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("after".into(), &mut env.ident_ids, Region::zero())
             .unwrap()
     };
 
@@ -791,23 +764,13 @@ fn build_effect_forever(
 
     let forever_symbol = {
         scope
-            .introduce(
-                "forever".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("forever".into(), &mut env.ident_ids, Region::zero())
             .unwrap()
     };
 
     let effect = {
         scope
-            .introduce(
-                "effect".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("effect".into(), &mut env.ident_ids, Region::zero())
             .unwrap()
     };
 
@@ -897,12 +860,7 @@ fn build_effect_forever_body(
 ) -> Expr {
     let closure_name = {
         scope
-            .introduce(
-                "forever_inner".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("forever_inner".into(), &mut env.ident_ids, Region::zero())
             .unwrap()
     };
 
@@ -935,23 +893,13 @@ fn build_effect_forever_inner_body(
 ) -> Expr {
     let thunk1_symbol = {
         scope
-            .introduce(
-                "thunk1".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("thunk1".into(), &mut env.ident_ids, Region::zero())
             .unwrap()
     };
 
     let thunk2_symbol = {
         scope
-            .introduce(
-                "thunk2".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("thunk2".into(), &mut env.ident_ids, Region::zero())
             .unwrap()
     };
 
@@ -1190,12 +1138,7 @@ fn build_effect_loop_body(
 ) -> Expr {
     let closure_name = {
         scope
-            .introduce(
-                "loop_inner".into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                Region::zero(),
-            )
+            .introduce("loop_inner".into(), &mut env.ident_ids, Region::zero())
             .unwrap()
     };
 
@@ -1410,12 +1353,7 @@ pub fn build_host_exposed_def(
                     let arg_symbol = {
                         let ident = name.clone().into();
                         scope
-                            .introduce(
-                                ident,
-                                &env.exposed_ident_ids,
-                                &mut env.ident_ids,
-                                Region::zero(),
-                            )
+                            .introduce(ident, &mut env.ident_ids, Region::zero())
                             .unwrap()
                     };
 
@@ -1439,12 +1377,7 @@ pub fn build_host_exposed_def(
 
                     let ident = name.into();
                     scope
-                        .introduce(
-                            ident,
-                            &env.exposed_ident_ids,
-                            &mut env.ident_ids,
-                            Region::zero(),
-                        )
+                        .introduce(ident, &mut env.ident_ids, Region::zero())
                         .unwrap()
                 };
 
@@ -1501,12 +1434,7 @@ pub fn build_host_exposed_def(
 
                     let ident = name.into();
                     scope
-                        .introduce(
-                            ident,
-                            &env.exposed_ident_ids,
-                            &mut env.ident_ids,
-                            Region::zero(),
-                        )
+                        .introduce(ident, &mut env.ident_ids, Region::zero())
                         .unwrap()
                 };
 
