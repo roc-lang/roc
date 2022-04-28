@@ -341,6 +341,37 @@ impl Scope {
     pub fn contains_alias(&mut self, name: Symbol) -> bool {
         self.aliases.contains_key(&name)
     }
+
+    pub fn inner_scope<F, T>(&mut self, f: F) -> T
+    where
+        F: FnOnce(&mut Scope) -> T,
+    {
+        let snapshot = self.snapshot();
+
+        let result = f(self);
+
+        *self = Self::rollback(snapshot);
+
+        result
+    }
+
+    pub fn snapshot(&self) -> ScopeSnapshot {
+        ScopeSnapshot {
+            idents: self.idents.clone(),
+            aliases: self.aliases.clone(),
+            abilities_store: self.abilities_store.clone(),
+            home: self.home,
+        }
+    }
+
+    pub fn rollback(snapshot: ScopeSnapshot) -> Scope {
+        Scope {
+            idents: snapshot.idents,
+            aliases: snapshot.aliases,
+            abilities_store: snapshot.abilities_store,
+            home: snapshot.home,
+        }
+    }
 }
 
 pub fn create_alias(
@@ -470,4 +501,19 @@ impl IdentStore {
         self.symbols.push(symbol);
         self.regions.push(region);
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ScopeSnapshot {
+    idents: IdentStore,
+
+    /// The type aliases currently in scope
+    aliases: SendMap<Symbol, Alias>,
+
+    /// The abilities currently in scope, and their implementors.
+    abilities_store: AbilitiesStore,
+
+    /// The current module being processed. This will be used to turn
+    /// unqualified idents into Symbols.
+    home: ModuleId,
 }
