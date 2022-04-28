@@ -153,7 +153,7 @@ pub fn can_expr_with<'a>(
 
     let mut scope = Scope::new_with_aliases(home, &mut var_store, IdentIds::default());
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(home, &dep_idents, &module_ids, IdentIds::default());
+    let mut env = Env::new(home, &dep_idents, &module_ids);
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,

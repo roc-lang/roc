@@ -170,8 +170,8 @@ pub fn canonicalize_module_defs<'a>(
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home, var_store, exposed_ident_ids.clone());
-    let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
+    let mut scope = Scope::new(home, var_store, exposed_ident_ids);
+    let mut env = Env::new(home, dep_idents, module_ids);
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {

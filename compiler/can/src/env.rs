@@ -32,8 +32,6 @@ pub struct Env<'a> {
     pub qualified_type_lookups: VecSet<Symbol>,
 
     pub top_level_symbols: VecSet<Symbol>,
-
-    ident_ids: IdentIds,
 }
 
 impl<'a> Env<'a> {
@@ -41,13 +39,11 @@ impl<'a> Env<'a> {
         home: ModuleId,
         dep_idents: &'a IdentIdsByModule,
         module_ids: &'a ModuleIds,
-        exposed_ident_ids: IdentIds,
     ) -> Env<'a> {
         Env {
             home,
             dep_idents,
             module_ids,
-            ident_ids: exposed_ident_ids, // we start with these, but will add more later
             problems: Vec::new(),
             closures: MutMap::default(),
             qualified_value_lookups: VecSet::default(),
@@ -163,18 +159,6 @@ impl<'a> Env<'a> {
                 module_exists: false,
             }),
         }
-    }
-
-    /// Generates a unique, new symbol like "$1" or "$5",
-    /// using the home module as the module_id.
-    ///
-    /// This is used, for example, during canonicalization of an Expr::Closure
-    /// to generate a unique symbol to refer to that closure.
-    // TODO IDENT_IDS
-    pub fn gen_unique_symbol(&mut self) -> Symbol {
-        let ident_id = self.ident_ids.gen_unique();
-
-        Symbol::new(self.home, ident_id)
     }
 
     pub fn problem(&mut self, problem: Problem) {
