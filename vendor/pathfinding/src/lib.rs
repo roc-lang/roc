@@ -105,7 +105,7 @@ where
     let mut marked = HashSet::with_capacity_and_hasher(nodes.len(), default_hasher());
     let mut temp = MutSet::default();
     let mut sorted = VecDeque::with_capacity(nodes.len());
-    while let Some(node) = unmarked.iter().cloned().next() {
+    while let Some(node) = unmarked.iter().next().cloned() {
         temp.clear();
         visit(
             &node,
