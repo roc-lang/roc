@@ -67,10 +67,10 @@ fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
 }
 
 impl Scope {
-    pub fn new(home: ModuleId, _var_store: &mut VarStore, exposed_ident_ids: IdentIds) -> Scope {
+    pub fn new(home: ModuleId, _var_store: &mut VarStore, initial_ident_ids: IdentIds) -> Scope {
         Scope {
             home,
-            exposed_ident_ids,
+            exposed_ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: SendMap::default(),
             // TODO(abilities): default abilities in scope
@@ -81,11 +81,11 @@ impl Scope {
     pub fn new_with_aliases(
         home: ModuleId,
         var_store: &mut VarStore,
-        exposed_ident_ids: IdentIds,
+        initial_ident_ids: IdentIds,
     ) -> Scope {
         Scope {
             home,
-            exposed_ident_ids,
+            exposed_ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: add_aliases(var_store),
             // TODO(abilities): default abilities in scope
