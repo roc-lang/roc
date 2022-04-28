@@ -33,7 +33,6 @@ pub struct Env<'a> {
     pub top_level_symbols: VecSet<Symbol>,
 
     pub ident_ids: IdentIds,
-    pub exposed_ident_ids: IdentIds,
 }
 
 impl<'a> Env<'a> {
@@ -47,8 +46,7 @@ impl<'a> Env<'a> {
             home,
             dep_idents,
             module_ids,
-            ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later
-            exposed_ident_ids,
+            ident_ids: exposed_ident_ids, // we start with these, but will add more later
             problems: Vec::new(),
             closures: MutMap::default(),
             qualified_value_lookups: VecSet::default(),
