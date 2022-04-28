@@ -15,23 +15,40 @@ pub use roc_exhaustive::Context as ExhaustiveContext;
 pub const GUARD_CTOR: &str = "#Guard";
 pub const NONEXHAUSIVE_CTOR: &str = "#Open";
 
-pub struct ErrorSummary {
-    errors: Vec<Error>,
-    exhaustive: bool,
-    redundant: Vec<RedundantMark>,
+pub struct ExhaustiveSummary {
+    pub errors: Vec<Error>,
+    pub exhaustive: bool,
+    pub redundancies: Vec<RedundantMark>,
 }
 
 pub fn check(
     subs: &Subs,
     sketched_rows: SketchedRows,
     context: ExhaustiveContext,
-) -> Result<(), Vec<Error>> {
+) -> ExhaustiveSummary {
     let overall_region = sketched_rows.overall_region;
-    // TODO: can we keep going even if we had redundant rows?
-    let matrix = sketched_rows
-        .reify_to_non_redundant(subs)
-        .map_err(|e| vec![e])?;
-    roc_exhaustive::check(overall_region, context, matrix)
+    let mut all_errors = Vec::with_capacity(1);
+
+    let NonRedundantSummary {
+        non_redundant_rows,
+        errors,
+        redundancies,
+    } = sketched_rows.reify_to_non_redundant(subs);
+    all_errors.extend(errors);
+
+    let exhaustive = match roc_exhaustive::check(overall_region, context, non_redundant_rows) {
+        Ok(()) => true,
+        Err(errors) => {
+            all_errors.extend(errors);
+            false
+        }
+    };
+
+    ExhaustiveSummary {
+        errors: all_errors,
+        exhaustive,
+        redundancies,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +86,7 @@ struct SketchedRow {
     patterns: Vec<SketchedPattern>,
     region: Region,
     guard: Guard,
+    redundant_mark: RedundantMark,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,7 +96,7 @@ pub struct SketchedRows {
 }
 
 impl SketchedRows {
-    pub fn reify_to_non_redundant(self, subs: &Subs) -> Result<Vec<Vec<Pattern>>, Error> {
+    fn reify_to_non_redundant(self, subs: &Subs) -> NonRedundantSummary {
         to_nonredundant_rows(subs, self)
     }
 }
@@ -203,6 +221,7 @@ pub fn sketch_rows(target_var: Variable, region: Region, patterns: &[WhenBranch]
         patterns,
         guard,
         value: _,
+        redundant,
     } in patterns
     {
         let guard = if guard.is_some() {
@@ -248,6 +267,7 @@ pub fn sketch_rows(target_var: Variable, region: Region, patterns: &[WhenBranch]
                 patterns,
                 region: loc_pat.region,
                 guard,
+                redundant_mark: *redundant,
             };
             rows.push(row);
         }
@@ -261,18 +281,28 @@ pub fn sketch_rows(target_var: Variable, region: Region, patterns: &[WhenBranch]
 
 /// REDUNDANT PATTERNS
 
+struct NonRedundantSummary {
+    non_redundant_rows: Vec<Vec<Pattern>>,
+    redundancies: Vec<RedundantMark>,
+    errors: Vec<Error>,
+}
+
 /// INVARIANT: Produces a list of rows where (forall row. length row == 1)
-fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> Result<Vec<Vec<Pattern>>, Error> {
+fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> NonRedundantSummary {
     let SketchedRows {
         rows,
         overall_region,
     } = rows;
     let mut checked_rows = Vec::with_capacity(rows.len());
 
+    let mut redundancies = vec![];
+    let mut errors = vec![];
+
     for SketchedRow {
         patterns,
         guard,
         region,
+        redundant_mark,
     } in rows.into_iter()
     {
         let next_row: Vec<Pattern> = patterns
@@ -283,7 +313,8 @@ fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> Result<Vec<Vec<Patte
         if matches!(guard, Guard::HasGuard) || is_useful(checked_rows.clone(), next_row.clone()) {
             checked_rows.push(next_row);
         } else {
-            return Err(Error::Redundant {
+            redundancies.push(redundant_mark);
+            errors.push(Error::Redundant {
                 overall_region,
                 branch_region: region,
                 index: HumanIndex::zero_based(checked_rows.len()),
@@ -291,7 +322,11 @@ fn to_nonredundant_rows(subs: &Subs, rows: SketchedRows) -> Result<Vec<Vec<Patte
         }
     }
 
-    Ok(checked_rows)
+    NonRedundantSummary {
+        non_redundant_rows: checked_rows,
+        redundancies,
+        errors,
+    }
 }
 
 fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, TagId) {

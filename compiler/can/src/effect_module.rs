@@ -8,7 +8,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExhaustiveMark, VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{AliasKind, LambdaSet, Type, TypeExtension};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -1209,6 +1209,7 @@ fn build_effect_loop_inner_body(
             patterns: vec![Loc::at_zero(step_pattern)],
             value: Loc::at_zero(force_thunk2),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         }
     };
 
@@ -1220,6 +1221,7 @@ fn build_effect_loop_inner_body(
             patterns: vec![Loc::at_zero(done_pattern)],
             value: Loc::at_zero(Expr::Var(done_symbol)),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         }
     };
 

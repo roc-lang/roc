@@ -18,7 +18,7 @@ use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExhaustiveMark, VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, LambdaSet, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
@@ -338,6 +338,8 @@ pub struct WhenBranch {
     pub patterns: Vec<Loc<Pattern>>,
     pub value: Loc<Expr>,
     pub guard: Option<Loc<Expr>>,
+    /// Whether this branch is redundant in the `when` it appears in
+    pub redundant: RedundantMark,
 }
 
 impl WhenBranch {
@@ -1137,6 +1139,7 @@ fn canonicalize_when_branch<'a>(
             patterns,
             value,
             guard,
+            redundant: RedundantMark(var_store.fresh()),
         },
         references,
     )
@@ -1374,6 +1377,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                     patterns: branch.patterns,
                     value,
                     guard,
+                    redundant: RedundantMark(var_store.fresh()),
                 };
 
                 new_branches.push(new_branch);

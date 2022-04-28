@@ -2508,7 +2508,10 @@ pub fn gather_tags_unsorted_iter(
             // TODO investigate this likely can happen when there is a type error
             RigidVar(_) => break,
 
-            other => unreachable!("something weird ended up in a tag union type: {:?}", other),
+            other => unreachable!(
+                "something weird ended up in a tag union type: {:?} at {:?}",
+                other, var
+            ),
         }
     }
 

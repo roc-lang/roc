@@ -12,7 +12,8 @@ use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
     AliasVariables, Content, Descriptor, ExhaustiveMark, FlatType, Mark, OptVariable, Rank,
-    RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    RecordFields, RedundantMark, Subs, SubsIndex, SubsSlice, UnionTags, Variable,
+    VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
@@ -1286,23 +1287,26 @@ fn solve(
                 let sketched_rows = constraints.sketched_rows[sketched_rows.index()].clone();
 
                 if should_check_exhaustiveness {
-                    use roc_can::exhaustive::check;
-                    use roc_exhaustive::Error;
+                    use roc_can::exhaustive::{check, ExhaustiveSummary};
 
-                    let checked = roc_can::exhaustive::check(subs, sketched_rows, context);
-                    if let Err(errors) = checked {
-                        for error in errors.iter() {
-                            match error {
-                                Error::Incomplete(..) => subs
-                                    .set_content(exhaustive_mark.0, ExhaustiveMark::NON_EXHAUSTIVE),
-                                Error::Redundant { index, .. } => {
-                                    //
-                                }
-                            }
-                        }
+                    let ExhaustiveSummary {
+                        errors,
+                        exhaustive,
+                        redundancies,
+                    } = check(subs, sketched_rows, context);
 
-                        problems.extend(errors.into_iter().map(TypeError::Exhaustive));
+                    // Store information about whether the "when" is exhaustive, and
+                    // which (if any) of its branches are redundant. Codegen may use
+                    // this for branch-fixing and redundant elimination.
+                    if !exhaustive {
+                        subs.set_content(exhaustive_mark.0, ExhaustiveMark::NON_EXHAUSTIVE)
                     }
+                    for redundant_mark in redundancies {
+                        subs.set_content(redundant_mark.0, RedundantMark::REDUNDANT);
+                    }
+
+                    // Store the errors.
+                    problems.extend(errors.into_iter().map(TypeError::Exhaustive));
                 }
 
                 state

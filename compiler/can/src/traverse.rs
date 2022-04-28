@@ -108,6 +108,7 @@ fn walk_when_branch<V: Visitor>(visitor: &mut V, branch: &WhenBranch, expr_var: 
         patterns,
         value,
         guard,
+        redundant: _,
     } = branch;
 
     patterns

@@ -18,7 +18,10 @@ use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
-use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSubsSlice};
+use roc_types::subs::{
+    Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs, Variable,
+    VariableSubsSlice,
+};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
@@ -2090,8 +2093,12 @@ fn pattern_to_when<'a>(
                     patterns: vec![pattern],
                     value: body,
                     guard: None,
+                    // TODO(exhaustive): should come from real var!
+                    redundant: RedundantMark(Variable::EMPTY_TAG_UNION),
                 }],
                 branches_cond_var: pattern_var,
+                // TODO(exhaustive): should come from real var!
+                exhaustive: ExhaustiveMark(Variable::EMPTY_TAG_UNION),
             };
 
             (symbol, Loc::at_zero(wrapped_body))
@@ -3751,10 +3758,11 @@ pub fn with_hole<'a>(
         When {
             cond_var,
             expr_var,
-            region,
+            region: _,
             loc_cond,
             branches,
             branches_cond_var: _,
+            exhaustive,
         } => {
             let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
 
@@ -3764,9 +3772,9 @@ pub fn with_hole<'a>(
                 env,
                 cond_var,
                 expr_var,
-                region,
                 cond_symbol,
                 branches,
+                exhaustive,
                 layout_cache,
                 procs,
                 Some(id),
@@ -5442,10 +5450,11 @@ pub fn from_can<'a>(
         When {
             cond_var,
             expr_var,
-            region,
+            region: _,
             loc_cond,
             branches,
             branches_cond_var: _,
+            exhaustive,
         } => {
             let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
 
@@ -5453,9 +5462,9 @@ pub fn from_can<'a>(
                 env,
                 cond_var,
                 expr_var,
-                region,
                 cond_symbol,
                 branches,
+                exhaustive,
                 layout_cache,
                 procs,
                 None,
@@ -5822,8 +5831,8 @@ pub fn from_can<'a>(
 
 fn to_opt_branches<'a>(
     env: &mut Env<'a, '_>,
-    region: Region,
     branches: std::vec::Vec<roc_can::expr::WhenBranch>,
+    exhaustive_mark: ExhaustiveMark,
     layout_cache: &mut LayoutCache<'a>,
 ) -> std::vec::Vec<(
     Pattern<'a>,
@@ -5841,6 +5850,11 @@ fn to_opt_branches<'a>(
         } else {
             Guard::NoGuard
         };
+
+        if when_branch.redundant.is_redundant(&env.subs) {
+            // Don't codegen this branch since it's redundant.
+            continue;
+        }
 
         for loc_pattern in when_branch.patterns {
             match from_can_pattern(env, layout_cache, &loc_pattern.value) {
@@ -5891,45 +5905,14 @@ fn to_opt_branches<'a>(
         }
     }
 
-    // NOTE exhaustiveness is checked after the construction of all the branches
-    // In contrast to elm (currently), we still do codegen even if a pattern is non-exhaustive.
-    // So we not only report exhaustiveness errors, but also correct them
-    let context = roc_exhaustive::Context::BadCase;
-    match crate::exhaustive::check(region, &loc_branches, context) {
-        Ok(_) => {}
-        Err(errors) => {
-            use roc_exhaustive::Error::*;
-            let mut is_not_exhaustive = false;
-            let mut overlapping_branches = std::vec::Vec::new();
-
-            for error in errors {
-                match &error {
-                    Incomplete(_, _, _) => {
-                        is_not_exhaustive = true;
-                    }
-                    Redundant { index, .. } => {
-                        overlapping_branches.push(index.to_zero_based());
-                    }
-                }
-                env.problems.push(MonoProblem::PatternProblem(error))
-            }
-
-            overlapping_branches.sort_unstable();
-
-            for i in overlapping_branches.into_iter().rev() {
-                opt_branches.remove(i);
-            }
-
-            if is_not_exhaustive {
-                opt_branches.push((
-                    Pattern::Underscore,
-                    None,
-                    roc_can::expr::Expr::RuntimeError(
-                        roc_problem::can::RuntimeError::NonExhaustivePattern,
-                    ),
-                ));
-            }
-        }
+    if !exhaustive_mark.is_exhaustive(env.subs) {
+        // In contrast to elm (currently), we still do codegen even if a pattern is non-exhaustive.
+        // So we not only report exhaustiveness errors, but also correct them
+        opt_branches.push((
+            Pattern::Underscore,
+            None,
+            roc_can::expr::Expr::RuntimeError(roc_problem::can::RuntimeError::NonExhaustivePattern),
+        ));
     }
 
     opt_branches
@@ -5940,9 +5923,9 @@ fn from_can_when<'a>(
     env: &mut Env<'a, '_>,
     cond_var: Variable,
     expr_var: Variable,
-    region: Region,
     cond_symbol: Symbol,
     branches: std::vec::Vec<roc_can::expr::WhenBranch>,
+    exhaustive_mark: ExhaustiveMark,
     layout_cache: &mut LayoutCache<'a>,
     procs: &mut Procs<'a>,
     join_point: Option<JoinPointId>,
@@ -5952,7 +5935,7 @@ fn from_can_when<'a>(
         // We can't know what to return!
         return Stmt::RuntimeError("Hit a 0-branch when expression");
     }
-    let opt_branches = to_opt_branches(env, region, branches, layout_cache);
+    let opt_branches = to_opt_branches(env, branches, exhaustive_mark, layout_cache);
 
     let cond_layout =
         return_on_layout_error!(env, layout_cache.from_var(env.arena, cond_var, env.subs));

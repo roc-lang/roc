@@ -973,14 +973,27 @@ impl ExhaustiveMark {
     pub const EXHAUSTIVE_TYPE: Type = Type::EmptyTagUnion;
     pub const EXHAUSTIVE: Content = Content::Structure(FlatType::EmptyTagUnion);
     pub const NON_EXHAUSTIVE: Content = Content::Error;
+
+    pub fn is_exhaustive(&self, subs: &Subs) -> bool {
+        matches!(
+            subs.get_content_without_compacting(self.0),
+            Content::Structure(FlatType::EmptyTagUnion)
+        )
+    }
 }
 
 /// Marks whether a when branch is redundant using a variable.
-pub struct RedundantMark(Variable);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RedundantMark(pub Variable);
 
 impl RedundantMark {
-    pub const REDUNDANT: Content = Content::Structure(FlatType::EmptyTagUnion);
-    pub const NON_REDUNDANT: Content = Content::Error;
+    pub const REDUNDANT: Content = Content::Error;
+    pub const NON_REDUNDANT: Content = Content::Structure(FlatType::EmptyTagUnion);
+    pub const NON_REDUNDANT_TYPE: Type = Type::EmptyTagUnion;
+
+    pub fn is_redundant(&self, subs: &Subs) -> bool {
+        matches!(subs.get_content_without_compacting(self.0), Content::Error)
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -9,7 +9,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExhaustiveMark, VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
 
 macro_rules! macro_magic {
     (@single $($x:tt)*) => (());
@@ -4686,6 +4686,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
@@ -4716,6 +4717,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
@@ -4785,6 +4787,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
@@ -4815,6 +4818,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
@@ -4860,6 +4864,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_3)),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
@@ -4880,6 +4885,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_2)),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
@@ -4932,6 +4938,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
@@ -4959,6 +4966,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
@@ -5011,6 +5019,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
@@ -5038,6 +5047,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
@@ -5102,6 +5112,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
@@ -5132,6 +5143,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
+            redundant: RedundantMark(var_store.fresh()),
         };
 
         branches.push(branch);
