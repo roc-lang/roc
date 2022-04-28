@@ -5762,7 +5762,7 @@ fn to_opt_branches<'a>(
             Guard::NoGuard
         };
 
-        if when_branch.redundant.is_redundant(&env.subs) {
+        if when_branch.redundant.is_redundant(env.subs) {
             // Don't codegen this branch since it's redundant.
             continue;
         }

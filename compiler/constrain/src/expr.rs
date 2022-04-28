@@ -1985,8 +1985,8 @@ pub fn rec_defs_help(
                             def,
                             &mut def_pattern_state,
                             &mut state,
-                            &arguments,
-                            &arg_types,
+                            arguments,
+                            arg_types,
                         );
                         let pattern_types = arguments.iter().map(|a| Type::Variable(a.0)).collect();
 
