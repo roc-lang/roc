@@ -1183,11 +1183,6 @@ fn constrain_when_branch_help(
         delayed_is_open_constraints: Vec::new(),
     };
 
-    // TODO: can i remove this?
-    // state
-    //     .vars
-    //     .push(when_branch.redundant.variable_for_introduction());
-
     // TODO investigate for error messages, is it better to unify all branches with a variable,
     // then unify that variable with the expectation?
     for (i, loc_pattern) in when_branch.patterns.iter().enumerate() {
