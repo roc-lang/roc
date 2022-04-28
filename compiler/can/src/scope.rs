@@ -70,7 +70,7 @@ fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
 }
 
 impl Scope {
-    pub fn new(home: ModuleId, _var_store: &mut VarStore, initial_ident_ids: IdentIds) -> Scope {
+    pub fn new(home: ModuleId, initial_ident_ids: IdentIds) -> Scope {
         Scope {
             home,
             exposed_ident_count: initial_ident_ids.len(),
