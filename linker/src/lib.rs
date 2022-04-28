@@ -1401,16 +1401,8 @@ fn surgery_impl(
                                 return Ok(-1);
                             }
                         }
-                    } else if {
-                        const ALWAYS_LINKED: &[&str] = &[
-                            "__divti3",
-                            "__udivti3",
-                            // By zig builtins
-                            "setjmp",
-                            "longjmp",
-                        ];
-                        matches!(app_obj.symbol_by_index(index), Ok(sym) if ALWAYS_LINKED.contains(&sym.name().unwrap_or_default()))
-                    } {
+                    } else if matches!(app_obj.symbol_by_index(index), Ok(sym) if ["__divti3", "__udivti3"].contains(&sym.name().unwrap_or_default()))
+                    {
                         // Explicitly ignore some symbols that are currently always linked.
                         continue;
                     } else {
