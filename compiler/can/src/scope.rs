@@ -1,5 +1,4 @@
-use roc_collections::all::{MutSet, SendMap};
-use roc_collections::SmallStringInterner;
+use roc_collections::{MutSet, SmallStringInterner, VecMap};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -14,7 +13,7 @@ pub struct Scope {
     idents: IdentStore,
 
     /// The type aliases currently in scope
-    pub aliases: SendMap<Symbol, Alias>,
+    pub aliases: VecMap<Symbol, Alias>,
 
     /// The abilities currently in scope, and their implementors.
     pub abilities_store: AbilitiesStore,
@@ -29,11 +28,11 @@ pub struct Scope {
     exposed_ident_count: usize,
 }
 
-fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
+fn add_aliases(var_store: &mut VarStore) -> VecMap<Symbol, Alias> {
     use roc_types::solved_types::{BuiltinAlias, FreeVars};
 
     let solved_aliases = roc_types::builtin_aliases::aliases();
-    let mut aliases = SendMap::default();
+    let mut aliases = VecMap::default();
 
     for (symbol, builtin_alias) in solved_aliases {
         let BuiltinAlias {
@@ -76,7 +75,7 @@ impl Scope {
             exposed_ident_count: initial_ident_ids.len(),
             ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
-            aliases: SendMap::default(),
+            aliases: VecMap::default(),
             // TODO(abilities): default abilities in scope
             abilities_store: AbilitiesStore::default(),
         }
@@ -348,15 +347,20 @@ impl Scope {
     where
         F: FnOnce(&mut Scope) -> T,
     {
+        // store enough information to roll back to the original outer scope
+        //
+        // - abilities_store: abilitie definitions not allowed in inner scopes
+        // - ident_ids: identifiers in inner scopes should still be available in the ident_ids
+        // - idents: we have to clone for now
+        // - aliases: stored in a VecMap, we just discard anything added in an inner scope
+        // - exposed_ident_count: unchanged
         let idents = self.idents.clone();
-        let aliases = self.aliases.clone();
-        let abilities_store = self.abilities_store.clone();
+        let aliases_count = self.aliases.len();
 
         let result = f(self);
 
         self.idents = idents;
-        self.aliases = aliases;
-        self.abilities_store = abilities_store;
+        self.aliases.truncate(aliases_count);
 
         result
     }
