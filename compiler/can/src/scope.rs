@@ -355,7 +355,7 @@ impl Scope {
         result
     }
 
-    pub fn snapshot(&self) -> ScopeSnapshot {
+    fn snapshot(&self) -> ScopeSnapshot {
         ScopeSnapshot {
             idents: self.idents.clone(),
             aliases: self.aliases.clone(),
@@ -364,7 +364,7 @@ impl Scope {
         }
     }
 
-    pub fn rollback(snapshot: ScopeSnapshot) -> Scope {
+    fn rollback(snapshot: ScopeSnapshot) -> Scope {
         Scope {
             idents: snapshot.idents,
             aliases: snapshot.aliases,

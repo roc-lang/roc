@@ -208,10 +208,10 @@ pub(crate) fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
     var_store: &mut VarStore,
-    mut scope: Scope,
+    scope: &mut Scope,
     loc_defs: &'a [&'a Loc<ast::Def<'a>>],
     pattern_type: PatternType,
-) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
+) -> (CanDefs, Output, MutMap<Symbol, Region>) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
     // 1. Go through each of the patterns.
@@ -236,7 +236,7 @@ pub(crate) fn canonicalize_defs<'a>(
     for loc_def in loc_defs {
         match loc_def.value.unroll_def() {
             Ok(type_def) => {
-                pending_type_defs.push(to_pending_type_def(env, type_def, &mut scope, pattern_type))
+                pending_type_defs.push(to_pending_type_def(env, type_def, scope, pattern_type))
             }
             Err(value_def) => value_defs.push(Loc::at(loc_def.region, value_def)),
         }
@@ -322,7 +322,7 @@ pub(crate) fn canonicalize_defs<'a>(
                 let symbol = name.value;
                 let can_ann = canonicalize_annotation(
                     env,
-                    &mut scope,
+                    scope,
                     &ann.value,
                     ann.region,
                     var_store,
@@ -446,7 +446,7 @@ pub(crate) fn canonicalize_defs<'a>(
         env,
         &mut output,
         var_store,
-        &mut scope,
+        scope,
         abilities,
         &abilities_in_scope,
         pattern_type,
@@ -465,7 +465,7 @@ pub(crate) fn canonicalize_defs<'a>(
             env,
             var_store,
             loc_def.value,
-            &mut scope,
+            scope,
             &mut new_output,
             pattern_type,
         ) {
@@ -512,7 +512,7 @@ pub(crate) fn canonicalize_defs<'a>(
             env,
             pending_def,
             output,
-            &mut scope,
+            scope,
             var_store,
             &mut aliases,
             &abilities_in_scope,
@@ -525,13 +525,6 @@ pub(crate) fn canonicalize_defs<'a>(
         def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
     }
 
-    // This returns both the defs info as well as the new scope.
-    //
-    // We have to return the new scope because we added defs to it
-    // (and those lookups shouldn't fail later, e.g. when canonicalizing
-    // the return expr), but we didn't want to mutate the original scope
-    // directly because we wanted to keep a clone of it around to diff
-    // when looking for unused idents.
     (
         CanDefs {
             defs,
@@ -539,7 +532,6 @@ pub(crate) fn canonicalize_defs<'a>(
             // The result needs a thread-safe `SendMap`
             aliases,
         },
-        scope,
         output,
         symbols_introduced,
     )
@@ -1278,11 +1270,11 @@ fn canonicalize_pending_body<'a>(
 pub fn can_defs_with_return<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
-    scope: Scope,
+    scope: &mut Scope,
     loc_defs: &'a [&'a Loc<ast::Def<'a>>],
     loc_ret: &'a Loc<ast::Expr<'a>>,
 ) -> (Expr, Output) {
-    let (unsorted, mut scope, defs_output, symbols_introduced) = canonicalize_defs(
+    let (unsorted, defs_output, symbols_introduced) = canonicalize_defs(
         env,
         Output::default(),
         var_store,
@@ -1294,7 +1286,7 @@ pub fn can_defs_with_return<'a>(
     // The def as a whole is a tail call iff its return expression is a tail call.
     // Use its output as a starting point because its tail_call already has the right answer!
     let (ret_expr, mut output) =
-        canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
+        canonicalize_expr(env, var_store, scope, loc_ret.region, &loc_ret.value);
 
     output
         .introduced_variables

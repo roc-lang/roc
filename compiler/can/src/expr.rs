@@ -654,15 +654,10 @@ pub fn canonicalize_expr<'a>(
             (RuntimeError(problem), Output::default())
         }
         ast::Expr::Defs(loc_defs, loc_ret) => {
-            can_defs_with_return(
-                env,
-                var_store,
-                // The body expression gets a new scope for canonicalization,
-                // so clone it.
-                scope.clone(),
-                loc_defs,
-                loc_ret,
-            )
+            // The body expression gets a new scope for canonicalization,
+            scope.inner_scope(|inner_scope| {
+                can_defs_with_return(env, var_store, inner_scope, loc_defs, loc_ret)
+            })
         }
         ast::Expr::Backpassing(_, _, _) => {
             unreachable!("Backpassing should have been desugared by now")
@@ -685,14 +680,16 @@ pub fn canonicalize_expr<'a>(
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches.iter() {
-                let (can_when_branch, branch_references) = canonicalize_when_branch(
-                    env,
-                    var_store,
-                    scope.clone(),
-                    region,
-                    *branch,
-                    &mut output,
-                );
+                let (can_when_branch, branch_references) = scope.inner_scope(|inner_scope| {
+                    canonicalize_when_branch(
+                        env,
+                        var_store,
+                        inner_scope,
+                        region,
+                        *branch,
+                        &mut output,
+                    )
+                });
 
                 output.references.union_mut(&branch_references);
 
@@ -957,15 +954,29 @@ pub fn canonicalize_closure<'a>(
     loc_body_expr: &'a Loc<ast::Expr<'a>>,
     opt_def_name: Option<Symbol>,
 ) -> (ClosureData, Output) {
+    scope.inner_scope(|inner_scope| {
+        canonicalize_closure_inner_scope(
+            env,
+            var_store,
+            inner_scope,
+            loc_arg_patterns,
+            loc_body_expr,
+            opt_def_name,
+        )
+    })
+}
+
+fn canonicalize_closure_inner_scope<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    loc_arg_patterns: &'a [Loc<ast::Pattern<'a>>],
+    loc_body_expr: &'a Loc<ast::Expr<'a>>,
+    opt_def_name: Option<Symbol>,
+) -> (ClosureData, Output) {
     // The globally unique symbol that will refer to this closure once it gets converted
     // into a top-level procedure for code gen.
     let symbol = opt_def_name.unwrap_or_else(|| env.gen_unique_symbol());
-
-    // The body expression gets a new scope for canonicalization.
-    // Shadow `scope` to make sure we don't accidentally use the original one for the
-    // rest of this block, but keep the original around for later diffing.
-    let original_scope = scope;
-    let mut scope = original_scope.clone();
 
     let mut can_args = Vec::with_capacity(loc_arg_patterns.len());
     let mut output = Output::default();
@@ -974,7 +985,7 @@ pub fn canonicalize_closure<'a>(
         let can_argument_pattern = canonicalize_pattern(
             env,
             var_store,
-            &mut scope,
+            scope,
             &mut output,
             FunctionArg,
             &loc_pattern.value,
@@ -990,7 +1001,7 @@ pub fn canonicalize_closure<'a>(
     let (loc_body_expr, new_output) = canonicalize_expr(
         env,
         var_store,
-        &mut scope,
+        scope,
         loc_body_expr.region,
         &loc_body_expr.value,
     );
@@ -1062,7 +1073,7 @@ pub fn canonicalize_closure<'a>(
 fn canonicalize_when_branch<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
-    mut scope: Scope,
+    scope: &mut Scope,
     _region: Region,
     branch: &'a ast::WhenBranch<'a>,
     output: &mut Output,
@@ -1074,7 +1085,7 @@ fn canonicalize_when_branch<'a>(
         let can_pattern = canonicalize_pattern(
             env,
             var_store,
-            &mut scope,
+            scope,
             output,
             WhenBranch,
             &loc_pattern.value,
@@ -1087,7 +1098,7 @@ fn canonicalize_when_branch<'a>(
     let (value, mut branch_output) = canonicalize_expr(
         env,
         var_store,
-        &mut scope,
+        scope,
         branch.value.region,
         &branch.value.value,
     );
@@ -1096,7 +1107,7 @@ fn canonicalize_when_branch<'a>(
         None => None,
         Some(loc_expr) => {
             let (can_guard, guard_branch_output) =
-                canonicalize_expr(env, var_store, &mut scope, loc_expr.region, &loc_expr.value);
+                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
 
             branch_output.union(guard_branch_output);
             Some(can_guard)

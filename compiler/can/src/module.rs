@@ -285,11 +285,11 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, mut scope, output, symbols_introduced) = canonicalize_defs(
+    let (defs, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
-        scope,
+        &mut scope,
         &desugared,
         PatternType::TopLevelDef,
     );
