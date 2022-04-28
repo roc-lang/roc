@@ -1,14 +1,14 @@
 #![cfg(not(feature = "gen-wasm"))]
 
 #[cfg(feature = "gen-llvm")]
-use test_gen_helpers::assert_evals_to;
+use roc_test_gen_helpers::assert_evals_to;
 #[cfg(feature = "gen-llvm")]
-use test_gen_helpers::assert_llvm_evals_to;
+use roc_test_gen_helpers::assert_llvm_evals_to;
 
 #[cfg(feature = "gen-dev")]
-use test_gen_helpers::assert_evals_to;
+use roc_test_gen_helpers::assert_evals_to;
 #[cfg(feature = "gen-dev")]
-use test_gen_helpers::assert_evals_to as assert_llvm_evals_to;
+use roc_test_gen_helpers::assert_evals_to as assert_llvm_evals_to;
 
 #[allow(unused_imports)]
 use indoc::indoc;

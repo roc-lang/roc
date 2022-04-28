@@ -1,5 +1,5 @@
-use test_gen_helpers::assert_evals_to;
-use test_gen_helpers::expect_runtime_error_panic;
+use roc_test_gen_helpers::assert_evals_to;
+use roc_test_gen_helpers::expect_runtime_error_panic;
 
 // use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;

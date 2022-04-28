@@ -1,4 +1,4 @@
-use test_gen_helpers::assert_evals_to;
+use roc_test_gen_helpers::assert_evals_to;
 
 use core::ffi::c_void;
 #[no_mangle]

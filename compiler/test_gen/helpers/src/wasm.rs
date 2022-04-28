@@ -381,12 +381,14 @@ pub fn identity<T>(value: T) -> T {
     value
 }
 
-#[allow(unused_macros)]
+#[cfg(feature = "gen-wasm")]
+#[macro_export]
 macro_rules! assert_refcounts {
     // We need the result type to generate the test_wrapper, even though we ignore the value!
     // We can't just call `main` with no args, because some tests return structs, via pointer arg!
     // Also we need to know how much stack space to reserve for the struct.
     ($src: expr, $ty: ty, $expected_refcounts: expr) => {{
+        panic!(1);
         let phantom = std::marker::PhantomData;
         let num_refcounts = $expected_refcounts.len();
         let result =
@@ -407,4 +409,4 @@ pub(crate) use assert_evals_to;
 pub(crate) use expect_runtime_error_panic;
 
 #[allow(unused_imports)]
-pub(crate) use assert_refcounts;
+pub use assert_refcounts;

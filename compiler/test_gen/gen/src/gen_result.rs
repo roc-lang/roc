@@ -1,13 +1,7 @@
 #![cfg(feature = "gen-llvm")]
 
 #[cfg(feature = "gen-llvm")]
-use test_gen_helpers::assert_evals_to;
-
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to;
-
-// #[cfg(feature = "gen-wasm")]
-// use crate::helpers::wasm::assert_evals_to;
+use roc_test_gen_helpers::assert_evals_to;
 
 use indoc::indoc;
 

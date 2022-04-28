@@ -1,5 +1,6 @@
 #[cfg(feature = "gen-wasm")]
-use crate::helpers::{wasm::assert_refcounts, RefCount::*};
+use roc_test_gen_helpers::assert_refcounts;
+use roc_test_gen_helpers::RefCount::*;
 
 #[allow(unused_imports)]
 use indoc::indoc;

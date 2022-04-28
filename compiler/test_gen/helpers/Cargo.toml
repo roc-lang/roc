@@ -1,5 +1,5 @@
 [package]
-name = "test_gen_helpers"
+name = "roc_test_gen_helpers"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"

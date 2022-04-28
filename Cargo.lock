@@ -3988,6 +3988,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_test_gen_helpers"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "either",
+ "indoc",
+ "inkwell 0.1.0",
+ "libc",
+ "libloading 0.7.1",
+ "roc_build",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_gen_dev",
+ "roc_gen_llvm",
+ "roc_gen_wasm",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_std",
+ "roc_target",
+ "roc_types",
+ "roc_unify",
+ "target-lexicon",
+ "tempfile",
+ "wasmer",
+ "wasmer-wasi",
+]
+
+[[package]]
 name = "roc_test_utils"
 version = "0.1.0"
 dependencies = [
@@ -4544,43 +4580,7 @@ dependencies = [
  "roc_solve",
  "roc_std",
  "roc_target",
- "roc_types",
- "roc_unify",
- "target-lexicon",
- "tempfile",
- "test_gen_helpers",
- "wasmer",
- "wasmer-wasi",
-]
-
-[[package]]
-name = "test_gen_helpers"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "either",
- "indoc",
- "inkwell 0.1.0",
- "libc",
- "libloading 0.7.1",
- "roc_build",
- "roc_builtins",
- "roc_can",
- "roc_collections",
- "roc_constrain",
- "roc_gen_dev",
- "roc_gen_llvm",
- "roc_gen_wasm",
- "roc_load",
- "roc_module",
- "roc_mono",
- "roc_parse",
- "roc_problem",
- "roc_region",
- "roc_reporting",
- "roc_solve",
- "roc_std",
- "roc_target",
+ "roc_test_gen_helpers",
  "roc_types",
  "roc_unify",
  "target-lexicon",
@@ -4617,11 +4617,11 @@ dependencies = [
  "roc_solve",
  "roc_std",
  "roc_target",
+ "roc_test_gen_helpers",
  "roc_types",
  "roc_unify",
  "target-lexicon",
  "tempfile",
- "test_gen_helpers",
  "wasmer",
  "wasmer-wasi",
 ]
@@ -4654,11 +4654,11 @@ dependencies = [
  "roc_solve",
  "roc_std",
  "roc_target",
+ "roc_test_gen_helpers",
  "roc_types",
  "roc_unify",
  "target-lexicon",
  "tempfile",
- "test_gen_helpers",
  "wasmer",
  "wasmer-wasi",
 ]

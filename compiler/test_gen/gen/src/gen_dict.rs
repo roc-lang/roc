@@ -1,6 +1,6 @@
 #![cfg(feature = "gen-llvm")]
 
-use test_gen_helpers::assert_evals_to;
+use roc_test_gen_helpers::assert_evals_to;
 
 use indoc::indoc;
 use roc_std::{RocList, RocStr};

@@ -1,10 +1,7 @@
-use test_gen_helpers::assert_evals_to;
-use test_gen_helpers::expect_runtime_error_panic;
+use roc_test_gen_helpers::assert_evals_to;
+use roc_test_gen_helpers::expect_runtime_error_panic;
 
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to;
-
-use test_gen_helpers::with_larger_debug_stack;
+use roc_test_gen_helpers::with_larger_debug_stack;
 //use crate::assert_wasm_evals_to as assert_evals_to;
 #[allow(unused_imports)]
 use indoc::indoc;

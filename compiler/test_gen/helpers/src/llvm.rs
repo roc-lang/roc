@@ -638,6 +638,14 @@ macro_rules! assert_non_opt_evals_to {
     }};
 }
 
+#[cfg(feature = "gen-llvm")]
+#[macro_export]
+macro_rules! assert_refcounts {
+    ($src: expr, $ty: ty, $expected_refcounts: expr) => {
+        unimplemented!()
+    };
+}
+
 #[allow(unused)]
 pub use assert_evals_to;
 #[allow(unused)]

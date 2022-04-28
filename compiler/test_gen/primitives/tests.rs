@@ -1,6 +1,5 @@
-use test_gen_helpers::assert_evals_to;
-use test_gen_helpers::assert_expect_failed;
-use test_gen_helpers::assert_non_opt_evals_to;
+use roc_test_gen_helpers::assert_evals_to;
+use roc_test_gen_helpers::assert_expect_failed;
 
 use core::ffi::c_void;
 #[no_mangle]
@@ -48,7 +47,9 @@ pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
 }
 
 #[cfg(feature = "gen-wasm")]
-use test_gen_helpers::assert_evals_to as assert_non_opt_evals_to;
+use roc_test_gen_helpers::assert_evals_to as assert_non_opt_evals_to;
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+use roc_test_gen_helpers::assert_non_opt_evals_to;
 
 use indoc::indoc;
 #[allow(unused_imports)]
