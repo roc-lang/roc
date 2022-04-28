@@ -15,7 +15,7 @@ use roc_collections::all::{HumanIndex, MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExhaustiveMark, RedundantMark, Variable};
+use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
     AliasKind, AnnotationSource, Category, PReason, Reason, RecordField, TypeExtension,
@@ -719,15 +719,6 @@ pub fn constrain_expr(
             );
             pattern_cons.push(cond_constraint);
 
-            // Mark the `when` as exhaustive initially. We'll refine this if the condition
-            // disagrees.
-            pattern_cons.push(constraints.store(
-                ExhaustiveMark::EXHAUSTIVE_TYPE,
-                exhaustive.0,
-                file!(),
-                line!(),
-            ));
-
             // Now check the condition against the type expected by the branches.
             let sketched_rows = sketch_rows(real_cond_var, branches_region, branches);
             let cond_matches_branches_constraint = constraints.exhaustive(
@@ -1181,15 +1172,6 @@ fn constrain_when_branch_help(
         constraints: Vec::with_capacity(2),
         delayed_is_open_constraints: Vec::new(),
     };
-
-    // Mark the branch as non-redundant initially. We'll refine this during solving.
-    state.vars.push(when_branch.redundant.0);
-    state.constraints.push(constraints.store(
-        RedundantMark::NON_REDUNDANT_TYPE,
-        when_branch.redundant.0,
-        file!(),
-        line!(),
-    ));
 
     // TODO investigate for error messages, is it better to unify all branches with a variable,
     // then unify that variable with the expectation?

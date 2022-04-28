@@ -1,6 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{
-    name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, Type, TypeExt,
+    name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt,
 };
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_error_macros::internal_error;
@@ -970,15 +970,12 @@ impl From<OptVariable> for Option<Variable> {
 pub struct ExhaustiveMark(pub Variable);
 
 impl ExhaustiveMark {
-    pub const EXHAUSTIVE_TYPE: Type = Type::EmptyTagUnion;
-    pub const EXHAUSTIVE: Content = Content::Structure(FlatType::EmptyTagUnion);
-    pub const NON_EXHAUSTIVE: Content = Content::Error;
+    pub fn set_non_exhaustive(&self, subs: &mut Subs) {
+        subs.set_content(self.0, Content::Error);
+    }
 
-    pub fn is_exhaustive(&self, subs: &Subs) -> bool {
-        matches!(
-            subs.get_content_without_compacting(self.0),
-            Content::Structure(FlatType::EmptyTagUnion)
-        )
+    pub fn is_non_exhaustive(&self, subs: &Subs) -> bool {
+        matches!(subs.get_content_without_compacting(self.0), Content::Error,)
     }
 }
 
@@ -987,12 +984,12 @@ impl ExhaustiveMark {
 pub struct RedundantMark(pub Variable);
 
 impl RedundantMark {
-    pub const REDUNDANT: Content = Content::Error;
-    pub const NON_REDUNDANT: Content = Content::Structure(FlatType::EmptyTagUnion);
-    pub const NON_REDUNDANT_TYPE: Type = Type::EmptyTagUnion;
+    pub fn set_redundant(&self, subs: &mut Subs) {
+        subs.set_content(self.0, Content::Error);
+    }
 
     pub fn is_redundant(&self, subs: &Subs) -> bool {
-        matches!(subs.get_content_without_compacting(self.0), Content::Error)
+        matches!(subs.get_content_without_compacting(self.0), Content::Error,)
     }
 }
 

@@ -5905,7 +5905,7 @@ fn to_opt_branches<'a>(
         }
     }
 
-    if !exhaustive_mark.is_exhaustive(env.subs) {
+    if exhaustive_mark.is_non_exhaustive(env.subs) {
         // In contrast to elm (currently), we still do codegen even if a pattern is non-exhaustive.
         // So we not only report exhaustiveness errors, but also correct them
         opt_branches.push((

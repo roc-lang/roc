@@ -11,9 +11,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    AliasVariables, Content, Descriptor, ExhaustiveMark, FlatType, Mark, OptVariable, Rank,
-    RecordFields, RedundantMark, Subs, SubsIndex, SubsSlice, UnionTags, Variable,
-    VariableSubsSlice,
+    AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
+    SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
@@ -1299,10 +1298,10 @@ fn solve(
                     // which (if any) of its branches are redundant. Codegen may use
                     // this for branch-fixing and redundant elimination.
                     if !exhaustive {
-                        subs.set_content(exhaustive_mark.0, ExhaustiveMark::NON_EXHAUSTIVE)
+                        exhaustive_mark.set_non_exhaustive(subs);
                     }
                     for redundant_mark in redundancies {
-                        subs.set_content(redundant_mark.0, RedundantMark::REDUNDANT);
+                        redundant_mark.set_redundant(subs);
                     }
 
                     // Store the errors.
