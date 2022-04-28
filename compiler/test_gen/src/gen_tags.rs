@@ -7,10 +7,9 @@ use crate::helpers::dev::assert_evals_to;
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
 
-// use crate::assert_wasm_evals_to as assert_evals_to;
-#[allow(unused_imports)]
+#[cfg(test)]
 use indoc::indoc;
-#[allow(unused_imports)]
+#[cfg(test)]
 use roc_std::{RocList, RocStr};
 
 #[test]
@@ -1603,5 +1602,58 @@ fn opaque_assign_to_symbol() {
         ),
         98,
         u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_2777_default_branch_codegen() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f1 = \color ->
+              when color is
+                Red -> "red"
+                Yellow -> "yellow"
+                _ -> "unknown"
+            
+            r1 = Red |> f1 |> Str.concat (f1 Orange)
+            
+            f2 = \color ->
+              when color is
+                Red -> "red"
+                Yellow -> "yellow"
+                Green -> "green"
+                _ -> "unknown"
+            
+            r2 = Red |> f2 |> Str.concat (f2 Orange)
+            
+            f3 = \color ->
+              when color is
+                Red -> "red"
+                Yellow -> "yellow"
+                Green -> "green"
+                _ -> "unknown"
+            
+            r3 = Orange |> f3 |> Str.concat (f3 Red)
+            
+            f4 = \color ->
+              when color is
+                Red -> "red"
+                Yellow | Gold -> "yellow"
+                _ -> "unknown"
+            
+            r4 = Red |> f4 |> Str.concat (f4 Orange)
+
+            [r1, r2, r3, r4]
+            "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from("redunknown"),
+            RocStr::from("redunknown"),
+            RocStr::from("unknownred"),
+            RocStr::from("redunknown"),
+        ]),
+        RocList<RocStr>
     )
 }
