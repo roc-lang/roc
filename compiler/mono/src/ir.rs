@@ -217,7 +217,7 @@ impl<'a> PartialProc<'a> {
     ) -> PartialProc<'a> {
         let number_of_arguments = loc_args.len();
 
-        match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
+        match patterns_to_when(env, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // a named closure. Since these aren't specialized by the surrounding
                 // context, we can't add pending specializations for them yet.
@@ -877,7 +877,7 @@ impl<'a> Procs<'a> {
             _ => false,
         };
 
-        match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
+        match patterns_to_when(env, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
                 // by the surrounding context, so we can add pending specializations
@@ -1938,8 +1938,6 @@ impl<'a> Stmt<'a> {
 #[allow(clippy::type_complexity)]
 fn patterns_to_when<'a>(
     env: &mut Env<'a, '_>,
-    // TODO REMOVE ME
-    _layout_cache: &mut LayoutCache<'a>,
     patterns: std::vec::Vec<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
     body_var: Variable,
     body: Loc<roc_can::expr::Expr>,
