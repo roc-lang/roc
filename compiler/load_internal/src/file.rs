@@ -4292,7 +4292,6 @@ fn add_def_to_module<'a>(
 
                     let partial_proc = PartialProc::from_named_function(
                         mono_env,
-                        layout_cache,
                         annotation,
                         loc_args,
                         *loc_body,
