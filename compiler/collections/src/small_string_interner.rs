@@ -143,6 +143,14 @@ impl SmallStringInterner {
             None => None,
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.lengths.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lengths.is_empty()
+    }
 }
 
 #[cfg(test)]

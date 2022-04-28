@@ -23,8 +23,10 @@ pub struct Scope {
     /// unqualified idents into Symbols.
     home: ModuleId,
 
-    exposed_ident_ids: IdentIds,
     pub ident_ids: IdentIds,
+
+    /// The first `exposed_ident_count` identifiers are exposed
+    exposed_ident_count: usize,
 }
 
 fn add_aliases(var_store: &mut VarStore) -> SendMap<Symbol, Alias> {
@@ -71,8 +73,8 @@ impl Scope {
     pub fn new(home: ModuleId, _var_store: &mut VarStore, initial_ident_ids: IdentIds) -> Scope {
         Scope {
             home,
-            ident_ids: initial_ident_ids.clone(),
-            exposed_ident_ids: initial_ident_ids,
+            exposed_ident_count: initial_ident_ids.len(),
+            ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: SendMap::default(),
             // TODO(abilities): default abilities in scope
@@ -87,8 +89,8 @@ impl Scope {
     ) -> Scope {
         Scope {
             home,
-            ident_ids: initial_ident_ids.clone(),
-            exposed_ident_ids: initial_ident_ids,
+            exposed_ident_count: initial_ident_ids.len(),
+            ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: add_aliases(var_store),
             // TODO(abilities): default abilities in scope
@@ -280,12 +282,10 @@ impl Scope {
     }
 
     fn commit_introduction(&mut self, ident: &Ident, region: Region) -> Symbol {
-        // If this IdentId was already added previously
-        // when the value was exposed in the module header,
-        // use that existing IdentId. Otherwise, create a fresh one.
-        let ident_id = match self.exposed_ident_ids.get_id(ident) {
-            Some(ident_id) => ident_id,
-            None => self.ident_ids.add_ident(ident),
+        // if the identifier is exposed, use the IdentId we already have for it
+        let ident_id = match self.ident_ids.get_id(ident) {
+            Some(ident_id) if ident_id.index() < self.exposed_ident_count => ident_id,
+            _ => self.ident_ids.add_ident(ident),
         };
 
         let symbol = Symbol::new(self.home, ident_id);
@@ -344,14 +344,12 @@ impl Scope {
         F: FnOnce(&mut Scope) -> T,
     {
         let idents = self.idents.clone();
-        let exposed_ident_ids = self.exposed_ident_ids.clone();
         let aliases = self.aliases.clone();
         let abilities_store = self.abilities_store.clone();
 
         let result = f(self);
 
         self.idents = idents;
-        self.exposed_ident_ids = exposed_ident_ids;
         self.aliases = aliases;
         self.abilities_store = abilities_store;
 

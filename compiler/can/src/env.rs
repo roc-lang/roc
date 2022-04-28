@@ -2,7 +2,7 @@ use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::{ IdentIdsByModule, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIdsByModule, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 
