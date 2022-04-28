@@ -3689,7 +3689,7 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_SETJMP)
     } else {
         // Anywhere else, use the LLVM intrinsic.
-        let jmp_buf_i8p = env
+        let jmp_buf_i8p_arr = env
             .builder
             .build_bitcast(
                 jmp_buf,
@@ -3710,13 +3710,21 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         let zero = env.context.i32_type().const_zero();
         let fa_index = env.context.i32_type().const_zero();
         let fa = unsafe {
-            env.builder
-                .build_in_bounds_gep(jmp_buf_i8p, &[zero, fa_index], "frame address index")
+            env.builder.build_in_bounds_gep(
+                jmp_buf_i8p_arr,
+                &[zero, fa_index],
+                "frame address index",
+            )
         };
 
         env.builder.build_store(fa, frame_address);
 
-        env.call_intrinsic(LLVM_SETJMP, &[jmp_buf_i8p.into()])
+        let jmp_buf_i8p = env.builder.build_bitcast(
+            jmp_buf,
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            "jmp_buf i8*",
+        );
+        env.call_intrinsic(LLVM_SETJMP, &[jmp_buf_i8p])
     }
 }
 
