@@ -84,7 +84,7 @@ impl Scope {
         Scope {
             home,
             exposed_ident_count: initial_ident_ids.len(),
-            locals: ScopedIdentIds::from_ident_ids(initial_ident_ids.clone()),
+            locals: ScopedIdentIds::from_ident_ids(home, initial_ident_ids.clone()),
             ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: VecMap::default(),
@@ -107,7 +107,7 @@ impl Scope {
         Scope {
             home,
             exposed_ident_count: initial_ident_ids.len(),
-            locals: ScopedIdentIds::from_ident_ids(initial_ident_ids.clone()),
+            locals: ScopedIdentIds::from_ident_ids(home, initial_ident_ids.clone()),
             ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: add_aliases(var_store),
@@ -118,7 +118,16 @@ impl Scope {
     }
 
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
-        match self.idents.get_symbol(ident) {
+        // match self.idents.get_symbol(ident) {
+
+        let a = self.idents.get_symbol(ident);
+        let b = self.locals.get_symbol(ident);
+
+        // dbg!(ident);
+
+        // assert_eq!(a, b, "{:?} != {:?} | {:?}", a, b, ident);
+
+        match a {
             Some(symbol) => Ok(symbol),
             None => {
                 for (import, symbol, _) in self.imports.iter() {
@@ -311,6 +320,8 @@ impl Scope {
                     let dummy = Ident::default();
                     self.idents.insert_unchecked(&dummy, shadow_symbol, region);
 
+                    let _ = self.locals.scopeless(&ident, region);
+
                     Ok((shadow_symbol, Some(original_symbol)))
                 } else {
                     // This is an illegal shadow.
@@ -331,18 +342,29 @@ impl Scope {
 
     fn commit_introduction(&mut self, ident: &Ident, region: Region) -> Symbol {
         // if the identifier is exposed, use the IdentId we already have for it
-        let ident_id = match self.ident_ids.get_id(ident) {
-            Some(ident_id) if ident_id.index() < self.exposed_ident_count => ident_id,
-            _ => self.ident_ids.add_ident(ident),
-        };
+        match self.ident_ids.get_id(ident) {
+            Some(ident_id) if ident_id.index() < self.exposed_ident_count => {
+                let symbol = Symbol::new(self.home, ident_id);
 
-        let symbol = Symbol::new(self.home, ident_id);
+                self.idents.insert_unchecked(ident, symbol, region);
 
-        self.idents.insert_unchecked(ident, symbol, region);
+                self.locals.in_scope.set(ident_id.index(), true);
+                self.locals.regions[ident_id.index()] = region;
 
-        self.locals.introduce_into_scope(ident, region);
+                symbol
+            }
+            _ => {
+                let ident_id = self.ident_ids.add_ident(ident);
 
-        symbol
+                let symbol = Symbol::new(self.home, ident_id);
+
+                self.idents.insert_unchecked(ident, symbol, region);
+
+                self.locals.introduce_into_scope(ident, region);
+
+                symbol
+            }
+        }
     }
 
     /// Ignore an identifier.
@@ -350,6 +372,7 @@ impl Scope {
     /// Used for record guards like { x: Just _ }
     pub fn ignore(&mut self, ident: &Ident) -> Symbol {
         let ident_id = self.ident_ids.add_ident(ident);
+        let _ = self.locals.scopeless(ident, Region::zero());
         Symbol::new(self.home, ident_id)
     }
 
@@ -546,16 +569,18 @@ struct ScopedIdentIds {
     ident_ids: IdentIds,
     in_scope: BitVec,
     regions: Vec<Region>,
+    home: ModuleId,
 }
 
 impl ScopedIdentIds {
-    fn from_ident_ids(ident_ids: IdentIds) -> Self {
+    fn from_ident_ids(home: ModuleId, ident_ids: IdentIds) -> Self {
         let capacity = ident_ids.len();
 
         Self {
             in_scope: BitVec::repeat(false, capacity),
             ident_ids,
             regions: std::iter::repeat(Region::zero()).take(capacity).collect(),
+            home,
         }
     }
 
@@ -577,6 +602,19 @@ impl ScopedIdentIds {
         for i in snapshot..self.in_scope.len() {
             self.in_scope.set(i, false);
         }
+    }
+
+    fn get_symbol(&self, ident: &Ident) -> Option<Symbol> {
+        self.ident_ids
+            .ident_strs()
+            .zip(self.in_scope.iter())
+            .find_map(|((ident_id, string), keep)| {
+                if *keep && string == ident.as_str() {
+                    Some(Symbol::new(self.home, ident_id))
+                } else {
+                    None
+                }
+            })
     }
 
     fn has_in_scope(&self, ident: &Ident) -> Option<(IdentId, Region)> {
