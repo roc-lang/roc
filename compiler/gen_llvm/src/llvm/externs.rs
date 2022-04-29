@@ -188,8 +188,6 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
     // roc_panic
     {
-        // use crate::llvm::build::LLVM_LONGJMP;
-
         // The type of this function (but not the implementation) should have
         // already been defined by the builtins, which rely on it.
         let fn_val = module.get_function("roc_panic").unwrap();
