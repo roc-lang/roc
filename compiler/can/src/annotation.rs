@@ -299,7 +299,7 @@ fn make_apply_symbol(
 /// `U8`, and `Str`.
 pub fn find_type_def_symbols(
     module_id: ModuleId,
-    ident_ids: &mut IdentIds,
+    ident_ids: &mut crate::scope::ScopedIdentIds,
     initial_annotation: &roc_parse::ast::TypeAnnotation,
 ) -> Vec<Symbol> {
     use roc_parse::ast::TypeAnnotation::*;
@@ -312,9 +312,8 @@ pub fn find_type_def_symbols(
         match annotation {
             Apply(_module_name, ident, arguments) => {
                 let ident: Ident = (*ident).into();
-                let ident_id = ident_ids.get_or_insert(&ident);
+                let symbol = ident_ids.scopeless_symbol(&ident, Region::zero());
 
-                let symbol = Symbol::new(module_id, ident_id);
                 result.push(symbol);
 
                 for t in arguments.iter() {

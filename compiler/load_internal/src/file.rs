@@ -3907,7 +3907,7 @@ fn canonicalize_and_constrain<'a>(
                 var_store,
                 constraints,
                 constraint,
-                ident_ids: module_output.scope.ident_ids,
+                ident_ids: module_output.scope.locals.ident_ids,
                 dep_idents,
                 module_timing,
             };

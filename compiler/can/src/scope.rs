@@ -12,9 +12,7 @@ use bitvec::vec::BitVec;
 
 #[derive(Clone, Debug)]
 pub struct Scope {
-    idents: IdentStore,
-
-    locals: ScopedIdentIds,
+    pub locals: ScopedIdentIds,
 
     /// The type aliases currently in scope
     pub aliases: VecMap<Symbol, Alias>,
@@ -25,8 +23,6 @@ pub struct Scope {
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
     home: ModuleId,
-
-    pub ident_ids: IdentIds,
 
     /// The first `exposed_ident_count` identifiers are exposed
     exposed_ident_count: usize,
@@ -84,9 +80,7 @@ impl Scope {
         Scope {
             home,
             exposed_ident_count: initial_ident_ids.len(),
-            locals: ScopedIdentIds::from_ident_ids(home, initial_ident_ids.clone()),
-            ident_ids: initial_ident_ids,
-            idents: IdentStore::new(),
+            locals: ScopedIdentIds::from_ident_ids(home, initial_ident_ids),
             aliases: VecMap::default(),
             // TODO(abilities): default abilities in scope
             abilities_store: AbilitiesStore::default(),
@@ -107,9 +101,7 @@ impl Scope {
         Scope {
             home,
             exposed_ident_count: initial_ident_ids.len(),
-            locals: ScopedIdentIds::from_ident_ids(home, initial_ident_ids.clone()),
-            ident_ids: initial_ident_ids,
-            idents: IdentStore::new(),
+            locals: ScopedIdentIds::from_ident_ids(home, initial_ident_ids),
             aliases: add_aliases(var_store),
             // TODO(abilities): default abilities in scope
             abilities_store: AbilitiesStore::default(),
@@ -120,14 +112,14 @@ impl Scope {
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
         // match self.idents.get_symbol(ident) {
 
-        let a = self.idents.get_symbol(ident);
+        // let a = self.idents.get_symbol(ident);
         let b = self.locals.get_symbol(ident);
 
         // dbg!(ident);
 
         // assert_eq!(a, b, "{:?} != {:?} | {:?}", a, b, ident);
 
-        match a {
+        match b {
             Some(symbol) => Ok(symbol),
             None => {
                 for (import, symbol, _) in self.imports.iter() {
@@ -216,8 +208,16 @@ impl Scope {
         opt_defined_alias: Option<Region>,
     ) -> RuntimeError {
         let opaques_in_scope = self
-            .idents
-            .iter_idents_symbols()
+            .locals
+            .ident_ids
+            .ident_strs()
+            .filter_map(|(ident_id, string)| {
+                if string.is_empty() {
+                    None
+                } else {
+                    Some((string, Symbol::new(self.home, ident_id)))
+                }
+            })
             .filter(|(_, sym)| {
                 self.aliases
                     .get(sym)
@@ -225,7 +225,7 @@ impl Scope {
                     .unwrap_or(AliasKind::Structural)
                     == AliasKind::Opaque
             })
-            .map(|(v, _)| v.as_ref().into())
+            .map(|(v, _)| v.into())
             .collect();
 
         RuntimeError::OpaqueNotDefined {
@@ -252,8 +252,7 @@ impl Scope {
         match self.introduce_without_shadow_symbol(&ident, region) {
             Ok(symbol) => Ok(symbol),
             Err((original_region, shadow)) => {
-                let ident_id = self.ident_ids.add_ident(&ident);
-                let symbol = Symbol::new(self.home, ident_id);
+                let symbol = self.locals.scopeless_symbol(&ident, region);
 
                 Err((original_region, shadow, symbol))
             }
@@ -304,23 +303,22 @@ impl Scope {
         ident: Ident,
         region: Region,
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
-        match self.idents.get_index(&ident) {
-            Some(index) => {
-                let original_symbol = self.idents.symbols[index];
-                let original_region = self.idents.regions[index];
+        match self.locals.has_in_scope(&ident) {
+            Some((ident_id, original_region)) => {
+                let index = ident_id.index();
 
-                let shadow_ident_id = self.ident_ids.add_ident(&ident);
-                let shadow_symbol = Symbol::new(self.home, shadow_ident_id);
+                let original_symbol = Symbol::new(self.home, ident_id);
+                let shadow_symbol = self.locals.scopeless_symbol(&ident, region);
 
                 if self.abilities_store.is_ability_member_name(original_symbol) {
                     self.abilities_store
                         .register_specializing_symbol(shadow_symbol, original_symbol);
 
-                    // Add a symbol for the shadow, but don't re-associate the member name.
-                    let dummy = Ident::default();
-                    self.idents.insert_unchecked(&dummy, shadow_symbol, region);
-
-                    let _ = self.locals.scopeless(&ident, region);
+                    //                    // Add a symbol for the shadow, but don't re-associate the member name.
+                    //                    let dummy = Ident::default();
+                    //                    self.idents.insert_unchecked(&dummy, shadow_symbol, region);
+                    //
+                    //                    let _ = self.locals.scopeless(&ident, region);
 
                     Ok((shadow_symbol, Some(original_symbol)))
                 } else {
@@ -342,11 +340,9 @@ impl Scope {
 
     fn commit_introduction(&mut self, ident: &Ident, region: Region) -> Symbol {
         // if the identifier is exposed, use the IdentId we already have for it
-        match self.ident_ids.get_id(ident) {
+        match self.locals.ident_ids.get_id(ident) {
             Some(ident_id) if ident_id.index() < self.exposed_ident_count => {
                 let symbol = Symbol::new(self.home, ident_id);
-
-                self.idents.insert_unchecked(ident, symbol, region);
 
                 self.locals.in_scope.set(ident_id.index(), true);
                 self.locals.regions[ident_id.index()] = region;
@@ -354,15 +350,8 @@ impl Scope {
                 symbol
             }
             _ => {
-                let ident_id = self.ident_ids.add_ident(ident);
-
-                let symbol = Symbol::new(self.home, ident_id);
-
-                self.idents.insert_unchecked(ident, symbol, region);
-
-                self.locals.introduce_into_scope(ident, region);
-
-                symbol
+                let ident_id = self.locals.introduce_into_scope(ident, region);
+                Symbol::new(self.home, ident_id)
             }
         }
     }
@@ -371,9 +360,7 @@ impl Scope {
     ///
     /// Used for record guards like { x: Just _ }
     pub fn ignore(&mut self, ident: &Ident) -> Symbol {
-        let ident_id = self.ident_ids.add_ident(ident);
-        let _ = self.locals.scopeless(ident, Region::zero());
-        Symbol::new(self.home, ident_id)
+        self.locals.scopeless_symbol(&ident, Region::zero())
     }
 
     /// Import a Symbol from another module into this module's top-level scope.
@@ -424,13 +411,11 @@ impl Scope {
         // - idents: we have to clone for now
         // - aliases: stored in a VecMap, we just discard anything added in an inner scope
         // - exposed_ident_count: unchanged
-        let idents = self.idents.clone();
         let aliases_count = self.aliases.len();
         let locals_snapshot = self.locals.snapshot();
 
         let result = f(self);
 
-        self.idents = idents;
         self.aliases.truncate(aliases_count);
         self.locals.revert(locals_snapshot);
 
@@ -438,7 +423,7 @@ impl Scope {
     }
 
     pub fn register_debug_idents(&self) {
-        self.home.register_debug_idents(&self.ident_ids)
+        self.home.register_debug_idents(&self.locals.ident_ids)
     }
 
     /// Generates a unique, new symbol like "$1" or "$5",
@@ -447,7 +432,7 @@ impl Scope {
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique_symbol(&mut self) -> Symbol {
-        let ident_id = self.ident_ids.gen_unique();
+        let ident_id = self.locals.gen_unique();
 
         Symbol::new(self.home, ident_id)
     }
@@ -499,74 +484,8 @@ pub fn create_alias(
 }
 
 #[derive(Clone, Debug)]
-struct IdentStore {
-    interner: SmallStringInterner,
-
-    /// A Symbol for each Ident
-    symbols: Vec<Symbol>,
-
-    /// A Region for each Ident
-    regions: Vec<Region>,
-}
-
-impl IdentStore {
-    fn new() -> Self {
-        let capacity = 64;
-
-        Self {
-            interner: SmallStringInterner::with_capacity(capacity),
-            symbols: Vec::with_capacity(capacity),
-            regions: Vec::with_capacity(capacity),
-        }
-    }
-
-    fn iter_idents_symbols(&self) -> impl Iterator<Item = (Ident, Symbol)> + '_ {
-        self.interner
-            .iter()
-            .zip(self.symbols.iter())
-            .filter_map(move |(string, symbol)| {
-                // empty slice is used when ability members are shadowed
-                if string.is_empty() {
-                    None
-                } else {
-                    Some((Ident::from(string), *symbol))
-                }
-            })
-    }
-
-    fn get_index(&self, ident: &Ident) -> Option<usize> {
-        let ident_str = ident.as_inline_str().as_str();
-
-        self.interner.find_index(ident_str)
-    }
-
-    fn get_symbol(&self, ident: &Ident) -> Option<Symbol> {
-        Some(self.symbols[self.get_index(ident)?])
-    }
-
-    fn get_symbol_and_region(&self, ident: &Ident) -> Option<(Symbol, Region)> {
-        let index = self.get_index(ident)?;
-
-        Some((self.symbols[index], self.regions[index]))
-    }
-
-    /// Does not check that the ident is unique
-    fn insert_unchecked(&mut self, ident: &Ident, symbol: Symbol, region: Region) {
-        let ident_str = ident.as_inline_str().as_str();
-
-        let index = self.interner.insert(ident_str);
-
-        debug_assert_eq!(index, self.symbols.len());
-        debug_assert_eq!(index, self.regions.len());
-
-        self.symbols.push(symbol);
-        self.regions.push(region);
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ScopedIdentIds {
-    ident_ids: IdentIds,
+pub struct ScopedIdentIds {
+    pub ident_ids: IdentIds,
     in_scope: BitVec,
     regions: Vec<Region>,
     home: ModuleId,
@@ -582,14 +501,6 @@ impl ScopedIdentIds {
             regions: std::iter::repeat(Region::zero()).take(capacity).collect(),
             home,
         }
-    }
-
-    fn len(&self) -> usize {
-        self.in_scope.count_ones()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     fn snapshot(&self) -> usize {
@@ -655,6 +566,10 @@ impl ScopedIdentIds {
         id
     }
 
+    pub fn scopeless_symbol(&mut self, ident_name: &Ident, region: Region) -> Symbol {
+        Symbol::new(self.home, self.scopeless(ident_name, region))
+    }
+
     fn scopeless(&mut self, ident_name: &Ident, region: Region) -> IdentId {
         let id = self.ident_ids.add_ident(ident_name);
 
@@ -663,6 +578,18 @@ impl ScopedIdentIds {
 
         self.in_scope.push(false);
         self.regions.push(region);
+
+        id
+    }
+
+    fn gen_unique(&mut self) -> IdentId {
+        let id = self.ident_ids.gen_unique();
+
+        debug_assert_eq!(id.index(), self.in_scope.len());
+        debug_assert_eq!(id.index(), self.regions.len());
+
+        self.in_scope.push(false);
+        self.regions.push(Region::zero());
 
         id
     }

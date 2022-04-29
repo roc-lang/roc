@@ -279,8 +279,7 @@ pub(crate) fn canonicalize_defs<'a>(
             } => {
                 let referenced_symbols = crate::annotation::find_type_def_symbols(
                     env.home,
-                    // TODO IDENT_IDS
-                    &mut scope.ident_ids,
+                    &mut scope.locals,
                     &ann.value,
                 );
 
@@ -297,8 +296,7 @@ pub(crate) fn canonicalize_defs<'a>(
                     // definition.
                     referenced_symbols.extend(crate::annotation::find_type_def_symbols(
                         env.home,
-                        // TODO IDENT_IDS
-                        &mut scope.ident_ids,
+                        &mut scope.locals,
                         &member.typ.value,
                     ));
                 }

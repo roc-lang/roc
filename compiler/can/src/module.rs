@@ -404,8 +404,12 @@ pub fn canonicalize_module_defs<'a>(
                                 GeneratedInfo::Hosted { effect_symbol, .. } => {
                                     let symbol = def.pattern_vars.iter().next().unwrap().0;
                                     let ident_id = symbol.ident_id();
-                                    let ident =
-                                        scope.ident_ids.get_name(ident_id).unwrap().to_string();
+                                    let ident = scope
+                                        .locals
+                                        .ident_ids
+                                        .get_name(ident_id)
+                                        .unwrap()
+                                        .to_string();
                                     let def_annotation = def.annotation.clone().unwrap();
                                     let annotation = crate::annotation::Annotation {
                                         typ: def_annotation.signature,
