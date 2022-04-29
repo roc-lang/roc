@@ -301,8 +301,6 @@ impl Aliases {
                 Some((_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),
             };
 
-        dbg!(symbol, &typ, &delayed_variables);
-
         let mut substitutions: MutMap<_, _> = Default::default();
 
         for rec_var in delayed_variables
