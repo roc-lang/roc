@@ -722,7 +722,7 @@ fn solve(
                         let failing: Vec<_> = it.collect();
                         println!("Rigids {:?}", &rigid_vars);
                         println!("Failing {:?}", failing);
-                        assert!(false)
+                        debug_assert!(false);
                     }
                 }
 
