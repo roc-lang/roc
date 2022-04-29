@@ -15,6 +15,10 @@ use roc_constrain::module::{
     constrain_builtin_imports, constrain_module, ExposedByModule, ExposedForModule,
     ExposedModuleTypes,
 };
+use roc_debug_flags::{
+    dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
+    ROC_PRINT_IR_AFTER_SPECIALIZATION,
+};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName, TagName};
 use roc_module::symbol::{
@@ -1627,21 +1631,20 @@ fn start_tasks<'a>(
     Ok(())
 }
 
-#[cfg(debug_assertions)]
-fn debug_print_ir(state: &State, flag: &str) {
-    if env::var(flag) != Ok("1".into()) {
-        return;
-    }
+macro_rules! debug_print_ir {
+    ($state:expr, $flag:path) => {
+        dbg_do!($flag, {
+            let procs_string = $state
+                .procedures
+                .values()
+                .map(|proc| proc.to_pretty(200))
+                .collect::<Vec<_>>();
 
-    let procs_string = state
-        .procedures
-        .values()
-        .map(|proc| proc.to_pretty(200))
-        .collect::<Vec<_>>();
+            let result = procs_string.join("\n");
 
-    let result = procs_string.join("\n");
-
-    println!("{}", result);
+            eprintln!("{}", result);
+        })
+    };
 }
 
 /// Report modules that are imported, but from which nothing is used
@@ -2181,8 +2184,7 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
-                #[cfg(debug_assertions)]
-                debug_print_ir(&state, "PRINT_IR_AFTER_SPECIALIZATION");
+                debug_print_ir!(state, ROC_PRINT_IR_AFTER_SPECIALIZATION);
 
                 Proc::insert_reset_reuse_operations(
                     arena,
@@ -2192,13 +2194,11 @@ fn update<'a>(
                     &mut state.procedures,
                 );
 
-                #[cfg(debug_assertions)]
-                debug_print_ir(&state, "PRINT_IR_AFTER_RESET_REUSE");
+                debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
-                #[cfg(debug_assertions)]
-                debug_print_ir(&state, "PRINT_IR_AFTER_REFCOUNT");
+                debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
 
                 // This is not safe with the new non-recursive RC updates that we do for tag unions
                 //
