@@ -678,6 +678,8 @@ fn solve(
                 pools.get_mut(next_rank).extend(pool_variables);
 
                 debug_assert_eq!(
+                    // Check that no variable ended up in a higher rank than the next rank.. that
+                    // would mean we generalized one level more than we need to!
                     {
                         let offenders = pools
                             .get(next_rank)
@@ -704,7 +706,7 @@ fn solve(
                 pools.get_mut(next_rank).clear();
 
                 // check that things went well
-                debug_assert!({
+                if cfg!(debug_assertions) && std::env::var("ROC_VERIFY_RIGID_RANKS").is_ok() {
                     let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
 
                     // NOTE the `subs.redundant` check does not come from elm.
@@ -720,13 +722,9 @@ fn solve(
                         let failing: Vec<_> = it.collect();
                         println!("Rigids {:?}", &rigid_vars);
                         println!("Failing {:?}", failing);
-
-                        // nicer error message
-                        failing.is_empty()
-                    } else {
-                        true
+                        debug_assert!(false);
                     }
-                });
+                }
 
                 let mut new_env = env.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {

@@ -6215,4 +6215,23 @@ mod solve_expr {
             "a -> Task a *",
         );
     }
+
+    #[test]
+    fn export_rigid_to_lower_rank() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ foo ] to "./platform"
+
+                F a : { foo : a }
+
+                foo = \arg ->
+                    x : F b
+                    x = arg
+                    x.foo
+                "#
+            ),
+            "F b -> b",
+        )
+    }
 }
