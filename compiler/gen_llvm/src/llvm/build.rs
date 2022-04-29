@@ -546,6 +546,13 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         i8_ptr_type.fn_type(&[i32_type.into()], false),
     );
 
+    add_intrinsic(
+        ctx,
+        module,
+        LLVM_STACK_SAVE,
+        i8_ptr_type.fn_type(&[], false),
+    );
+
     add_float_intrinsic(ctx, module, &LLVM_LOG, |t| t.fn_type(&[t.into()], false));
     add_float_intrinsic(ctx, module, &LLVM_POW, |t| {
         t.fn_type(&[t.into(), t.into()], false)
@@ -599,6 +606,7 @@ static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 
 static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0i8";
+static LLVM_STACK_SAVE: &str = "llvm.stacksave";
 
 static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";
 pub static LLVM_LONGJMP: &str = "llvm.eh.sjlj.longjmp";
@@ -3689,6 +3697,8 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_SETJMP)
     } else {
         // Anywhere else, use the LLVM intrinsic.
+        // https://llvm.org/docs/ExceptionHandling.html#llvm-eh-sjlj-setjmp
+
         let jmp_buf_i8p_arr = env
             .builder
             .build_bitcast(
@@ -3701,6 +3711,7 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
                 "jmp_buf [5 x i8*]",
             )
             .into_pointer_value();
+
         // LLVM asks us to please store the frame pointer in the first word.
         let frame_address = env.call_intrinsic(
             LLVM_FRAME_ADDRESS,
@@ -3716,8 +3727,18 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
                 "frame address index",
             )
         };
-
         env.builder.build_store(fa, frame_address);
+
+        // LLVM says that the target implementation of the setjmp intrinsic will put the
+        // destination address at index 1, and that the remaining three words are for ad-hoc target
+        // usage. But for whatever reason, on x86, it appears we need a stacksave in those words.
+        let ss_index = env.context.i32_type().const_int(2, false);
+        let ss = unsafe {
+            env.builder
+                .build_in_bounds_gep(jmp_buf_i8p_arr, &[zero, ss_index], "name")
+        };
+        let stack_save = env.call_intrinsic(LLVM_STACK_SAVE, &[]);
+        env.builder.build_store(ss, stack_save);
 
         let jmp_buf_i8p = env.builder.build_bitcast(
             jmp_buf,
