@@ -117,8 +117,8 @@ impl Pattern {
             | UnsupportedPattern(..)
             | MalformedPattern(..)
             | AbilityMemberSpecialization { .. } => true,
+            RecordDestructure { destructs, .. } => destructs.is_empty(),
             AppliedTag { .. }
-            | RecordDestructure { .. }
             | NumLiteral(..)
             | IntLiteral(..)
             | FloatLiteral(..)
