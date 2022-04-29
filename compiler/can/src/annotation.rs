@@ -1045,26 +1045,35 @@ pub fn instantiate_and_freshen_alias_type(
 pub fn freshen_opaque_def(
     var_store: &mut VarStore,
     opaque: &Alias,
-) -> (Vec<(Lowercase, Type)>, Vec<LambdaSet>, Type) {
+) -> (Vec<Variable>, Vec<LambdaSet>, Type) {
     debug_assert!(opaque.kind == AliasKind::Opaque);
 
-    let fresh_arguments = opaque
+    let fresh_variables: Vec<Variable> = opaque
         .type_variables
         .iter()
-        .map(|_| Type::Variable(var_store.fresh()))
+        .map(|_| var_store.fresh())
         .collect();
 
-    // TODO this gets ignored; is that a problem
+    let fresh_type_arguments = fresh_variables
+        .iter()
+        .copied()
+        .map(Type::Variable)
+        .collect();
+
+    // NB: We don't introduce the fresh variables here, we introduce them during constraint gen.
+    // NB: If there are bugs, check whether this is a problem!
     let mut introduced_variables = IntroducedVariables::default();
 
-    instantiate_and_freshen_alias_type(
+    let (_fresh_type_arguments, fresh_lambda_set, fresh_type) = instantiate_and_freshen_alias_type(
         var_store,
         &mut introduced_variables,
         &opaque.type_variables,
-        fresh_arguments,
+        fresh_type_arguments,
         &opaque.lambda_set_variables,
         opaque.typ.clone(),
-    )
+    );
+
+    (fresh_variables, fresh_lambda_set, fresh_type)
 }
 
 fn insertion_sort_by<T, F>(arr: &mut [T], mut compare: F)

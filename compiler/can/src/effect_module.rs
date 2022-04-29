@@ -5,7 +5,7 @@ use crate::pattern::Pattern;
 use crate::scope::Scope;
 use roc_collections::{SendMap, VecSet};
 use roc_module::called_via::CalledVia;
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
@@ -1466,7 +1466,7 @@ fn build_effect_opaque(
 
 fn build_fresh_opaque_variables(
     var_store: &mut VarStore,
-) -> (Box<Type>, Vec<(Lowercase, Type)>, Vec<LambdaSet>) {
+) -> (Box<Type>, Vec<Variable>, Vec<LambdaSet>) {
     let closure_var = var_store.fresh();
 
     // NB: if there are bugs, check whether not introducing variables is a problem!
@@ -1478,7 +1478,7 @@ fn build_fresh_opaque_variables(
         Box::new(Type::Variable(closure_var)),
         Box::new(Type::Variable(a_var)),
     );
-    let type_arguments = vec![("a".into(), Type::Variable(a_var))];
+    let type_arguments = vec![a_var];
     let lambda_set_variables = vec![roc_types::types::LambdaSet(Type::Variable(closure_var))];
 
     (Box::new(actual), type_arguments, lambda_set_variables)
