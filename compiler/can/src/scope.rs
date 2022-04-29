@@ -1,6 +1,6 @@
 use roc_collections::{MutSet, SmallStringInterner, VecMap};
 use roc_module::ident::{Ident, Lowercase};
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -8,9 +8,13 @@ use roc_types::types::{Alias, AliasKind, Type};
 
 use crate::abilities::AbilitiesStore;
 
+use bitvec::vec::BitVec;
+
 #[derive(Clone, Debug)]
 pub struct Scope {
     idents: IdentStore,
+
+    locals: ScopedIdentIds,
 
     /// The type aliases currently in scope
     pub aliases: VecMap<Symbol, Alias>,
@@ -72,15 +76,21 @@ fn add_aliases(var_store: &mut VarStore) -> VecMap<Symbol, Alias> {
 
 impl Scope {
     pub fn new(home: ModuleId, initial_ident_ids: IdentIds) -> Scope {
+        let imports = Symbol::default_in_scope()
+            .into_iter()
+            .map(|(a, (b, c))| (a, b, c))
+            .collect();
+
         Scope {
             home,
             exposed_ident_count: initial_ident_ids.len(),
+            locals: ScopedIdentIds::from_ident_ids(initial_ident_ids.clone()),
             ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: VecMap::default(),
             // TODO(abilities): default abilities in scope
             abilities_store: AbilitiesStore::default(),
-            imports: Vec::new(),
+            imports,
         }
     }
 
@@ -89,15 +99,21 @@ impl Scope {
         var_store: &mut VarStore,
         initial_ident_ids: IdentIds,
     ) -> Scope {
+        let imports = Symbol::default_in_scope()
+            .into_iter()
+            .map(|(a, (b, c))| (a, b, c))
+            .collect();
+
         Scope {
             home,
             exposed_ident_count: initial_ident_ids.len(),
+            locals: ScopedIdentIds::from_ident_ids(initial_ident_ids.clone()),
             ident_ids: initial_ident_ids,
             idents: IdentStore::new(),
             aliases: add_aliases(var_store),
             // TODO(abilities): default abilities in scope
             abilities_store: AbilitiesStore::default(),
-            imports: Vec::new(),
+            imports,
         }
     }
 
@@ -125,10 +141,10 @@ impl Scope {
     }
 
     fn idents_in_scope(&self) -> impl Iterator<Item = Ident> + '_ {
-        let it1 = self.idents.iter_idents();
+        let it1 = self.locals.idents_in_scope();
         let it2 = self.imports.iter().map(|t| t.0.clone());
 
-        it1.chain(it2)
+        it2.chain(it1)
     }
 
     pub fn lookup_alias(&self, symbol: Symbol) -> Option<&Alias> {
@@ -238,6 +254,8 @@ impl Scope {
     ) -> Result<Symbol, (Region, Loc<Ident>)> {
         match self.idents.get_symbol_and_region(ident) {
             Some((_, original_region)) => {
+                assert!(self.locals.has_in_scope(ident).is_some());
+
                 let shadow = Loc {
                     value: ident.clone(),
                     region,
@@ -245,6 +263,8 @@ impl Scope {
                 Err((original_region, shadow))
             }
             None => {
+                assert!(self.locals.has_in_scope(ident).is_none());
+
                 for (import, _, original_region) in self.imports.iter() {
                     if ident == import {
                         let shadow = Loc {
@@ -317,6 +337,8 @@ impl Scope {
 
         self.idents.insert_unchecked(ident, symbol, region);
 
+        self.locals.introduce_into_scope(ident, region);
+
         symbol
     }
 
@@ -378,11 +400,13 @@ impl Scope {
         // - exposed_ident_count: unchanged
         let idents = self.idents.clone();
         let aliases_count = self.aliases.len();
+        let locals_snapshot = self.locals.snapshot();
 
         let result = f(self);
 
         self.idents = idents;
         self.aliases.truncate(aliases_count);
+        self.locals.revert(locals_snapshot);
 
         result
     }
@@ -461,31 +485,13 @@ struct IdentStore {
 
 impl IdentStore {
     fn new() -> Self {
-        let defaults = Symbol::default_in_scope();
-        let capacity = defaults.len();
+        let capacity = 64;
 
-        let mut this = Self {
+        Self {
             interner: SmallStringInterner::with_capacity(capacity),
             symbols: Vec::with_capacity(capacity),
             regions: Vec::with_capacity(capacity),
-        };
-
-        for (ident, (symbol, region)) in defaults {
-            this.insert_unchecked(&ident, symbol, region);
         }
-
-        this
-    }
-
-    fn iter_idents(&self) -> impl Iterator<Item = Ident> + '_ {
-        self.interner.iter().filter_map(move |string| {
-            // empty string is used when ability members are shadowed
-            if string.is_empty() {
-                None
-            } else {
-                Some(Ident::from(string))
-            }
-        })
     }
 
     fn iter_idents_symbols(&self) -> impl Iterator<Item = (Ident, Symbol)> + '_ {
@@ -529,6 +535,95 @@ impl IdentStore {
 
         self.symbols.push(symbol);
         self.regions.push(region);
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ScopedIdentIds {
+    ident_ids: IdentIds,
+    in_scope: BitVec,
+    regions: Vec<Region>,
+}
+
+impl ScopedIdentIds {
+    fn from_ident_ids(ident_ids: IdentIds) -> Self {
+        let capacity = ident_ids.len();
+
+        Self {
+            in_scope: BitVec::repeat(false, capacity),
+            ident_ids,
+            regions: std::iter::repeat(Region::zero()).take(capacity).collect(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.in_scope.count_ones()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn snapshot(&self) -> usize {
+        debug_assert_eq!(self.ident_ids.len(), self.in_scope.len());
+
+        self.ident_ids.len()
+    }
+
+    fn revert(&mut self, snapshot: usize) {
+        for i in snapshot..self.in_scope.len() {
+            self.in_scope.set(i, false);
+        }
+    }
+
+    fn has_in_scope(&self, ident: &Ident) -> Option<IdentId> {
+        self.ident_ids
+            .ident_strs()
+            .zip(self.in_scope.iter())
+            .find_map(|((ident_id, string), keep)| {
+                if *keep && string == ident.as_str() {
+                    Some(ident_id)
+                } else {
+                    None
+                }
+            })
+    }
+
+    fn idents_in_scope(&self) -> impl Iterator<Item = Ident> + '_ {
+        self.ident_ids
+            .ident_strs()
+            .zip(self.in_scope.iter())
+            .filter_map(|((_, string), keep)| {
+                if *keep {
+                    Some(Ident::from(string))
+                } else {
+                    None
+                }
+            })
+    }
+
+    fn introduce_into_scope(&mut self, ident_name: &Ident, region: Region) -> IdentId {
+        let id = self.ident_ids.add_ident(ident_name);
+
+        debug_assert_eq!(id.index(), self.in_scope.len());
+        debug_assert_eq!(id.index(), self.regions.len());
+
+        self.in_scope.push(true);
+        self.regions.push(region);
+
+        id
+    }
+
+    fn scopeless(&mut self, ident_name: &Ident, region: Region) -> IdentId {
+        let id = self.ident_ids.add_ident(ident_name);
+
+        debug_assert_eq!(id.index(), self.in_scope.len());
+        debug_assert_eq!(id.index(), self.regions.len());
+
+        self.in_scope.push(false);
+        self.regions.push(region);
+
+        id
     }
 }
 
@@ -595,6 +690,29 @@ mod test {
         });
 
         assert!(scope.lookup(&ident, region).is_err());
+    }
+
+    #[test]
+    fn default_idents_in_scope() {
+        let _register_module_debug_names = ModuleIds::default();
+        let scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+
+        let idents: Vec<_> = scope.idents_in_scope().collect();
+
+        assert_eq!(
+            &idents,
+            &[
+                Ident::from("Box"),
+                Ident::from("Set"),
+                Ident::from("Dict"),
+                Ident::from("Str"),
+                Ident::from("Ok"),
+                Ident::from("False"),
+                Ident::from("List"),
+                Ident::from("True"),
+                Ident::from("Err"),
+            ]
+        );
     }
 
     #[test]
