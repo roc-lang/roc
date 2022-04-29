@@ -430,33 +430,19 @@ impl ScopedIdentIds {
         }
     }
 
-    fn get_symbol(&self, ident: &Ident) -> Option<Symbol> {
-        self.ident_ids
-            .ident_strs()
-            .zip(self.in_scope.iter())
-            .find_map(|((ident_id, string), keep)| {
-                if *keep && string == ident.as_str() {
-                    Some(Symbol::new(self.home, ident_id))
-                } else {
-                    None
-                }
-            })
-    }
-
     fn has_in_scope(&self, ident: &Ident) -> Option<(Symbol, Region)> {
-        self.ident_ids
-            .ident_strs()
-            .zip(self.in_scope.iter())
-            .find_map(|((ident_id, string), keep)| {
-                if *keep && string == ident.as_str() {
-                    Some((
+        for index in self.in_scope.iter_ones() {
+            if let Some((ident_id, string)) = self.ident_ids.get_name_at_index(index) {
+                if string == ident.as_str() {
+                    return Some((
                         Symbol::new(self.home, ident_id),
                         self.regions[ident_id.index()],
-                    ))
-                } else {
-                    None
+                    ));
                 }
-            })
+            }
+        }
+
+        None
     }
 
     fn idents_in_scope(&self) -> impl Iterator<Item = Ident> + '_ {

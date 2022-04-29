@@ -584,6 +584,12 @@ impl IdentIds {
         self.interner.try_get(id.0 as usize)
     }
 
+    pub fn get_name_at_index(&self, index: usize) -> Option<(IdentId, &str)> {
+        self.interner
+            .try_get(index)
+            .map(|v| (IdentId(index as u32), v))
+    }
+
     pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
         self.get_name(ident_id).with_context(|| IdentIdNotFound {
             ident_id,
