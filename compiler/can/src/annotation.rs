@@ -510,10 +510,8 @@ fn can_annotation_help(
 
                     let mut type_var_to_arg = Vec::new();
 
-                    for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
-                        let name = loc_var.value.0.clone();
-
-                        type_var_to_arg.push((name, arg_ann));
+                    for (_, arg_ann) in alias.type_variables.iter().zip(args) {
+                        type_var_to_arg.push(arg_ann);
                     }
 
                     let mut lambda_set_variables =
@@ -670,8 +668,6 @@ fn can_annotation_help(
 
             let alias = scope.lookup_alias(symbol).unwrap();
             local_aliases.insert(symbol, alias.clone());
-
-            // Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
 
             if vars.is_empty() && env.home == symbol.module_id() {
                 let actual_var = var_store.fresh();

@@ -4738,16 +4738,13 @@ fn default_aliases() -> roc_solve::solve::Aliases {
 
         let typ = Type::DelayedAlias(AliasCommon {
             symbol: Symbol::NUM_NUM,
-            type_arguments: vec![(
-                "range".into(),
-                Type::Alias {
-                    symbol: Symbol::NUM_INTEGER,
-                    type_arguments: vec![("range".into(), Type::Variable(tvar))],
-                    lambda_set_variables: vec![],
-                    actual: Box::new(Type::Variable(tvar)),
-                    kind: AliasKind::Opaque,
-                },
-            )],
+            type_arguments: vec![Type::Alias {
+                symbol: Symbol::NUM_INTEGER,
+                type_arguments: vec![("range".into(), Type::Variable(tvar))],
+                lambda_set_variables: vec![],
+                actual: Box::new(Type::Variable(tvar)),
+                kind: AliasKind::Opaque,
+            }],
             lambda_set_variables: vec![],
         });
 
@@ -4770,16 +4767,13 @@ fn default_aliases() -> roc_solve::solve::Aliases {
 
         let typ = Type::DelayedAlias(AliasCommon {
             symbol: Symbol::NUM_NUM,
-            type_arguments: vec![(
-                "range".into(),
-                Type::Alias {
-                    symbol: Symbol::NUM_FLOATINGPOINT,
-                    type_arguments: vec![("range".into(), Type::Variable(tvar))],
-                    lambda_set_variables: vec![],
-                    actual: Box::new(Type::Variable(tvar)),
-                    kind: AliasKind::Opaque,
-                },
-            )],
+            type_arguments: vec![Type::Alias {
+                symbol: Symbol::NUM_FLOATINGPOINT,
+                type_arguments: vec![("range".into(), Type::Variable(tvar))],
+                lambda_set_variables: vec![],
+                actual: Box::new(Type::Variable(tvar)),
+                kind: AliasKind::Opaque,
+            }],
             lambda_set_variables: vec![],
         });
 

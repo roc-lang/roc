@@ -187,7 +187,7 @@ impl LambdaSet {
 #[derive(PartialEq, Eq, Clone)]
 pub struct AliasCommon {
     pub symbol: Symbol,
-    pub type_arguments: Vec<(Lowercase, Type)>,
+    pub type_arguments: Vec<Type>,
     pub lambda_set_variables: Vec<LambdaSet>,
 }
 
@@ -385,7 +385,7 @@ impl fmt::Debug for Type {
             }) => {
                 write!(f, "(DelayedAlias {:?}", symbol)?;
 
-                for (_, arg) in type_arguments {
+                for arg in type_arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -694,7 +694,7 @@ impl Type {
                     lambda_set_variables,
                     ..
                 }) => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -803,7 +803,7 @@ impl Type {
                     lambda_set_variables,
                     ..
                 }) => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -903,7 +903,7 @@ impl Type {
                 lambda_set_variables: _no_aliases_in_lambda_sets,
                 ..
             }) => {
-                for (_, ta) in type_arguments {
+                for ta in type_arguments {
                     ta.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
 
@@ -985,9 +985,7 @@ impl Type {
                 ..
             }) => {
                 symbol == &rep_symbol
-                    || type_arguments
-                        .iter()
-                        .any(|v| v.1.contains_symbol(rep_symbol))
+                    || type_arguments.iter().any(|v| v.contains_symbol(rep_symbol))
                     || lambda_set_variables
                         .iter()
                         .any(|v| v.0.contains_symbol(rep_symbol))
@@ -1163,10 +1161,8 @@ impl Type {
                     if false {
                         let mut type_var_to_arg = Vec::new();
 
-                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
-                            let name = loc_var.value.0.clone();
-
-                            type_var_to_arg.push((name, arg_ann.clone()));
+                        for (_, arg_ann) in alias.type_variables.iter().zip(args) {
+                            type_var_to_arg.push(arg_ann.clone());
                         }
 
                         let mut lambda_set_variables =
@@ -1383,7 +1379,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 ..
             }) => {
                 output.push(*symbol);
-                stack.extend(type_arguments.iter().map(|v| &v.1));
+                stack.extend(type_arguments);
             }
             Alias {
                 symbol: alias_symbol,
@@ -1491,7 +1487,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             lambda_set_variables,
             ..
         }) => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help(arg, accum);
             }
 
@@ -1623,7 +1619,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             lambda_set_variables,
             ..
         }) => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help_detailed(arg, accum);
             }
 

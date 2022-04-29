@@ -1928,9 +1928,7 @@ fn type_to_variable<'a>(
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, (_, arg_type)) in
-                        (new_variables.indices()).zip(type_arguments)
-                    {
+                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
                     }
