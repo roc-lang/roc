@@ -63,11 +63,11 @@ exclude = [
 resolver = "2"
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
-[profile.release]
-lto = "thin"
-codegen-units = 1
+# [profile.release]
+# lto = "thin"
+# codegen-units = 1
 
 # debug = true # enable when profiling
-[profile.bench]
-lto = "thin"
-codegen-units = 1
+# [profile.bench]
+# lto = "thin"
+# codegen-units = 1
