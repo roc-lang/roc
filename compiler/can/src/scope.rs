@@ -12,8 +12,6 @@ use bitvec::vec::BitVec;
 
 #[derive(Clone, Debug)]
 pub struct Scope {
-    pub locals: ScopedIdentIds,
-
     /// The type aliases currently in scope
     pub aliases: VecMap<Symbol, Alias>,
 
@@ -27,7 +25,11 @@ pub struct Scope {
     /// The first `exposed_ident_count` identifiers are exposed
     exposed_ident_count: usize,
 
+    /// Identifiers that are imported (and introduced in the header)
     imports: Vec<(Ident, Symbol, Region)>,
+
+    /// Identifiers that are in scope, and defined in the current module
+    pub locals: ScopedIdentIds,
 }
 
 impl Scope {
@@ -49,15 +51,9 @@ impl Scope {
     }
 
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
-        match self.locals.get_symbol(ident) {
-            Some(symbol) => Ok(symbol),
+        match self.scope_contains(ident) {
+            Some((symbol, _)) => Ok(symbol),
             None => {
-                for (import, symbol, _) in self.imports.iter() {
-                    if ident == import {
-                        return Ok(*symbol);
-                    }
-                }
-
                 let error = RuntimeError::LookupNotInScope(
                     Loc {
                         region,
@@ -163,6 +159,19 @@ impl Scope {
         }
     }
 
+    /// Is an identifier in scope, either in the locals or imports
+    fn scope_contains(&self, ident: &Ident) -> Option<(Symbol, Region)> {
+        self.locals.has_in_scope(ident).or_else(|| {
+            for (import, shadow, original_region) in self.imports.iter() {
+                if ident == import {
+                    return Some((*shadow, *original_region));
+                }
+            }
+
+            None
+        })
+    }
+
     /// Introduce a new ident to scope.
     ///
     /// Returns Err if this would shadow an existing ident, including the
@@ -193,7 +202,7 @@ impl Scope {
         ident: &Ident,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>)> {
-        match self.locals.has_in_scope(ident) {
+        match self.scope_contains(ident) {
             Some((_, original_region)) => {
                 let shadow = Loc {
                     value: ident.clone(),
@@ -201,19 +210,7 @@ impl Scope {
                 };
                 Err((original_region, shadow))
             }
-            None => {
-                for (import, _, original_region) in self.imports.iter() {
-                    if ident == import {
-                        let shadow = Loc {
-                            value: ident.clone(),
-                            region,
-                        };
-                        return Err((*original_region, shadow));
-                    }
-                }
-
-                Ok(self.commit_introduction(ident, region))
-            }
+            None => Ok(self.commit_introduction(ident, region)),
         }
     }
 
@@ -229,7 +226,7 @@ impl Scope {
         ident: Ident,
         region: Region,
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
-        match self.locals.has_in_scope(&ident) {
+        match self.scope_contains(&ident) {
             Some((original_symbol, original_region)) => {
                 let shadow_symbol = self.scopeless_symbol(&ident, region);
 
