@@ -379,7 +379,6 @@ impl Aliases {
                     .map(LambdaSet)
                     .collect();
                 let type_arguments = new_type_variables
-                    .clone()
                     .iter()
                     .copied()
                     .map(Type::Variable)
