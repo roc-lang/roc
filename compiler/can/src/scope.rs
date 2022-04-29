@@ -162,19 +162,9 @@ impl Scope {
         debug_assert!(opaque_ref.starts_with('@'));
         let opaque = opaque_ref[1..].into();
 
-        match self.idents.get_symbol_and_region(&opaque) {
-            // TODO: is it worth caching any of these results?
-            Some((symbol, decl_region)) => {
-                if symbol.module_id() != self.home {
-                    // The reference is to an opaque type declared in another module - this is
-                    // illegal, as opaque types can only be wrapped/unwrapped in the scope they're
-                    // declared.
-                    return Err(RuntimeError::OpaqueOutsideScope {
-                        opaque,
-                        referenced_region: lookup_region,
-                        imported_region: decl_region,
-                    });
-                }
+        match self.locals.has_in_scope(&opaque) {
+            Some((ident_id, _)) => {
+                let symbol = Symbol::new(self.home, ident_id);
 
                 match self.aliases.get(&symbol) {
                     None => Err(self.opaque_not_defined_error(opaque, lookup_region, None)),
@@ -191,7 +181,22 @@ impl Scope {
                     },
                 }
             }
-            None => Err(self.opaque_not_defined_error(opaque, lookup_region, None)),
+            None => {
+                for (import, _, decl_region) in self.imports.iter() {
+                    if &opaque == import {
+                        // The reference is to an opaque type declared in another module - this is
+                        // illegal, as opaque types can only be wrapped/unwrapped in the scope they're
+                        // declared.
+                        return Err(RuntimeError::OpaqueOutsideScope {
+                            opaque,
+                            referenced_region: lookup_region,
+                            imported_region: *decl_region,
+                        });
+                    }
+                }
+
+                Err(self.opaque_not_defined_error(opaque, lookup_region, None))
+            }
         }
     }
 
@@ -252,10 +257,8 @@ impl Scope {
         ident: &Ident,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>)> {
-        match self.idents.get_symbol_and_region(ident) {
+        match self.locals.has_in_scope(ident) {
             Some((_, original_region)) => {
-                assert!(self.locals.has_in_scope(ident).is_some());
-
                 let shadow = Loc {
                     value: ident.clone(),
                     region,
@@ -576,13 +579,13 @@ impl ScopedIdentIds {
         }
     }
 
-    fn has_in_scope(&self, ident: &Ident) -> Option<IdentId> {
+    fn has_in_scope(&self, ident: &Ident) -> Option<(IdentId, Region)> {
         self.ident_ids
             .ident_strs()
             .zip(self.in_scope.iter())
             .find_map(|((ident_id, string), keep)| {
                 if *keep && string == ident.as_str() {
-                    Some(ident_id)
+                    Some((ident_id, self.regions[ident_id.index()]))
                 } else {
                     None
                 }
