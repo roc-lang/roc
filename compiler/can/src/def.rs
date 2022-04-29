@@ -1,5 +1,6 @@
 use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
+use crate::annotation::find_type_def_symbols;
 use crate::annotation::IntroducedVariables;
 use crate::env::Env;
 use crate::expr::AnnotatedMark;
@@ -277,8 +278,7 @@ pub(crate) fn canonicalize_defs<'a>(
                 ann,
                 kind,
             } => {
-                let referenced_symbols =
-                    crate::annotation::find_type_def_symbols(&mut scope.locals, &ann.value);
+                let referenced_symbols = find_type_def_symbols(scope, &ann.value);
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
 
@@ -291,10 +291,7 @@ pub(crate) fn canonicalize_defs<'a>(
                     // Add the referenced type symbols of each member function. We need to make
                     // sure those are processed first before we resolve the whole ability
                     // definition.
-                    referenced_symbols.extend(crate::annotation::find_type_def_symbols(
-                        &mut scope.locals,
-                        &member.typ.value,
-                    ));
+                    referenced_symbols.extend(find_type_def_symbols(scope, &member.typ.value));
                 }
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);

@@ -1,9 +1,9 @@
-use roc_collections::{MutSet, VecMap};
+use roc_collections::VecMap;
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{VarStore, Variable};
+use roc_types::subs::Variable;
 use roc_types::types::{Alias, AliasKind, Type};
 
 use crate::abilities::AbilitiesStore;
@@ -30,46 +30,6 @@ pub struct Scope {
     imports: Vec<(Ident, Symbol, Region)>,
 }
 
-fn add_aliases(var_store: &mut VarStore) -> VecMap<Symbol, Alias> {
-    use roc_types::solved_types::{BuiltinAlias, FreeVars};
-
-    let solved_aliases = roc_types::builtin_aliases::aliases();
-    let mut aliases = VecMap::default();
-
-    for (symbol, builtin_alias) in solved_aliases {
-        let BuiltinAlias {
-            region,
-            vars,
-            typ,
-            kind,
-        } = builtin_alias;
-
-        let mut free_vars = FreeVars::default();
-        let typ = roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
-
-        let mut variables = Vec::new();
-        // make sure to sort these variables to make them line up with the type arguments
-        let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
-        type_variables.sort();
-        for (loc_name, (_, var)) in vars.iter().zip(type_variables) {
-            variables.push(Loc::at(loc_name.region, (loc_name.value.clone(), var)));
-        }
-
-        let alias = Alias {
-            region,
-            typ,
-            lambda_set_variables: Vec::new(),
-            recursion_variables: MutSet::default(),
-            type_variables: variables,
-            kind,
-        };
-
-        aliases.insert(symbol, alias);
-    }
-
-    aliases
-}
-
 impl Scope {
     pub fn new(home: ModuleId, initial_ident_ids: IdentIds) -> Scope {
         let imports = Symbol::default_in_scope()
@@ -88,38 +48,8 @@ impl Scope {
         }
     }
 
-    pub fn new_with_aliases(
-        home: ModuleId,
-        var_store: &mut VarStore,
-        initial_ident_ids: IdentIds,
-    ) -> Scope {
-        let imports = Symbol::default_in_scope()
-            .into_iter()
-            .map(|(a, (b, c))| (a, b, c))
-            .collect();
-
-        Scope {
-            home,
-            exposed_ident_count: initial_ident_ids.len(),
-            locals: ScopedIdentIds::from_ident_ids(home, initial_ident_ids),
-            aliases: add_aliases(var_store),
-            // TODO(abilities): default abilities in scope
-            abilities_store: AbilitiesStore::default(),
-            imports,
-        }
-    }
-
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
-        // match self.idents.get_symbol(ident) {
-
-        // let a = self.idents.get_symbol(ident);
-        let b = self.locals.get_symbol(ident);
-
-        // dbg!(ident);
-
-        // assert_eq!(a, b, "{:?} != {:?} | {:?}", a, b, ident);
-
-        match b {
+        match self.locals.get_symbol(ident) {
             Some(symbol) => Ok(symbol),
             None => {
                 for (import, symbol, _) in self.imports.iter() {
@@ -164,9 +94,7 @@ impl Scope {
         let opaque = opaque_ref[1..].into();
 
         match self.locals.has_in_scope(&opaque) {
-            Some((ident_id, _)) => {
-                let symbol = Symbol::new(self.home, ident_id);
-
+            Some((symbol, _)) => {
                 match self.aliases.get(&symbol) {
                     None => Err(self.opaque_not_defined_error(opaque, lookup_region, None)),
 
@@ -252,7 +180,7 @@ impl Scope {
         match self.introduce_without_shadow_symbol(&ident, region) {
             Ok(symbol) => Ok(symbol),
             Err((original_region, shadow)) => {
-                let symbol = self.locals.scopeless_symbol(&ident, region);
+                let symbol = self.scopeless_symbol(&ident, region);
 
                 Err((original_region, shadow, symbol))
             }
@@ -274,8 +202,6 @@ impl Scope {
                 Err((original_region, shadow))
             }
             None => {
-                assert!(self.locals.has_in_scope(ident).is_none());
-
                 for (import, _, original_region) in self.imports.iter() {
                     if ident == import {
                         let shadow = Loc {
@@ -304,19 +230,12 @@ impl Scope {
         region: Region,
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
         match self.locals.has_in_scope(&ident) {
-            Some((ident_id, original_region)) => {
-                let original_symbol = Symbol::new(self.home, ident_id);
-                let shadow_symbol = self.locals.scopeless_symbol(&ident, region);
+            Some((original_symbol, original_region)) => {
+                let shadow_symbol = self.scopeless_symbol(&ident, region);
 
                 if self.abilities_store.is_ability_member_name(original_symbol) {
                     self.abilities_store
                         .register_specializing_symbol(shadow_symbol, original_symbol);
-
-                    //                    // Add a symbol for the shadow, but don't re-associate the member name.
-                    //                    let dummy = Ident::default();
-                    //                    self.idents.insert_unchecked(&dummy, shadow_symbol, region);
-                    //
-                    //                    let _ = self.locals.scopeless(&ident, region);
 
                     Ok((shadow_symbol, Some(original_symbol)))
                 } else {
@@ -338,6 +257,7 @@ impl Scope {
 
     fn commit_introduction(&mut self, ident: &Ident, region: Region) -> Symbol {
         // if the identifier is exposed, use the IdentId we already have for it
+        // other modules depend on the symbol having that IdentId
         match self.locals.ident_ids.get_id(ident) {
             Some(ident_id) if ident_id.index() < self.exposed_ident_count => {
                 let symbol = Symbol::new(self.home, ident_id);
@@ -354,11 +274,13 @@ impl Scope {
         }
     }
 
-    /// Ignore an identifier.
+    /// Create a new symbol, but don't add it to the scope (yet)
     ///
-    /// Used for record guards like { x: Just _ }
-    pub fn ignore(&mut self, ident: &Ident) -> Symbol {
-        self.locals.scopeless_symbol(ident, Region::zero())
+    /// Used for record guards like { x: Just _ } where the `x` is not added to the scope,
+    /// but also in other places where we need to create a symbol and we don't have the right
+    /// scope information yet. An identifier can be introduced later, and will use the same IdentId
+    pub fn scopeless_symbol(&mut self, ident: &Ident, region: Region) -> Symbol {
+        self.locals.scopeless_symbol(ident, region)
     }
 
     /// Import a Symbol from another module into this module's top-level scope.
@@ -405,10 +327,10 @@ impl Scope {
         // store enough information to roll back to the original outer scope
         //
         // - abilities_store: ability definitions not allowed in inner scopes
-        // - ident_ids: identifiers in inner scopes should still be available in the ident_ids
-        // - idents: we have to clone for now
+        // - locals: everything introduced in the inner scope is marked as not in scope in the rollback
         // - aliases: stored in a VecMap, we just discard anything added in an inner scope
         // - exposed_ident_count: unchanged
+        // - home: unchanged
         let aliases_count = self.aliases.len();
         let locals_snapshot = self.locals.snapshot();
 
@@ -430,9 +352,7 @@ impl Scope {
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique_symbol(&mut self) -> Symbol {
-        let ident_id = self.locals.gen_unique();
-
-        Symbol::new(self.home, ident_id)
+        Symbol::new(self.home, self.locals.gen_unique())
     }
 }
 
@@ -526,13 +446,16 @@ impl ScopedIdentIds {
             })
     }
 
-    fn has_in_scope(&self, ident: &Ident) -> Option<(IdentId, Region)> {
+    fn has_in_scope(&self, ident: &Ident) -> Option<(Symbol, Region)> {
         self.ident_ids
             .ident_strs()
             .zip(self.in_scope.iter())
             .find_map(|((ident_id, string), keep)| {
                 if *keep && string == ident.as_str() {
-                    Some((ident_id, self.regions[ident_id.index()]))
+                    Some((
+                        Symbol::new(self.home, ident_id),
+                        self.regions[ident_id.index()],
+                    ))
                 } else {
                     None
                 }
@@ -564,11 +487,8 @@ impl ScopedIdentIds {
         id
     }
 
-    pub fn scopeless_symbol(&mut self, ident_name: &Ident, region: Region) -> Symbol {
-        Symbol::new(self.home, self.scopeless(ident_name, region))
-    }
-
-    fn scopeless(&mut self, ident_name: &Ident, region: Region) -> IdentId {
+    /// Adds an IdentId, but does not introduce it to the scope
+    fn scopeless_symbol(&mut self, ident_name: &Ident, region: Region) -> Symbol {
         let id = self.ident_ids.add_ident(ident_name);
 
         debug_assert_eq!(id.index(), self.in_scope.len());
@@ -577,7 +497,7 @@ impl ScopedIdentIds {
         self.in_scope.push(false);
         self.regions.push(region);
 
-        id
+        Symbol::new(self.home, id)
     }
 
     fn gen_unique(&mut self) -> IdentId {

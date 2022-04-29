@@ -298,7 +298,7 @@ fn make_apply_symbol(
 /// For example, in `[ A Age U8, B Str {} ]`, there are three type definition references - `Age`,
 /// `U8`, and `Str`.
 pub fn find_type_def_symbols(
-    ident_ids: &mut crate::scope::ScopedIdentIds,
+    scope: &mut Scope,
     initial_annotation: &roc_parse::ast::TypeAnnotation,
 ) -> Vec<Symbol> {
     use roc_parse::ast::TypeAnnotation::*;
@@ -311,7 +311,7 @@ pub fn find_type_def_symbols(
         match annotation {
             Apply(_module_name, ident, arguments) => {
                 let ident: Ident = (*ident).into();
-                let symbol = ident_ids.scopeless_symbol(&ident, Region::zero());
+                let symbol = scope.scopeless_symbol(&ident, Region::zero());
 
                 result.push(symbol);
 
