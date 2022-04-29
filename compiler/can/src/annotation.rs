@@ -508,51 +508,30 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    let is_structural = alias.kind == AliasKind::Structural;
-                    if is_structural {
-                        let mut type_var_to_arg = Vec::new();
+                    let mut type_var_to_arg = Vec::new();
 
-                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
-                            let name = loc_var.value.0.clone();
+                    for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
+                        let name = loc_var.value.0.clone();
 
-                            type_var_to_arg.push((name, arg_ann));
-                        }
-
-                        let mut lambda_set_variables =
-                            Vec::with_capacity(alias.lambda_set_variables.len());
-
-                        for _ in 0..alias.lambda_set_variables.len() {
-                            let lvar = var_store.fresh();
-
-                            introduced_variables.insert_lambda_set(lvar);
-
-                            lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
-                        }
-
-                        Type::DelayedAlias(AliasCommon {
-                            symbol,
-                            type_arguments: type_var_to_arg,
-                            lambda_set_variables,
-                        })
-                    } else {
-                        let (type_arguments, lambda_set_variables, actual) =
-                            instantiate_and_freshen_alias_type(
-                                var_store,
-                                introduced_variables,
-                                &alias.type_variables,
-                                args,
-                                &alias.lambda_set_variables,
-                                alias.typ.clone(),
-                            );
-
-                        Type::Alias {
-                            symbol,
-                            type_arguments,
-                            lambda_set_variables,
-                            actual: Box::new(actual),
-                            kind: alias.kind,
-                        }
+                        type_var_to_arg.push((name, arg_ann));
                     }
+
+                    let mut lambda_set_variables =
+                        Vec::with_capacity(alias.lambda_set_variables.len());
+
+                    for _ in 0..alias.lambda_set_variables.len() {
+                        let lvar = var_store.fresh();
+
+                        introduced_variables.insert_lambda_set(lvar);
+
+                        lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
+                    }
+
+                    Type::DelayedAlias(AliasCommon {
+                        symbol,
+                        type_arguments: type_var_to_arg,
+                        lambda_set_variables,
+                    })
                 }
                 None => Type::Apply(symbol, args, region),
             }
