@@ -1,4 +1,4 @@
-use roc_collections::{MutSet, SmallStringInterner, VecMap};
+use roc_collections::{MutSet, VecMap};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -305,8 +305,6 @@ impl Scope {
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
         match self.locals.has_in_scope(&ident) {
             Some((ident_id, original_region)) => {
-                let index = ident_id.index();
-
                 let original_symbol = Symbol::new(self.home, ident_id);
                 let shadow_symbol = self.locals.scopeless_symbol(&ident, region);
 
@@ -360,7 +358,7 @@ impl Scope {
     ///
     /// Used for record guards like { x: Just _ }
     pub fn ignore(&mut self, ident: &Ident) -> Symbol {
-        self.locals.scopeless_symbol(&ident, Region::zero())
+        self.locals.scopeless_symbol(ident, Region::zero())
     }
 
     /// Import a Symbol from another module into this module's top-level scope.

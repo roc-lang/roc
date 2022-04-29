@@ -277,11 +277,8 @@ pub(crate) fn canonicalize_defs<'a>(
                 ann,
                 kind,
             } => {
-                let referenced_symbols = crate::annotation::find_type_def_symbols(
-                    env.home,
-                    &mut scope.locals,
-                    &ann.value,
-                );
+                let referenced_symbols =
+                    crate::annotation::find_type_def_symbols(&mut scope.locals, &ann.value);
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
 
@@ -295,7 +292,6 @@ pub(crate) fn canonicalize_defs<'a>(
                     // sure those are processed first before we resolve the whole ability
                     // definition.
                     referenced_symbols.extend(crate::annotation::find_type_def_symbols(
-                        env.home,
                         &mut scope.locals,
                         &member.typ.value,
                     ));
