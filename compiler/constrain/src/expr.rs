@@ -1022,10 +1022,7 @@ pub fn constrain_expr(
 
             let opaque_type = Type::Alias {
                 symbol: *name,
-                type_arguments: type_arguments
-                    .iter()
-                    .map(|v| ("".into(), Type::Variable(*v)))
-                    .collect(),
+                type_arguments: type_arguments.iter().copied().map(Type::Variable).collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: Box::new(arg_type.clone()),
                 kind: AliasKind::Opaque,

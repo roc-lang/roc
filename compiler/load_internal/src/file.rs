@@ -16,7 +16,7 @@ use roc_constrain::module::{
     ExposedModuleTypes,
 };
 use roc_error_macros::internal_error;
-use roc_module::ident::{Ident, ModuleName, QualifiedModuleName, TagName};
+use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,

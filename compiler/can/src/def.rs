@@ -1788,7 +1788,10 @@ fn make_tag_union_of_alias_recursive<'a>(
 
     let made_recursive = make_tag_union_recursive_help(
         env,
-        Loc::at(alias.header_region(), (alias_name, &alias_args)),
+        Loc::at(
+            alias.header_region(),
+            (alias_name, alias_args.iter().map(|ta| &ta.1)),
+        ),
         alias.region,
         others,
         &mut alias.typ,
@@ -1835,12 +1838,12 @@ enum MakeTagUnionRecursive {
 /// ```
 ///
 /// When `Err` is returned, a problem will be added to `env`.
-fn make_tag_union_recursive_help<'a>(
+fn make_tag_union_recursive_help<'a, 'b>(
     env: &mut Env<'a>,
-    recursive_alias: Loc<(Symbol, &[(Lowercase, Type)])>,
+    recursive_alias: Loc<(Symbol, impl Iterator<Item = &'b Type>)>,
     region: Region,
     others: Vec<Symbol>,
-    typ: &mut Type,
+    typ: &'b mut Type,
     var_store: &mut VarStore,
     can_report_cyclic_error: &mut bool,
 ) -> MakeTagUnionRecursive {
@@ -1852,7 +1855,7 @@ fn make_tag_union_recursive_help<'a>(
     match typ {
         Type::TagUnion(tags, ext) => {
             let recursion_variable = var_store.fresh();
-            let type_arguments = args.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
+            let type_arguments: Vec<_> = args.into_iter().cloned().collect();
 
             let mut pending_typ =
                 Type::RecursiveTagUnion(recursion_variable, tags.to_vec(), ext.clone());
@@ -1890,7 +1893,7 @@ fn make_tag_union_recursive_help<'a>(
             // try to make `actual` recursive
             make_tag_union_recursive_help(
                 env,
-                Loc::at_zero((symbol, type_arguments)),
+                Loc::at_zero((symbol, type_arguments.iter())),
                 region,
                 others,
                 actual,

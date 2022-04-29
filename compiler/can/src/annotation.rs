@@ -597,20 +597,20 @@ fn can_annotation_help(
                 let var_name = Lowercase::from(var);
 
                 if let Some(var) = introduced_variables.var_by_name(&var_name) {
-                    vars.push((var_name.clone(), Type::Variable(var)));
+                    vars.push(Type::Variable(var));
                     lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
                 } else {
                     let var = var_store.fresh();
 
                     introduced_variables
                         .insert_named(var_name.clone(), Loc::at(loc_var.region, var));
-                    vars.push((var_name.clone(), Type::Variable(var)));
+                    vars.push(Type::Variable(var));
 
                     lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
                 }
             }
 
-            let alias_args = vars.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>();
+            let alias_args = vars.clone();
 
             let alias_actual = if let Type::TagUnion(tags, ext) = inner_type {
                 let rec_var = var_store.fresh();

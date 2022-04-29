@@ -372,19 +372,24 @@ impl Aliases {
             AliasKind::Opaque => {
                 // For opaques, the instantiation must be to an opaque type rather than just what's
                 // on the RHS.
+                let lambda_set_variables = new_lambda_set_variables
+                    .iter()
+                    .copied()
+                    .map(Type::Variable)
+                    .map(LambdaSet)
+                    .collect();
+                let type_arguments = new_type_variables
+                    .clone()
+                    .iter()
+                    .copied()
+                    .map(Type::Variable)
+                    .collect();
+
                 let opaq = Type::Alias {
                     symbol,
                     kind: *kind,
-                    lambda_set_variables: new_lambda_set_variables
-                        .iter()
-                        .copied()
-                        .map(Type::Variable)
-                        .map(LambdaSet)
-                        .collect(),
-                    type_arguments: new_type_variables
-                        .iter()
-                        .map(|v| ("".into(), Type::Variable(*v)))
-                        .collect(),
+                    lambda_set_variables,
+                    type_arguments,
                     actual: Box::new(typ.clone()),
                 };
 
@@ -1971,9 +1976,7 @@ fn type_to_variable<'a>(
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, (_, arg_type)) in
-                        (new_variables.indices()).zip(type_arguments)
-                    {
+                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
                     }
@@ -2013,9 +2016,7 @@ fn type_to_variable<'a>(
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, (_, arg_type)) in
-                        (new_variables.indices()).zip(type_arguments)
-                    {
+                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
                     }

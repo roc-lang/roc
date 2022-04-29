@@ -208,14 +208,14 @@ pub enum Type {
     DelayedAlias(AliasCommon),
     Alias {
         symbol: Symbol,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Type>,
         lambda_set_variables: Vec<LambdaSet>,
         actual: Box<Type>,
         kind: AliasKind,
     },
     HostExposedAlias {
         name: Symbol,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Type>,
         lambda_set_variables: Vec<LambdaSet>,
         actual_var: Variable,
         actual: Box<Type>,
@@ -409,7 +409,7 @@ impl fmt::Debug for Type {
             } => {
                 write!(f, "(Alias {:?}", symbol)?;
 
-                for (_, arg) in type_arguments {
+                for arg in type_arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -433,7 +433,7 @@ impl fmt::Debug for Type {
             } => {
                 write!(f, "HostExposedAlias {:?}", name)?;
 
-                for (_, arg) in arguments {
+                for arg in arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -708,7 +708,7 @@ impl Type {
                     actual,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -724,7 +724,7 @@ impl Type {
                     actual: actual_type,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -817,7 +817,7 @@ impl Type {
                     actual,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
                     for lambda_set in lambda_set_variables.iter_mut() {
@@ -832,7 +832,7 @@ impl Type {
                     actual: actual_type,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -914,7 +914,7 @@ impl Type {
                 actual: alias_actual,
                 ..
             } => {
-                for (_, ta) in type_arguments {
+                for ta in type_arguments {
                     ta.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
                 alias_actual.substitute_alias(rep_symbol, rep_args, actual)
@@ -1139,8 +1139,7 @@ impl Type {
                 ..
             } => {
                 for arg in type_args {
-                    arg.1
-                        .instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
                 }
 
                 for arg in lambda_set_variables {
@@ -1202,7 +1201,7 @@ impl Type {
                         // TODO substitute further in args
                         for (
                             Loc {
-                                value: (lowercase, placeholder),
+                                value: (_, placeholder),
                                 ..
                             },
                             filler,
@@ -1215,7 +1214,7 @@ impl Type {
                                 var_store,
                                 new_lambda_set_variables,
                             );
-                            named_args.push((lowercase.clone(), filler.clone()));
+                            named_args.push(filler.clone());
                             substitution.insert(*placeholder, filler);
                         }
 
@@ -1500,7 +1499,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             actual,
             ..
         } => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help(arg, accum);
             }
             variables_help(actual, accum);
@@ -1510,7 +1509,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             actual,
             ..
         } => {
-            for (_, arg) in arguments {
+            for arg in arguments {
                 variables_help(arg, accum);
             }
             variables_help(actual, accum);
@@ -1636,7 +1635,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             actual,
             ..
         } => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help_detailed(arg, accum);
             }
             variables_help_detailed(actual, accum);
@@ -1646,7 +1645,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             actual,
             ..
         } => {
-            for (_, arg) in arguments {
+            for arg in arguments {
                 variables_help_detailed(arg, accum);
             }
             variables_help_detailed(actual, accum);

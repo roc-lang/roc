@@ -514,10 +514,7 @@ pub fn constrain_pattern(
 
             let opaque_type = Type::Alias {
                 symbol: *opaque,
-                type_arguments: type_arguments
-                    .iter()
-                    .map(|v| ("".into(), Type::Variable(*v)))
-                    .collect(),
+                type_arguments: type_arguments.iter().copied().map(Type::Variable).collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: Box::new(arg_pattern_type.clone()),
                 kind: AliasKind::Opaque,
