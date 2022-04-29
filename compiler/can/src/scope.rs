@@ -26,6 +26,8 @@ pub struct Scope {
 
     /// The first `exposed_ident_count` identifiers are exposed
     exposed_ident_count: usize,
+
+    imports: Vec<(Ident, Symbol, Region)>,
 }
 
 fn add_aliases(var_store: &mut VarStore) -> VecMap<Symbol, Alias> {
@@ -78,6 +80,7 @@ impl Scope {
             aliases: VecMap::default(),
             // TODO(abilities): default abilities in scope
             abilities_store: AbilitiesStore::default(),
+            imports: Vec::new(),
         }
     }
 
@@ -94,6 +97,7 @@ impl Scope {
             aliases: add_aliases(var_store),
             // TODO(abilities): default abilities in scope
             abilities_store: AbilitiesStore::default(),
+            imports: Vec::new(),
         }
     }
 
@@ -101,15 +105,18 @@ impl Scope {
         match self.idents.get_symbol(ident) {
             Some(symbol) => Ok(symbol),
             None => {
+                for (import, symbol, _) in self.imports.iter() {
+                    if ident == import {
+                        return Ok(*symbol);
+                    }
+                }
+
                 let error = RuntimeError::LookupNotInScope(
                     Loc {
                         region,
                         value: ident.clone(),
                     },
-                    self.idents
-                        .iter_idents()
-                        .map(|v| v.as_ref().into())
-                        .collect(),
+                    self.idents_in_scope().map(|v| v.as_ref().into()).collect(),
                 );
 
                 Err(error)
@@ -117,9 +124,11 @@ impl Scope {
         }
     }
 
-    #[cfg(test)]
     fn idents_in_scope(&self) -> impl Iterator<Item = Ident> + '_ {
-        self.idents.iter_idents()
+        let it1 = self.idents.iter_idents();
+        let it2 = self.imports.iter().map(|t| t.0.clone());
+
+        it1.chain(it2)
     }
 
     pub fn lookup_alias(&self, symbol: Symbol) -> Option<&Alias> {
@@ -235,7 +244,19 @@ impl Scope {
                 };
                 Err((original_region, shadow))
             }
-            None => Ok(self.commit_introduction(ident, region)),
+            None => {
+                for (import, _, original_region) in self.imports.iter() {
+                    if ident == import {
+                        let shadow = Loc {
+                            value: ident.clone(),
+                            region,
+                        };
+                        return Err((*original_region, shadow));
+                    }
+                }
+
+                Ok(self.commit_introduction(ident, region))
+            }
         }
     }
 
@@ -317,14 +338,15 @@ impl Scope {
         symbol: Symbol,
         region: Region,
     ) -> Result<(), (Symbol, Region)> {
-        match self.idents.get_symbol_and_region(&ident) {
-            Some(shadowed) => Err(shadowed),
-            None => {
-                self.idents.insert_unchecked(&ident, symbol, region);
-
-                Ok(())
+        for t in self.imports.iter() {
+            if t.0 == ident {
+                return Err((t.1, t.2));
             }
         }
+
+        self.imports.push((ident, symbol, region));
+
+        Ok(())
     }
 
     pub fn add_alias(
@@ -640,5 +662,49 @@ mod test {
         let idents: Vec<_> = scope.idents_in_scope().collect();
 
         assert_eq!(&idents[builtin_count..], &[ident1, ident2, ident3,]);
+    }
+
+    #[test]
+    fn import_is_in_scope() {
+        let _register_module_debug_names = ModuleIds::default();
+        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+
+        let ident = Ident::from("product");
+        let symbol = Symbol::LIST_PRODUCT;
+        let region = Region::zero();
+
+        assert!(scope.lookup(&ident, region).is_err());
+
+        assert!(scope.import(ident.clone(), symbol, region).is_ok());
+
+        assert!(scope.lookup(&ident, region).is_ok());
+
+        assert!(scope.idents_in_scope().any(|x| x == ident));
+    }
+
+    #[test]
+    fn shadow_of_import() {
+        let _register_module_debug_names = ModuleIds::default();
+        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+
+        let ident = Ident::from("product");
+        let symbol = Symbol::LIST_PRODUCT;
+
+        let region1 = Region::from_pos(Position { offset: 10 });
+        let region2 = Region::from_pos(Position { offset: 20 });
+
+        scope.import(ident.clone(), symbol, region1).unwrap();
+
+        let (original_region, _ident, shadow_symbol) =
+            scope.introduce(ident.clone(), region2).unwrap_err();
+
+        scope.register_debug_idents();
+
+        assert_ne!(symbol, shadow_symbol);
+        assert_eq!(original_region, region1);
+
+        let lookup = scope.lookup(&ident, Region::zero()).unwrap();
+
+        assert_eq!(symbol, lookup);
     }
 }
