@@ -47,7 +47,6 @@ pub struct ModuleOutput {
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub problems: Vec<Problem>,
-    pub ident_ids: IdentIds,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
     pub scope: Scope,
@@ -170,7 +169,7 @@ pub fn canonicalize_module_defs<'a>(
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home, var_store, exposed_ident_ids);
+    let mut scope = Scope::new(home, exposed_ident_ids);
     let mut env = Env::new(home, dep_idents, module_ids);
     let num_deps = dep_idents.len();
 
@@ -533,8 +532,6 @@ pub fn canonicalize_module_defs<'a>(
                 }
             }
 
-            let ident_ids = scope.ident_ids.clone();
-
             let output = ModuleOutput {
                 scope,
                 aliases,
@@ -545,7 +542,6 @@ pub fn canonicalize_module_defs<'a>(
                 exposed_imports: can_exposed_imports,
                 problems: env.problems,
                 lookups,
-                ident_ids,
             };
 
             Ok(output)

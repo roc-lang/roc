@@ -109,6 +109,11 @@ impl<K: PartialEq, V> VecMap<K, V> {
         self.values.iter()
     }
 
+    pub fn truncate(&mut self, len: usize) {
+        self.keys.truncate(len);
+        self.values.truncate(len);
+    }
+
     pub fn unzip(self) -> (Vec<K>, Vec<V>) {
         (self.keys, self.values)
     }

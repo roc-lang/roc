@@ -89,14 +89,13 @@ pub struct Tag {
 pub fn generate_module_docs<'a>(
     scope: Scope,
     module_name: ModuleName,
-    ident_ids: &'a IdentIds,
     parsed_defs: &'a [Loc<ast::Def<'a>>],
 ) -> ModuleDocumentation {
     let (entries, _) =
         parsed_defs
             .iter()
             .fold((vec![], None), |(acc, maybe_comments_after), def| {
-                generate_entry_doc(ident_ids, acc, maybe_comments_after, &def.value)
+                generate_entry_doc(&scope.ident_ids, acc, maybe_comments_after, &def.value)
             });
 
     ModuleDocumentation {
