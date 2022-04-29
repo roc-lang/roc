@@ -349,7 +349,7 @@ impl Scope {
     {
         // store enough information to roll back to the original outer scope
         //
-        // - abilities_store: abilitie definitions not allowed in inner scopes
+        // - abilities_store: ability definitions not allowed in inner scopes
         // - ident_ids: identifiers in inner scopes should still be available in the ident_ids
         // - idents: we have to clone for now
         // - aliases: stored in a VecMap, we just discard anything added in an inner scope
