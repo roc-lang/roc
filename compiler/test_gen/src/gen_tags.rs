@@ -1676,6 +1676,8 @@ fn issue_2900_unreachable_pattern() {
             "#
         ),
         RocStr::from("foo"),
-        RocStr
+        RocStr,
+        |x| x,
+        true // ignore type errors
     )
 }

@@ -18,7 +18,7 @@ use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, LambdaSet, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
@@ -84,12 +84,18 @@ pub enum Expr {
     Var(Symbol),
     // Branching
     When {
+        /// The actual condition of the when expression.
+        loc_cond: Box<Loc<Expr>>,
         cond_var: Variable,
+        /// Result type produced by the branches.
         expr_var: Variable,
         region: Region,
-        loc_cond: Box<Loc<Expr>>,
+        /// The branches of the when, and the type of the condition that they expect to be matched
+        /// against.
         branches: Vec<WhenBranch>,
         branches_cond_var: Variable,
+        /// Whether the branches are exhaustive.
+        exhaustive: ExhaustiveMark,
     },
     If {
         cond_var: Variable,
@@ -235,6 +241,32 @@ impl Expr {
     }
 }
 
+/// Stores exhaustiveness-checking metadata for a closure argument that may
+/// have an annotated type.
+#[derive(Clone, Copy, Debug)]
+pub struct AnnotatedMark {
+    pub annotation_var: Variable,
+    pub exhaustive: ExhaustiveMark,
+}
+
+impl AnnotatedMark {
+    pub fn new(var_store: &mut VarStore) -> Self {
+        Self {
+            annotation_var: var_store.fresh(),
+            exhaustive: ExhaustiveMark::new(var_store),
+        }
+    }
+
+    // NOTE: only ever use this if you *know* a pattern match is surely exhaustive!
+    // Otherwise you will get unpleasant unification errors.
+    pub fn known_exhaustive() -> Self {
+        Self {
+            annotation_var: Variable::EMPTY_TAG_UNION,
+            exhaustive: ExhaustiveMark::known_exhaustive(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ClosureData {
     pub function_type: Variable,
@@ -244,7 +276,7 @@ pub struct ClosureData {
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub recursive: Recursive,
-    pub arguments: Vec<(Variable, Loc<Pattern>)>,
+    pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
     pub loc_body: Box<Loc<Expr>>,
 }
 
@@ -296,7 +328,11 @@ impl AccessorData {
 
         let loc_body = Loc::at_zero(body);
 
-        let arguments = vec![(record_var, Loc::at_zero(Pattern::Identifier(record_symbol)))];
+        let arguments = vec![(
+            record_var,
+            AnnotatedMark::known_exhaustive(),
+            Loc::at_zero(Pattern::Identifier(record_symbol)),
+        )];
 
         ClosureData {
             function_type: function_var,
@@ -332,6 +368,8 @@ pub struct WhenBranch {
     pub patterns: Vec<Loc<Pattern>>,
     pub value: Loc<Expr>,
     pub guard: Option<Loc<Expr>>,
+    /// Whether this branch is redundant in the `when` it appears in
+    pub redundant: RedundantMark,
 }
 
 impl WhenBranch {
@@ -711,6 +749,7 @@ pub fn canonicalize_expr<'a>(
                 loc_cond: Box::new(can_cond),
                 branches: can_branches,
                 branches_cond_var: var_store.fresh(),
+                exhaustive: ExhaustiveMark::new(var_store),
             };
 
             (expr, output)
@@ -992,11 +1031,15 @@ fn canonicalize_closure_body<'a>(
             loc_pattern.region,
         );
 
-        can_args.push((var_store.fresh(), can_argument_pattern));
+        can_args.push((
+            var_store.fresh(),
+            AnnotatedMark::new(var_store),
+            can_argument_pattern,
+        ));
     }
 
     let bound_by_argument_patterns: Vec<_> =
-        BindingsFromPattern::new_many(can_args.iter().map(|x| &x.1)).collect();
+        BindingsFromPattern::new_many(can_args.iter().map(|x| &x.2)).collect();
 
     let (loc_body_expr, new_output) = canonicalize_expr(
         env,
@@ -1130,6 +1173,7 @@ fn canonicalize_when_branch<'a>(
             patterns,
             value,
             guard,
+            redundant: RedundantMark::new(var_store),
         },
         references,
     )
@@ -1342,6 +1386,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             loc_cond,
             branches,
             branches_cond_var,
+            exhaustive,
         } => {
             let loc_cond = Box::new(Loc {
                 region: loc_cond.region,
@@ -1366,6 +1411,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                     patterns: branch.patterns,
                     value,
                     guard,
+                    redundant: RedundantMark::new(var_store),
                 };
 
                 new_branches.push(new_branch);
@@ -1378,6 +1424,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 loc_cond,
                 branches: new_branches,
                 branches_cond_var,
+                exhaustive,
             }
         }
         If {
@@ -1607,7 +1654,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                         // Wrap the body in one LetNonRec for each argument,
                         // such that at the end we have all the arguments in
                         // scope with the values the caller provided.
-                        for ((_param_var, loc_pattern), (expr_var, loc_expr)) in
+                        for ((_param_var, _exhaustive_mark, loc_pattern), (expr_var, loc_expr)) in
                             params.iter().cloned().zip(args.into_iter()).rev()
                         {
                             // TODO get the correct vars into here.

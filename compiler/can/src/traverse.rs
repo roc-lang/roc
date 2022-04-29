@@ -66,6 +66,7 @@ fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr) {
             branches,
             region: _,
             branches_cond_var: _,
+            exhaustive: _,
         } => {
             walk_when(visitor, *cond_var, *expr_var, loc_cond, branches);
         }
@@ -81,9 +82,9 @@ fn walk_closure<V: Visitor>(visitor: &mut V, clos: &ClosureData) {
         ..
     } = clos;
 
-    arguments
-        .iter()
-        .for_each(|(var, arg)| visitor.visit_pattern(&arg.value, arg.region, Some(*var)));
+    arguments.iter().for_each(|(var, _exhaustive_mark, arg)| {
+        visitor.visit_pattern(&arg.value, arg.region, Some(*var))
+    });
 
     visitor.visit_expr(&loc_body.value, loc_body.region, *return_type);
 }
@@ -107,6 +108,7 @@ fn walk_when_branch<V: Visitor>(visitor: &mut V, branch: &WhenBranch, expr_var: 
         patterns,
         value,
         guard,
+        redundant: _,
     } = branch;
 
     patterns

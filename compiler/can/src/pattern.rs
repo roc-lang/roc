@@ -13,7 +13,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{LambdaSet, Type};
+use roc_types::types::{LambdaSet, PatternCategory, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -102,6 +102,59 @@ impl Pattern {
 
             Shadowed(..) | OpaqueNotInScope(..) | UnsupportedPattern(..) | MalformedPattern(..) => {
                 None
+            }
+        }
+    }
+
+    /// Is this pattern sure to cover all instances of a type T, assuming it typechecks against T?
+    pub fn surely_exhaustive(&self) -> bool {
+        use Pattern::*;
+        match self {
+            Identifier(..)
+            | Underscore
+            | Shadowed(..)
+            | OpaqueNotInScope(..)
+            | UnsupportedPattern(..)
+            | MalformedPattern(..)
+            | AbilityMemberSpecialization { .. } => true,
+            RecordDestructure { destructs, .. } => destructs.is_empty(),
+            AppliedTag { .. }
+            | NumLiteral(..)
+            | IntLiteral(..)
+            | FloatLiteral(..)
+            | StrLiteral(..)
+            | SingleQuote(..) => false,
+            UnwrappedOpaque { argument, .. } => {
+                // Opaques can only match against one constructor (the opaque symbol), so this is
+                // surely exhaustive against T if the inner pattern is surely exhaustive against
+                // its type U.
+                argument.1.value.surely_exhaustive()
+            }
+        }
+    }
+
+    pub fn category(&self) -> PatternCategory {
+        use Pattern::*;
+        use PatternCategory as C;
+
+        match self {
+            Identifier(_) => C::PatternDefault,
+
+            AppliedTag { tag_name, .. } => C::Ctor(tag_name.clone()),
+            UnwrappedOpaque { opaque, .. } => C::Opaque(*opaque),
+            RecordDestructure { destructs, .. } if destructs.is_empty() => C::EmptyRecord,
+            RecordDestructure { .. } => C::Record,
+            NumLiteral(..) => C::Num,
+            IntLiteral(..) => C::Int,
+            FloatLiteral(..) => C::Float,
+            StrLiteral(_) => C::Str,
+            SingleQuote(_) => C::Character,
+            Underscore => C::PatternDefault,
+
+            AbilityMemberSpecialization { .. } => C::PatternDefault,
+
+            Shadowed(..) | OpaqueNotInScope(..) | UnsupportedPattern(..) | MalformedPattern(..) => {
+                C::PatternDefault
             }
         }
     }

@@ -663,7 +663,7 @@ fn fix_values_captured_in_closure_expr(
             }
 
             // patterns can contain default expressions, so much go over them too!
-            for (_, loc_pat) in arguments.iter_mut() {
+            for (_, _, loc_pat) in arguments.iter_mut() {
                 fix_values_captured_in_closure_pattern(&mut loc_pat.value, no_capture_symbols);
             }
 

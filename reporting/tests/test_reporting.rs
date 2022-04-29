@@ -12,16 +12,12 @@ mod test_reporting {
     use bumpalo::Bump;
     use indoc::indoc;
     use roc_can::abilities::AbilitiesStore;
-    use roc_can::def::Declaration;
-    use roc_can::pattern::Pattern;
     use roc_load::{self, LoadedModule, LoadingProblem};
     use roc_module::symbol::{Interns, ModuleId};
-    use roc_mono::ir::{Procs, Stmt, UpdateModeIds};
-    use roc_mono::layout::LayoutCache;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
-        can_problem, mono_problem, parse_problem, type_problem, RenderTarget, Report, Severity,
-        ANSI_STYLE_CODES, DEFAULT_PALETTE,
+        can_problem, parse_problem, type_problem, RenderTarget, Report, Severity, ANSI_STYLE_CODES,
+        DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
@@ -114,7 +110,6 @@ mod test_reporting {
             String,
             Vec<solve::TypeError>,
             Vec<roc_problem::can::Problem>,
-            Vec<roc_mono::ir::MonoProblem>,
             ModuleId,
             Interns,
         ),
@@ -128,8 +123,6 @@ mod test_reporting {
             interns,
             mut solved,
             exposed_to_host,
-            mut declarations_by_id,
-            abilities_store,
             ..
         } = result?;
 
@@ -142,65 +135,7 @@ mod test_reporting {
             name_all_type_vars(*var, subs);
         }
 
-        let mut mono_problems = Vec::new();
-
-        // MONO
-
-        if type_problems.is_empty() && can_problems.is_empty() {
-            let arena = Bump::new();
-
-            assert!(exposed_to_host.len() == 1);
-            let (sym, _var) = exposed_to_host.into_iter().next().unwrap();
-
-            let home_decls = declarations_by_id.remove(&home).unwrap();
-            let (loc_expr, var) = home_decls
-                .into_iter()
-                .find_map(|decl| match decl {
-                    Declaration::Declare(def) => match def.loc_pattern.value {
-                        Pattern::Identifier(s) if s == sym => Some((def.loc_expr, def.expr_var)),
-                        _ => None,
-                    },
-                    _ => None,
-                })
-                .expect("No expression to monomorphize found!");
-
-            // Compile and add all the Procs before adding main
-            let mut procs = Procs::new_in(&arena);
-            let mut ident_ids = interns.all_ident_ids.get(&home).unwrap().clone();
-            let mut update_mode_ids = UpdateModeIds::new();
-
-            // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let target_info = roc_target::TargetInfo::default_x86_64();
-            let mut layout_cache = LayoutCache::new(target_info);
-            let mut mono_env = roc_mono::ir::Env {
-                arena: &arena,
-                subs,
-                problems: &mut mono_problems,
-                home,
-                ident_ids: &mut ident_ids,
-                update_mode_ids: &mut update_mode_ids,
-                target_info,
-                // call_specialization_counter=0 is reserved
-                call_specialization_counter: 1,
-                abilities_store: &abilities_store,
-            };
-            let _mono_expr = Stmt::new(
-                &mut mono_env,
-                loc_expr.value,
-                var,
-                &mut procs,
-                &mut layout_cache,
-            );
-        }
-
-        Ok((
-            module_src,
-            type_problems,
-            can_problems,
-            mono_problems,
-            home,
-            interns,
-        ))
+        Ok((module_src, type_problems, can_problems, home, interns))
     }
 
     fn list_reports_new<F>(subdir: &str, arena: &Bump, src: &str, finalize_render: F) -> String
@@ -215,7 +150,7 @@ mod test_reporting {
 
         match infer_expr_help_new(subdir, arena, src) {
             Err(LoadingProblem::FormattedReport(fail)) => fail,
-            Ok((module_src, type_problems, can_problems, mono_problems, home, interns)) => {
+            Ok((module_src, type_problems, can_problems, home, interns)) => {
                 let lines = LineInfo::new(&module_src);
                 let src_lines: Vec<&str> = module_src.split('\n').collect();
                 let mut reports = Vec::new();
@@ -233,11 +168,6 @@ mod test_reporting {
                     {
                         reports.push(report);
                     }
-                }
-
-                for problem in mono_problems {
-                    let report = mono_problem(&alloc, &lines, filename.clone(), problem.clone());
-                    reports.push(report);
                 }
 
                 let has_reports = !reports.is_empty();
@@ -267,14 +197,13 @@ mod test_reporting {
         (
             Vec<solve::TypeError>,
             Vec<roc_problem::can::Problem>,
-            Vec<roc_mono::ir::MonoProblem>,
             ModuleId,
             Interns,
         ),
         ParseErrOut<'a>,
     > {
         let CanExprOut {
-            loc_expr,
+            loc_expr: _,
             output,
             var_store,
             var,
@@ -315,43 +244,7 @@ mod test_reporting {
 
         name_all_type_vars(var, &mut subs);
 
-        let mut mono_problems = Vec::new();
-
-        // MONO
-
-        if unify_problems.is_empty() && can_problems.is_empty() {
-            let arena = Bump::new();
-
-            // Compile and add all the Procs before adding main
-            let mut procs = Procs::new_in(&arena);
-            let mut ident_ids = interns.all_ident_ids.get(&home).unwrap().clone();
-            let mut update_mode_ids = UpdateModeIds::new();
-
-            // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let target_info = roc_target::TargetInfo::default_x86_64();
-            let mut layout_cache = LayoutCache::new(target_info);
-            let mut mono_env = roc_mono::ir::Env {
-                arena: &arena,
-                subs: &mut subs,
-                problems: &mut mono_problems,
-                home,
-                ident_ids: &mut ident_ids,
-                update_mode_ids: &mut update_mode_ids,
-                target_info,
-                // call_specialization_counter=0 is reserved
-                call_specialization_counter: 1,
-                abilities_store: &abilities_store,
-            };
-            let _mono_expr = Stmt::new(
-                &mut mono_env,
-                loc_expr.value,
-                var,
-                &mut procs,
-                &mut layout_cache,
-            );
-        }
-
-        Ok((unify_problems, can_problems, mono_problems, home, interns))
+        Ok((unify_problems, can_problems, home, interns))
     }
 
     fn list_reports<F>(arena: &Bump, src: &str, buf: &mut String, callback: F)
@@ -380,7 +273,7 @@ mod test_reporting {
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
             }
-            Ok((type_problems, can_problems, mono_problems, home, interns)) => {
+            Ok((type_problems, can_problems, home, interns)) => {
                 let mut reports = Vec::new();
 
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
@@ -396,11 +289,6 @@ mod test_reporting {
                     {
                         reports.push(report);
                     }
-                }
-
-                for problem in mono_problems {
-                    let report = mono_problem(&alloc, &lines, filename.clone(), problem.clone());
-                    reports.push(report);
                 }
 
                 let has_reports = !reports.is_empty();
@@ -922,7 +810,7 @@ mod test_reporting {
         );
 
         let arena = Bump::new();
-        let (_type_problems, _can_problems, _mono_problems, home, interns) =
+        let (_type_problems, _can_problems, home, interns) =
             infer_expr_help(&arena, src).expect("parse error");
 
         let mut buf = String::new();
@@ -953,7 +841,7 @@ mod test_reporting {
         );
 
         let arena = Bump::new();
-        let (_type_problems, _can_problems, _mono_problems, home, mut interns) =
+        let (_type_problems, _can_problems, home, mut interns) =
             infer_expr_help(&arena, src).expect("parse error");
 
         let mut buf = String::new();
@@ -8487,16 +8375,16 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This pattern is being used in an unexpected way:
+                The 1st argument to `f` is weird:
 
                 4│  f = \Age n -> n
                          ^^^^^
 
-                It is a `Age` tag of type:
+                The argument is a pattern that matches a `Age` tag of type:
 
                     [ Age a ]
 
-                But it needs to match:
+                But the annotation on `f` says the 1st argument should be:
 
                     Age
 
@@ -9861,6 +9749,7 @@ I need all branches in an `if` to have the same type!
         )
     }
 
+    #[test]
     fn imports_missing_comma() {
         new_report_problem_as(
             "imports_missing_comma",

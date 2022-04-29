@@ -4,7 +4,7 @@ use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::Variable;
+use roc_types::subs::{ExhaustiveMark, Variable};
 use roc_types::types::{Category, PatternCategory, Type};
 
 #[derive(Debug)]
@@ -22,6 +22,7 @@ pub struct Constraints {
     pub strings: Vec<&'static str>,
     pub sketched_rows: Vec<SketchedRows>,
     pub eq: Vec<Eq>,
+    pub pattern_eq: Vec<PatternEq>,
 }
 
 impl Default for Constraints {
@@ -45,6 +46,7 @@ impl Constraints {
         let strings = Vec::new();
         let sketched_rows = Vec::new();
         let eq = Vec::new();
+        let pattern_eq = Vec::new();
 
         types.extend([
             Type::EmptyRec,
@@ -97,6 +99,7 @@ impl Constraints {
             strings,
             sketched_rows,
             eq,
+            pattern_eq,
         }
     }
 
@@ -610,19 +613,35 @@ impl Constraints {
         &mut self,
         real_var: Variable,
         real_region: Region,
-        real_category: Category,
-        expected_branches: Expected<Type>,
+        category_and_expectation: Result<
+            (Category, Expected<Type>),
+            (PatternCategory, PExpected<Type>),
+        >,
         sketched_rows: SketchedRows,
         context: ExhaustiveContext,
+        exhaustive: ExhaustiveMark,
     ) -> Constraint {
         let real_var = Self::push_type_variable(real_var);
-        let real_category = Index::push_new(&mut self.categories, real_category);
-        let expected_branches = Index::push_new(&mut self.expectations, expected_branches);
-        let equality = Eq(real_var, expected_branches, real_category, real_region);
-        let equality = Index::push_new(&mut self.eq, equality);
         let sketched_rows = Index::push_new(&mut self.sketched_rows, sketched_rows);
 
-        Constraint::Exhaustive(equality, sketched_rows, context)
+        let equality = match category_and_expectation {
+            Ok((category, expected)) => {
+                let category = Index::push_new(&mut self.categories, category);
+                let expected = Index::push_new(&mut self.expectations, expected);
+                let equality = Eq(real_var, expected, category, real_region);
+                let equality = Index::push_new(&mut self.eq, equality);
+                Ok(equality)
+            }
+            Err((category, expected)) => {
+                let category = Index::push_new(&mut self.pattern_categories, category);
+                let expected = Index::push_new(&mut self.pattern_expectations, expected);
+                let equality = PatternEq(real_var, expected, category, real_region);
+                let equality = Index::push_new(&mut self.pattern_eq, equality);
+                Err(equality)
+            }
+        };
+
+        Constraint::Exhaustive(equality, sketched_rows, context, exhaustive)
     }
 }
 
@@ -634,6 +653,14 @@ pub struct Eq(
     pub EitherIndex<Type, Variable>,
     pub Index<Expected<Type>>,
     pub Index<Category>,
+    pub Region,
+);
+
+#[derive(Clone, Copy, Debug)]
+pub struct PatternEq(
+    pub EitherIndex<Type, Variable>,
+    pub Index<PExpected<Type>>,
+    pub Index<PatternCategory>,
     pub Region,
 );
 
@@ -672,7 +699,12 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
-    Exhaustive(Index<Eq>, Index<SketchedRows>, ExhaustiveContext),
+    Exhaustive(
+        Result<Index<Eq>, Index<PatternEq>>,
+        Index<SketchedRows>,
+        ExhaustiveContext,
+        ExhaustiveMark,
+    ),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -727,8 +759,12 @@ impl std::fmt::Debug for Constraint {
                     arg0, arg1, arg2, arg3
                 )
             }
-            Self::Exhaustive(arg0, arg1, arg2) => {
-                write!(f, "Exhaustive({:?}, {:?}, {:?})", arg0, arg1, arg2)
+            Self::Exhaustive(arg0, arg1, arg2, arg3) => {
+                write!(
+                    f,
+                    "Exhaustive({:?}, {:?}, {:?}, {:?})",
+                    arg0, arg1, arg2, arg3
+                )
             }
         }
     }

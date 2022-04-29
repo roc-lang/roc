@@ -965,6 +965,77 @@ impl From<OptVariable> for Option<Variable> {
     }
 }
 
+/// Marks whether a when expression is exhaustive using a variable.
+#[derive(Clone, Copy, Debug)]
+pub struct ExhaustiveMark(Variable);
+
+impl ExhaustiveMark {
+    pub fn new(var_store: &mut VarStore) -> Self {
+        Self(var_store.fresh())
+    }
+
+    // NOTE: only ever use this if you *know* a pattern match is surely exhaustive!
+    // Otherwise you will get unpleasant unification errors.
+    pub fn known_exhaustive() -> Self {
+        Self(Variable::EMPTY_TAG_UNION)
+    }
+
+    pub fn variable_for_introduction(&self) -> Variable {
+        debug_assert!(
+            self.0 != Variable::EMPTY_TAG_UNION,
+            "Attempting to introduce known mark"
+        );
+        self.0
+    }
+
+    pub fn set_non_exhaustive(&self, subs: &mut Subs) {
+        subs.set_content(self.0, Content::Error);
+    }
+
+    pub fn is_non_exhaustive(&self, subs: &Subs) -> bool {
+        matches!(subs.get_content_without_compacting(self.0), Content::Error)
+    }
+}
+
+/// Marks whether a when branch is redundant using a variable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RedundantMark(Variable);
+
+impl RedundantMark {
+    pub fn new(var_store: &mut VarStore) -> Self {
+        Self(var_store.fresh())
+    }
+
+    // NOTE: only ever use this if you *know* a pattern match is surely exhaustive!
+    // Otherwise you will get unpleasant unification errors.
+    pub fn known_non_redundant() -> Self {
+        Self(Variable::EMPTY_TAG_UNION)
+    }
+
+    pub fn variable_for_introduction(&self) -> Variable {
+        debug_assert!(
+            self.0 != Variable::EMPTY_TAG_UNION,
+            "Attempting to introduce known mark"
+        );
+        self.0
+    }
+
+    pub fn set_redundant(&self, subs: &mut Subs) {
+        subs.set_content(self.0, Content::Error);
+    }
+
+    pub fn is_redundant(&self, subs: &Subs) -> bool {
+        matches!(subs.get_content_without_compacting(self.0), Content::Error)
+    }
+}
+
+pub fn new_marks(var_store: &mut VarStore) -> (RedundantMark, ExhaustiveMark) {
+    (
+        RedundantMark::new(var_store),
+        ExhaustiveMark::new(var_store),
+    )
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Variable(u32);
 

@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
 pub use crate::error::canonicalize::can_problem;
-pub use crate::error::mono::mono_problem;
 pub use crate::error::parse::parse_problem;
 pub use crate::error::r#type::type_problem;
 

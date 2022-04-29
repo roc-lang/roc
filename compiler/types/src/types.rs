@@ -1731,6 +1731,10 @@ pub enum Reason {
         name: Option<Symbol>,
         arg_index: HumanIndex,
     },
+    TypedArg {
+        name: Option<Symbol>,
+        arg_index: HumanIndex,
+    },
     FnCall {
         name: Option<Symbol>,
         arity: u8,
@@ -2508,7 +2512,10 @@ pub fn gather_tags_unsorted_iter(
             // TODO investigate this likely can happen when there is a type error
             RigidVar(_) => break,
 
-            other => unreachable!("something weird ended up in a tag union type: {:?}", other),
+            other => unreachable!(
+                "something weird ended up in a tag union type: {:?} at {:?}",
+                other, var
+            ),
         }
     }
 

@@ -519,7 +519,6 @@ pub struct MonomorphizedModule<'a> {
     pub platform_path: Box<str>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
-    pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,
@@ -544,10 +543,6 @@ impl<'a> MonomorphizedModule<'a> {
         }
 
         for problems in self.type_problems.values() {
-            total += problems.len();
-        }
-
-        for problems in self.mono_problems.values() {
             total += problems.len();
         }
 
@@ -2321,7 +2316,6 @@ fn finish_specialization(
     } = state;
 
     let ModuleCache {
-        mono_problems,
         type_problems,
         can_problems,
         sources,
@@ -2384,7 +2378,6 @@ fn finish_specialization(
 
     Ok(MonomorphizedModule {
         can_problems,
-        mono_problems,
         type_problems,
         output_path: output_path.unwrap_or(DEFAULT_APP_OUTPUT_PATH).into(),
         platform_path,
@@ -4291,7 +4284,6 @@ fn add_def_to_module<'a>(
 
                     let partial_proc = PartialProc::from_named_function(
                         mono_env,
-                        layout_cache,
                         annotation,
                         loc_args,
                         *loc_body,

@@ -8,7 +8,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::AbilitiesStore;
-use roc_can::expr::{ClosureData, IntValue};
+use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -18,7 +18,10 @@ use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
-use roc_types::subs::{Content, FlatType, StorageSubs, Subs, Variable, VariableSubsSlice};
+use roc_types::subs::{
+    Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs, Variable,
+    VariableSubsSlice,
+};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
@@ -204,9 +207,8 @@ impl<'a> PartialProc<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn from_named_function(
         env: &mut Env<'a, '_>,
-        layout_cache: &mut LayoutCache<'a>,
         annotation: Variable,
-        loc_args: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)>,
+        loc_args: std::vec::Vec<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
         loc_body: Loc<roc_can::expr::Expr>,
         captured_symbols: CapturedSymbols<'a>,
         is_self_recursive: bool,
@@ -214,7 +216,7 @@ impl<'a> PartialProc<'a> {
     ) -> PartialProc<'a> {
         let number_of_arguments = loc_args.len();
 
-        match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
+        match patterns_to_when(env, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // a named closure. Since these aren't specialized by the surrounding
                 // context, we can't add pending specializations for them yet.
@@ -855,7 +857,7 @@ impl<'a> Procs<'a> {
         env: &mut Env<'a, '_>,
         symbol: Symbol,
         annotation: Variable,
-        loc_args: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)>,
+        loc_args: std::vec::Vec<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
         loc_body: Loc<roc_can::expr::Expr>,
         captured_symbols: CapturedSymbols<'a>,
         ret_var: Variable,
@@ -874,7 +876,7 @@ impl<'a> Procs<'a> {
             _ => false,
         };
 
-        match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
+        match patterns_to_when(env, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
                 // by the surrounding context, so we can add pending specializations
@@ -1935,8 +1937,7 @@ impl<'a> Stmt<'a> {
 #[allow(clippy::type_complexity)]
 fn patterns_to_when<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &mut LayoutCache<'a>,
-    patterns: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)>,
+    patterns: std::vec::Vec<(Variable, AnnotatedMark, Loc<roc_can::pattern::Pattern>)>,
     body_var: Variable,
     body: Loc<roc_can::expr::Expr>,
 ) -> Result<(Vec<'a, Variable>, Vec<'a, Symbol>, Loc<roc_can::expr::Expr>), Loc<RuntimeError>> {
@@ -1951,66 +1952,26 @@ fn patterns_to_when<'a>(
     // NOTE this fails if the pattern contains rigid variables,
     // see https://github.com/rtfeldman/roc/issues/786
     // this must be fixed when moving exhaustiveness checking to the new canonical AST
-    for (pattern_var, pattern) in patterns.into_iter() {
-        let context = roc_exhaustive::Context::BadArg;
-        let mono_pattern = match from_can_pattern(env, layout_cache, &pattern.value) {
-            Ok((pat, _assignments)) => {
-                // Don't apply any assignments (e.g. to initialize optional variables) yet.
-                // We'll take care of that later when expanding the new "when" branch.
-                pat
-            }
-            Err(runtime_error) => {
-                // Even if the body was Ok, replace it with this Err.
-                // If it was already an Err, leave it at that Err, so the first
-                // RuntimeError we encountered remains the first.
-                body = body.and({
-                    Err(Loc {
-                        region: pattern.region,
-                        value: runtime_error,
-                    })
-                });
+    for (pattern_var, annotated_mark, pattern) in patterns.into_iter() {
+        if annotated_mark.exhaustive.is_non_exhaustive(env.subs) {
+            // Even if the body was Ok, replace it with this Err.
+            // If it was already an Err, leave it at that Err, so the first
+            // RuntimeError we encountered remains the first.
+            let value = RuntimeError::UnsupportedPattern(pattern.region);
+            body = body.and({
+                Err(Loc {
+                    region: pattern.region,
+                    value,
+                })
+            });
+        } else if let Ok(unwrapped_body) = body {
+            let (new_symbol, new_body) =
+                pattern_to_when(env, pattern_var, pattern, body_var, unwrapped_body);
 
-                continue;
-            }
-        };
+            symbols.push(new_symbol);
+            arg_vars.push(pattern_var);
 
-        match crate::exhaustive::check(
-            pattern.region,
-            &[(
-                Loc::at(pattern.region, mono_pattern),
-                roc_exhaustive::Guard::NoGuard,
-            )],
-            context,
-        ) {
-            Ok(_) => {
-                // Replace the body with a new one, but only if it was Ok.
-                if let Ok(unwrapped_body) = body {
-                    let (new_symbol, new_body) =
-                        pattern_to_when(env, pattern_var, pattern, body_var, unwrapped_body);
-
-                    symbols.push(new_symbol);
-                    arg_vars.push(pattern_var);
-
-                    body = Ok(new_body)
-                }
-            }
-            Err(errors) => {
-                for error in errors {
-                    env.problems.push(MonoProblem::PatternProblem(error))
-                }
-
-                let value = RuntimeError::UnsupportedPattern(pattern.region);
-
-                // Even if the body was Ok, replace it with this Err.
-                // If it was already an Err, leave it at that Err, so the first
-                // RuntimeError we encountered remains the first.
-                body = body.and({
-                    Err(Loc {
-                        region: pattern.region,
-                        value,
-                    })
-                });
-            }
+            body = Ok(new_body)
         }
     }
 
@@ -2090,8 +2051,12 @@ fn pattern_to_when<'a>(
                     patterns: vec![pattern],
                     value: body,
                     guard: None,
+                    // If this type-checked, it's non-redundant
+                    redundant: RedundantMark::known_non_redundant(),
                 }],
                 branches_cond_var: pattern_var,
+                // If this type-checked, it's exhaustive
+                exhaustive: ExhaustiveMark::known_exhaustive(),
             };
 
             (symbol, Loc::at_zero(wrapped_body))
@@ -3259,7 +3224,7 @@ pub fn with_hole<'a>(
         LetNonRec(def, cont, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
                 if let Closure(closure_data) = def.loc_expr.value {
-                    register_noncapturing_closure(env, procs, layout_cache, symbol, closure_data);
+                    register_noncapturing_closure(env, procs, symbol, closure_data);
 
                     return with_hole(
                         env,
@@ -3345,24 +3310,6 @@ pub fn with_hole<'a>(
                         }
                     };
 
-                let context = roc_exhaustive::Context::BadDestruct;
-                match crate::exhaustive::check(
-                    def.loc_pattern.region,
-                    &[(
-                        Loc::at(def.loc_pattern.region, mono_pattern.clone()),
-                        roc_exhaustive::Guard::NoGuard,
-                    )],
-                    context,
-                ) {
-                    Ok(_) => {}
-                    Err(errors) => {
-                        for error in errors {
-                            env.problems.push(MonoProblem::PatternProblem(error))
-                        }
-                    } // TODO make all variables bound in the pattern evaluate to a runtime error
-                      // return Stmt::RuntimeError("TODO non-exhaustive pattern");
-                }
-
                 let mut hole = hole;
 
                 for (symbol, variable, expr) in assignments {
@@ -3402,13 +3349,7 @@ pub fn with_hole<'a>(
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                     if let Closure(closure_data) = def.loc_expr.value {
-                        register_noncapturing_closure(
-                            env,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            closure_data,
-                        );
+                        register_noncapturing_closure(env, procs, *symbol, closure_data);
 
                         continue;
                     }
@@ -3751,10 +3692,11 @@ pub fn with_hole<'a>(
         When {
             cond_var,
             expr_var,
-            region,
+            region: _,
             loc_cond,
             branches,
             branches_cond_var: _,
+            exhaustive,
         } => {
             let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
 
@@ -3764,9 +3706,9 @@ pub fn with_hole<'a>(
                 env,
                 cond_var,
                 expr_var,
-                region,
                 cond_symbol,
                 branches,
+                exhaustive,
                 layout_cache,
                 procs,
                 Some(id),
@@ -5176,7 +5118,7 @@ fn tag_union_to_function<'a>(
 
         let loc_expr = Loc::at_zero(roc_can::expr::Expr::Var(arg_symbol));
 
-        loc_pattern_args.push((arg_var, loc_pattern));
+        loc_pattern_args.push((arg_var, AnnotatedMark::known_exhaustive(), loc_pattern));
         loc_expr_args.push((arg_var, loc_expr));
     }
 
@@ -5278,7 +5220,6 @@ fn sorted_field_symbols<'a>(
 fn register_noncapturing_closure<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
     closure_name: Symbol,
     closure_data: ClosureData,
 ) {
@@ -5306,7 +5247,6 @@ fn register_noncapturing_closure<'a>(
 
     let partial_proc = PartialProc::from_named_function(
         env,
-        layout_cache,
         function_type,
         arguments,
         loc_body,
@@ -5390,7 +5330,6 @@ fn register_capturing_closure<'a>(
 
         let partial_proc = PartialProc::from_named_function(
             env,
-            layout_cache,
             function_type,
             arguments,
             loc_body,
@@ -5442,10 +5381,11 @@ pub fn from_can<'a>(
         When {
             cond_var,
             expr_var,
-            region,
+            region: _,
             loc_cond,
             branches,
             branches_cond_var: _,
+            exhaustive,
         } => {
             let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
 
@@ -5453,9 +5393,9 @@ pub fn from_can<'a>(
                 env,
                 cond_var,
                 expr_var,
-                region,
                 cond_symbol,
                 branches,
+                exhaustive,
                 layout_cache,
                 procs,
                 None,
@@ -5581,7 +5521,6 @@ pub fn from_can<'a>(
                         register_noncapturing_closure(
                             env,
                             procs,
-                            layout_cache,
                             *symbol,
                             accessor_data.to_closure_data(fresh_record_symbol),
                         );
@@ -5763,25 +5702,6 @@ pub fn from_can<'a>(
                     hole,
                 )
             } else {
-                let context = roc_exhaustive::Context::BadDestruct;
-                match crate::exhaustive::check(
-                    def.loc_pattern.region,
-                    &[(
-                        Loc::at(def.loc_pattern.region, mono_pattern.clone()),
-                        roc_exhaustive::Guard::NoGuard,
-                    )],
-                    context,
-                ) {
-                    Ok(_) => {}
-                    Err(errors) => {
-                        for error in errors {
-                            env.problems.push(MonoProblem::PatternProblem(error))
-                        }
-
-                        return Stmt::RuntimeError("TODO non-exhaustive pattern");
-                    }
-                }
-
                 // convert the continuation
                 let mut stmt = from_can(env, variable, cont.value, procs, layout_cache);
 
@@ -5822,8 +5742,8 @@ pub fn from_can<'a>(
 
 fn to_opt_branches<'a>(
     env: &mut Env<'a, '_>,
-    region: Region,
     branches: std::vec::Vec<roc_can::expr::WhenBranch>,
+    exhaustive_mark: ExhaustiveMark,
     layout_cache: &mut LayoutCache<'a>,
 ) -> std::vec::Vec<(
     Pattern<'a>,
@@ -5841,6 +5761,11 @@ fn to_opt_branches<'a>(
         } else {
             Guard::NoGuard
         };
+
+        if when_branch.redundant.is_redundant(env.subs) {
+            // Don't codegen this branch since it's redundant.
+            continue;
+        }
 
         for loc_pattern in when_branch.patterns {
             match from_can_pattern(env, layout_cache, &loc_pattern.value) {
@@ -5891,45 +5816,14 @@ fn to_opt_branches<'a>(
         }
     }
 
-    // NOTE exhaustiveness is checked after the construction of all the branches
-    // In contrast to elm (currently), we still do codegen even if a pattern is non-exhaustive.
-    // So we not only report exhaustiveness errors, but also correct them
-    let context = roc_exhaustive::Context::BadCase;
-    match crate::exhaustive::check(region, &loc_branches, context) {
-        Ok(_) => {}
-        Err(errors) => {
-            use roc_exhaustive::Error::*;
-            let mut is_not_exhaustive = false;
-            let mut overlapping_branches = std::vec::Vec::new();
-
-            for error in errors {
-                match &error {
-                    Incomplete(_, _, _) => {
-                        is_not_exhaustive = true;
-                    }
-                    Redundant { index, .. } => {
-                        overlapping_branches.push(index.to_zero_based());
-                    }
-                }
-                env.problems.push(MonoProblem::PatternProblem(error))
-            }
-
-            overlapping_branches.sort_unstable();
-
-            for i in overlapping_branches.into_iter().rev() {
-                opt_branches.remove(i);
-            }
-
-            if is_not_exhaustive {
-                opt_branches.push((
-                    Pattern::Underscore,
-                    None,
-                    roc_can::expr::Expr::RuntimeError(
-                        roc_problem::can::RuntimeError::NonExhaustivePattern,
-                    ),
-                ));
-            }
-        }
+    if exhaustive_mark.is_non_exhaustive(env.subs) {
+        // In contrast to elm (currently), we still do codegen even if a pattern is non-exhaustive.
+        // So we not only report exhaustiveness errors, but also correct them
+        opt_branches.push((
+            Pattern::Underscore,
+            None,
+            roc_can::expr::Expr::RuntimeError(roc_problem::can::RuntimeError::NonExhaustivePattern),
+        ));
     }
 
     opt_branches
@@ -5940,9 +5834,9 @@ fn from_can_when<'a>(
     env: &mut Env<'a, '_>,
     cond_var: Variable,
     expr_var: Variable,
-    region: Region,
     cond_symbol: Symbol,
     branches: std::vec::Vec<roc_can::expr::WhenBranch>,
+    exhaustive_mark: ExhaustiveMark,
     layout_cache: &mut LayoutCache<'a>,
     procs: &mut Procs<'a>,
     join_point: Option<JoinPointId>,
@@ -5952,7 +5846,7 @@ fn from_can_when<'a>(
         // We can't know what to return!
         return Stmt::RuntimeError("Hit a 0-branch when expression");
     }
-    let opt_branches = to_opt_branches(env, region, branches, layout_cache);
+    let opt_branches = to_opt_branches(env, branches, exhaustive_mark, layout_cache);
 
     let cond_layout =
         return_on_layout_error!(env, layout_cache.from_var(env.arena, cond_var, env.subs));
