@@ -53,7 +53,7 @@ impl Scope {
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
         use ContainsIdent::*;
 
-        match self.scope_contains_ident(ident) {
+        match self.scope_contains_ident(ident.as_str()) {
             InScope(symbol, _) => Ok(symbol),
             NotInScope(_) | NotPresent => {
                 let error = RuntimeError::LookupNotInScope(
@@ -85,7 +85,8 @@ impl Scope {
         lookup_region: Region,
     ) -> Result<(Symbol, &Alias), RuntimeError> {
         debug_assert!(opaque_ref.starts_with('@'));
-        let opaque = opaque_ref[1..].into();
+        let opaque_str = &opaque_ref[1..];
+        let opaque = opaque_str.into();
 
         match self.locals.has_in_scope(&opaque) {
             Some((symbol, _)) => match self.lookup_opaque_alias(symbol) {
@@ -96,7 +97,7 @@ impl Scope {
             },
             None => {
                 // opaque types can only be wrapped/unwrapped in the scope they are defined in (and below)
-                let error = if let Some((_, decl_region)) = self.has_imported(&opaque) {
+                let error = if let Some((_, decl_region)) = self.has_imported(opaque_str) {
                     // specific error for when the opaque is imported, which definitely does not work
                     RuntimeError::OpaqueOutsideScope {
                         opaque,
@@ -159,9 +160,9 @@ impl Scope {
         }
     }
 
-    fn has_imported(&self, ident: &Ident) -> Option<(Symbol, Region)> {
+    fn has_imported(&self, ident: &str) -> Option<(Symbol, Region)> {
         for (import, shadow, original_region) in self.imports.iter() {
-            if ident == import {
+            if ident == import.as_str() {
                 return Some((*shadow, *original_region));
             }
         }
@@ -170,7 +171,7 @@ impl Scope {
     }
 
     /// Is an identifier in scope, either in the locals or imports
-    fn scope_contains_ident(&self, ident: &Ident) -> ContainsIdent {
+    fn scope_contains_ident(&self, ident: &str) -> ContainsIdent {
         // exposed imports are likely to be small
         match self.has_imported(ident) {
             Some((symbol, region)) => ContainsIdent::InScope(symbol, region),
@@ -178,11 +179,7 @@ impl Scope {
         }
     }
 
-    fn introduce_help(
-        &mut self,
-        ident: &Ident,
-        region: Region,
-    ) -> Result<Symbol, (Symbol, Region)> {
+    fn introduce_help(&mut self, ident: &str, region: Region) -> Result<Symbol, (Symbol, Region)> {
         match self.scope_contains_ident(ident) {
             ContainsIdent::InScope(original_symbol, original_region) => {
                 // the ident is already in scope; up to the caller how to handle that
@@ -229,10 +226,22 @@ impl Scope {
         ident: Ident,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
-        match self.introduce_without_shadow_symbol(&ident, region) {
+        self.introduce_str(ident.as_str(), region)
+    }
+
+    pub fn introduce_str(
+        &mut self,
+        ident: &str,
+        region: Region,
+    ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
+        match self.introduce_help(ident, region) {
             Ok(symbol) => Ok(symbol),
-            Err((original_region, shadow)) => {
-                let symbol = self.scopeless_symbol(&ident, region);
+            Err((_, original_region)) => {
+                let shadow = Loc {
+                    value: Ident::from(ident),
+                    region,
+                };
+                let symbol = self.locals.scopeless_symbol(ident, region);
 
                 Err((original_region, shadow, symbol))
             }
@@ -245,7 +254,7 @@ impl Scope {
         ident: &Ident,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>)> {
-        match self.introduce_help(ident, region) {
+        match self.introduce_help(ident.as_str(), region) {
             Err((_, original_region)) => {
                 let shadow = Loc {
                     value: ident.clone(),
@@ -271,7 +280,7 @@ impl Scope {
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
         let ident = &ident;
 
-        match self.introduce_help(ident, region) {
+        match self.introduce_help(ident.as_str(), region) {
             Err((original_symbol, original_region)) => {
                 let shadow_symbol = self.scopeless_symbol(ident, region);
 
@@ -300,7 +309,7 @@ impl Scope {
     /// but also in other places where we need to create a symbol and we don't have the right
     /// scope information yet. An identifier can be introduced later, and will use the same IdentId
     pub fn scopeless_symbol(&mut self, ident: &Ident, region: Region) -> Symbol {
-        self.locals.scopeless_symbol(ident, region)
+        self.locals.scopeless_symbol(ident.as_str(), region)
     }
 
     /// Import a Symbol from another module into this module's top-level scope.
@@ -313,7 +322,7 @@ impl Scope {
         symbol: Symbol,
         region: Region,
     ) -> Result<(), (Symbol, Region)> {
-        if let Some((s, r)) = self.has_imported(&ident) {
+        if let Some((s, r)) = self.has_imported(ident.as_str()) {
             return Err((s, r));
         }
 
@@ -463,13 +472,13 @@ impl ScopedIdentIds {
     }
 
     fn has_in_scope(&self, ident: &Ident) -> Option<(Symbol, Region)> {
-        match self.contains_ident(ident) {
+        match self.contains_ident(ident.as_str()) {
             ContainsIdent::InScope(symbol, region) => Some((symbol, region)),
             ContainsIdent::NotInScope(_) | ContainsIdent::NotPresent => None,
         }
     }
 
-    fn contains_ident(&self, ident: &Ident) -> ContainsIdent {
+    fn contains_ident(&self, ident: &str) -> ContainsIdent {
         use ContainsIdent::*;
 
         let mut result = NotPresent;
@@ -499,8 +508,8 @@ impl ScopedIdentIds {
             })
     }
 
-    fn introduce_into_scope(&mut self, ident_name: &Ident, region: Region) -> IdentId {
-        let id = self.ident_ids.add_ident(ident_name);
+    fn introduce_into_scope(&mut self, ident_name: &str, region: Region) -> IdentId {
+        let id = self.ident_ids.add_str(ident_name);
 
         debug_assert_eq!(id.index(), self.in_scope.len());
         debug_assert_eq!(id.index(), self.regions.len());
@@ -524,8 +533,8 @@ impl ScopedIdentIds {
     }
 
     /// Adds an IdentId, but does not introduce it to the scope
-    fn scopeless_symbol(&mut self, ident_name: &Ident, region: Region) -> Symbol {
-        let id = self.ident_ids.add_ident(ident_name);
+    fn scopeless_symbol(&mut self, ident_name: &str, region: Region) -> Symbol {
+        let id = self.ident_ids.add_str(ident_name);
 
         debug_assert_eq!(id.index(), self.in_scope.len());
         debug_assert_eq!(id.index(), self.regions.len());

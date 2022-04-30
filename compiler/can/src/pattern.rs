@@ -288,7 +288,7 @@ pub fn canonicalize_pattern<'a>(
     use PatternType::*;
 
     let can_pattern = match pattern {
-        Identifier(name) => match scope.introduce((*name).into(), region) {
+        Identifier(name) => match scope.introduce_str(name, region) {
             Ok(symbol) => {
                 output.references.insert_bound(symbol);
 

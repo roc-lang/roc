@@ -543,7 +543,11 @@ impl IdentIds {
     }
 
     pub fn add_ident(&mut self, ident_name: &Ident) -> IdentId {
-        IdentId(self.interner.insert(ident_name.as_str()) as u32)
+        self.add_str(ident_name.as_str())
+    }
+
+    pub fn add_str(&mut self, ident_name: &str) -> IdentId {
+        IdentId(self.interner.insert(ident_name) as u32)
     }
 
     pub fn duplicate_ident(&mut self, ident_id: IdentId) -> IdentId {
@@ -553,7 +557,7 @@ impl IdentIds {
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
         match self.get_id(name) {
             Some(id) => id,
-            None => self.add_ident(name),
+            None => self.add_str(name.as_str()),
         }
     }
 
@@ -585,9 +589,9 @@ impl IdentIds {
     }
 
     #[inline(always)]
-    pub fn get_id_many<'a>(&'a self, ident_name: &'a Ident) -> impl Iterator<Item = IdentId> + 'a {
+    pub fn get_id_many<'a>(&'a self, ident_name: &'a str) -> impl Iterator<Item = IdentId> + 'a {
         self.interner
-            .find_indices(ident_name.as_str())
+            .find_indices(ident_name)
             .map(|i| IdentId(i as u32))
     }
 

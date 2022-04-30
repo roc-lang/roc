@@ -8,15 +8,4 @@ app "helloWorld"
     imports []
     provides [ main ] to pf
 
-a = 
-    foobar = "Hello"
-
-    foobar
-
-b = 
-    foobar = "World"
-
-    foobar
-
-# main = "Hello, World!\n"
-main = Str.concat a b 
+main = "Hello, World!\n"

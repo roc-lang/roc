@@ -4,7 +4,6 @@ use std::fmt::Write;
 use code_builder::Align;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_module::ident::Ident;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
@@ -183,7 +182,7 @@ impl<'a> WasmBackend<'a> {
             .get_mut(&self.env.module_id)
             .unwrap();
 
-        let ident_id = ident_ids.add_ident(&Ident::from(debug_name));
+        let ident_id = ident_ids.add_str(debug_name);
         Symbol::new(self.env.module_id, ident_id)
     }
 

@@ -25,7 +25,7 @@ impl Length {
     #[inline(always)]
     const fn kind(self) -> Kind {
         if self.0 == 0 {
-            Kind::Emtpy
+            Kind::Empty
         } else if self.0 > 0 {
             Kind::Interned(self.0 as usize)
         } else {
@@ -41,7 +41,7 @@ impl Length {
 
 enum Kind {
     Generated(usize),
-    Emtpy,
+    Empty,
     Interned(usize),
 }
 
@@ -49,7 +49,7 @@ impl Debug for Kind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Generated(arg0) => write!(f, "Generated({})", arg0),
-            Self::Emtpy => write!(f, "Emtpy"),
+            Self::Empty => write!(f, "Emtpy"),
             Self::Interned(arg0) => write!(f, "Interned({})", arg0),
         }
     }
@@ -174,7 +174,7 @@ impl SmallStringInterner {
             .enumerate()
             .filter_map(move |(index, length)| match length.kind() {
                 Kind::Generated(_) => None,
-                Kind::Emtpy => {
+                Kind::Empty => {
                     if target_length == 0 {
                         Some(index)
                     } else {
@@ -198,7 +198,7 @@ impl SmallStringInterner {
 
     fn get(&self, index: usize) -> &str {
         match self.lengths[index].kind() {
-            Kind::Emtpy => "",
+            Kind::Empty => "",
             Kind::Generated(length) | Kind::Interned(length) => {
                 let offset = self.offsets[index] as usize;
 
