@@ -44,12 +44,7 @@ fn main() {
 
     generate_bc_file(&bitcode_path, "ir-i386", "builtins-i386");
 
-    generate_bc_file(
-        &bitcode_path,
-        &build_script_dir_path,
-        "ir-x86_64",
-        "builtins-x86_64",
-    );
+    generate_bc_file(&bitcode_path, "ir-x86_64", "builtins-x86_64");
 
     // OBJECT FILES
     #[cfg(windows)]
