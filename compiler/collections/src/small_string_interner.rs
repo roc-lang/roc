@@ -49,7 +49,7 @@ impl Debug for Kind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Generated(arg0) => write!(f, "Generated({})", arg0),
-            Self::Empty => write!(f, "Emtpy"),
+            Self::Empty => write!(f, "Empty"),
             Self::Interned(arg0) => write!(f, "Interned({})", arg0),
         }
     }
