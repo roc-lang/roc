@@ -531,7 +531,7 @@ impl IdentId {
 /// Stores a mapping between Ident and IdentId.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
-    interner: SmallStringInterner,
+    pub interner: SmallStringInterner,
 }
 
 impl IdentIds {
@@ -759,11 +759,13 @@ macro_rules! define_builtins {
                             }
                         };
 
-                        let interner = SmallStringInterner::from_parts (
+                        // Safety: all lengths are non-negative and smaller than 2^15
+                        let interner = unsafe {
+                            SmallStringInterner::from_parts (
                             BUFFER.as_bytes().to_vec(),
                             LENGTHS.to_vec(),
                             OFFSETS.to_vec(),
-                        );
+                        )};
 
                         IdentIds{ interner }
                     };
