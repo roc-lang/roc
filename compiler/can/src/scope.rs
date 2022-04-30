@@ -76,10 +76,6 @@ impl Scope {
         it2.chain(it1)
     }
 
-    pub fn lookup_alias(&self, symbol: Symbol) -> Option<&Alias> {
-        self.aliases.get(&symbol)
-    }
-
     /// Check if there is an opaque type alias referenced by `opaque_ref` referenced in the
     /// current scope. E.g. `@Age` must reference an opaque `Age` declared in this module, not any
     /// other!
@@ -92,38 +88,52 @@ impl Scope {
         let opaque = opaque_ref[1..].into();
 
         match self.locals.has_in_scope(&opaque) {
-            Some((symbol, _)) => {
-                match self.aliases.get(&symbol) {
-                    None => Err(self.opaque_not_defined_error(opaque, lookup_region, None)),
-
-                    Some(alias) => match alias.kind {
-                        // The reference is to a proper alias like `Age : U32`, not an opaque type!
-                        AliasKind::Structural => Err(self.opaque_not_defined_error(
-                            opaque,
-                            lookup_region,
-                            Some(alias.header_region()),
-                        )),
-                        // All is good
-                        AliasKind::Opaque => Ok((symbol, alias)),
-                    },
+            Some((symbol, _)) => match self.lookup_opaque_alias(symbol) {
+                Ok(alias) => Ok((symbol, alias)),
+                Err(opt_alias_def_region) => {
+                    Err(self.opaque_not_defined_error(opaque, lookup_region, opt_alias_def_region))
                 }
-            }
+            },
             None => {
-                for (import, _, decl_region) in self.imports.iter() {
-                    if &opaque == import {
-                        // The reference is to an opaque type declared in another module - this is
-                        // illegal, as opaque types can only be wrapped/unwrapped in the scope they're
-                        // declared.
-                        return Err(RuntimeError::OpaqueOutsideScope {
-                            opaque,
-                            referenced_region: lookup_region,
-                            imported_region: *decl_region,
-                        });
+                // opaque types can only be wrapped/unwrapped in the scope they are defined in (and below)
+                let error = if let Some((_, decl_region)) = self.has_imported(&opaque) {
+                    // specific error for when the opaque is imported, which definitely does not work
+                    RuntimeError::OpaqueOutsideScope {
+                        opaque,
+                        referenced_region: lookup_region,
+                        imported_region: decl_region,
                     }
-                }
+                } else {
+                    self.opaque_not_defined_error(opaque, lookup_region, None)
+                };
 
-                Err(self.opaque_not_defined_error(opaque, lookup_region, None))
+                Err(error)
             }
+        }
+    }
+
+    fn lookup_opaque_alias(&self, symbol: Symbol) -> Result<&Alias, Option<Region>> {
+        match self.aliases.get(&symbol) {
+            None => Err(None),
+
+            Some(alias) => match alias.kind {
+                AliasKind::Opaque => Ok(alias),
+                AliasKind::Structural => Err(Some(alias.header_region())),
+            },
+        }
+    }
+
+    fn is_opaque(&self, ident_id: IdentId, string: &str) -> Option<Box<str>> {
+        if string.is_empty() {
+            return None;
+        }
+
+        let symbol = Symbol::new(self.home, ident_id);
+
+        if let Some(AliasKind::Opaque) = self.aliases.get(&symbol).map(|alias| alias.kind) {
+            Some(string.into())
+        } else {
+            None
         }
     }
 
@@ -133,25 +143,13 @@ impl Scope {
         lookup_region: Region,
         opt_defined_alias: Option<Region>,
     ) -> RuntimeError {
+        // for opaques, we only look at the locals because opaques can only be matched
+        // on in the module that defines them.
         let opaques_in_scope = self
             .locals
             .ident_ids
             .ident_strs()
-            .filter_map(|(ident_id, string)| {
-                if string.is_empty() {
-                    None
-                } else {
-                    Some((string, Symbol::new(self.home, ident_id)))
-                }
-            })
-            .filter(|(_, sym)| {
-                self.aliases
-                    .get(sym)
-                    .map(|alias| alias.kind)
-                    .unwrap_or(AliasKind::Structural)
-                    == AliasKind::Opaque
-            })
-            .map(|(v, _)| v.into())
+            .filter_map(|(ident_id, string)| self.is_opaque(ident_id, string))
             .collect();
 
         RuntimeError::OpaqueNotDefined {
@@ -184,6 +182,43 @@ impl Scope {
                 Some((symbol, region)) => ContainsIdent::InScope(symbol, region),
                 None => ContainsIdent::NotPresent,
             },
+        }
+    }
+
+    fn introduce_help(
+        &mut self,
+        ident: &Ident,
+        region: Region,
+    ) -> Result<Symbol, (Symbol, Region)> {
+        match self.scope_contains_ident(ident) {
+            ContainsIdent::InScope(original_symbol, original_region) => {
+                // the ident is already in scope; up to the caller how to handle that
+                // (usually it's shadowing, but it is valid to shadow ability members)
+                Err((original_symbol, original_region))
+            }
+            ContainsIdent::NotPresent => {
+                // We know nothing about this ident yet; introduce it to the scope
+                let ident_id = self.locals.introduce_into_scope(ident, region);
+                Ok(Symbol::new(self.home, ident_id))
+            }
+            ContainsIdent::NotInScope(existing) => {
+                // The ident is not in scope, but its name is already in the string interner
+                if existing.index() < self.exposed_ident_count {
+                    // if the identifier is exposed, use the IdentId we already have for it
+                    // other modules depend on the symbol having that IdentId
+                    let symbol = Symbol::new(self.home, existing);
+
+                    self.locals.in_scope.set(existing.index(), true);
+                    self.locals.regions[existing.index()] = region;
+
+                    Ok(symbol)
+                } else {
+                    // create a new IdentId that under the hood uses the same string bytes as an existing one
+                    let ident_id = self.locals.introduce_into_scope_duplicate(existing, region);
+
+                    Ok(Symbol::new(self.home, ident_id))
+                }
+            }
         }
     }
 
@@ -226,38 +261,6 @@ impl Scope {
                 Err((original_region, shadow))
             }
             Ok(symbol) => Ok(symbol),
-        }
-    }
-
-    fn introduce_help(
-        &mut self,
-        ident: &Ident,
-        region: Region,
-    ) -> Result<Symbol, (Symbol, Region)> {
-        match self.scope_contains_ident(ident) {
-            ContainsIdent::InScope(original_symbol, original_region) => {
-                Err((original_symbol, original_region))
-            }
-            ContainsIdent::NotPresent => {
-                let ident_id = self.locals.introduce_into_scope(ident, region);
-                Ok(Symbol::new(self.home, ident_id))
-            }
-            ContainsIdent::NotInScope(existing) => {
-                if existing.index() < self.exposed_ident_count {
-                    // if the identifier is exposed, use the IdentId we already have for it
-                    // other modules depend on the symbol having that IdentId
-                    let symbol = Symbol::new(self.home, existing);
-
-                    self.locals.in_scope.set(existing.index(), true);
-                    self.locals.regions[existing.index()] = region;
-
-                    Ok(symbol)
-                } else {
-                    let ident_id = self.locals.introduce_into_scope_duplicate(existing, region);
-
-                    Ok(Symbol::new(self.home, ident_id))
-                }
-            }
         }
     }
 
@@ -317,10 +320,8 @@ impl Scope {
         symbol: Symbol,
         region: Region,
     ) -> Result<(), (Symbol, Region)> {
-        for t in self.imports.iter() {
-            if t.0 == ident {
-                return Err((t.1, t.2));
-            }
+        if let Some((s, r)) = self.has_imported(&ident) {
+            return Err((s, r));
         }
 
         self.imports.push((ident, symbol, region));
@@ -338,6 +339,10 @@ impl Scope {
     ) {
         let alias = create_alias(name, region, vars, typ, kind);
         self.aliases.insert(name, alias);
+    }
+
+    pub fn lookup_alias(&self, symbol: Symbol) -> Option<&Alias> {
+        self.aliases.get(&symbol)
     }
 
     pub fn contains_alias(&mut self, name: Symbol) -> bool {
@@ -465,14 +470,10 @@ impl ScopedIdentIds {
     }
 
     fn has_in_scope(&self, ident: &Ident) -> Option<(Symbol, Region)> {
-        for ident_id in self.ident_ids.get_id_many(ident) {
-            let index = ident_id.index();
-            if self.in_scope[index] {
-                return Some((Symbol::new(self.home, ident_id), self.regions[index]));
-            }
+        match self.contains_ident(ident) {
+            ContainsIdent::InScope(symbol, region) => Some((symbol, region)),
+            ContainsIdent::NotInScope(_) | ContainsIdent::NotPresent => None,
         }
-
-        None
     }
 
     fn contains_ident(&self, ident: &Ident) -> ContainsIdent {
