@@ -120,13 +120,15 @@ impl RecordField<Type> {
         }
     }
 
-    pub fn instantiate_aliases(
+    pub fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         introduced: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         use RecordField::*;
 
         match self {
@@ -168,13 +170,15 @@ impl LambdaSet {
         &mut self.0
     }
 
-    fn instantiate_aliases(
+    fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         introduced: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         self.0
             .instantiate_aliases(region, aliases, var_store, introduced)
     }
@@ -1064,13 +1068,28 @@ impl Type {
         result
     }
 
-    pub fn instantiate_aliases(
+    pub fn shallow_structural_dealias(&self) -> &Self {
+        let mut result = self;
+        while let Type::Alias {
+            actual,
+            kind: AliasKind::Structural,
+            ..
+        } = result
+        {
+            result = actual;
+        }
+        result
+    }
+
+    pub fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         new_lambda_set_variables: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         use Type::*;
 
         match self {
@@ -1138,7 +1157,7 @@ impl Type {
                 );
             }
             Apply(symbol, args, _) => {
-                if let Some(alias) = aliases.get(symbol) {
+                if let Some(alias) = aliases(*symbol) {
                     // TODO switch to this, but we still need to check for recursion with the
                     // `else` branch
                     if false {
@@ -1670,6 +1689,7 @@ pub enum PReason {
     },
     WhenMatch {
         index: HumanIndex,
+        sub_pattern: HumanIndex,
     },
     TagArg {
         tag_name: TagName,
@@ -1711,6 +1731,10 @@ pub enum Reason {
         name: Option<Symbol>,
         arg_index: HumanIndex,
     },
+    TypedArg {
+        name: Option<Symbol>,
+        arg_index: HumanIndex,
+    },
     FnCall {
         name: Option<Symbol>,
         arity: u8,
@@ -1727,6 +1751,7 @@ pub enum Reason {
     IntLiteral,
     NumLiteral,
     StrInterpolation,
+    WhenBranches,
     WhenBranch {
         index: HumanIndex,
     },
@@ -1794,6 +1819,9 @@ pub enum Category {
     DefaultValue(Lowercase), // for setting optional fields
 
     AbilityMemberSpecialization(Symbol),
+
+    Expect,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1990,7 +2018,7 @@ fn write_error_type_help(
             if write_parens {
                 buf.push('(');
             }
-            buf.push_str(symbol.ident_str(interns).as_str());
+            buf.push_str(symbol.as_str(interns));
 
             for arg in arguments {
                 buf.push(' ');
@@ -2328,26 +2356,33 @@ fn write_type_ext(ext: TypeExt, buf: &mut String) {
 
 static THE_LETTER_A: u32 = 'a' as u32;
 
-pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lowercase, u32) {
+pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
+    letters_used: u32,
+    taken: &mut impl Iterator<Item = I>,
+    mut predicate: F,
+) -> (Lowercase, u32) {
     // TODO we should arena-allocate this String,
     // so all the strings in the entire pass only require ~1 allocation.
-    let mut generated_name = String::with_capacity((letters_used as usize) / 26 + 1);
+    let mut buf = String::with_capacity((letters_used as usize) / 26 + 1);
 
-    let mut remaining = letters_used as i32;
-    while remaining >= 0 {
-        generated_name.push(std::char::from_u32(THE_LETTER_A + ((remaining as u32) % 26)).unwrap());
-        remaining -= 26;
-    }
+    let is_taken = {
+        let mut remaining = letters_used as i32;
 
-    let generated_name = generated_name.into();
+        while remaining >= 0 {
+            buf.push(std::char::from_u32(THE_LETTER_A + ((remaining as u32) % 26)).unwrap());
+            remaining -= 26;
+        }
 
-    if taken.contains(&generated_name) {
+        let generated_name: &str = buf.as_str();
+
+        taken.any(|item| predicate(&item, generated_name))
+    };
+
+    if is_taken {
         // If the generated name is already taken, try again.
-        name_type_var(letters_used + 1, taken)
+        name_type_var(letters_used + 1, taken, predicate)
     } else {
-        taken.insert(generated_name.clone());
-
-        (generated_name, letters_used + 1)
+        (buf.into(), letters_used + 1)
     }
 }
 
@@ -2477,7 +2512,10 @@ pub fn gather_tags_unsorted_iter(
             // TODO investigate this likely can happen when there is a type error
             RigidVar(_) => break,
 
-            other => unreachable!("something weird ended up in a tag union type: {:?}", other),
+            other => unreachable!(
+                "something weird ended up in a tag union type: {:?} at {:?}",
+                other, var
+            ),
         }
     }
 

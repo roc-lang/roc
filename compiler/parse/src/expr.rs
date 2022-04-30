@@ -196,6 +196,7 @@ fn parse_loc_term_or_underscore<'a>(
 ) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(min_indent),
+        loc!(specialize(EExpr::If, if_expr_help(min_indent, options))),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
@@ -603,7 +604,7 @@ fn append_body_definition<'a>(
                 //   UserId x = UserId 42
                 // We optimistically parsed the first line as an alias; we now turn it
                 // into an annotation.
-                let loc_name = arena.alloc(header.name.map(|x| Pattern::GlobalTag(x)));
+                let loc_name = arena.alloc(header.name.map(|x| Pattern::Tag(x)));
                 let ann_pattern = Pattern::Apply(loc_name, header.vars);
                 let vars_region = Region::across_all(header.vars.iter().map(|v| &v.region));
                 let region_ann_pattern = Region::span_across(&loc_name.region, &vars_region);
@@ -697,7 +698,7 @@ fn append_annotation_definition<'a>(
     match &loc_pattern.value {
         Pattern::Apply(
             Loc {
-                value: Pattern::GlobalTag(name),
+                value: Pattern::Tag(name),
                 ..
             },
             alias_arguments,
@@ -711,7 +712,7 @@ fn append_annotation_definition<'a>(
             loc_ann,
             kind,
         ),
-        Pattern::GlobalTag(name) => append_type_definition(
+        Pattern::Tag(name) => append_type_definition(
             arena,
             defs,
             region,
@@ -872,12 +873,12 @@ fn parse_defs_end<'a>(
             {
                 Pattern::Apply(
                     Loc {
-                        value: Pattern::GlobalTag(name),
+                        value: Pattern::Tag(name),
                         region,
                     },
                     args,
                 ) => Some((name, *region, args)),
-                Pattern::GlobalTag(name) => Some((name, loc_pattern.region, &[])),
+                Pattern::Tag(name) => Some((name, loc_pattern.region, &[])),
                 _ => None,
             };
 
@@ -1019,7 +1020,7 @@ fn finish_parsing_alias_or_opaque<'a>(
         .map_err(|fail| (MadeProgress, fail, state.clone()))?;
 
     let (loc_def, state) = match &expr.value {
-        Expr::GlobalTag(name) => {
+        Expr::Tag(name) => {
             let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
 
             for argument in arguments {
@@ -1509,8 +1510,8 @@ fn parse_expr_operator<'a>(
                     }
                 }
             }
-            Err((NoProgress, _, _)) => {
-                todo!()
+            Err((NoProgress, expr, e)) => {
+                todo!("{:?} {:?}", expr, e)
             }
         },
     }
@@ -1542,11 +1543,11 @@ fn parse_expr_end<'a>(
                 ..
             },
             state,
-        )) if matches!(expr_state.expr.value, Expr::GlobalTag(..)) => {
+        )) if matches!(expr_state.expr.value, Expr::Tag(..)) => {
             // This is an ability definition, `Ability arg1 ... has ...`.
 
             let name = expr_state.expr.map_owned(|e| match e {
-                Expr::GlobalTag(name) => name,
+                Expr::Tag(name) => name,
                 _ => unreachable!(),
             });
 
@@ -1762,8 +1763,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             }
         }
         Expr::Underscore(opt_name) => Ok(Pattern::Underscore(opt_name)),
-        Expr::GlobalTag(value) => Ok(Pattern::GlobalTag(value)),
-        Expr::PrivateTag(value) => Ok(Pattern::PrivateTag(value)),
+        Expr::Tag(value) => Ok(Pattern::Tag(value)),
         Expr::OpaqueRef(value) => Ok(Pattern::OpaqueRef(value)),
         Expr::Apply(loc_val, loc_args, _) => {
             let region = loc_val.region;
@@ -2436,8 +2436,7 @@ where
 
 fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
     match src {
-        Ident::GlobalTag(string) => Expr::GlobalTag(string),
-        Ident::PrivateTag(string) => Expr::PrivateTag(string),
+        Ident::Tag(string) => Expr::Tag(string),
         Ident::OpaqueRef(string) => Expr::OpaqueRef(string),
         Ident::Access { module_name, parts } => {
             let mut iter = parts.iter();
@@ -2762,7 +2761,6 @@ where
         "&&" => good!(BinOp::And, 2),
         "||" => good!(BinOp::Or, 2),
         "//" => good!(BinOp::DoubleSlash, 2),
-        "%%" => good!(BinOp::DoublePercent, 2),
         "->" => {
             // makes no progress, so it does not interfere with `_ if isGood -> ...`
             Err((NoProgress, to_error("->", state.pos()), state))

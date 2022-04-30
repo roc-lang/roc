@@ -37,7 +37,7 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 either = "1.6.1"
 libc = "0.2.106"
 inkwell = { path = "../../vendor/inkwell" }
-target-lexicon = "0.12.2"
+target-lexicon = "0.12.3"
 libloading = "0.7.1"
 wasmer-wasi = "2.0.0"
 tempfile = "3.2.0"

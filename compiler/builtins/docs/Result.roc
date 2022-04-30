@@ -13,7 +13,7 @@ interface Result
 
 ## The result of an operation that could fail: either the operation went
 ## okay, or else there was an error of some sort.
-Result ok err : [ @Result ok err ]
+Result ok err : [ Ok ok, Err err ]
 
 ## Return True if the result indicates a success, else return False
 ##

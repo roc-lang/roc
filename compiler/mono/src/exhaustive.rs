@@ -1,7 +1,7 @@
 use crate::ir::DestructType;
 use roc_collections::all::HumanIndex;
 use roc_exhaustive::{
-    is_useful, Context, Ctor, Error, Guard, Literal, Pattern, RenderAs, TagId, Union,
+    is_useful, Context, Ctor, CtorName, Error, Guard, Literal, Pattern, RenderAs, TagId, Union,
 };
 use roc_module::ident::{TagIdIntType, TagName};
 use roc_region::all::{Loc, Region};
@@ -45,7 +45,7 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
             let union = Union {
                 render_as: RenderAs::Record(field_names),
                 alternatives: vec![Ctor {
-                    name: TagName::Global("#Record".into()),
+                    name: CtorName::Tag(TagName::Tag("#Record".into())),
                     tag_id,
                     arity: destructures.len(),
                 }],
@@ -62,7 +62,7 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
             let simplified_args: std::vec::Vec<_> =
                 arguments.iter().map(|v| simplify(&v.0)).collect();
             Ctor(
-                Union::newtype_wrapper(tag_name.clone(), arguments.len()),
+                Union::newtype_wrapper(CtorName::Tag(tag_name.clone()), arguments.len()),
                 TagId(tag_id),
                 simplified_args,
             )
@@ -87,7 +87,7 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
             let union = Union {
                 render_as: RenderAs::Opaque,
                 alternatives: vec![Ctor {
-                    name: TagName::Private(*opaque),
+                    name: CtorName::Opaque(*opaque),
                     tag_id,
                     arity: 1,
                 }],
@@ -113,7 +113,7 @@ pub fn check(
     }
 }
 
-pub fn check_patterns<'a>(
+fn check_patterns<'a>(
     region: Region,
     context: Context,
     patterns: &[(Loc<crate::ir::Pattern<'a>>, Guard)],
@@ -169,7 +169,7 @@ fn to_nonredundant_rows(
                 render_as: RenderAs::Guard,
                 alternatives: vec![Ctor {
                     tag_id,
-                    name: TagName::Global("#Guard".into()),
+                    name: CtorName::Tag(TagName::Tag("#Guard".into())),
                     arity: 2,
                 }],
             };

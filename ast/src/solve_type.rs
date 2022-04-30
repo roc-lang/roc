@@ -3,6 +3,7 @@
 use bumpalo::Bump;
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{BumpMap, BumpMapDefault, MutMap};
+use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -75,7 +76,7 @@ use crate::mem_pool::shallow_clone::ShallowClone;
 // Ranks are used to limit the number of type variables considered for generalization. Only those inside
 // of the let (so those used in inferring the type of `\x -> x`) are considered.
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
@@ -868,7 +869,7 @@ fn type_to_variable<'a>(
             register(subs, rank, pools, content)
         }
 
-        Alias(symbol, args, alias_type_id) => {
+        Alias(symbol, args, alias_type_id) | Opaque(symbol, args, alias_type_id) => {
             // TODO cache in uniqueness inference gives problems! all Int's get the same uniqueness var!
             // Cache aliases without type arguments. Commonly used aliases like `Int` would otherwise get O(n)
             // different variables (once for each occurrence). The recursion restriction is required
@@ -910,8 +911,12 @@ fn type_to_variable<'a>(
 
             let alias_var = type_to_variable(arena, mempool, subs, rank, pools, cached, alias_type);
 
-            // TODO(opaques): take opaques into account
-            let content = Content::Alias(*symbol, arg_vars, alias_var, AliasKind::Structural);
+            let kind = match typ {
+                Alias(..) => AliasKind::Structural,
+                Opaque(..) => AliasKind::Opaque,
+                _ => internal_error!(),
+            };
+            let content = Content::Alias(*symbol, arg_vars, alias_var, kind);
 
             let result = register(subs, rank, pools, content);
 

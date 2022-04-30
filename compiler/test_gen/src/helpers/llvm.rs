@@ -83,15 +83,12 @@ fn create_llvm_module<'a>(
     let mut delayed_errors = Vec::new();
 
     for (home, (module_path, src)) in loaded.sources {
-        use roc_reporting::report::{
-            can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
-        };
+        use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
 
         let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
         let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();
-        let mono_problems = loaded.mono_problems.remove(&home).unwrap_or_default();
 
-        let error_count = can_problems.len() + type_problems.len() + mono_problems.len();
+        let error_count = can_problems.len() + type_problems.len();
 
         if error_count == 0 {
             continue;
@@ -106,8 +103,8 @@ fn create_llvm_module<'a>(
 
         use roc_problem::can::Problem::*;
         for problem in can_problems.into_iter() {
-            // Ignore "unused" problems
             match problem {
+                // Ignore "unused" problems
                 UnusedDef(_, _)
                 | UnusedArgument(_, _, _)
                 | UnusedImport(_, _)
@@ -122,6 +119,8 @@ fn create_llvm_module<'a>(
                     delayed_errors.push(buf.clone());
                     lines.push(buf);
                 }
+                // We should be able to compile even when abilities are used as types
+                AbilityUsedAsType(..) => {}
                 _ => {
                     let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
                     let mut buf = String::new();
@@ -141,16 +140,6 @@ fn create_llvm_module<'a>(
 
                 lines.push(buf);
             }
-        }
-
-        for problem in mono_problems {
-            let report = mono_problem(&alloc, &line_info, module_path.clone(), problem);
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            delayed_errors.push(buf.clone());
-            lines.push(buf);
         }
     }
 

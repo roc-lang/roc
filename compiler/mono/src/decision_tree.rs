@@ -4,7 +4,7 @@ use crate::ir::{
 use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_exhaustive::{Ctor, RenderAs, TagId, Union};
+use roc_exhaustive::{Ctor, CtorName, RenderAs, TagId, Union};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
@@ -82,7 +82,7 @@ enum GuardedTest<'a> {
 enum Test<'a> {
     IsCtor {
         tag_id: TagIdIntType,
-        tag_name: TagName,
+        ctor_name: CtorName,
         union: roc_exhaustive::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
@@ -512,7 +512,7 @@ fn test_at_path<'a>(
                         render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
                             tag_id: TagId(0),
-                            name: TagName::Global(RECORD_TAG_NAME.into()),
+                            name: CtorName::Tag(TagName::Tag(RECORD_TAG_NAME.into())),
                             arity: destructs.len(),
                         }],
                     };
@@ -532,7 +532,7 @@ fn test_at_path<'a>(
 
                     IsCtor {
                         tag_id: 0,
-                        tag_name: TagName::Global(RECORD_TAG_NAME.into()),
+                        ctor_name: CtorName::Tag(TagName::Tag(RECORD_TAG_NAME.into())),
                         union,
                         arguments,
                     }
@@ -543,11 +543,12 @@ fn test_at_path<'a>(
                     arguments,
                 } => {
                     let tag_id = 0;
-                    let union = Union::newtype_wrapper(tag_name.clone(), arguments.len());
+                    let union =
+                        Union::newtype_wrapper(CtorName::Tag(tag_name.clone()), arguments.len());
 
                     IsCtor {
                         tag_id,
-                        tag_name: tag_name.clone(),
+                        ctor_name: CtorName::Tag(tag_name.clone()),
                         union,
                         arguments: arguments.to_vec(),
                     }
@@ -561,7 +562,7 @@ fn test_at_path<'a>(
                     ..
                 } => IsCtor {
                     tag_id: *tag_id,
-                    tag_name: tag_name.clone(),
+                    ctor_name: CtorName::Tag(tag_name.clone()),
                     union: union.clone(),
                     arguments: arguments.to_vec(),
                 },
@@ -571,14 +572,14 @@ fn test_at_path<'a>(
                         render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
                             tag_id: TagId(0),
-                            name: TagName::Private(*opaque),
+                            name: CtorName::Opaque(*opaque),
                             arity: 1,
                         }],
                     };
 
                     IsCtor {
                         tag_id: 0,
-                        tag_name: TagName::Private(*opaque),
+                        ctor_name: CtorName::Opaque(*opaque),
                         union,
                         arguments: vec![(**argument).clone()],
                     }
@@ -680,11 +681,11 @@ fn to_relevant_branch_help<'a>(
 
         RecordDestructure(destructs, _) => match test {
             IsCtor {
-                tag_name: test_name,
+                ctor_name: test_name,
                 tag_id,
                 ..
             } => {
-                debug_assert!(test_name == &TagName::Global(RECORD_TAG_NAME.into()));
+                debug_assert!(test_name == &CtorName::Tag(TagName::Tag(RECORD_TAG_NAME.into())));
                 let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
                     let pattern = match destruct.typ {
                         DestructType::Guard(guard) => guard.clone(),
@@ -713,11 +714,11 @@ fn to_relevant_branch_help<'a>(
 
         OpaqueUnwrap { opaque, argument } => match test {
             IsCtor {
-                tag_name: test_opaque_tag_name,
+                ctor_name: test_opaque_tag_name,
                 tag_id,
                 ..
             } => {
-                debug_assert_eq!(test_opaque_tag_name, &TagName::Private(opaque));
+                debug_assert_eq!(test_opaque_tag_name, &CtorName::Opaque(opaque));
 
                 let (argument, _) = *argument;
 
@@ -744,10 +745,10 @@ fn to_relevant_branch_help<'a>(
             ..
         } => match test {
             IsCtor {
-                tag_name: test_name,
+                ctor_name: test_name,
                 tag_id: test_id,
                 ..
-            } if &tag_name == test_name => {
+            } if test_name.is_tag(&tag_name) => {
                 let tag_id = 0;
                 debug_assert_eq!(tag_id, *test_id);
 
@@ -785,10 +786,10 @@ fn to_relevant_branch_help<'a>(
         } => {
             match test {
                 IsCtor {
-                    tag_name: test_name,
+                    ctor_name: test_name,
                     tag_id: test_id,
                     ..
-                } if &tag_name == test_name => {
+                } if test_name.is_tag(&tag_name) => {
                     debug_assert_eq!(tag_id, *test_id);
 
                     // the test matches the constructor of this pattern

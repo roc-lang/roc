@@ -23,12 +23,12 @@ makeMapHelp = \freq, n, m, acc ->
 
         _ ->
             powerOf10 =
-                (n % 10 |> resultWithDefault 0) == 0
+                n % 10 == 0
 
             m1 = insert m n powerOf10
 
             isFrequency =
-                (n % freq |> resultWithDefault 0) == 0
+                n % freq == 0
 
             x = (if isFrequency then Cons m1 acc else acc)
 
@@ -42,15 +42,6 @@ fold = \f, tree, b ->
 
         Node _ l k v r ->
             fold f r (f k v (fold f l b))
-
-resultWithDefault : Result a e, a -> a
-resultWithDefault = \res, default ->
-    when res is
-        Ok v ->
-            v
-
-        Err _ ->
-            default
 
 main : Task.Task {} []
 main =

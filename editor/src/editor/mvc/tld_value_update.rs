@@ -1,5 +1,6 @@
 use roc_ast::lang::core::{def::def2::Def2, expr::expr2::Expr2};
 use roc_code_markup::slow_pool::MarkNodeId;
+use roc_module::ident::Ident;
 
 use crate::{
     editor::ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},
@@ -26,13 +27,8 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let val_expr_node = Expr2::Blank;
     let val_expr_id = ed_model.module.env.pool.add(val_expr_node);
 
-    let val_name_string = new_char.to_string();
-
-    let ident_id = ed_model
-        .module
-        .env
-        .ident_ids
-        .add(val_name_string.clone().into());
+    let ident = Ident::from(new_char.to_string().as_str());
+    let ident_id = ed_model.module.env.ident_ids.add_ident(&ident);
 
     let module_ident_ids_opt = ed_model
         .loaded_module
@@ -42,7 +38,7 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
 
     if let Some(module_ident_ids_ref) = module_ident_ids_opt {
         // this might create different IdentId for interns and env.ident_ids which may be a problem
-        module_ident_ids_ref.add(val_name_string.into());
+        module_ident_ids_ref.add_ident(&ident);
     } else {
         KeyNotFound {
             key_str: format!("{:?}", ed_model.module.env.home),

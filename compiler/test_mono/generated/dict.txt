@@ -1,13 +1,13 @@
-procedure Dict.2 ():
-    let Test.4 : Dict [] [] = lowlevel DictEmpty ;
-    ret Test.4;
+procedure Dict.1 ():
+    let Dict.28 : Dict [] [] = lowlevel DictEmpty ;
+    ret Dict.28;
 
-procedure Dict.8 (#Attr.2):
-    let Test.3 : U64 = lowlevel DictSize #Attr.2;
+procedure Dict.7 (#Attr.2):
+    let Dict.27 : U64 = lowlevel DictSize #Attr.2;
     dec #Attr.2;
-    ret Test.3;
+    ret Dict.27;
 
 procedure Test.0 ():
-    let Test.2 : Dict [] [] = CallByName Dict.2;
-    let Test.1 : U64 = CallByName Dict.8 Test.2;
+    let Test.2 : Dict [] [] = CallByName Dict.1;
+    let Test.1 : U64 = CallByName Dict.7 Test.2;
     ret Test.1;

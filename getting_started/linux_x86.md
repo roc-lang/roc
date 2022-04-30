@@ -24,9 +24,9 @@
     # Rust. If you installed rust in this terminal you'll need to open a new one first!
     ./roc examples/hello-world/rust-platform/helloRust.roc
     # Zig
-    ./roc examples/hello-world/zig-platform/helloZig.roc
+    ./roc examples/hello-world/zig-platform/helloZig.roc --linker=legacy
     # C
-    ./roc examples/hello-world/c-platform/helloC.roc
+    ./roc examples/hello-world/c-platform/helloC.roc --linker=legacy
     ```
 0. See [here](../README.md#examples) for the other examples.
 

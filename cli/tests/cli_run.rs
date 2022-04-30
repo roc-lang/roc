@@ -63,13 +63,19 @@ mod cli_run {
             .replace(ANSI_STYLE_CODES.bold, "")
             .replace(ANSI_STYLE_CODES.underline, "")
             .replace(ANSI_STYLE_CODES.reset, "")
+            .replace(ANSI_STYLE_CODES.color_reset, "")
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
         let compile_out = run_roc(&[&["check", file.to_str().unwrap()], flags].concat());
         let err = compile_out.stdout.trim();
         let err = strip_colors(err);
-        assert_multiline_str_eq!(err, expected.into());
+
+        // e.g. "1 error and 0 warnings found in 123 ms."
+        let (before_first_digit, _) = err.split_at(err.rfind("found in ").unwrap());
+        let err = format!("{}found in <ignored for test> ms.", before_first_digit);
+
+        assert_multiline_str_eq!(err.as_str(), expected.into());
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
@@ -180,8 +186,8 @@ mod cli_run {
         };
         if !&out.stdout.ends_with(expected_ending) {
             panic!(
-                "expected output to end with {:?} but instead got {:#?}",
-                expected_ending, out.stdout
+                "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
+                expected_ending, out.stdout, out.stderr
             );
         }
         assert!(out.status.success());
@@ -255,8 +261,8 @@ mod cli_run {
                                 return;
                             }
                         }
-                        "hello-gui" => {
-                            // Since this one requires opening a window, we do `roc build` on it but don't run it.
+                        "hello-gui" | "breakout" => {
+                            // Since these require opening a window, we do `roc build` on them but don't run them.
                             build_example(&file_name, &["--optimize"]);
 
                             return;
@@ -388,6 +394,14 @@ mod cli_run {
         gui:"gui" => Example {
             filename: "Hello.roc",
             executable_filename: "hello-gui",
+            stdin: &[],
+            input_file: None,
+            expected_ending: "",
+            use_valgrind: false,
+        },
+        breakout:"breakout" => Example {
+            filename: "breakout.roc",
+            executable_filename: "breakout",
             stdin: &[],
             input_file: None,
             expected_ending: "",
@@ -849,7 +863,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
 
                 I cannot find a `d` value
 
@@ -863,7 +877,9 @@ mod cli_run {
                     I8
                     F64
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }
@@ -875,14 +891,16 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── MISSING DEFINITION ──────────────────────────────────────────────────────────
+                ── MISSING DEFINITION ────────────────── tests/known_bad/ExposedNotDefined.roc ─
 
                 bar is listed as exposed, but it isn't defined in this module.
 
                 You can fix this by adding a definition for bar, or by removing it
                 from exposes.
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }
@@ -894,7 +912,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNUSED IMPORT ───────────────────────────────────────────────────────────────
+                ── UNUSED IMPORT ──────────────────────────── tests/known_bad/UnusedImport.roc ─
 
                 Nothing from Symbol is used in this module.
 
@@ -903,7 +921,9 @@ mod cli_run {
 
                 Since Symbol isn't used, you don't need to import it.
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                0 errors and 1 warning found in <ignored for test> ms."#
             ),
         );
     }
@@ -915,7 +935,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNKNOWN GENERATES FUNCTION ──────────────────────────────────────────────────
+                ── UNKNOWN GENERATES FUNCTION ─────── tests/known_bad/UnknownGeneratesWith.roc ─
 
                 I don't know how to generate the foobar function.
 
@@ -925,7 +945,9 @@ mod cli_run {
                 Only specific functions like `after` and `map` can be generated.Learn
                 more about hosted modules at TODO.
 
-                ────────────────────────────────────────────────────────────────────────────────"#
+                ────────────────────────────────────────────────────────────────────────────────
+
+                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }

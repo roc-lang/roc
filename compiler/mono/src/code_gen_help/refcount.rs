@@ -107,7 +107,9 @@ pub fn refcount_generic<'a>(
 
     match layout {
         Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
-            unreachable!("Not refcounted: {:?}", layout)
+            // Generate a dummy function that immediately returns Unit
+            // Some higher-order Zig builtins *always* call an RC function on List elements.
+            rc_return_stmt(root, ident_ids, ctx)
         }
         Layout::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx),
         Layout::Builtin(Builtin::List(elem_layout)) => {

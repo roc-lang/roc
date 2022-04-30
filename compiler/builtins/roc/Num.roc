@@ -44,8 +44,6 @@ interface Num
             Binary32,
             Binary64,
 
-            maxFloat,
-            minFloat,
             abs,
             neg,
             add,
@@ -68,12 +66,13 @@ interface Num
             isPositive,
             isNegative,
             rem,
+            remChecked,
             div,
             divChecked,
-            modInt,
-            modFloat,
             sqrt,
+            sqrtChecked,
             log,
+            logChecked,
             round,
             ceiling,
             floor,
@@ -99,8 +98,8 @@ interface Num
             bytesToU32,
             divCeil,
             divCeilChecked,
-            divFloor,
-            divFloorChecked,
+            divTrunc,
+            divTruncChecked,
             toStr,
             isMultipleOf,
             minI8,
@@ -123,6 +122,10 @@ interface Num
             maxI128,
             minU128,
             maxU128,
+            minF32,
+            maxF32,
+            minF64,
+            maxF64,
             toI8,
             toI8Checked,
             toI16,
@@ -143,28 +146,37 @@ interface Num
             toU64Checked,
             toU128,
             toU128Checked,
+            toNat,
+            toNatChecked,
+            toF32,
+            toF32Checked,
+            toF64,
+            toF64Checked,
         ]
-    imports [ ]
+    imports
+        [
+            Bool.{ Bool }
+        ]
 
-Num range : [ @Num range ]
+Num range := range
 Int range : Num (Integer range)
 Float range : Num (FloatingPoint range)
 
-Signed128 : [ @Signed128 ]
-Signed64 : [ @Signed64 ]
-Signed32 : [ @Signed32 ]
-Signed16 : [ @Signed16 ]
-Signed8 : [ @Signed8 ]
+Signed128 := []
+Signed64 := []
+Signed32 := []
+Signed16 := []
+Signed8 := []
 
-Unsigned128 : [ @Unsigned128 ]
-Unsigned64 : [ @Unsigned64 ]
-Unsigned32 : [ @Unsigned32 ]
-Unsigned16 : [ @Unsigned16 ]
-Unsigned8 : [ @Unsigned8 ]
+Unsigned128 := []
+Unsigned64 := []
+Unsigned32 := []
+Unsigned16 := []
+Unsigned8 := []
 
-Natural : [ @Natural ]
+Natural := []
 
-Integer range : [ @Integer range ]
+Integer range := range
 
 I128 : Num (Integer Signed128)
 I64 : Num (Integer Signed64)
@@ -180,11 +192,11 @@ U8 : Num (Integer Unsigned8)
 
 Nat : Num (Integer Natural)
 
-Decimal : [ @Decimal ]
-Binary64 : [ @Binary64 ]
-Binary32 : [ @Binary32 ]
+Decimal := []
+Binary64 := []
+Binary32 := []
 
-FloatingPoint range : [ @FloatingPoint range ]
+FloatingPoint range := range
 
 F64 : Num (FloatingPoint Binary64)
 F32 : Num (FloatingPoint Binary32)
@@ -230,19 +242,22 @@ asin : Float a -> Float a
 acos : Float a -> Float a
 atan : Float a -> Float a
 
-sqrt : Float a -> Result (Float a) [ SqrtOfNegative ]*
-log : Float a -> Result (Float a) [ LogNeedsPositive ]*
+sqrt : Float a -> Float a
+sqrtChecked : Float a -> Result (Float a) [ SqrtOfNegative ]*
+log : Float a -> Float a
+logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
+
 div : Float a, Float a -> Float a
 divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
-
 divCeil : Int a, Int a -> Int a
 divCeilChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
-divFloor : Int a, Int a -> Int a
-divFloorChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
-# mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
-rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
-# mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
+divTrunc : Int a, Int a -> Int a
+divTruncChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+
+rem : Int a, Int a -> Int a
+remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+
 isMultipleOf : Int a, Int a -> Bool
 
 bitwiseAnd : Int a, Int a -> Int a
@@ -331,6 +346,18 @@ minU128 = 0
 maxU128 : U128
 maxU128 = 0340282366920938463463374607431768211455
 
+minF32 : F32
+minF32 = -3.40282347e38
+
+maxF32 : F32
+maxF32 = 3.40282347e38
+
+minF64 : F64
+minF64 = -1.7976931348623157e308
+
+maxF64 : F64
+maxF64 = 1.7976931348623157e308
+
 toI8 : Int * -> I8
 toI16 : Int * -> I16
 toI32 : Int * -> I32
@@ -341,6 +368,7 @@ toU16 : Int * -> U16
 toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
+toNat : Int * -> Nat
 
 toF32 : Num * -> F32
 toF64 : Num * -> F64
@@ -355,5 +383,6 @@ toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
 toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
 toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
 toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
+toNatChecked : Int * -> Result Nat [ OutOfBounds ]*
 toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
 toF64Checked : Num * -> Result F64 [ OutOfBounds ]*

@@ -20,11 +20,10 @@ loopHelp = \{ remaining, string } ->
         c = Num.intCast z
         combined = Num.bitwiseOr (Num.bitwiseOr (Num.shiftLeftBy 16 a) (Num.shiftLeftBy 8 b)) c
 
-        Loop
-            {
-                remaining: remaining - 3,
-                string: Str.concat string (bitsToChars combined 0),
-            }
+        Loop {
+            remaining: remaining - 3,
+            string: Str.concat string (bitsToChars combined 0),
+        }
     else if remaining == 0 then
         Bytes.Decode.succeed (Done string)
     else if remaining == 2 then

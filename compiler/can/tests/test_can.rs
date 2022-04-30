@@ -20,11 +20,32 @@ mod test_can {
     use roc_region::all::{Position, Region};
     use std::{f64, i64};
 
-    fn assert_can(input: &str, expected: Expr) {
+    fn assert_can_runtime_error(input: &str, expected: RuntimeError) {
         let arena = Bump::new();
         let actual_out = can_expr_with(&arena, test_home(), input);
 
-        assert_eq!(actual_out.loc_expr.value, expected);
+        match actual_out.loc_expr.value {
+            Expr::RuntimeError(actual) => {
+                assert_eq!(expected, actual);
+            }
+            actual => {
+                panic!("Expected a Float, but got: {:?}", actual);
+            }
+        }
+    }
+
+    fn assert_can_string(input: &str, expected: &str) {
+        let arena = Bump::new();
+        let actual_out = can_expr_with(&arena, test_home(), input);
+
+        match actual_out.loc_expr.value {
+            Expr::Str(actual) => {
+                assert_eq!(expected, &*actual);
+            }
+            actual => {
+                panic!("Expected a Float, but got: {:?}", actual);
+            }
+        }
     }
 
     fn assert_can_float(input: &str, expected: f64) {
@@ -50,7 +71,7 @@ mod test_can {
                 assert_eq!(IntValue::I128(expected), actual);
             }
             actual => {
-                panic!("Expected an Int *, but got: {:?}", actual);
+                panic!("Expected an Num.Int *, but got: {:?}", actual);
             }
         }
     }
@@ -69,10 +90,6 @@ mod test_can {
         }
     }
 
-    fn expr_str(contents: &str) -> Expr {
-        Expr::Str(contents.into())
-    }
-
     // NUMBER LITERALS
 
     #[test]
@@ -81,14 +98,14 @@ mod test_can {
 
         let string = "340_282_366_920_938_463_463_374_607_431_768_211_456".to_string();
 
-        assert_can(
+        assert_can_runtime_error(
             &string.clone(),
-            RuntimeError(RuntimeError::InvalidInt(
+            RuntimeError::InvalidInt(
                 IntErrorKind::Overflow,
                 Base::Decimal,
                 Region::zero(),
                 string.into_boxed_str(),
-            )),
+            ),
         );
     }
 
@@ -98,14 +115,14 @@ mod test_can {
 
         let string = "-170_141_183_460_469_231_731_687_303_715_884_105_729".to_string();
 
-        assert_can(
+        assert_can_runtime_error(
             &string.clone(),
-            RuntimeError(RuntimeError::InvalidInt(
+            RuntimeError::InvalidInt(
                 IntErrorKind::Underflow,
                 Base::Decimal,
                 Region::zero(),
                 string.into(),
-            )),
+            ),
         );
     }
 
@@ -114,13 +131,9 @@ mod test_can {
         let string = format!("{}1.0", f64::MAX);
         let region = Region::zero();
 
-        assert_can(
+        assert_can_runtime_error(
             &string.clone(),
-            RuntimeError(RuntimeError::InvalidFloat(
-                FloatErrorKind::PositiveInfinity,
-                region,
-                string.into(),
-            )),
+            RuntimeError::InvalidFloat(FloatErrorKind::PositiveInfinity, region, string.into()),
         );
     }
 
@@ -129,13 +142,9 @@ mod test_can {
         let string = format!("{}1.0", f64::MIN);
         let region = Region::zero();
 
-        assert_can(
+        assert_can_runtime_error(
             &string.clone(),
-            RuntimeError(RuntimeError::InvalidFloat(
-                FloatErrorKind::NegativeInfinity,
-                region,
-                string.into(),
-            )),
+            RuntimeError::InvalidFloat(FloatErrorKind::NegativeInfinity, region, string.into()),
         );
     }
 
@@ -144,13 +153,9 @@ mod test_can {
         let string = "1.1.1";
         let region = Region::zero();
 
-        assert_can(
+        assert_can_runtime_error(
             string.clone(),
-            RuntimeError(RuntimeError::InvalidFloat(
-                FloatErrorKind::Error,
-                region,
-                string.into(),
-            )),
+            RuntimeError::InvalidFloat(FloatErrorKind::Error, region, string.into()),
         );
     }
 
@@ -274,7 +279,7 @@ mod test_can {
     fn correct_annotated_body() {
         let src = indoc!(
             r#"
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
                 f = \ a -> a
 
                 f
@@ -290,7 +295,7 @@ mod test_can {
     fn correct_annotated_body_with_comments() {
         let src = indoc!(
             r#"
-                f : Int * -> Int * # comment
+                f : Num.Int * -> Num.Int * # comment
                 f = \ a -> a
 
                 f
@@ -306,7 +311,7 @@ mod test_can {
     fn name_mismatch_annotated_body() {
         let src = indoc!(
             r#"
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
                 g = \ a -> a
 
                 g
@@ -332,7 +337,7 @@ mod test_can {
     fn name_mismatch_annotated_body_with_comment() {
         let src = indoc!(
             r#"
-                f : Int * -> Int * # comment
+                f : Num.Int * -> Num.Int * # comment
                 g = \ a -> a
 
                 g
@@ -358,7 +363,7 @@ mod test_can {
     fn separated_annotated_body() {
         let src = indoc!(
             r#"
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
 
                 f = \ a -> a
 
@@ -368,11 +373,9 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
+        assert_eq!(problems.len(), 1);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            // Due to one of the shadows
-            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -381,7 +384,7 @@ mod test_can {
     fn separated_annotated_body_with_comment() {
         let src = indoc!(
             r#"
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
                 # comment
                 f = \ a -> a
 
@@ -391,11 +394,9 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
+        assert_eq!(problems.len(), 1);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            // Due to one of the shadows
-            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -404,9 +405,9 @@ mod test_can {
     fn shadowed_annotation() {
         let src = indoc!(
             r#"
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
 
-                f : Int * -> Int *
+                f : Num.Int * -> Num.Int *
 
                 f
             "#
@@ -414,12 +415,10 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
+        assert_eq!(problems.len(), 1);
         println!("{:#?}", problems);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            // Due to one of the shadows
-            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -428,7 +427,7 @@ mod test_can {
     fn correct_nested_unannotated_body() {
         let src = indoc!(
             r#"
-                f : Int *
+                f : Num.Int *
                 f =
                     g = 42
 
@@ -447,9 +446,9 @@ mod test_can {
     fn correct_nested_annotated_body() {
         let src = indoc!(
             r#"
-                f : Int *
+                f : Num.Int *
                 f =
-                    g : Int *
+                    g : Num.Int *
                     g = 42
 
                     g + 1
@@ -467,11 +466,11 @@ mod test_can {
     fn correct_nested_body_annotated_multiple_lines() {
         let src = indoc!(
             r#"
-                f : Int *
+                f : Num.Int *
                 f =
-                    g : Int *
+                    g : Num.Int *
                     g = 42
-                    h : Int *
+                    h : Num.Int *
                     h = 5
                     z = 4
                     g + h + z
@@ -489,10 +488,10 @@ mod test_can {
     fn correct_nested_body_unannotated_multiple_lines() {
         let src = indoc!(
             r#"
-                f : Int *
+                f : Num.Int *
                 f =
                     g = 42
-                    h : Int *
+                    h : Num.Int *
                     h = 5
                     z = 4
                     g + h + z
@@ -509,7 +508,7 @@ mod test_can {
     fn correct_double_nested_body() {
         let src = indoc!(
             r#"
-                f : Int *
+                f : Num.Int *
                 f =
                     g =
                         h = 42
@@ -1582,27 +1581,27 @@ mod test_can {
 
     #[test]
     fn string_with_valid_unicode_escapes() {
-        assert_can(r#""x\u(00A0)x""#, expr_str("x\u{00A0}x"));
-        assert_can(r#""x\u(101010)x""#, expr_str("x\u{101010}x"));
+        assert_can_string(r#""x\u(00A0)x""#, "x\u{00A0}x");
+        assert_can_string(r#""x\u(101010)x""#, "x\u{101010}x");
     }
 
     #[test]
     fn block_string() {
-        assert_can(
+        assert_can_string(
             r#"
             """foobar"""
             "#,
-            expr_str("foobar"),
+            "foobar",
         );
 
-        assert_can(
+        assert_can_string(
             indoc!(
                 r#"
             """foo
             bar"""
             "#
             ),
-            expr_str("foo\nbar"),
+            "foo\nbar",
         );
     }
 

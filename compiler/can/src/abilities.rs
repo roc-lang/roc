@@ -16,6 +16,7 @@ pub struct MemberVariables {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbilityMemberData {
     pub parent_ability: Symbol,
+    pub signature_var: Variable,
     pub signature: Type,
     pub variables: MemberVariables,
     pub region: Region,
@@ -60,15 +61,16 @@ impl AbilitiesStore {
     pub fn register_ability(
         &mut self,
         ability: Symbol,
-        members: Vec<(Symbol, Region, Type, MemberVariables)>,
+        members: Vec<(Symbol, Region, Variable, Type, MemberVariables)>,
     ) {
         let mut members_vec = Vec::with_capacity(members.len());
-        for (member, region, signature, variables) in members.into_iter() {
+        for (member, region, signature_var, signature, variables) in members.into_iter() {
             members_vec.push(member);
             let old_member = self.ability_members.insert(
                 member,
                 AbilityMemberData {
                     parent_ability: ability,
+                    signature_var,
                     signature,
                     region,
                     variables,
@@ -81,6 +83,10 @@ impl AbilitiesStore {
             old_ability.is_none(),
             "Replacing existing ability definition"
         );
+    }
+
+    pub fn is_ability(&self, ability: Symbol) -> bool {
+        self.members_of_ability.contains_key(&ability)
     }
 
     /// Records a specialization of `ability_member` with specialized type `implementing_type`.

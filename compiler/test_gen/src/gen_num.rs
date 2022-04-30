@@ -19,7 +19,7 @@ fn nat_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                    i : Nat
+                    i : Num.Nat
                     i = 1
 
                     i
@@ -473,7 +473,7 @@ fn f64_sqrt() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.sqrt 100 is
+                    when Num.sqrtChecked 100 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -489,9 +489,7 @@ fn f64_log() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log 7.38905609893 is
-                        Ok val -> val
-                        Err _ -> -1
+                    Num.log 7.38905609893
                 "#
         ),
         1.999999999999912,
@@ -501,11 +499,11 @@ fn f64_log() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn f64_log_one() {
+fn f64_log_checked_one() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log 1 is
+                    when Num.logChecked 1 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -521,7 +519,7 @@ fn f64_sqrt_zero() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.sqrt 0 is
+                    when Num.sqrtChecked 0 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -533,11 +531,11 @@ fn f64_sqrt_zero() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn f64_sqrt_negative() {
+fn f64_sqrt_checked_negative() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.sqrt -1 is
+                    when Num.sqrtChecked -1 is
                         Err _ -> 42
                         Ok val -> val
                 "#
@@ -549,11 +547,11 @@ fn f64_sqrt_negative() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn f64_log_zero() {
+fn f64_log_checked_zero() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log 0 is
+                    when Num.logChecked 0 is
                         Err _ -> 42
                         Ok val -> val
                 "#
@@ -569,13 +567,12 @@ fn f64_log_negative() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.log -1 is
-                        Err _ -> 42
-                        Ok val -> val
+                    Num.log -1
                 "#
         ),
-        42.0,
-        f64
+        true,
+        f64,
+        |f: f64| f.is_nan()
     );
 }
 
@@ -1050,7 +1047,7 @@ fn gen_div_checked_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.divFloorChecked 1000 10 is
+                    when Num.divTruncChecked 1000 10 is
                         Ok val -> val
                         Err _ -> -1
                 "#
@@ -1066,7 +1063,7 @@ fn gen_div_checked_by_zero_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.divFloorChecked 1000 0 is
+                    when Num.divTruncChecked 1000 0 is
                         Err DivByZero -> 99
                         _ -> -24
                 "#
@@ -1082,9 +1079,7 @@ fn gen_rem_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.rem 8 3 is
-                        Ok val -> val
-                        Err _ -> -1
+                    Num.rem 8 3
                 "#
         ),
         2,
@@ -1094,11 +1089,11 @@ fn gen_rem_i64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn gen_rem_div_by_zero_i64() {
+fn gen_rem_checked_div_by_zero_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.rem 8 0 is
+                    when Num.remChecked 8 0 is
                         Err DivByZero -> 4
                         Ok _ -> -23
                 "#

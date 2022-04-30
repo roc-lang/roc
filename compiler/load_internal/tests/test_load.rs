@@ -89,11 +89,11 @@ mod test_load {
         buf
     }
 
-    fn multiple_modules(files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
+    fn multiple_modules(subdir: &str, files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
         let arena = Bump::new();
         let arena = &arena;
 
-        match multiple_modules_help(arena, files) {
+        match multiple_modules_help(subdir, arena, files) {
             Err(io_error) => panic!("IO trouble: {:?}", io_error),
             Ok(Err(LoadingProblem::FormattedReport(buf))) => Err(buf),
             Ok(Err(loading_problem)) => Err(format!("{:?}", loading_problem)),
@@ -112,13 +112,11 @@ mod test_load {
                     ));
                 }
 
-                assert_eq!(
-                    loaded_module
-                        .type_problems
-                        .remove(&home)
-                        .unwrap_or_default(),
-                    Vec::new()
-                );
+                assert!(loaded_module
+                    .type_problems
+                    .remove(&home)
+                    .unwrap_or_default()
+                    .is_empty(),);
 
                 Ok(loaded_module)
             }
@@ -126,18 +124,21 @@ mod test_load {
     }
 
     fn multiple_modules_help<'a>(
+        subdir: &str,
         arena: &'a Bump,
         mut files: Vec<(&str, &str)>,
     ) -> Result<Result<LoadedModule, roc_load_internal::file::LoadingProblem<'a>>, std::io::Error>
     {
         use std::fs::{self, File};
         use std::io::Write;
-        use tempfile::tempdir;
 
         let mut file_handles: Vec<_> = Vec::new();
 
-        // create a temporary directory
-        let dir = tempdir()?;
+        // Use a deterministic temporary directory.
+        // We can't have all tests use "tmp" because tests run in parallel,
+        // so append the test name to the tmp path.
+        let tmp = format!("tmp/{}", subdir);
+        let dir = roc_test_utils::TmpDir::new(&tmp);
 
         let app_module = files.pop().unwrap();
 
@@ -173,8 +174,6 @@ mod test_load {
             )
         };
 
-        dir.close()?;
-
         Ok(result)
     }
 
@@ -208,13 +207,11 @@ mod test_load {
             loaded_module.can_problems.remove(&home).unwrap_or_default(),
             Vec::new()
         );
-        assert_eq!(
-            loaded_module
-                .type_problems
-                .remove(&home)
-                .unwrap_or_default(),
-            Vec::new()
-        );
+        assert!(loaded_module
+            .type_problems
+            .remove(&home)
+            .unwrap_or_default()
+            .is_empty());
 
         let expected_name = loaded_module
             .interns
@@ -261,13 +258,11 @@ mod test_load {
             loaded_module.can_problems.remove(&home).unwrap_or_default(),
             Vec::new()
         );
-        assert_eq!(
-            loaded_module
-                .type_problems
-                .remove(&home)
-                .unwrap_or_default(),
-            Vec::new()
-        );
+        assert!(loaded_module
+            .type_problems
+            .remove(&home)
+            .unwrap_or_default()
+            .is_empty());
 
         for decl in loaded_module.declarations_by_id.remove(&home).unwrap() {
             match decl {
@@ -341,7 +336,7 @@ mod test_load {
             ),
         ];
 
-        assert!(multiple_modules(modules).is_ok());
+        assert!(multiple_modules("import_transitive_alias", modules).is_ok());
     }
 
     #[test]
@@ -365,13 +360,11 @@ mod test_load {
             loaded_module.can_problems.remove(&home).unwrap_or_default(),
             Vec::new()
         );
-        assert_eq!(
-            loaded_module
-                .type_problems
-                .remove(&home)
-                .unwrap_or_default(),
-            Vec::new()
-        );
+        assert!(loaded_module
+            .type_problems
+            .remove(&home)
+            .unwrap_or_default()
+            .is_empty(),);
 
         let def_count: usize = loaded_module
             .declarations_by_id
@@ -584,12 +577,12 @@ mod test_load {
             ),
         )];
 
-        match multiple_modules(modules) {
+        match multiple_modules("parse_problem", modules) {
             Err(report) => assert_eq!(
                 report,
                 indoc!(
                     "
-                    ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
+                    ── UNFINISHED LIST ──────────────────────────────────── tmp/parse_problem/Main ─
 
                     I cannot find the end of this list:
 
@@ -651,10 +644,14 @@ mod test_load {
             ),
         )];
 
-        match multiple_modules(modules) {
+        match multiple_modules("platform_does_not_exist", modules) {
             Err(report) => {
-                assert!(report.contains("FILE NOT FOUND"));
-                assert!(report.contains("zzz-does-not-exist/Package-Config.roc"));
+                assert!(report.contains("FILE NOT FOUND"), "report=({})", report);
+                assert!(
+                    report.contains("zzz-does-not-exist/Package-Config.roc"),
+                    "report=({})",
+                    report
+                );
             }
             Ok(_) => unreachable!("we expect failure here"),
         }
@@ -694,7 +691,7 @@ mod test_load {
             ),
         ];
 
-        match multiple_modules(modules) {
+        match multiple_modules("platform_parse_error", modules) {
             Err(report) => {
                 assert!(report.contains("NOT END OF FILE"));
                 assert!(report.contains("blah 1 2 3 # causing a parse error on purpose"));
@@ -738,7 +735,7 @@ mod test_load {
             ),
         ];
 
-        assert!(multiple_modules(modules).is_ok());
+        assert!(multiple_modules("platform_exposes_main_return_by_pointer_issue", modules).is_ok());
     }
 
     #[test]
@@ -760,24 +757,25 @@ mod test_load {
                     r#"
                     interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
 
-                    twenty = $Age 20
+                    twenty = @Age 20
 
-                    readAge = \$Age n -> n
+                    readAge = \@Age n -> n
                     "#
                 ),
             ),
         ];
 
-        let err = multiple_modules(modules).unwrap_err();
+        let err = multiple_modules("opaque_wrapped_unwrapped_outside_defining_module", modules)
+            .unwrap_err();
         assert_eq!(
             err,
             indoc!(
                 r#"
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ──────────────────────────────────────────
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
 
                 The unwrapped opaque type Age referenced here:
 
-                3│  twenty = $Age 20
+                3│  twenty = @Age 20
                              ^^^^
 
                 is imported from another module:
@@ -787,11 +785,11 @@ mod test_load {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ──────────────────────────────────────────
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
 
                 The unwrapped opaque type Age referenced here:
 
-                5│  readAge = \$Age n -> n
+                5│  readAge = \@Age n -> n
                                ^^^^
 
                 is imported from another module:
@@ -801,7 +799,7 @@ mod test_load {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── UNUSED IMPORT ───────────────────────────────────────────────────────────────
+                ── UNUSED IMPORT ─── tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ─
 
                 Nothing from Age is used in this module.
 
@@ -850,13 +848,13 @@ mod test_load {
             ),
         ];
 
-        match multiple_modules(modules) {
+        match multiple_modules("issue_2863_module_type_does_not_exist", modules) {
             Err(report) => {
                 assert_eq!(
                     report,
                     indoc!(
                         "
-                        ── UNRECOGNIZED NAME ───────────────────────────────────────────────────────────
+                        ── UNRECOGNIZED NAME ────────── tmp/issue_2863_module_type_does_not_exist/Main ─
 
                         I cannot find a `DoesNotExist` value
 
@@ -868,7 +866,7 @@ mod test_load {
                             Dict
                             Result
                             List
-                            Nat
+                            Box
                         "
                     )
                 )

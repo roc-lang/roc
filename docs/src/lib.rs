@@ -6,13 +6,12 @@ use html::mark_node_to_html;
 use roc_can::scope::Scope;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::slow_pool::SlowPool;
-use roc_collections::all::MutMap;
 use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::DocEntry::DocDef;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{LoadedModule, LoadingProblem};
-use roc_module::symbol::{IdentIds, Interns, ModuleId};
+use roc_module::symbol::{IdentIdsByModule, Interns, ModuleId};
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::state::State;
 use roc_region::all::Region;
@@ -71,7 +70,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
                     let exposed_values = loaded_module
                         .exposed_values
                         .iter()
-                        .map(|symbol| symbol.ident_str(&loaded_module.interns).to_string())
+                        .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
                         .collect::<Vec<String>>();
 
                     (exposed_values, d)
@@ -711,7 +710,7 @@ struct DocUrl {
 fn doc_url<'a>(
     home: ModuleId,
     exposed_values: &[&str],
-    dep_idents: &MutMap<ModuleId, IdentIds>,
+    dep_idents: &IdentIdsByModule,
     scope: &Scope,
     interns: &'a Interns,
     mut module_name: &'a str,
@@ -844,8 +843,8 @@ fn markdown_to_html(
                             }
                         }
                     }
-                    Ok((_, Ident::GlobalTag(type_name), _)) => {
-                        // This looks like a global tag name, but it could
+                    Ok((_, Ident::Tag(type_name), _)) => {
+                        // This looks like a tag name, but it could
                         // be a type alias that's in scope, e.g. [I64]
                         let DocUrl { url, title } = doc_url(
                             loaded_module.module_id,

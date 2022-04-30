@@ -253,6 +253,7 @@ pub struct WasmDebugLogSettings {
     helper_procs_ir: bool,
     let_stmt_ir: bool,
     instructions: bool,
+    storage_map: bool,
     pub keep_test_binary: bool,
 }
 
@@ -262,5 +263,6 @@ pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
     helper_procs_ir: false && cfg!(debug_assertions),
     let_stmt_ir: false && cfg!(debug_assertions),
     instructions: false && cfg!(debug_assertions),
+    storage_map: false && cfg!(debug_assertions),
     keep_test_binary: false && cfg!(debug_assertions),
 };

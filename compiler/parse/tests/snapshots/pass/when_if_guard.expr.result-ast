@@ -50,7 +50,7 @@ When(
         WhenBranch {
             patterns: [
                 @54-56 SpaceBefore(
-                    GlobalTag(
+                    Tag(
                         "Ok",
                     ),
                     [

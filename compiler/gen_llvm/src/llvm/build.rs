@@ -30,6 +30,7 @@ use crate::llvm::refcounting::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -40,7 +41,7 @@ use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{
-    BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType, StructType,
+    AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType, StructType,
 };
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
@@ -63,7 +64,7 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
-use roc_target::TargetInfo;
+use roc_target::{PtrWidth, TargetInfo};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 use super::convert::zig_with_overflow_roc_dec;
@@ -469,7 +470,7 @@ fn add_float_intrinsic<'ctx, F>(
             if let Some(_) = module.get_function(full_name) {
                 // zig defined this function already
             } else {
-                add_intrinsic(module, full_name, construct_type($typ));
+                add_intrinsic(ctx, module, full_name, construct_type($typ));
             }
         };
     }
@@ -494,7 +495,7 @@ fn add_int_intrinsic<'ctx, F>(
             if let Some(_) = module.get_function(full_name) {
                 // zig defined this function already
             } else {
-                add_intrinsic(module, full_name, construct_type($typ));
+                add_intrinsic(ctx, module, full_name, construct_type($typ));
             }
         };
     }
@@ -516,12 +517,10 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
-    let f64_type = ctx.f64_type();
     let i1_type = ctx.bool_type();
     let i8_type = ctx.i8_type();
     let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
     let i32_type = ctx.i32_type();
-    let i64_type = ctx.i64_type();
     let void_type = ctx.void_type();
 
     if let Some(func) = module.get_function("__muloti4") {
@@ -529,37 +528,31 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     }
 
     add_intrinsic(
+        ctx,
         module,
         LLVM_SETJMP,
         i32_type.fn_type(&[i8_ptr_type.into()], false),
     );
 
-    if true {
-        add_intrinsic(
-            module,
-            LLVM_LONGJMP,
-            void_type.fn_type(&[i8_ptr_type.into()], false),
-        );
-    } else {
-        add_intrinsic(
-            module,
-            LLVM_LONGJMP,
-            void_type.fn_type(&[i8_ptr_type.into(), i32_type.into()], false),
-        );
-    }
+    add_intrinsic(
+        ctx,
+        module,
+        LLVM_LONGJMP,
+        void_type.fn_type(&[i8_ptr_type.into()], false),
+    );
 
     add_intrinsic(
+        ctx,
         module,
         LLVM_FRAME_ADDRESS,
         i8_ptr_type.fn_type(&[i32_type.into()], false),
     );
 
-    add_intrinsic(module, LLVM_STACK_SAVE, i8_ptr_type.fn_type(&[], false));
-
     add_intrinsic(
+        ctx,
         module,
-        LLVM_LROUND_I64_F64,
-        i64_type.fn_type(&[f64_type.into()], false),
+        LLVM_STACK_SAVE,
+        i8_ptr_type.fn_type(&[], false),
     );
 
     add_float_intrinsic(ctx, module, &LLVM_LOG, |t| t.fn_type(&[t.into()], false));
@@ -613,9 +606,7 @@ static LLVM_FLOOR: IntrinsicName = float_intrinsic!("llvm.floor");
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
-static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
 
-// static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress";
 static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0i8";
 static LLVM_STACK_SAVE: &str = "llvm.stacksave";
 
@@ -633,18 +624,17 @@ const LLVM_ADD_SATURATED: IntrinsicName = llvm_int_intrinsic!("llvm.sadd.sat", "
 const LLVM_SUB_SATURATED: IntrinsicName = llvm_int_intrinsic!("llvm.ssub.sat", "llvm.usub.sat");
 
 fn add_intrinsic<'ctx>(
+    context: &Context,
     module: &Module<'ctx>,
     intrinsic_name: &str,
     fn_type: FunctionType<'ctx>,
 ) -> FunctionValue<'ctx> {
     add_func(
+        context,
         module,
         intrinsic_name,
-        fn_type,
+        FunctionSpec::intrinsic(fn_type),
         Linkage::External,
-        // LLVM intrinsics always use the C calling convention, because
-        // they are implemented in C libraries
-        C_CALL_CONV,
     )
 }
 
@@ -3256,32 +3246,29 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     // let mut argument_types = roc_function.get_type().get_param_types();
     let mut argument_types = cc_argument_types;
 
-    let c_function_type = match roc_function.get_type().get_return_type() {
+    match roc_function.get_type().get_return_type() {
         None => {
             // this function already returns by-pointer
             let output_type = roc_function.get_type().get_param_types().pop().unwrap();
             argument_types.insert(0, output_type);
-
-            env.context
-                .void_type()
-                .fn_type(&function_arguments(env, &argument_types), false)
         }
         Some(return_type) => {
             let output_type = return_type.ptr_type(AddressSpace::Generic);
             argument_types.insert(0, output_type.into());
-
-            env.context
-                .void_type()
-                .fn_type(&function_arguments(env, &argument_types), false)
         }
-    };
+    }
+    // This is not actually a function that returns a value but then became
+    // return-by-pointer do to the calling convention. Instead, here we
+    // explicitly are forcing the passing of values via the first parameter
+    // pointer, since they are generic and hence opaque to anything outside roc.
+    let c_function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);
 
     let c_function = add_func(
+        env.context,
         env.module,
         c_function_name,
-        c_function_type,
+        c_function_spec,
         Linkage::External,
-        C_CALL_CONV,
     );
 
     let subprogram = env.new_subprogram(c_function_name);
@@ -3394,20 +3381,18 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     let mut argument_types = cc_argument_types;
     let return_type = wrapper_return_type;
 
-    let c_function_type = {
+    let c_function_spec = {
         let output_type = return_type.ptr_type(AddressSpace::Generic);
         argument_types.push(output_type.into());
-        env.context
-            .void_type()
-            .fn_type(&function_arguments(env, &argument_types), false)
+        FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types)
     };
 
     let c_function = add_func(
+        env.context,
         env.module,
         c_function_name,
-        c_function_type,
+        c_function_spec,
         Linkage::External,
-        C_CALL_CONV,
     );
 
     let subprogram = env.new_subprogram(c_function_name);
@@ -3472,15 +3457,20 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     builder.build_return(None);
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
-    let size_function_type = env.context.i64_type().fn_type(&[], false);
+    let size_function_spec = FunctionSpec::cconv(
+        env,
+        CCReturn::Return,
+        Some(env.context.i64_type().as_basic_type_enum()),
+        &[],
+    );
     let size_function_name: String = format!("roc__{}_size", ident_string);
 
     let size_function = add_func(
+        env.context,
         env.module,
         size_function_name.as_str(),
-        size_function_type,
+        size_function_spec,
         Linkage::External,
-        C_CALL_CONV,
     );
 
     let subprogram = env.new_subprogram(&size_function_name);
@@ -3512,14 +3502,14 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
     let cc_return = to_cc_return(env, &return_layout);
     let roc_return = RocReturn::from_layout(env, &return_layout);
 
-    let c_function_type = cc_return.to_signature(env, return_type, argument_types.as_slice());
+    let c_function_spec = FunctionSpec::cconv(env, cc_return, Some(return_type), &argument_types);
 
     let c_function = add_func(
+        env.context,
         env.module,
         c_function_name,
-        c_function_type,
+        c_function_spec,
         Linkage::External,
-        C_CALL_CONV,
     );
 
     let subprogram = env.new_subprogram(c_function_name);
@@ -3630,15 +3620,20 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     );
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
-    let size_function_type = env.context.i64_type().fn_type(&[], false);
+    let size_function_spec = FunctionSpec::cconv(
+        env,
+        CCReturn::Return,
+        Some(env.context.i64_type().as_basic_type_enum()),
+        &[],
+    );
     let size_function_name: String = format!("roc__{}_size", ident_string);
 
     let size_function = add_func(
+        env.context,
         env.module,
         size_function_name.as_str(),
-        size_function_type,
+        size_function_spec,
         Linkage::External,
-        C_CALL_CONV,
     );
 
     let subprogram = env.new_subprogram(&size_function_name);
@@ -3664,10 +3659,22 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 }
 
 pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
-    let type_ = env
-        .context
-        .i8_type()
-        .array_type(5 * env.target_info.ptr_width() as u32);
+    // The size of jump_buf is platform-dependent.
+    //   - AArch64 needs 3 machine-sized words
+    //   - LLVM says the following about the SJLJ intrinsic:
+    //
+    //     [It is] a five word buffer in which the calling context is saved.
+    //     The front end places the frame pointer in the first word, and the
+    //     target implementation of this intrinsic should place the destination
+    //     address for a llvm.eh.sjlj.longjmp in the second word.
+    //     The following three words are available for use in a target-specific manner.
+    //
+    // So, let's create a 5-word buffer.
+    let word_type = match env.target_info.ptr_width() {
+        PtrWidth::Bytes4 => env.context.i32_type(),
+        PtrWidth::Bytes8 => env.context.i64_type(),
+    };
+    let type_ = word_type.array_type(5);
 
     let global = match env.module.get_global("roc_sjlj_buffer") {
         Some(global) => global,
@@ -3679,10 +3686,83 @@ pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValu
     env.builder
         .build_bitcast(
             global.as_pointer_value(),
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            env.context.i32_type().ptr_type(AddressSpace::Generic),
             "cast_sjlj_buffer",
         )
         .into_pointer_value()
+}
+
+pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let jmp_buf = get_sjlj_buffer(env);
+    if cfg!(target_arch = "aarch64") {
+        // Due to https://github.com/rtfeldman/roc/issues/2965, we use a setjmp we linked in from Zig
+        call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_SETJMP)
+    } else {
+        // Anywhere else, use the LLVM intrinsic.
+        // https://llvm.org/docs/ExceptionHandling.html#llvm-eh-sjlj-setjmp
+
+        let jmp_buf_i8p_arr = env
+            .builder
+            .build_bitcast(
+                jmp_buf,
+                env.context
+                    .i8_type()
+                    .ptr_type(AddressSpace::Generic)
+                    .array_type(5)
+                    .ptr_type(AddressSpace::Generic),
+                "jmp_buf [5 x i8*]",
+            )
+            .into_pointer_value();
+
+        // LLVM asks us to please store the frame pointer in the first word.
+        let frame_address = env.call_intrinsic(
+            LLVM_FRAME_ADDRESS,
+            &[env.context.i32_type().const_zero().into()],
+        );
+
+        let zero = env.context.i32_type().const_zero();
+        let fa_index = env.context.i32_type().const_zero();
+        let fa = unsafe {
+            env.builder.build_in_bounds_gep(
+                jmp_buf_i8p_arr,
+                &[zero, fa_index],
+                "frame address index",
+            )
+        };
+        env.builder.build_store(fa, frame_address);
+
+        // LLVM says that the target implementation of the setjmp intrinsic will put the
+        // destination address at index 1, and that the remaining three words are for ad-hoc target
+        // usage. But for whatever reason, on x86, it appears we need a stacksave in those words.
+        let ss_index = env.context.i32_type().const_int(2, false);
+        let ss = unsafe {
+            env.builder
+                .build_in_bounds_gep(jmp_buf_i8p_arr, &[zero, ss_index], "name")
+        };
+        let stack_save = env.call_intrinsic(LLVM_STACK_SAVE, &[]);
+        env.builder.build_store(ss, stack_save);
+
+        let jmp_buf_i8p = env.builder.build_bitcast(
+            jmp_buf,
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            "jmp_buf i8*",
+        );
+        env.call_intrinsic(LLVM_SETJMP, &[jmp_buf_i8p])
+    }
+}
+
+/// Pointer to pointer of the panic message.
+pub fn get_panic_msg_ptr<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
+    let ptr_to_u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let global_name = "roc_panic_msg_ptr";
+    let global = env.module.get_global(global_name).unwrap_or_else(|| {
+        let global = env.module.add_global(ptr_to_u8_ptr, None, global_name);
+        global.set_initializer(&ptr_to_u8_ptr.const_zero());
+        global
+    });
+
+    global.as_pointer_value()
 }
 
 fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
@@ -3703,53 +3783,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
     let catch_block = context.append_basic_block(parent, "catch_block");
     let cont_block = context.append_basic_block(parent, "cont_block");
 
-    let buffer = get_sjlj_buffer(env);
-
-    let cast = env
-        .builder
-        .build_bitcast(
-            buffer,
-            env.context
-                .i8_type()
-                .ptr_type(AddressSpace::Generic)
-                .array_type(5)
-                .ptr_type(AddressSpace::Generic),
-            "to [5 x i8*]",
-        )
-        .into_pointer_value();
-
-    let zero = env.context.i32_type().const_zero();
-
-    let index = env.context.i32_type().const_zero();
-    let fa = unsafe {
-        env.builder
-            .build_in_bounds_gep(cast, &[zero, index], "name")
-    };
-
-    let index = env.context.i32_type().const_int(2, false);
-    let ss = unsafe {
-        env.builder
-            .build_in_bounds_gep(cast, &[zero, index], "name")
-    };
-
-    let index = env.context.i32_type().const_int(3, false);
-    let error_msg = unsafe {
-        env.builder
-            .build_in_bounds_gep(cast, &[zero, index], "name")
-    };
-
-    let frame_address = env.call_intrinsic(
-        LLVM_FRAME_ADDRESS,
-        &[env.context.i32_type().const_zero().into()],
-    );
-
-    env.builder.build_store(fa, frame_address);
-
-    let stack_save = env.call_intrinsic(LLVM_STACK_SAVE, &[]);
-
-    env.builder.build_store(ss, stack_save);
-
-    let panicked_u32 = env.call_intrinsic(LLVM_SETJMP, &[buffer.into()]);
+    let panicked_u32 = build_setjmp_call(env);
     let panicked_bool = env.builder.build_int_compare(
         IntPredicate::NE,
         panicked_u32.into_int_value(),
@@ -3779,19 +3813,10 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
 
         let error_msg = {
             // u8**
-            let ptr_int_ptr = builder.build_bitcast(
-                error_msg,
-                env.context
-                    .i8_type()
-                    .ptr_type(AddressSpace::Generic)
-                    .ptr_type(AddressSpace::Generic),
-                "cast",
-            );
+            let ptr_int_ptr = get_panic_msg_ptr(env);
 
             // u8* again
-            let ptr_int = builder.build_load(ptr_int_ptr.into_pointer_value(), "ptr_int");
-
-            ptr_int
+            builder.build_load(ptr_int_ptr, "ptr_int")
         };
 
         let return_value = {
@@ -3919,16 +3944,20 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     // argument_types.push(wrapper_return_type.ptr_type(AddressSpace::Generic).into());
 
     // let wrapper_function_type = env.context.void_type().fn_type(&argument_types, false);
-    let wrapper_function_type =
-        wrapper_return_type.fn_type(&function_arguments(env, &argument_types), false);
+    let wrapper_function_spec = FunctionSpec::cconv(
+        env,
+        CCReturn::Return,
+        Some(wrapper_return_type.as_basic_type_enum()),
+        &argument_types,
+    );
 
     // Add main to the module.
     let wrapper_function = add_func(
+        env.context,
         env.module,
         wrapper_function_name,
-        wrapper_function_type,
+        wrapper_function_spec,
         Linkage::External,
-        C_CALL_CONV,
     );
 
     let subprogram = env.new_subprogram(wrapper_function_name);
@@ -4157,23 +4186,15 @@ fn build_proc_header<'a, 'ctx, 'env>(
         arg_basic_types.push(arg_type);
     }
 
-    let fn_type = match RocReturn::from_layout(env, &proc.ret_layout) {
-        RocReturn::Return => ret_type.fn_type(&function_arguments(env, &arg_basic_types), false),
-        RocReturn::ByPointer => {
-            // println!( "{:?}  will return void instead of {:?}", symbol, proc.ret_layout);
-            arg_basic_types.push(ret_type.ptr_type(AddressSpace::Generic).into());
-            env.context
-                .void_type()
-                .fn_type(&function_arguments(env, &arg_basic_types), false)
-        }
-    };
+    let roc_return = RocReturn::from_layout(env, &proc.ret_layout);
+    let fn_spec = FunctionSpec::fastcc(env, roc_return, ret_type, arg_basic_types);
 
     let fn_val = add_func(
+        env.context,
         env.module,
         fn_name.as_str(),
-        fn_type,
+        fn_spec,
         Linkage::Internal,
-        FAST_CALL_CONV,
     );
 
     let subprogram = env.new_subprogram(&fn_name);
@@ -4191,8 +4212,6 @@ fn build_proc_header<'a, 'ctx, 'env>(
     }
 
     if false {
-        use inkwell::attributes::{Attribute, AttributeLoc};
-
         let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
         debug_assert!(kind_id > 0);
         let enum_attr = env.context.create_enum_attribute(kind_id, 1);
@@ -4200,8 +4219,6 @@ fn build_proc_header<'a, 'ctx, 'env>(
     }
 
     if false {
-        use inkwell::attributes::{Attribute, AttributeLoc};
-
         let kind_id = Attribute::get_named_enum_kind_id("noinline");
         debug_assert!(kind_id > 0);
         let enum_attr = env.context.create_enum_attribute(kind_id, 1);
@@ -4255,14 +4272,14 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         alias_symbol.as_str(&env.interns)
     );
 
-    let function_type = context.void_type().fn_type(&argument_types, false);
+    let function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);
 
     let function_value = add_func(
+        env.context,
         env.module,
         function_name.as_str(),
-        function_type,
+        function_spec,
         Linkage::External,
-        C_CALL_CONV,
     );
 
     // STEP 2: build function body
@@ -4361,7 +4378,8 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     let builder = env.builder;
     let context = env.context;
 
-    let size_function_type = env.context.i64_type().fn_type(&[], false);
+    let i64 = env.context.i64_type().as_basic_type_enum();
+    let size_function_spec = FunctionSpec::cconv(env, CCReturn::Return, Some(i64), &[]);
     let size_function_name: String = if let Some(label) = opt_label {
         format!(
             "roc__{}_{}_{}_size",
@@ -4378,11 +4396,11 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     };
 
     let size_function = add_func(
+        env.context,
         env.module,
         size_function_name.as_str(),
-        size_function_type,
+        size_function_spec,
         Linkage::External,
-        C_CALL_CONV,
     );
 
     let entry = context.append_basic_block(size_function, "entry");
@@ -6083,6 +6101,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let key_layout = list_element_layout!(list_layout);
             set_from_list(env, layout_ids, list, key_layout)
         }
+        SetToDict => {
+            debug_assert_eq!(args.len(), 1);
+
+            let (set, _set_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            set
+        }
         ExpectTrue => {
             debug_assert_eq!(args.len(), 1);
 
@@ -6205,6 +6230,7 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
     }
 }
 
+#[derive(Clone, Copy)]
 enum RocReturn {
     /// Return as normal
     Return,
@@ -6245,7 +6271,7 @@ impl RocReturn {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum CCReturn {
     /// Return as normal
     Return,
@@ -6257,32 +6283,113 @@ pub enum CCReturn {
     Void,
 }
 
-impl CCReturn {
-    fn to_signature<'a, 'ctx, 'env>(
-        &self,
+#[derive(Debug, Clone, Copy)]
+pub struct FunctionSpec<'ctx> {
+    /// The function type
+    pub typ: FunctionType<'ctx>,
+    call_conv: u32,
+
+    /// Index (0-based) of return-by-pointer parameter, if it exists.
+    /// We only care about this for C-call-conv functions, because this may take
+    /// ownership of a register due to the convention. For example, on AArch64,
+    /// values returned-by-pointer use the x8 register.
+    /// But for internal functions we don't need to worry about that and we don't
+    /// want the convention, since it might eat a register and cause a spill!
+    cconv_sret_parameter: Option<u32>,
+}
+
+impl<'ctx> FunctionSpec<'ctx> {
+    fn attach_attributes(&self, ctx: &Context, fn_val: FunctionValue<'ctx>) {
+        fn_val.set_call_conventions(self.call_conv);
+
+        if let Some(param_index) = self.cconv_sret_parameter {
+            // Indicate to LLVM that this argument holds the return value of the function.
+            let sret_attribute_id = Attribute::get_named_enum_kind_id("sret");
+            debug_assert!(sret_attribute_id > 0);
+            let ret_typ = self.typ.get_param_types()[param_index as usize];
+            let sret_attribute =
+                ctx.create_type_attribute(sret_attribute_id, ret_typ.as_any_type_enum());
+            fn_val.add_attribute(AttributeLoc::Param(0), sret_attribute);
+        }
+    }
+
+    /// C-calling convention
+    pub fn cconv<'a, 'env>(
         env: &Env<'a, 'ctx, 'env>,
-        return_type: BasicTypeEnum<'ctx>,
+        cc_return: CCReturn,
+        return_type: Option<BasicTypeEnum<'ctx>>,
         argument_types: &[BasicTypeEnum<'ctx>],
-    ) -> FunctionType<'ctx> {
-        match self {
+    ) -> FunctionSpec<'ctx> {
+        let (typ, opt_sret_parameter) = match cc_return {
             CCReturn::ByPointer => {
                 // turn the output type into a pointer type. Make it the first argument to the function
-                let output_type = return_type.ptr_type(AddressSpace::Generic);
+                let output_type = return_type.unwrap().ptr_type(AddressSpace::Generic);
+
                 let mut arguments: Vec<'_, BasicTypeEnum> =
                     bumpalo::vec![in env.arena; output_type.into()];
                 arguments.extend(argument_types);
 
                 let arguments = function_arguments(env, &arguments);
-                env.context.void_type().fn_type(&arguments, false)
+                (env.context.void_type().fn_type(&arguments, false), Some(0))
             }
             CCReturn::Return => {
                 let arguments = function_arguments(env, argument_types);
-                return_type.fn_type(&arguments, false)
+                (return_type.unwrap().fn_type(&arguments, false), None)
             }
             CCReturn::Void => {
                 let arguments = function_arguments(env, argument_types);
-                env.context.void_type().fn_type(&arguments, false)
+                (env.context.void_type().fn_type(&arguments, false), None)
             }
+        };
+
+        Self {
+            typ,
+            call_conv: C_CALL_CONV,
+            cconv_sret_parameter: opt_sret_parameter,
+        }
+    }
+
+    /// Fastcc calling convention
+    fn fastcc<'a, 'env>(
+        env: &Env<'a, 'ctx, 'env>,
+        roc_return: RocReturn,
+        return_type: BasicTypeEnum<'ctx>,
+        mut argument_types: Vec<BasicTypeEnum<'ctx>>,
+    ) -> FunctionSpec<'ctx> {
+        let typ = match roc_return {
+            RocReturn::Return => {
+                return_type.fn_type(&function_arguments(env, &argument_types), false)
+            }
+            RocReturn::ByPointer => {
+                argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
+                env.context
+                    .void_type()
+                    .fn_type(&function_arguments(env, &argument_types), false)
+            }
+        };
+
+        Self {
+            typ,
+            call_conv: FAST_CALL_CONV,
+            cconv_sret_parameter: None,
+        }
+    }
+
+    pub fn known_fastcc(fn_type: FunctionType<'ctx>) -> FunctionSpec<'ctx> {
+        Self {
+            typ: fn_type,
+            call_conv: FAST_CALL_CONV,
+            cconv_sret_parameter: None,
+        }
+    }
+
+    pub fn intrinsic(fn_type: FunctionType<'ctx>) -> Self {
+        // LLVM intrinsics always use the C calling convention, because
+        // they are implemented in C libraries
+        Self {
+            typ: fn_type,
+            call_conv: C_CALL_CONV,
+            cconv_sret_parameter: None,
         }
     }
 }
@@ -6363,27 +6470,19 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                 arguments.push(value);
             }
 
-            let cc_type = cc_return.to_signature(env, return_type, cc_argument_types.as_slice());
+            let cc_type =
+                FunctionSpec::cconv(env, cc_return, Some(return_type), &cc_argument_types);
             let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
 
-            let fastcc_type = match roc_return {
-                RocReturn::Return => {
-                    return_type.fn_type(&function_arguments(env, &fastcc_argument_types), false)
-                }
-                RocReturn::ByPointer => {
-                    fastcc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
-                    env.context
-                        .void_type()
-                        .fn_type(&function_arguments(env, &fastcc_argument_types), false)
-                }
-            };
+            let fastcc_type =
+                FunctionSpec::fastcc(env, roc_return, return_type, fastcc_argument_types);
 
             let fastcc_function = add_func(
+                env.context,
                 env.module,
                 &fastcc_function_name,
                 fastcc_type,
                 Linkage::Internal,
-                FAST_CALL_CONV,
             );
 
             let old = builder.get_insert_block().unwrap();
@@ -6921,7 +7020,6 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),
         NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
-        NumRemUnchecked => bd.build_float_rem(lhs, rhs, "rem_float").into(),
         NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
         NumPow => env.call_intrinsic(&LLVM_POW[float_width], &[lhs.into(), rhs.into()]),
         _ => {
@@ -7510,7 +7608,7 @@ fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
 fn get_foreign_symbol<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     foreign_symbol: roc_module::ident::ForeignSymbol,
-    function_type: FunctionType<'ctx>,
+    function_spec: FunctionSpec<'ctx>,
 ) -> FunctionValue<'ctx> {
     let module = env.module;
 
@@ -7518,11 +7616,11 @@ fn get_foreign_symbol<'a, 'ctx, 'env>(
         Some(gvalue) => gvalue,
         None => {
             let foreign_function = add_func(
+                env.context,
                 module,
                 foreign_symbol.as_str(),
-                function_type,
+                function_spec,
                 Linkage::External,
-                C_CALL_CONV,
             );
 
             foreign_function
@@ -7534,11 +7632,11 @@ fn get_foreign_symbol<'a, 'ctx, 'env>(
 /// We never want to define the same function twice in the same module!
 /// The result can be bugs that are difficult to track down.
 pub fn add_func<'ctx>(
+    ctx: &Context,
     module: &Module<'ctx>,
     name: &str,
-    typ: FunctionType<'ctx>,
+    spec: FunctionSpec<'ctx>,
     linkage: Linkage,
-    call_conv: u32,
 ) -> FunctionValue<'ctx> {
     if cfg!(debug_assertions) {
         if let Some(func) = module.get_function(name) {
@@ -7546,9 +7644,9 @@ pub fn add_func<'ctx>(
         }
     }
 
-    let fn_val = module.add_function(name, typ, Some(linkage));
+    let fn_val = module.add_function(name, spec.typ, Some(linkage));
 
-    fn_val.set_call_conventions(call_conv);
+    spec.attach_attributes(ctx, fn_val);
 
     fn_val
 }

@@ -3,11 +3,10 @@ use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::LineColumnRegion;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
 pub use crate::error::canonicalize::can_problem;
-pub use crate::error::mono::mono_problem;
 pub use crate::error::parse::parse_problem;
 pub use crate::error::r#type::type_problem;
 
@@ -58,6 +57,46 @@ pub fn cycle<'b>(
         .vcat(lines)
         .indent(indent)
         .annotate(Annotation::TypeBlock)
+}
+
+const HEADER_WIDTH: usize = 80;
+
+pub fn pretty_header(title: &str) -> String {
+    let title_width = title.len() + 4;
+    let header = format!("── {} {}", title, "─".repeat(HEADER_WIDTH - title_width));
+    header
+}
+
+pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
+    let cwd = std::env::current_dir().unwrap();
+    let relative_path = match path.strip_prefix(cwd) {
+        Ok(p) => p,
+        _ => path,
+    }
+    .to_str()
+    .unwrap();
+
+    let title_width = title.len() + 4;
+    let relative_path_width = relative_path.len() + 3;
+    let available_path_width = HEADER_WIDTH - title_width - 1;
+
+    // If path is too long to fit in 80 characters with everything else then truncate it
+    let path_width = relative_path_width.min(available_path_width);
+    let path_trim = relative_path_width - path_width;
+    let path = if path_trim > 0 {
+        format!("...{}", &relative_path[(path_trim + 3)..])
+    } else {
+        relative_path.to_string()
+    };
+
+    let header = format!(
+        "── {} {} {} ─",
+        title,
+        "─".repeat(HEADER_WIDTH - (title_width + path_width)),
+        path
+    );
+
+    header
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -129,16 +168,13 @@ impl<'b> Report<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
-            let header = format!(
-                "── {} {}",
-                self.title,
-                "─".repeat(80 - (self.title.len() + 4))
-            );
+            let header = if self.filename == PathBuf::from("") {
+                crate::report::pretty_header(&self.title)
+            } else {
+                crate::report::pretty_header_with_path(&self.title, &self.filename)
+            };
 
-            alloc.stack(vec![
-                alloc.text(header).annotate(Annotation::Header),
-                self.doc,
-            ])
+            alloc.stack([alloc.text(header).annotate(Annotation::Header), self.doc])
         }
     }
 
@@ -194,7 +230,7 @@ const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
         module_name: codes.green,
         binop: codes.green,
         typo: codes.yellow,
-        typo_suggestion: codes.green,
+        typo_suggestion: codes.yellow,
         parser_suggestion: codes.yellow,
         bold: codes.bold,
         underline: codes.underline,
@@ -218,6 +254,7 @@ pub struct StyleCodes {
     pub bold: &'static str,
     pub underline: &'static str,
     pub reset: &'static str,
+    pub color_reset: &'static str,
 }
 
 pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
@@ -231,6 +268,7 @@ pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
     bold: "\u{001b}[1m",
     underline: "\u{001b}[4m",
     reset: "\u{001b}[0m",
+    color_reset: "\u{1b}[39m",
 };
 
 macro_rules! html_color {
@@ -250,6 +288,7 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     bold: "<span style='font-weight: bold'>",
     underline: "<span style='text-decoration: underline'>",
     reset: "</span>",
+    color_reset: "</span>",
 };
 
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
@@ -345,26 +384,25 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn tag_name(&'a self, tn: TagName) -> DocBuilder<'a, Self, Annotation> {
         match tn {
-            TagName::Global(uppercase) => self.global_tag_name(uppercase),
-            TagName::Private(symbol) => self.private_tag_name(symbol),
+            TagName::Tag(uppercase) => self.tag(uppercase),
             TagName::Closure(_symbol) => unreachable!("closure tags are internal only"),
         }
     }
 
     pub fn symbol_unqualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!("{}", symbol.ident_str(self.interns)))
+        self.text(symbol.as_str(self.interns))
             .annotate(Annotation::Symbol)
     }
     pub fn symbol_foreign_qualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
         if symbol.module_id() == self.home || symbol.module_id().is_builtin() {
             // Render it unqualified if it's in the current module or a builtin
-            self.text(format!("{}", symbol.ident_str(self.interns)))
+            self.text(symbol.as_str(self.interns))
                 .annotate(Annotation::Symbol)
         } else {
             self.text(format!(
                 "{}.{}",
                 symbol.module_string(self.interns),
-                symbol.ident_str(self.interns),
+                symbol.as_str(self.interns),
             ))
             .annotate(Annotation::Symbol)
         }
@@ -373,40 +411,25 @@ impl<'a> RocDocAllocator<'a> {
         self.text(format!(
             "{}.{}",
             symbol.module_string(self.interns),
-            symbol.ident_str(self.interns),
+            symbol.as_str(self.interns),
         ))
         .annotate(Annotation::Symbol)
     }
 
-    pub fn private_tag_name(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
-        if symbol.module_id() == self.home {
-            // Render it unqualified if it's in the current module.
-            self.text(format!("{}", symbol.ident_str(self.interns)))
-                .annotate(Annotation::PrivateTag)
-        } else {
-            self.text(format!(
-                "{}.{}",
-                symbol.module_string(self.interns),
-                symbol.ident_str(self.interns),
-            ))
-            .annotate(Annotation::PrivateTag)
-        }
-    }
-
-    pub fn global_tag_name(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
+    pub fn tag(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
         self.text(format!("{}", uppercase))
-            .annotate(Annotation::GlobalTag)
+            .annotate(Annotation::Tag)
     }
 
     pub fn opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
         let fmt = if opaque.module_id() == self.home {
             // Render it unqualified if it's in the current module.
-            format!("{}", opaque.ident_str(self.interns))
+            opaque.as_str(self.interns).to_string()
         } else {
             format!(
                 "{}.{}",
                 opaque.module_string(self.interns),
-                opaque.ident_str(self.interns),
+                opaque.as_str(self.interns),
             )
         };
 
@@ -416,8 +439,7 @@ impl<'a> RocDocAllocator<'a> {
     pub fn wrapped_opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
         debug_assert_eq!(opaque.module_id(), self.home, "Opaque wrappings can only be defined in the same module they're defined in, but this one is defined elsewhere: {:?}", opaque);
 
-        // TODO(opaques): $->@
-        self.text(format!("${}", opaque.ident_str(self.interns)))
+        self.text(format!("@{}", opaque.as_str(self.interns)))
             .annotate(Annotation::Opaque)
     }
 
@@ -767,8 +789,7 @@ pub enum Annotation {
     Emphasized,
     Url,
     Keyword,
-    GlobalTag,
-    PrivateTag,
+    Tag,
     RecordField,
     TypeVariable,
     Alias,
@@ -860,8 +881,7 @@ where
             Url => {
                 self.write_str("<")?;
             }
-            GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
-            | TypeVariable
+            Tag | Keyword | RecordField | Symbol | Typo | TypoSuggestion | TypeVariable
                 if !self.in_type_block && !self.in_code_block =>
             {
                 self.write_str("`")?;
@@ -891,8 +911,7 @@ where
                 Url => {
                     self.write_str(">")?;
                 }
-                GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
-                | TypeVariable
+                Tag | Keyword | RecordField | Symbol | Typo | TypoSuggestion | TypeVariable
                     if !self.in_type_block && !self.in_code_block =>
                 {
                     self.write_str("`")?;
@@ -984,7 +1003,7 @@ where
             ParserSuggestion => {
                 self.write_str(self.palette.parser_suggestion)?;
             }
-            TypeBlock | GlobalTag | PrivateTag | RecordField => { /* nothing yet */ }
+            TypeBlock | Tag | RecordField => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -1002,7 +1021,7 @@ where
                     self.write_str(self.palette.reset)?;
                 }
 
-                TypeBlock | GlobalTag | PrivateTag | Opaque | RecordField => { /* nothing yet */ }
+                TypeBlock | Tag | Opaque | RecordField => { /* nothing yet */ }
             },
         }
         Ok(())

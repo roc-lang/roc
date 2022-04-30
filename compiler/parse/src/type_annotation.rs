@@ -214,16 +214,9 @@ fn tag_type<'a>(min_indent: u32) -> impl Parser<'a, Tag<'a>, ETypeTagUnion<'a>> 
         let (_, args, state) = specialize_ref(ETypeTagUnion::Type, loc_applied_args_e(min_indent))
             .parse(arena, state)?;
 
-        let result = if name.value.starts_with('@') {
-            Tag::Private {
-                name,
-                args: args.into_bump_slice(),
-            }
-        } else {
-            Tag::Global {
-                name,
-                args: args.into_bump_slice(),
-            }
+        let result = Tag::Apply {
+            name,
+            args: args.into_bump_slice(),
         };
 
         Ok((MadeProgress, result, state))

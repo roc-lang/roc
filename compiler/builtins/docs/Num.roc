@@ -47,7 +47,7 @@ interface Num
             compare,
             cos,
             div,
-            divFloor,
+            divTrunc,
             floor,
             intCast,
             isEven,
@@ -61,6 +61,7 @@ interface Num
             isPositive,
             isZero,
             log,
+            logChecked,
             maxFloat,
             maxI8,
             maxU8,
@@ -81,8 +82,6 @@ interface Num
             minI64,
             minU64,
             minI128,
-            modInt,
-            modFloat,
             mul,
             mulChecked,
             mulWrap,
@@ -90,6 +89,7 @@ interface Num
             pow,
             powInt,
             rem,
+            remChecked,
             round,
             shiftLeftBy,
             shiftRightBy,
@@ -99,6 +99,7 @@ interface Num
             subChecked,
             subWrap,
             sqrt,
+            sqrtChecked,
             tan,
             toI8,
             toI8Checked,
@@ -188,7 +189,7 @@ interface Num
 ##
 ## In practice, these are rarely needed. It's most common to write
 ## number literals without any suffix.
-Num a : [ @Num a ]
+Num a := a
 
 ## A decimal number.
 ##
@@ -222,7 +223,7 @@ Num a : [ @Num a ]
 ## [Dec] typically takes slightly less time than [F64] to perform addition and
 ## subtraction, but 10-20 times longer to perform multiplication and division.
 ## [sqrt] and trigonometry are massively slower with [Dec] than with [F64].
-Dec : Float [ @Decimal128 ]
+Dec : Num (FloatingPoint Decimal)
 
 ## A fixed-size number with a fractional component.
 ##
@@ -291,7 +292,7 @@ Dec : Float [ @Decimal128 ]
 ## loops and conditionals. If you need to do performance-critical trigonometry
 ## or square roots, either [F64] or [F32] is probably a better choice than the
 ## usual default choice of [Dec], despite the precision problems they bring.
-Float a : Num [ @Fraction a ]
+Float range : Num (FloatingPoint range)
 
 ## A fixed-size integer - that is, a number with no fractional component.
 ##
@@ -342,19 +343,19 @@ Float a : Num [ @Fraction a ]
 ## * Start by deciding if this integer should allow negative numbers, and choose signed or unsigned accordingly.
 ## * Next, think about the range of numbers you expect this number to hold. Choose the smallest size you will never expect to overflow, no matter the inputs your program receives. (Validating inputs for size, and presenting the user with an error if they are too big, can help guard against overflow.)
 ## * Finally, if a particular numeric calculation is running too slowly, you can try experimenting with other number sizes. This rarely makes a meaningful difference, but some processors can operate on different number sizes at different speeds.
-Int size : Num [ @Integer size ]
+Int range : Num (Integer range)
 
 ## A signed 8-bit integer, ranging from -128 to 127
-I8 : Int [ @Signed8 ]
-U8 : Int [ @Unsigned8 ]
-I16 : Int [ @Signed16 ]
-U16 : Int [ @Unsigned16 ]
-I32 : Int [ @Signed32 ]
-U32 : Int [ @Unsigned32 ]
-I64 : Int [ @Signed64 ]
-U64 : Int [ @Unsigned64 ]
-I128 : Int [ @Signed128 ]
-U128 : Int [ @Unsigned128 ]
+I8 : Int Signed8
+U8 : Int Unsigned8
+I16 : Int Signed16
+U16 : Int Unsigned16
+I32 : Int Signed32
+U32 : Int Unsigned32
+I64 : Int Signed64
+U64 : Int Unsigned64
+I128 : Int Signed128
+U128 : Int Unsigned128
 
 ## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
 ## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
@@ -366,7 +367,7 @@ U128 : Int [ @Unsigned128 ]
 ## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
 ## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
 ## good fit for [List.len] regardless of system.
-Nat : Int [ @Natural ]
+Nat : Num (Integer Natural)
 
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
 ##
@@ -442,7 +443,7 @@ Nat : Int [ @Natural ]
 ##
 ## As such, it's very important to design your code not to exceed these bounds!
 ## If you need to do math outside these bounds, consider using a larger numeric size.
-Int size : Num [ @Int size ]
+Int range : Num (Integer range)
 
 ## Convert
 
@@ -781,7 +782,7 @@ toU128 : Int * -> U128
 ## there will be a loss of precision.
 toDec : Num * -> Dec
 
-## Divide two integers and #Num.round  the resulut.
+## Divide two integers, truncating the result towards zero.
 ##
 ## Division by zero is undefined in mathematics. As such, you should make
 ## sure never to pass zero as the denomaintor to this function!
@@ -791,40 +792,31 @@ toDec : Num * -> Dec
 ## * In a development build, you'll get an assertion failure.
 ## * In an optimized build, the function will return 0.
 ##
-## `a // b` is shorthand for `Num.divRound a b`.
+## `a // b` is shorthand for `Num.divTrunc a b`.
 ##
 ## >>> 5 // 7
 ##
-## >>> Num.divRound 5 7
+## >>> Num.divTrunc 5 7
 ##
 ## >>> 8 // -3
 ##
-## >>> Num.divRound 8 -3
+## >>> Num.divTrunc 8 -3
 ##
 ## This is the same as the #// operator.
-divRound : Int a, Int a -> Int a
+divTrunc : Int a, Int a -> Int a
 
-## Perform flooring modulo on two integers.
+## Obtain the remainder (truncating modulo) from the division of two integers.
 ##
-## Modulo is the same as remainder when working with positive numbers,
-## but if either number is negative, then modulo works differently.
+## `a % b` is shorthand for `Num.rem a b`.
 ##
-## Additionally, flooring modulo uses [Float].floor on the result.
+## >>> 5 % 7
 ##
-## (Use [Float].mod for non-flooring modulo.)
+## >>> Num.rem 5 7
 ##
-## Return `Err DivByZero` if the second integer is zero, because division by zero is undefined in mathematics.
+## >>> -8 % -3
 ##
-## `a %% b` is shorthand for `Int.modFloor a b`.
-##
-## >>> 5 %% 7
-##
-## >>> Int.modFloor 5 7
-##
-## >>> -8 %% -3
-##
-## >>> Int.modFloor -8 -3
-#modFloor : Int a, Int a -> Result (Int a) [ DivByZero ]*
+## >>> Num.rem -8 -3
+rem : Int a, Int a -> Int a
 
 
 ## Bitwise
@@ -1096,31 +1088,6 @@ atan : Float a -> Float a
 ## >>>     |> Num.div 2.0
 div : Float a, Float a -> Float a
 
-## Perform modulo on two [Float]s.
-##
-## Modulo is the same as remainder when working with positive numbers,
-## but if either number is negative, then modulo works differently.
-##
-## `a % b` is shorthand for `Num.mod a b`.
-##
-## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero),
-## and as such, so is modulo by zero. Because of this, you should make sure never
-## to pass zero for the second argument to this function!
-##
-## Passing [mod] a [Dec] value of zero for its second argument will cause a panic.
-## Passing [mod] a [F32] and [F64] value for its second argument will cause it
-## to return [*NaN*](Num.isNaN).
-##
-## >>> 5.0 % 7.0
-##
-## >>> Num.mod 5 7
-##
-## `Num.mod` can be convenient in pipelines.
-##
-## >>> Num.pi
-## >>>     |> Num.mod 2.0
-mod : Float a, Float a -> Float a
-
 ## Raises a [Float] to the power of another [Float].
 ##
 ## `
@@ -1316,7 +1283,7 @@ isInfinite : Float * -> Bool
 ##
 ## >>> Num.isNaN 12.3
 ##
-## >>> Num.isNaN (Num.sqrt -2)
+## >>> Num.isNaN (Num.pow -1 0.5)
 ##
 ## *NaN* is unusual from other numberic values in that:
 ## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `False` if either argument is *NaN*.

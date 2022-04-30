@@ -5,7 +5,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::Position;
 
-/// A global tag, for example. Must start with an uppercase letter
+/// A tag, for example. Must start with an uppercase letter
 /// and then contain only letters and numbers afterwards - no dots allowed!
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct UppercaseIdent<'a>(&'a str);
@@ -35,11 +35,8 @@ impl<'a> From<&'a UppercaseIdent<'a>> for &'a str {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ident<'a> {
     /// Foo or Bar
-    GlobalTag(&'a str),
+    Tag(&'a str),
     /// @Foo or @Bar
-    PrivateTag(&'a str),
-    /// $Foo or $Bar
-    // TODO(opaques): $->@ in the above comment
     OpaqueRef(&'a str),
     /// foo or foo.bar or Foo.Bar.baz.qux
     Access {
@@ -57,7 +54,7 @@ impl<'a> Ident<'a> {
         use self::Ident::*;
 
         match self {
-            GlobalTag(string) | PrivateTag(string) | OpaqueRef(string) => string.len(),
+            Tag(string) | OpaqueRef(string) => string.len(),
             Access { module_name, parts } => {
                 let mut len = if module_name.is_empty() {
                     0
@@ -101,31 +98,14 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 }
 
 pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |arena, state: State<'a>| {
-        if state.bytes().starts_with(b"@") {
-            match chomp_private_tag_or_opaque(
-                /* private tag */ true,
-                state.bytes(),
-                state.pos(),
-            ) {
-                Err(BadIdent::Start(_)) => Err((NoProgress, (), state)),
-                Err(_) => Err((MadeProgress, (), state)),
-                Ok(ident) => {
-                    let width = ident.len();
-                    Ok((MadeProgress, ident, state.advance(width)))
-                }
-            }
-        } else {
-            uppercase_ident().parse(arena, state)
-        }
-    }
+    move |arena, state: State<'a>| uppercase_ident().parse(arena, state)
 }
 
 /// This could be:
 ///
 /// * A module name
 /// * A type name
-/// * A global tag
+/// * A tag
 pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
     move |_, state: State<'a>| match chomp_uppercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
@@ -140,7 +120,7 @@ pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
 ///
 /// * A module name
 /// * A type name
-/// * A global tag
+/// * A tag
 pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>| match chomp_uppercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
@@ -242,7 +222,6 @@ pub enum BadIdent {
     WeirdDotAccess(Position),
     WeirdDotQualified(Position),
     StrayDot(Position),
-    BadPrivateTag(Position),
     BadOpaqueRef(Position),
 }
 
@@ -311,21 +290,13 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     }
 }
 
-/// a `@Token` private tag
-fn chomp_private_tag_or_opaque(
-    private_tag: bool, // If false, opaque
-    buffer: &[u8],
-    pos: Position,
-) -> Result<&str, BadIdent> {
+/// a `@Token` opaque
+fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     // assumes the leading `@` has NOT been chomped already
-    debug_assert_eq!(buffer.get(0), Some(if private_tag { &b'@' } else { &b'$' }));
+    debug_assert_eq!(buffer.get(0), Some(&b'@'));
     use encode_unicode::CharExt;
 
-    let bad_ident = if private_tag {
-        BadIdent::BadPrivateTag
-    } else {
-        BadIdent::BadOpaqueRef
-    };
+    let bad_ident = BadIdent::BadOpaqueRef;
 
     match chomp_uppercase_part(&buffer[1..]) {
         Ok(name) => {
@@ -362,15 +333,11 @@ fn chomp_identifier_chain<'a>(
                 }
                 Err(fail) => return Err((1, fail)),
             },
-            c @ ('@' | '$') => match chomp_private_tag_or_opaque(c == '@', buffer, pos) {
+            '@' => match chomp_opaque_ref(buffer, pos) {
                 Ok(tagname) => {
                     let bytes_parsed = tagname.len();
 
-                    let ident = if c == '@' {
-                        Ident::PrivateTag
-                    } else {
-                        Ident::OpaqueRef
-                    };
+                    let ident = Ident::OpaqueRef;
 
                     return Ok((bytes_parsed as u32, ident(tagname)));
                 }
@@ -451,9 +418,9 @@ fn chomp_identifier_chain<'a>(
             BadIdent::Underscore(pos.bump_column(chomped as u32 + 1)),
         ))
     } else if first_is_uppercase {
-        // just one segment, starting with an uppercase letter; that's a global tag
+        // just one segment, starting with an uppercase letter; that's a tag
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
-        Ok((chomped as u32, Ident::GlobalTag(value)))
+        Ok((chomped as u32, Ident::Tag(value)))
     } else {
         // just one segment, starting with a lowercase letter; that's a normal identifier
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };

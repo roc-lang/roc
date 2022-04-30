@@ -24,6 +24,7 @@ pub enum Type2 {
     Variable(Variable), // 4B
 
     Alias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
+    Opaque(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
     AsAlias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
 
     // 24B
@@ -74,6 +75,9 @@ impl ShallowClone for Type2 {
             Self::Alias(symbol, args, alias_type_id) => {
                 Self::Alias(*symbol, args.shallow_clone(), alias_type_id.clone())
             }
+            Self::Opaque(symbol, args, alias_type_id) => {
+                Self::Opaque(*symbol, args.shallow_clone(), alias_type_id.clone())
+            }
             Self::Record(fields, ext_id) => Self::Record(fields.shallow_clone(), ext_id.clone()),
             Self::Function(args, closure_type_id, ret_type_id) => Self::Function(
                 args.shallow_clone(),
@@ -101,7 +105,7 @@ impl Type2 {
                 Variable(v) => {
                     result.insert(*v);
                 }
-                Alias(_, _, actual) | AsAlias(_, _, actual) => {
+                Alias(_, _, actual) | AsAlias(_, _, actual) | Opaque(_, _, actual) => {
                     stack.push(pool.get(*actual));
                 }
                 HostExposedAlias {
@@ -690,29 +694,14 @@ fn can_tags<'a>(
         // a duplicate
         let new_name = 'inner: loop {
             match tag {
-                Tag::Global { name, args } => {
+                Tag::Apply { name, args } => {
                     let arg_types = PoolVec::with_capacity(args.len() as u32, env.pool);
 
                     for (type_id, loc_arg) in arg_types.iter_node_ids().zip(args.iter()) {
                         as_type_id(env, scope, rigids, type_id, &loc_arg.value, loc_arg.region);
                     }
 
-                    let tag_name = TagName::Global(name.value.into());
-                    tag_types.push((tag_name.clone(), arg_types));
-
-                    break 'inner tag_name;
-                }
-                Tag::Private { name, args } => {
-                    let ident_id = env.ident_ids.get_or_insert(&name.value.into());
-                    let symbol = Symbol::new(env.home, ident_id);
-
-                    let arg_types = PoolVec::with_capacity(args.len() as u32, env.pool);
-
-                    for (type_id, loc_arg) in arg_types.iter_node_ids().zip(args.iter()) {
-                        as_type_id(env, scope, rigids, type_id, &loc_arg.value, loc_arg.region);
-                    }
-
-                    let tag_name = TagName::Private(symbol);
+                    let tag_name = TagName::Tag(name.value.into());
                     tag_types.push((tag_name.clone(), arg_types));
 
                     break 'inner tag_name;
