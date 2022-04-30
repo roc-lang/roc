@@ -117,25 +117,16 @@ impl<'a> Formattable for Expr<'a> {
         use self::Expr::*;
 
         //dbg!(self);
-        let format_newlines = newlines == Newlines::Yes;
         let apply_needs_parens = parens == Parens::InApply;
 
         match self {
             SpaceBefore(sub_expr, spaces) => {
-                if format_newlines {
-                    fmt_spaces(buf, spaces.iter(), indent);
-                } else {
-                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-                }
+                format_spaces(buf, spaces, newlines, indent);
                 sub_expr.format_with_options(buf, parens, newlines, indent);
             }
             SpaceAfter(sub_expr, spaces) => {
                 sub_expr.format_with_options(buf, parens, newlines, indent);
-                if format_newlines {
-                    fmt_spaces(buf, spaces.iter(), indent);
-                } else {
-                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-                }
+                format_spaces(buf, spaces, newlines, indent);
             }
             ParensAround(sub_expr) => {
                 if parens == Parens::NotNeeded && !sub_expr_requests_parens(sub_expr) {
@@ -321,15 +312,39 @@ impl<'a> Formattable for Expr<'a> {
                     fmt_def(buf, &loc_def.value, indent);
                 }
 
-                let empty_line_before_return = empty_line_before_expr(&ret.value);
+                match &ret.value {
+                    SpaceBefore(sub_expr, spaces) => {
+                        let empty_line_before_return = empty_line_before_expr(&ret.value);
+                        let has_inline_comment = with_inline_comment(&ret.value);
 
-                if !empty_line_before_return {
-                    buf.newline();
+                        if has_inline_comment {
+                            buf.spaces(1);
+                            format_spaces(buf, spaces, newlines, indent);
+
+                            if !empty_line_before_return {
+                                buf.newline();
+                            }
+
+                            sub_expr.format_with_options(
+                                buf,
+                                Parens::NotNeeded,
+                                Newlines::Yes,
+                                indent,
+                            );
+                        } else {
+                            if !empty_line_before_return {
+                                buf.newline();
+                            }
+
+                            ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                        }
+                    }
+                    _ => {
+                        // Even if there were no defs, which theoretically should never happen,
+                        // still print the return value.
+                        ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                    }
                 }
-
-                // Even if there were no defs, which theoretically should never happen,
-                // still print the return value.
-                ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
             }
             Expect(condition, continuation) => {
                 fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
@@ -539,6 +554,34 @@ fn fmt_bin_ops<'a, 'buf>(
     };
 
     loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, next_indent);
+}
+
+fn format_spaces<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    spaces: &[CommentOrNewline<'a>],
+    newlines: Newlines,
+    indent: u16,
+) {
+    let format_newlines = newlines == Newlines::Yes;
+
+    if format_newlines {
+        fmt_spaces(buf, spaces.iter(), indent);
+    } else {
+        fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+    }
+}
+
+fn with_inline_comment<'a>(expr: &'a Expr<'a>) -> bool {
+    use roc_parse::ast::Expr::*;
+
+    match expr {
+        SpaceBefore(_, spaces) => match spaces.iter().next() {
+            Some(CommentOrNewline::LineComment(_)) => true,
+            Some(_) => false,
+            None => false,
+        },
+        _ => false,
+    }
 }
 
 fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {

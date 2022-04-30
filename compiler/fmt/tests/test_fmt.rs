@@ -106,26 +106,61 @@ mod test_fmt {
     }
 
     #[test]
-    #[ignore]
-    fn def_with_comment_on_same_line() {
-        // TODO(joshuawarner32): make trailing comments format stabily
-        // This test currently fails because the comment ends up as SpaceBefore for the following `a`
-        // This works fine when formatted _once_ - but if you format again, the formatter wants to
-        // insert a newline between `a = "Hello"` and the comment, further muddying the waters.
-        // Clearly the formatter shouldn't be allowed to migrate a comment around like that.
+    fn def_with_inline_comment() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 0 # comment
+
+            x
+            "#
+        ));
+
         expr_formats_to(
             indoc!(
                 r#"
-                a = "Hello" # This variable is for greeting
+                x = 0# comment
 
-                a
+                x
                 "#
             ),
             indoc!(
                 r#"
-                a = "Hello"
-                # This variable is for greeting
-                a
+                x = 0 # comment
+
+                x
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                x = 0# comment
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                x = 0 # comment
+
+                x
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                x = 0  # comment
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                x = 0 # comment
+
+                x
                 "#
             ),
         );
