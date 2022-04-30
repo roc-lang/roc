@@ -51,9 +51,11 @@ impl Scope {
     }
 
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
-        match self.scope_contains(ident) {
-            Some((symbol, _)) => Ok(symbol),
-            None => {
+        use ContainsIdent::*;
+
+        match self.scope_contains_ident(ident) {
+            InScope(symbol, _) => Ok(symbol),
+            NotInScope(_) | NotPresent => {
                 let error = RuntimeError::LookupNotInScope(
                     Loc {
                         region,
@@ -159,17 +161,30 @@ impl Scope {
         }
     }
 
-    /// Is an identifier in scope, either in the locals or imports
-    fn scope_contains(&self, ident: &Ident) -> Option<(Symbol, Region)> {
-        self.locals.has_in_scope(ident).or_else(|| {
-            for (import, shadow, original_region) in self.imports.iter() {
-                if ident == import {
-                    return Some((*shadow, *original_region));
-                }
+    fn has_imported(&self, ident: &Ident) -> Option<(Symbol, Region)> {
+        for (import, shadow, original_region) in self.imports.iter() {
+            if ident == import {
+                return Some((*shadow, *original_region));
             }
+        }
 
-            None
-        })
+        None
+    }
+
+    /// Is an identifier in scope, either in the locals or imports
+    fn scope_contains_ident(&self, ident: &Ident) -> ContainsIdent {
+        let result = self.locals.contains_ident(ident);
+        match result {
+            ContainsIdent::InScope(symbol, region) => result,
+            ContainsIdent::NotInScope(ident_id) => match self.has_imported(ident) {
+                Some((symbol, region)) => ContainsIdent::InScope(symbol, region),
+                None => result,
+            },
+            ContainsIdent::NotPresent => match self.has_imported(ident) {
+                Some((symbol, region)) => ContainsIdent::InScope(symbol, region),
+                None => ContainsIdent::NotPresent,
+            },
+        }
     }
 
     /// Introduce a new ident to scope.
@@ -202,15 +217,38 @@ impl Scope {
         ident: &Ident,
         region: Region,
     ) -> Result<Symbol, (Region, Loc<Ident>)> {
-        match self.scope_contains(ident) {
-            Some((_, original_region)) => {
+        let x = self.scope_contains_ident(ident);
+        if !self.home.is_builtin() {
+            dbg!(ident, &x);
+        }
+        match x {
+            ContainsIdent::InScope(_, original_region) => {
                 let shadow = Loc {
                     value: ident.clone(),
                     region,
                 };
                 Err((original_region, shadow))
             }
-            None => Ok(self.commit_introduction(ident, region)),
+            ContainsIdent::NotPresent => {
+                let ident_id = self.locals.introduce_into_scope(ident, region);
+                Ok(Symbol::new(self.home, ident_id))
+            }
+            ContainsIdent::NotInScope(existing) => {
+                if existing.index() < self.exposed_ident_count {
+                    // if the identifier is exposed, use the IdentId we already have for it
+                    // other modules depend on the symbol having that IdentId
+                    let symbol = Symbol::new(self.home, existing);
+
+                    self.locals.in_scope.set(existing.index(), true);
+                    self.locals.regions[existing.index()] = region;
+
+                    Ok(symbol)
+                } else {
+                    let ident_id = self.locals.introduce_into_scope_duplicate(existing, region);
+
+                    Ok(Symbol::new(self.home, ident_id))
+                }
+            }
         }
     }
 
@@ -226,9 +264,11 @@ impl Scope {
         ident: Ident,
         region: Region,
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
-        match self.scope_contains(&ident) {
-            Some((original_symbol, original_region)) => {
-                let shadow_symbol = self.scopeless_symbol(&ident, region);
+        let ident = &ident;
+
+        match self.scope_contains_ident(ident) {
+            ContainsIdent::InScope(original_symbol, original_region) => {
+                let shadow_symbol = self.scopeless_symbol(ident, region);
 
                 if self.abilities_store.is_ability_member_name(original_symbol) {
                     self.abilities_store
@@ -245,28 +285,25 @@ impl Scope {
                     Err((original_region, shadow, shadow_symbol))
                 }
             }
-            None => {
-                let new_symbol = self.commit_introduction(&ident, region);
-                Ok((new_symbol, None))
-            }
-        }
-    }
-
-    fn commit_introduction(&mut self, ident: &Ident, region: Region) -> Symbol {
-        // if the identifier is exposed, use the IdentId we already have for it
-        // other modules depend on the symbol having that IdentId
-        match self.locals.ident_ids.get_id(ident) {
-            Some(ident_id) if ident_id.index() < self.exposed_ident_count => {
-                let symbol = Symbol::new(self.home, ident_id);
-
-                self.locals.in_scope.set(ident_id.index(), true);
-                self.locals.regions[ident_id.index()] = region;
-
-                symbol
-            }
-            _ => {
+            ContainsIdent::NotPresent => {
                 let ident_id = self.locals.introduce_into_scope(ident, region);
-                Symbol::new(self.home, ident_id)
+                Ok((Symbol::new(self.home, ident_id), None))
+            }
+            ContainsIdent::NotInScope(existing) => {
+                if existing.index() < self.exposed_ident_count {
+                    // if the identifier is exposed, use the IdentId we already have for it
+                    // other modules depend on the symbol having that IdentId
+                    let symbol = Symbol::new(self.home, existing);
+
+                    self.locals.in_scope.set(existing.index(), true);
+                    self.locals.regions[existing.index()] = region;
+
+                    Ok((symbol, None))
+                } else {
+                    let ident_id = self.locals.introduce_into_scope_duplicate(existing, region);
+
+                    Ok((Symbol::new(self.home, ident_id), None))
+                }
             }
         }
     }
@@ -398,6 +435,13 @@ pub fn create_alias(
     }
 }
 
+#[derive(Debug)]
+enum ContainsIdent {
+    InScope(Symbol, Region),
+    NotInScope(IdentId),
+    NotPresent,
+}
+
 #[derive(Clone, Debug)]
 pub struct ScopedIdentIds {
     pub ident_ids: IdentIds,
@@ -441,6 +485,23 @@ impl ScopedIdentIds {
         None
     }
 
+    fn contains_ident(&self, ident: &Ident) -> ContainsIdent {
+        use ContainsIdent::*;
+
+        let mut result = NotPresent;
+
+        for ident_id in self.ident_ids.get_id_many(ident) {
+            let index = ident_id.index();
+            if self.in_scope[index] {
+                return InScope(Symbol::new(self.home, ident_id), self.regions[index]);
+            } else {
+                result = NotInScope(ident_id)
+            }
+        }
+
+        result
+    }
+
     fn idents_in_scope(&self) -> impl Iterator<Item = Ident> + '_ {
         self.ident_ids
             .ident_strs()
@@ -456,6 +517,18 @@ impl ScopedIdentIds {
 
     fn introduce_into_scope(&mut self, ident_name: &Ident, region: Region) -> IdentId {
         let id = self.ident_ids.add_ident(ident_name);
+
+        debug_assert_eq!(id.index(), self.in_scope.len());
+        debug_assert_eq!(id.index(), self.regions.len());
+
+        self.in_scope.push(true);
+        self.regions.push(region);
+
+        id
+    }
+
+    fn introduce_into_scope_duplicate(&mut self, existing: IdentId, region: Region) -> IdentId {
+        let id = self.ident_ids.duplicate_ident(existing);
 
         debug_assert_eq!(id.index(), self.in_scope.len());
         debug_assert_eq!(id.index(), self.regions.len());

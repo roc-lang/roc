@@ -45,6 +45,7 @@ impl SmallStringInterner {
         (0..self.offsets.len()).map(move |index| self.get(index))
     }
 
+    /// Insert without deduplicating
     pub fn insert(&mut self, string: &str) -> usize {
         let bytes = string.as_bytes();
 
@@ -59,6 +60,19 @@ impl SmallStringInterner {
         self.offsets.push(offset);
 
         self.buffer.extend(bytes);
+
+        index
+    }
+
+    /// Create a new entry that uses the same string bytes as an existing entry
+    pub fn duplicate(&mut self, existing: usize) -> usize {
+        let offset = self.offsets[existing];
+        let length = self.lengths[existing];
+
+        let index = self.lengths.len();
+
+        self.lengths.push(length);
+        self.offsets.push(offset);
 
         index
     }
