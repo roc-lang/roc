@@ -10,6 +10,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
+use roc_debug_flags::{dbg_do, ROC_PRETTY_PRINT_IR_SYMBOLS};
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -25,11 +26,11 @@ use roc_types::subs::{
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
+#[inline(always)]
 pub fn pretty_print_ir_symbols() -> bool {
-    #[cfg(debug_assertions)]
-    if std::env::var("PRETTY_PRINT_IR_SYMBOLS") == Ok("1".into()) {
+    dbg_do!(ROC_PRETTY_PRINT_IR_SYMBOLS, {
         return true;
-    }
+    });
     false
 }
 

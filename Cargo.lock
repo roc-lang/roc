@@ -3541,6 +3541,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_debug_flags"
+version = "0.1.0"
+
+[[package]]
 name = "roc_docs"
 version = "0.1.0"
 dependencies = [
@@ -3765,6 +3769,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
  "roc_mono",
@@ -3806,6 +3811,7 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_exhaustive",
  "roc_module",
@@ -4004,6 +4010,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "roc_collections",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
  "roc_region",
@@ -4017,6 +4024,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "roc_collections",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
  "roc_types",

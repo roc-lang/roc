@@ -21,6 +21,7 @@ roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
 roc_reporting = { path = "../../reporting" }
+roc_debug_flags = { path = "../debug_flags" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
 ven_pretty = { path = "../../vendor/pretty" }
 bumpalo = { version = "3.8.0", features = ["collections"] }

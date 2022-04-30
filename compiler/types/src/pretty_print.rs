@@ -449,15 +449,12 @@ fn write_content<'a>(
                         );
                     }
 
-                    // useful for debugging
-                    if cfg!(debug_assertions)
-                        && std::env::var("ROC_PRETTY_PRINT_ALIAS_CONTENTS").is_ok()
-                    {
+                    roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRETTY_PRINT_ALIAS_CONTENTS, {
                         buf.push_str("[[ but really ");
                         let content = subs.get_content_without_compacting(*_actual);
                         write_content(env, ctx, content, subs, buf, parens);
                         buf.push_str("]]");
-                    }
+                    });
                 }),
             }
         }
