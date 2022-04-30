@@ -132,6 +132,67 @@ mod test_fmt {
     }
 
     #[test]
+    fn def_with_inline_comment() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 0 # comment
+
+            x
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                x = 0# comment
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                x = 0 # comment
+
+                x
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                x = 0# comment
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                x = 0 # comment
+
+                x
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                x = 0  # comment
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                x = 0 # comment
+
+                x
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn def_with_comment_and_extra_space() {
         expr_formats_to(
             indoc!(
