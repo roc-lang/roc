@@ -580,14 +580,15 @@ impl IdentIds {
             .map(|i| IdentId(i as u32))
     }
 
-    pub fn get_name(&self, id: IdentId) -> Option<&str> {
-        self.interner.try_get(id.0 as usize)
+    #[inline(always)]
+    pub fn get_id_many<'a>(&'a self, ident_name: &'a Ident) -> impl Iterator<Item = IdentId> + 'a {
+        self.interner
+            .find_indices(ident_name.as_str())
+            .map(|i| IdentId(i as u32))
     }
 
-    pub fn get_name_at_index(&self, index: usize) -> Option<(IdentId, &str)> {
-        self.interner
-            .try_get(index)
-            .map(|v| (IdentId(index as u32), v))
+    pub fn get_name(&self, id: IdentId) -> Option<&str> {
+        self.interner.try_get(id.0 as usize)
     }
 
     pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {

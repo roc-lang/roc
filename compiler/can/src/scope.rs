@@ -431,14 +431,10 @@ impl ScopedIdentIds {
     }
 
     fn has_in_scope(&self, ident: &Ident) -> Option<(Symbol, Region)> {
-        for index in self.in_scope.iter_ones() {
-            if let Some((ident_id, string)) = self.ident_ids.get_name_at_index(index) {
-                if string == ident.as_str() {
-                    return Some((
-                        Symbol::new(self.home, ident_id),
-                        self.regions[ident_id.index()],
-                    ));
-                }
+        for ident_id in self.ident_ids.get_id_many(ident) {
+            let index = ident_id.index();
+            if self.in_scope[index] {
+                return Some((Symbol::new(self.home, ident_id), self.regions[index]));
             }
         }
 

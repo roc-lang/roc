@@ -86,22 +86,30 @@ impl SmallStringInterner {
 
     #[inline(always)]
     pub fn find_index(&self, string: &str) -> Option<usize> {
+        self.find_indices(string).next()
+    }
+
+    #[inline(always)]
+    pub fn find_indices<'a>(&'a self, string: &'a str) -> impl Iterator<Item = usize> + 'a {
         let target_length = string.len() as u16;
 
         // there can be gaps in the parts of the string that we use (because of updates)
         // hence we can't just sum the lengths we've seen so far to get the next offset
-        for (index, length) in self.lengths.iter().enumerate() {
-            if *length == target_length {
-                let offset = self.offsets[index];
-                let slice = &self.buffer[offset as usize..][..*length as usize];
+        self.lengths
+            .iter()
+            .enumerate()
+            .filter_map(move |(index, length)| {
+                if *length == target_length {
+                    let offset = self.offsets[index];
+                    let slice = &self.buffer[offset as usize..][..*length as usize];
 
-                if string.as_bytes() == slice {
-                    return Some(index);
+                    if string.as_bytes() == slice {
+                        return Some(index);
+                    }
                 }
-            }
-        }
 
-        None
+                None
+            })
     }
 
     fn get(&self, index: usize) -> &str {
