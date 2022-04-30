@@ -1,6 +1,6 @@
-use std::convert::TryInto;
 use roc_gen_wasm::wasm32_sized::Wasm32Sized;
 use roc_std::{ReferenceCount, RocDec, RocList, RocOrder, RocStr};
+use std::convert::TryInto;
 
 pub trait FromWasmerMemory: Wasm32Sized {
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self;
