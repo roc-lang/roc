@@ -7,8 +7,6 @@ extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
 
-extern crate indoc;
-
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
