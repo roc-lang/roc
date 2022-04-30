@@ -16,7 +16,7 @@ use roc_constrain::module::{
     ExposedModuleTypes,
 };
 use roc_error_macros::internal_error;
-use roc_module::ident::{Ident, ModuleName, QualifiedModuleName, TagName};
+use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,
@@ -39,7 +39,7 @@ use roc_solve::solve;
 use roc_target::TargetInfo;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types::{Alias, AliasCommon, AliasKind, TypeExtension};
+use roc_types::types::{Alias, AliasKind};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::io;
@@ -4689,156 +4689,13 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
 /// Builtin aliases that are not covered by type checker optimizations
 ///
 /// Types like `F64` and `I32` are hardcoded into Subs and therefore we don't define them here.
-/// All that remains are the generic number types (Num, Int, Float) and Result
+/// Generic number types (Num, Int, Float, etc.) are treated as `DelayedAlias`es resolved during
+/// type solving.
+/// All that remains are Signed8, Signed16, etc.
 fn default_aliases() -> roc_solve::solve::Aliases {
     use roc_types::types::Type;
 
     let mut solve_aliases = roc_solve::solve::Aliases::default();
-
-    let mut var_store = VarStore::default();
-
-    // Num range := range
-    {
-        let symbol = Symbol::NUM_NUM;
-        let tvar = var_store.fresh();
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ: Type::Variable(tvar),
-            kind: roc_types::types::AliasKind::Structural,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
-
-    // FloatingPoint range := []
-    {
-        let symbol = Symbol::NUM_FLOATINGPOINT;
-        let tvar = var_store.fresh();
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ: Type::Variable(tvar),
-            kind: roc_types::types::AliasKind::Opaque,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
-
-    // Int range : Num (Integer range)
-    {
-        let symbol = Symbol::NUM_INT;
-        let tvar = var_store.fresh();
-
-        let typ = Type::DelayedAlias(AliasCommon {
-            symbol: Symbol::NUM_NUM,
-            type_arguments: vec![(
-                "range".into(),
-                Type::Alias {
-                    symbol: Symbol::NUM_INTEGER,
-                    type_arguments: vec![("range".into(), Type::Variable(tvar))],
-                    lambda_set_variables: vec![],
-                    actual: Box::new(Type::Variable(tvar)),
-                    kind: AliasKind::Opaque,
-                },
-            )],
-            lambda_set_variables: vec![],
-        });
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ,
-            kind: roc_types::types::AliasKind::Structural,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
-
-    // Float range : Num (FloatingPoint range)
-    {
-        let symbol = Symbol::NUM_FLOAT;
-        let tvar = var_store.fresh();
-
-        let typ = Type::DelayedAlias(AliasCommon {
-            symbol: Symbol::NUM_NUM,
-            type_arguments: vec![(
-                "range".into(),
-                Type::Alias {
-                    symbol: Symbol::NUM_FLOATINGPOINT,
-                    type_arguments: vec![("range".into(), Type::Variable(tvar))],
-                    lambda_set_variables: vec![],
-                    actual: Box::new(Type::Variable(tvar)),
-                    kind: AliasKind::Opaque,
-                },
-            )],
-            lambda_set_variables: vec![],
-        });
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ,
-            kind: roc_types::types::AliasKind::Structural,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
-
-    // Integer range := range
-    {
-        let symbol = Symbol::NUM_INTEGER;
-        let tvar = var_store.fresh();
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ: Type::Variable(tvar),
-            kind: roc_types::types::AliasKind::Structural,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
-
-    {
-        let symbol = Symbol::RESULT_RESULT;
-        let tvar1 = var_store.fresh();
-        let tvar2 = var_store.fresh();
-
-        let typ = Type::TagUnion(
-            vec![
-                (TagName::Tag("Ok".into()), vec![Type::Variable(tvar1)]),
-                (TagName::Tag("Err".into()), vec![Type::Variable(tvar2)]),
-            ],
-            TypeExtension::Closed,
-        );
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![
-                Loc::at_zero(("ok".into(), tvar1)),
-                Loc::at_zero(("err".into(), tvar2)),
-            ],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ,
-            kind: roc_types::types::AliasKind::Structural,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
 
     let mut zero_opaque = |alias_name: Symbol| {
         let alias = Alias {

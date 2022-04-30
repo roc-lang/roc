@@ -48,7 +48,7 @@ fn to_type2(
         SolvedType::Alias(symbol, solved_type_variables, _todo, solved_actual, _kind) => {
             let type_variables = PoolVec::with_capacity(solved_type_variables.len() as u32, pool);
 
-            for (type_variable_node_id, (lowercase, solved_arg)) in type_variables
+            for (type_variable_node_id, solved_arg) in type_variables
                 .iter_node_ids()
                 .zip(solved_type_variables.iter())
             {
@@ -56,7 +56,7 @@ fn to_type2(
 
                 let node = pool.add(typ2);
 
-                pool[type_variable_node_id] = (PoolStr::new(lowercase.as_str(), pool), node);
+                pool[type_variable_node_id] = node;
             }
 
             let actual_typ2 = to_type2(pool, solved_actual, free_vars, var_store);

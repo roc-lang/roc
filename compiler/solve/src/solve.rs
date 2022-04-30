@@ -16,8 +16,8 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, PatternCategory,
-    Reason, TypeExtension,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, LambdaSet,
+    PatternCategory, Reason, TypeExtension,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
 
@@ -139,14 +139,12 @@ impl DelayedAliasVariables {
 
 #[derive(Debug, Default)]
 pub struct Aliases {
-    aliases: Vec<(Symbol, Type, DelayedAliasVariables)>,
+    aliases: Vec<(Symbol, Type, DelayedAliasVariables, AliasKind)>,
     variables: Vec<Variable>,
 }
 
 impl Aliases {
     pub fn insert(&mut self, symbol: Symbol, alias: Alias) {
-        // debug_assert!(self.get(&symbol).is_none());
-
         let alias_variables =
             {
                 let start = self.variables.len() as _;
@@ -172,7 +170,8 @@ impl Aliases {
                 }
             };
 
-        self.aliases.push((symbol, alias.typ, alias_variables));
+        self.aliases
+            .push((symbol, alias.typ, alias_variables, alias.kind));
     }
 
     fn instantiate_result_result(
@@ -229,10 +228,16 @@ impl Aliases {
 
                 Some(var)
             }
-            Symbol::NUM_NUM | Symbol::NUM_FLOATINGPOINT | Symbol::NUM_INTEGER => {
-                // These are opaque types Num range := range (respectively for FloatingPoint and
-                // Integer). They should not have been built as DelayedAliases!
-                internal_error!("Attempting to build delayed instantiation of opaque num");
+            Symbol::NUM_NUM | Symbol::NUM_INTEGER | Symbol::NUM_FLOATINGPOINT => {
+                // Num range := range | Integer range := range | FloatingPoint range := range
+                Self::build_num_opaque(
+                    subs,
+                    rank,
+                    pools,
+                    symbol,
+                    subs.variables[alias_variables.variables_start as usize],
+                )
+                .into()
             }
             Symbol::NUM_INT => {
                 // Int range : Num (Integer range)
@@ -290,11 +295,11 @@ impl Aliases {
             return Ok(var);
         }
 
-        let (typ, delayed_variables) = match self.aliases.iter_mut().find(|(s, _, _)| *s == symbol)
-        {
-            None => return Err(()),
-            Some((_, typ, delayed_variables)) => (typ, delayed_variables),
-        };
+        let (typ, delayed_variables, kind) =
+            match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
+                None => return Err(()),
+                Some((_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),
+            };
 
         let mut substitutions: MutMap<_, _> = Default::default();
 
@@ -338,23 +343,58 @@ impl Aliases {
             typ.substitute_variables(&substitutions);
         }
 
-        // assumption: an alias does not (transitively) syntactically contain itself
-        // (if it did it would have to be a recursive tag union)
-        let mut t = Type::EmptyRec;
+        let alias_variable = match kind {
+            AliasKind::Structural => {
+                // We can replace structural aliases wholly with the type on the
+                // RHS of their definition.
+                let mut t = Type::EmptyRec;
 
-        std::mem::swap(typ, &mut t);
+                std::mem::swap(typ, &mut t);
 
-        let alias_variable = type_to_variable(subs, rank, pools, arena, self, &t);
+                // assumption: an alias does not (transitively) syntactically contain itself
+                // (if it did it would have to be a recursive tag union, which we should have fixed up
+                // during canonicalization)
+                let alias_variable = type_to_variable(subs, rank, pools, arena, self, &t);
 
-        {
-            match self.aliases.iter_mut().find(|(s, _, _)| *s == symbol) {
-                None => unreachable!(),
-                Some((_, typ, _)) => {
-                    // swap typ back
-                    std::mem::swap(typ, &mut t);
+                {
+                    match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
+                        None => unreachable!(),
+                        Some((_, typ, _, _)) => {
+                            // swap typ back
+                            std::mem::swap(typ, &mut t);
+                        }
+                    }
                 }
+
+                alias_variable
             }
-        }
+
+            AliasKind::Opaque => {
+                // For opaques, the instantiation must be to an opaque type rather than just what's
+                // on the RHS.
+                let lambda_set_variables = new_lambda_set_variables
+                    .iter()
+                    .copied()
+                    .map(Type::Variable)
+                    .map(LambdaSet)
+                    .collect();
+                let type_arguments = new_type_variables
+                    .iter()
+                    .copied()
+                    .map(Type::Variable)
+                    .collect();
+
+                let opaq = Type::Alias {
+                    symbol,
+                    kind: *kind,
+                    lambda_set_variables,
+                    type_arguments,
+                    actual: Box::new(typ.clone()),
+                };
+
+                type_to_variable(subs, rank, pools, arena, self, &opaq)
+            }
+        };
 
         Ok(alias_variable)
     }
@@ -1888,9 +1928,7 @@ fn type_to_variable<'a>(
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, (_, arg_type)) in
-                        (new_variables.indices()).zip(type_arguments)
-                    {
+                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
                     }
@@ -1935,9 +1973,7 @@ fn type_to_variable<'a>(
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, (_, arg_type)) in
-                        (new_variables.indices()).zip(type_arguments)
-                    {
+                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
                     }
@@ -1977,9 +2013,7 @@ fn type_to_variable<'a>(
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, (_, arg_type)) in
-                        (new_variables.indices()).zip(type_arguments)
-                    {
+                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
                     }

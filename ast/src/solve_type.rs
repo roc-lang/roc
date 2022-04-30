@@ -899,7 +899,7 @@ fn type_to_variable<'a>(
 
             let mut arg_vars = Vec::with_capacity(args.len());
 
-            for (_, arg_type_id) in args.iter(mempool) {
+            for arg_type_id in args.iter(mempool) {
                 let arg_type = mempool.get(*arg_type_id);
 
                 let arg_var = type_to_variable(arena, mempool, subs, rank, pools, cached, arg_type);

@@ -23,8 +23,8 @@ pub type TypeId = NodeId<Type2>;
 pub enum Type2 {
     Variable(Variable), // 4B
 
-    Alias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
-    Opaque(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
+    Alias(Symbol, PoolVec<TypeId>, TypeId), // 24B = 8B + 8B + 4B + pad
+    Opaque(Symbol, PoolVec<TypeId>, TypeId), // 24B = 8B + 8B + 4B + pad
     AsAlias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
 
     // 24B
@@ -736,7 +736,7 @@ fn can_tags<'a>(
 
 enum TypeApply {
     Apply(Symbol, PoolVec<Type2>),
-    Alias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId),
+    Alias(Symbol, PoolVec<TypeId>, TypeId),
     Erroneous(roc_types::types::Problem),
 }
 
@@ -838,7 +838,17 @@ fn to_type_apply<'a>(
             // instantiate variables
             Type2::substitute(env.pool, &substitutions, actual);
 
-            TypeApply::Alias(symbol, arguments, actual)
+            let type_arguments = PoolVec::with_capacity(arguments.len() as u32, env.pool);
+
+            for (node_id, type_id) in arguments
+                .iter_node_ids()
+                .zip(type_arguments.iter_node_ids())
+            {
+                let typ = env.pool[node_id].1;
+                env.pool[type_id] = typ;
+            }
+
+            TypeApply::Alias(symbol, type_arguments, actual)
         }
         None => TypeApply::Apply(symbol, argument_type_ids),
     }
