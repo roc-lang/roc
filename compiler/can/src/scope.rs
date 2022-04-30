@@ -171,17 +171,10 @@ impl Scope {
 
     /// Is an identifier in scope, either in the locals or imports
     fn scope_contains_ident(&self, ident: &Ident) -> ContainsIdent {
-        let result = self.locals.contains_ident(ident);
-        match result {
-            ContainsIdent::InScope(_, _) => result,
-            ContainsIdent::NotInScope(_) => match self.has_imported(ident) {
-                Some((symbol, region)) => ContainsIdent::InScope(symbol, region),
-                None => result,
-            },
-            ContainsIdent::NotPresent => match self.has_imported(ident) {
-                Some((symbol, region)) => ContainsIdent::InScope(symbol, region),
-                None => ContainsIdent::NotPresent,
-            },
+        // exposed imports are likely to be small
+        match self.has_imported(ident) {
+            Some((symbol, region)) => ContainsIdent::InScope(symbol, region),
+            None => self.locals.contains_ident(ident),
         }
     }
 
