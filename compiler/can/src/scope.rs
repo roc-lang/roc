@@ -363,12 +363,16 @@ impl Scope {
         // - exposed_ident_count: unchanged
         // - home: unchanged
         let aliases_count = self.aliases.len();
-        let locals_snapshot = self.locals.snapshot();
+        let locals_snapshot = self.locals.in_scope.len();
 
         let result = f(self);
 
         self.aliases.truncate(aliases_count);
-        self.locals.revert(locals_snapshot);
+
+        // anything added in the inner scope is no longer in scope now
+        for i in locals_snapshot..self.locals.in_scope.len() {
+            self.locals.in_scope.set(i, false);
+        }
 
         result
     }
@@ -456,18 +460,6 @@ impl ScopedIdentIds {
             ident_ids,
             regions: vec![Region::zero(); capacity],
             home,
-        }
-    }
-
-    fn snapshot(&self) -> usize {
-        debug_assert_eq!(self.ident_ids.len(), self.in_scope.len());
-
-        self.ident_ids.len()
-    }
-
-    fn revert(&mut self, snapshot: usize) {
-        for i in snapshot..self.in_scope.len() {
-            self.in_scope.set(i, false);
         }
     }
 
