@@ -454,7 +454,7 @@ impl ScopedIdentIds {
         Self {
             in_scope: BitVec::repeat(false, capacity),
             ident_ids,
-            regions: std::iter::repeat(Region::zero()).take(capacity).collect(),
+            regions: vec![Region::zero(); capacity],
             home,
         }
     }
