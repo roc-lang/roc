@@ -17,7 +17,7 @@ use roc_constrain::module::{
 };
 use roc_debug_flags::{
     dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
-    ROC_PRINT_IR_AFTER_SPECIALIZATION,
+    ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_LOAD_LOG,
 };
 use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
@@ -74,13 +74,10 @@ const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
-const SHOW_MESSAGE_LOG: bool = false;
-
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 macro_rules! log {
-    () => (if SHOW_MESSAGE_LOG { println!()} else {});
-    ($($arg:tt)*) => (if SHOW_MESSAGE_LOG { println!($($arg)*); } else {})
+    ($($arg:tt)*) => (dbg_do!(ROC_PRINT_LOAD_LOG, println!($($arg)*)))
 }
 
 /// Struct storing various intermediate stages by their ModuleId

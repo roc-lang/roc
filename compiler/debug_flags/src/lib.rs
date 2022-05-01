@@ -34,7 +34,7 @@ macro_rules! dbg_do {
     ($flag:path, $expr:expr) => {
         #[cfg(debug_assertions)]
         {
-            if std::env::var($flag).unwrap_or("0".to_string()) != "0" {
+            if std::env::var($flag).as_ref() == Ok(&"0".to_string()) {
                 $expr
             }
         }
@@ -64,16 +64,27 @@ flags! {
 
     // ===Mono===
 
-    /// Writes the mono IR to stderr after function specialization
+    /// Writes a pretty-printed mono IR to stderr after function specialization.
     ROC_PRINT_IR_AFTER_SPECIALIZATION
 
-    /// Writes the mono IR to stderr after insertion of reset/reuse instructions
+    /// Writes a pretty-printed mono IR to stderr after insertion of reset/reuse
+    /// instructions.
     ROC_PRINT_IR_AFTER_RESET_REUSE
 
-    /// Writes the mono IR to stderr after insertion of refcount instructions
+    /// Writes a pretty-printed mono IR to stderr after insertion of refcount
+    /// instructions.
     ROC_PRINT_IR_AFTER_REFCOUNT
 
-    /// Instructs the mono IR pretty printer to dump pretty symbols and verbose
-    /// layout information
-    ROC_PRETTY_PRINT_IR_SYMBOLS
+    /// Prints debug information during the alias analysis pass.
+    ROC_DEBUG_ALIAS_ANALYSIS
+
+    // ===LLVM Gen===
+
+    /// Prints LLVM function verification output.
+    ROC_PRINT_LLVM_FN_VERIFICATION
+
+    // ===Load===
+
+    /// Print load phases as they complete.
+    ROC_PRINT_LOAD_LOG
 }
