@@ -95,7 +95,12 @@ pub fn generate_module_docs<'a>(
         parsed_defs
             .iter()
             .fold((vec![], None), |(acc, maybe_comments_after), def| {
-                generate_entry_doc(&scope.ident_ids, acc, maybe_comments_after, &def.value)
+                generate_entry_doc(
+                    &scope.locals.ident_ids,
+                    acc,
+                    maybe_comments_after,
+                    &def.value,
+                )
             });
 
     ModuleDocumentation {

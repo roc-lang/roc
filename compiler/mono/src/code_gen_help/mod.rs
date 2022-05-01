@@ -1,6 +1,5 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_module::ident::Ident;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
@@ -396,7 +395,7 @@ impl<'a> CodeGenHelp<'a> {
     }
 
     fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
-        let ident_id = ident_ids.add_ident(&Ident::from(debug_name));
+        let ident_id = ident_ids.add_str(debug_name);
         Symbol::new(self.home, ident_id)
     }
 

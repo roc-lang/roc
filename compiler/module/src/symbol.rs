@@ -531,7 +531,7 @@ impl IdentId {
 /// Stores a mapping between Ident and IdentId.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
-    interner: SmallStringInterner,
+    pub interner: SmallStringInterner,
 }
 
 impl IdentIds {
@@ -543,13 +543,21 @@ impl IdentIds {
     }
 
     pub fn add_ident(&mut self, ident_name: &Ident) -> IdentId {
-        IdentId(self.interner.insert(ident_name.as_str()) as u32)
+        self.add_str(ident_name.as_str())
+    }
+
+    pub fn add_str(&mut self, ident_name: &str) -> IdentId {
+        IdentId(self.interner.insert(ident_name) as u32)
+    }
+
+    pub fn duplicate_ident(&mut self, ident_id: IdentId) -> IdentId {
+        IdentId(self.interner.duplicate(ident_id.0 as usize) as u32)
     }
 
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
         match self.get_id(name) {
             Some(id) => id,
-            None => self.add_ident(name),
+            None => self.add_str(name.as_str()),
         }
     }
 
@@ -577,6 +585,13 @@ impl IdentIds {
     pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
         self.interner
             .find_index(ident_name.as_str())
+            .map(|i| IdentId(i as u32))
+    }
+
+    #[inline(always)]
+    pub fn get_id_many<'a>(&'a self, ident_name: &'a str) -> impl Iterator<Item = IdentId> + 'a {
+        self.interner
+            .find_indices(ident_name)
             .map(|i| IdentId(i as u32))
     }
 
@@ -748,11 +763,13 @@ macro_rules! define_builtins {
                             }
                         };
 
-                        let interner = SmallStringInterner::from_parts (
+                        // Safety: all lengths are non-negative and smaller than 2^15
+                        let interner = unsafe {
+                            SmallStringInterner::from_parts (
                             BUFFER.as_bytes().to_vec(),
                             LENGTHS.to_vec(),
                             OFFSETS.to_vec(),
-                        );
+                        )};
 
                         IdentIds{ interner }
                     };
