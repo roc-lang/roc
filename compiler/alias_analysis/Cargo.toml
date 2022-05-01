@@ -10,4 +10,4 @@ morphic_lib = {path = "../../vendor/morphic_lib"}
 roc_collections = {path = "../collections"}
 roc_module = {path = "../module"}
 roc_mono = {path = "../mono"}
-
+roc_debug_flags = {path = "../debug_flags"}

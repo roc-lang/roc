@@ -56,6 +56,7 @@ use morphic_lib::{
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth, IntrinsicName};
 use roc_builtins::{float_intrinsic, llvm_int_intrinsic};
 use roc_collections::all::{ImMap, MutMap, MutSet};
+use roc_debug_flags::{dbg_do, ROC_PRINT_LLVM_FN_VERIFICATION};
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -67,13 +68,13 @@ use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, Unio
 use roc_target::{PtrWidth, TargetInfo};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
-/// This is for Inkwell's FunctionValue::verify - we want to know the verification
-/// output in debug builds, but we don't want it to print to stdout in release builds!
-#[cfg(debug_assertions)]
-const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
-
-#[cfg(not(debug_assertions))]
-const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
+#[inline(always)]
+fn print_fn_verification_output() -> bool {
+    dbg_do!(ROC_PRINT_LLVM_FN_VERIFICATION, {
+        return true;
+    });
+    false
+}
 
 #[macro_export]
 macro_rules! debug_info_init {
@@ -4513,7 +4514,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
 }
 
 pub fn verify_fn(fn_val: FunctionValue<'_>) {
-    if !fn_val.verify(PRINT_FN_VERIFICATION_OUTPUT) {
+    if !fn_val.verify(print_fn_verification_output()) {
         unsafe {
             fn_val.delete();
         }

@@ -10,7 +10,10 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
-use roc_debug_flags::{dbg_do, ROC_PRETTY_PRINT_IR_SYMBOLS};
+use roc_debug_flags::{
+    dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
+    ROC_PRINT_IR_AFTER_SPECIALIZATION,
+};
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -28,7 +31,13 @@ use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
 #[inline(always)]
 pub fn pretty_print_ir_symbols() -> bool {
-    dbg_do!(ROC_PRETTY_PRINT_IR_SYMBOLS, {
+    dbg_do!(ROC_PRINT_IR_AFTER_SPECIALIZATION, {
+        return true;
+    });
+    dbg_do!(ROC_PRINT_IR_AFTER_RESET_REUSE, {
+        return true;
+    });
+    dbg_do!(ROC_PRINT_IR_AFTER_REFCOUNT, {
         return true;
     });
     false
