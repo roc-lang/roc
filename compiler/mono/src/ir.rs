@@ -7411,13 +7411,20 @@ fn call_by_name_help<'a>(
                     proc_name,
                 );
 
+                let has_closure = argument_layouts.len() != top_level_layout.arguments.len();
+                let closure_argument = env.unique_symbol();
+
+                if has_closure {
+                    field_symbols.push(closure_argument);
+                }
+
                 let field_symbols = field_symbols.into_bump_slice();
 
                 let call = self::Call {
                     call_type: CallType::ByName {
                         name: proc_name,
                         ret_layout,
-                        arg_layouts: argument_layouts,
+                        arg_layouts: top_level_layout.arguments,
                         specialization_id: env.next_call_specialization_id(),
                     },
                     arguments: field_symbols,
@@ -7425,8 +7432,36 @@ fn call_by_name_help<'a>(
 
                 let result = build_call(env, call, assigned, *ret_layout, hole);
 
+                let field_symbols = if has_closure {
+                    &field_symbols[..field_symbols.len() - 1]
+                } else {
+                    field_symbols
+                };
+
                 let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
-                assign_to_symbols(env, procs, layout_cache, iter, result)
+                let x = assign_to_symbols(env, procs, layout_cache, iter, result);
+
+                if has_closure {
+                    let partial_proc = procs.partial_procs.get_symbol(proc_name).unwrap();
+
+                    let captured = match partial_proc.captured_symbols {
+                        CapturedSymbols::None => &[],
+                        CapturedSymbols::Captured(slice) => slice,
+                    };
+
+                    construct_closure_data(
+                        env,
+                        procs,
+                        layout_cache,
+                        lambda_set,
+                        proc_name,
+                        captured.iter(),
+                        closure_argument,
+                        env.arena.alloc(x),
+                    )
+                } else {
+                    x
+                }
             }
             PendingSpecializations::Making => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name);

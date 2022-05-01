@@ -3344,3 +3344,55 @@ fn box_and_unbox_tag_union() {
         (u8, u8)
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn closure_called_in_its_defining_scope() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main : Str
+            main =
+                g : Str
+                g = "hello world"
+
+                getG : {} -> Str
+                getG = \{} -> g
+
+                getG {}
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
+    )
+}
+
+#[test]
+#[ignore]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2894() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main : U32
+            main =
+                g : { x : U32 }
+                g = { x: 1u32 }
+
+                getG : {} -> { x : U32 }
+                getG = \{} -> g
+
+                h : {} -> U32
+                h = \{} -> (getG {}).x
+
+                h {}
+            "#
+        ),
+        1u32,
+        u32
+    )
+}
