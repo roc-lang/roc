@@ -3,7 +3,7 @@ Defs(
         @0-36 Value(
             Body(
                 @0-5 Apply(
-                    @0-5 GlobalTag(
+                    @0-5 Tag(
                         "Email",
                     ),
                     [
@@ -13,7 +13,7 @@ Defs(
                     ],
                 ),
                 @12-36 Apply(
-                    @12-17 GlobalTag(
+                    @12-17 Tag(
                         "Email",
                     ),
                     [

@@ -19,3 +19,6 @@ path = "../module"
 
 [dependencies.roc_types]
 path = "../types"
+
+[dependencies.roc_debug_flags]
+path = "../debug_flags"

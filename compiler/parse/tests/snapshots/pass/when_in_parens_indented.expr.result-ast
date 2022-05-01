@@ -9,7 +9,7 @@ ParensAround(
                 WhenBranch {
                     patterns: [
                         @15-17 SpaceBefore(
-                            GlobalTag(
+                            Tag(
                                 "Ok",
                             ),
                             [

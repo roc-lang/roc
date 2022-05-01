@@ -5,10 +5,11 @@ use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::{Declaration, Def};
+use roc_can::exhaustive::{sketch_pattern_to_rows, sketch_when_branches, ExhaustiveContext};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
-use roc_can::expr::{AccessorData, ClosureData, Field, WhenBranch};
+use roc_can::expr::{AccessorData, AnnotatedMark, ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
@@ -49,7 +50,7 @@ pub struct Env {
 fn constrain_untyped_args(
     constraints: &mut Constraints,
     env: &Env,
-    arguments: &[(Variable, Loc<Pattern>)],
+    arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     closure_type: Type,
     return_type: Type,
 ) -> (Vec<Variable>, PatternState, Type) {
@@ -58,7 +59,10 @@ fn constrain_untyped_args(
 
     let mut pattern_state = PatternState::default();
 
-    for (pattern_var, loc_pattern) in arguments {
+    for (pattern_var, annotated_mark, loc_pattern) in arguments {
+        // Untyped args don't need exhaustiveness checking because they are the source of truth!
+        let _ = annotated_mark;
+
         let pattern_type = Type::Variable(*pattern_var);
         let pattern_expected = PExpected::NoExpectation(pattern_type.clone());
 
@@ -579,25 +583,28 @@ pub fn constrain_expr(
             }
         }
         When {
-            cond_var,
+            cond_var: real_cond_var,
             expr_var,
             loc_cond,
             branches,
+            branches_cond_var,
+            exhaustive,
             ..
         } => {
-            // Infer the condition expression's type.
-            let cond_var = *cond_var;
-            let cond_type = Variable(cond_var);
-            let expr_con = constrain_expr(
-                constraints,
-                env,
-                region,
-                &loc_cond.value,
-                NoExpectation(cond_type.clone()),
-            );
+            let branches_cond_var = *branches_cond_var;
+            let branches_cond_type = Variable(branches_cond_var);
 
-            let branch_var = *expr_var;
-            let branch_type = Variable(branch_var);
+            let body_var = *expr_var;
+            let body_type = Variable(body_var);
+
+            let branches_region = {
+                debug_assert!(!branches.is_empty());
+                Region::span_across(
+                    &loc_cond.region,
+                    // &branches.first().unwrap().region(),
+                    &branches.last().unwrap().pattern_region(),
+                )
+            };
 
             let branch_expr_reason =
                 |expected: &Expected<Type>, index, branch_region| match expected {
@@ -613,13 +620,13 @@ pub fn constrain_expr(
                                 index,
                                 region: ann_source.region(),
                             },
-                            branch_type.clone(),
+                            body_type.clone(),
                         )
                     }
 
                     _ => ForReason(
                         Reason::WhenBranch { index },
-                        branch_type.clone(),
+                        body_type.clone(),
                         branch_region,
                     ),
                 };
@@ -647,12 +654,20 @@ pub fn constrain_expr(
             // constraints.
             let mut pattern_vars = Vec::with_capacity(branches.len());
             let mut pattern_headers = SendMap::default();
-            let mut pattern_cons = Vec::with_capacity(branches.len());
+            let mut pattern_cons = Vec::with_capacity(branches.len() + 2);
             let mut branch_cons = Vec::with_capacity(branches.len());
 
             for (index, when_branch) in branches.iter().enumerate() {
-                let pattern_region =
-                    Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
+                let expected_pattern = |sub_pattern, sub_region| {
+                    PExpected::ForReason(
+                        PReason::WhenMatch {
+                            index: HumanIndex::zero_based(index),
+                            sub_pattern,
+                        },
+                        branches_cond_type.clone(),
+                        sub_region,
+                    )
+                };
 
                 let (new_pattern_vars, new_pattern_headers, pattern_con, branch_con) =
                     constrain_when_branch_help(
@@ -660,13 +675,7 @@ pub fn constrain_expr(
                         env,
                         region,
                         when_branch,
-                        PExpected::ForReason(
-                            PReason::WhenMatch {
-                                index: HumanIndex::zero_based(index),
-                            },
-                            cond_type.clone(),
-                            pattern_region,
-                        ),
+                        expected_pattern,
                         branch_expr_reason(
                             &expected,
                             HumanIndex::zero_based(index),
@@ -680,7 +689,8 @@ pub fn constrain_expr(
                         .clone()
                         .intersection(new_pattern_headers.clone())
                         .is_empty(),
-                    "Two patterns introduce the same symbols - that's a bug!"
+                    "Two patterns introduce the same symbols - that's a bug!\n{:?}",
+                    pattern_headers.clone().intersection(new_pattern_headers)
                 );
                 pattern_headers.extend(new_pattern_headers);
                 pattern_cons.push(pattern_con);
@@ -696,10 +706,36 @@ pub fn constrain_expr(
             //
             // The return type of each branch must equal the return type of
             // the entire when-expression.
-            // branch_cons.extend(pattern_cons);
-            // branch_constraints.push(constraints.and_constraint(pattern_cons));
-            let mut total_cons = Vec::with_capacity(1 + 2 * branches.len() + 1);
-            total_cons.push(expr_con);
+
+            // After solving the condition variable with what's expected from the branch patterns,
+            // check it against the condition expression.
+            //
+            // First, solve the condition type.
+            let real_cond_var = *real_cond_var;
+            let real_cond_type = Type::Variable(real_cond_var);
+            let cond_constraint = constrain_expr(
+                constraints,
+                env,
+                loc_cond.region,
+                &loc_cond.value,
+                Expected::NoExpectation(real_cond_type),
+            );
+            pattern_cons.push(cond_constraint);
+
+            // Now check the condition against the type expected by the branches.
+            let sketched_rows = sketch_when_branches(real_cond_var, branches_region, branches);
+            let cond_matches_branches_constraint = constraints.exhaustive(
+                real_cond_var,
+                loc_cond.region,
+                Ok((
+                    loc_cond.value.category(),
+                    Expected::ForReason(Reason::WhenBranches, branches_cond_type, branches_region),
+                )),
+                sketched_rows,
+                ExhaustiveContext::BadCase,
+                *exhaustive,
+            );
+            pattern_cons.push(cond_matches_branches_constraint);
 
             // Solve all the pattern constraints together, introducing variables in the pattern as
             // need be before solving the bodies.
@@ -712,20 +748,22 @@ pub fn constrain_expr(
                 pattern_constraints,
                 body_constraints,
             );
-            total_cons.push(when_body_con);
 
-            total_cons.push(constraints.equal_types_var(
-                branch_var,
-                expected,
-                Category::When,
-                region,
-            ));
+            let result_con =
+                constraints.equal_types_var(body_var, expected, Category::When, region);
 
+            let total_cons = [when_body_con, result_con];
             let branch_constraints = constraints.and_constraint(total_cons);
 
-            // exhautiveness checking happens when converting to mono::Expr
-            // ...for now
-            constraints.exists([cond_var, *expr_var], branch_constraints)
+            constraints.exists(
+                [
+                    exhaustive.variable_for_introduction(),
+                    branches_cond_var,
+                    real_cond_var,
+                    *expr_var,
+                ],
+                branch_constraints,
+            )
         }
         Access {
             record_var,
@@ -984,7 +1022,7 @@ pub fn constrain_expr(
 
             let opaque_type = Type::Alias {
                 symbol: *name,
-                type_arguments: type_arguments.clone(),
+                type_arguments: type_arguments.iter().copied().map(Type::Variable).collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: Box::new(arg_type.clone()),
                 kind: AliasKind::Opaque,
@@ -1021,9 +1059,7 @@ pub fn constrain_expr(
 
             let mut vars = vec![*arg_var, *opaque_var];
             // Also add the fresh variables we created for the type argument and lambda sets
-            vars.extend(type_arguments.iter().map(|(_, t)| {
-                t.expect_variable("all type arguments should be fresh variables here")
-            }));
+            vars.extend(type_arguments);
             vars.extend(lambda_set_variables.iter().map(|v| {
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));
@@ -1122,7 +1158,7 @@ fn constrain_when_branch_help(
     env: &Env,
     region: Region,
     when_branch: &WhenBranch,
-    pattern_expected: PExpected<Type>,
+    pattern_expected: impl Fn(HumanIndex, Region) -> PExpected<Type>,
     expr_expected: Expected<Type>,
 ) -> (
     Vec<Variable>,
@@ -1140,19 +1176,22 @@ fn constrain_when_branch_help(
 
     let mut state = PatternState {
         headers: SendMap::default(),
-        vars: Vec::with_capacity(1),
-        constraints: Vec::with_capacity(1),
+        vars: Vec::with_capacity(2),
+        constraints: Vec::with_capacity(2),
+        delayed_is_open_constraints: Vec::new(),
     };
 
     // TODO investigate for error messages, is it better to unify all branches with a variable,
     // then unify that variable with the expectation?
-    for loc_pattern in &when_branch.patterns {
+    for (i, loc_pattern) in when_branch.patterns.iter().enumerate() {
+        let pattern_expected = pattern_expected(HumanIndex::zero_based(i), loc_pattern.region);
+
         constrain_pattern(
             constraints,
             env,
             &loc_pattern.value,
             loc_pattern.region,
-            pattern_expected.clone(),
+            pattern_expected,
             &mut state,
         );
     }
@@ -1171,11 +1210,17 @@ fn constrain_when_branch_help(
         );
 
         // must introduce the headers from the pattern before constraining the guard
+        state
+            .constraints
+            .append(&mut state.delayed_is_open_constraints);
         let state_constraints = constraints.and_constraint(state.constraints);
         let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
 
         (state_constraints, inner)
     } else {
+        state
+            .constraints
+            .append(&mut state.delayed_is_open_constraints);
         let state_constraints = constraints.and_constraint(state.constraints);
         (state_constraints, ret_constraint)
     };
@@ -1267,6 +1312,7 @@ fn constrain_def_pattern(
         headers: SendMap::default(),
         vars: Vec::with_capacity(1),
         constraints: Vec::with_capacity(1),
+        delayed_is_open_constraints: vec![],
     };
 
     constrain_pattern(
@@ -1364,6 +1410,7 @@ fn constrain_typed_def(
                 headers: SendMap::default(),
                 vars: Vec::with_capacity(arguments.len()),
                 constraints: Vec::with_capacity(1),
+                delayed_is_open_constraints: vec![],
             };
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = *ret_var;
@@ -1499,7 +1546,7 @@ fn constrain_typed_function_arguments(
     def: &Def,
     def_pattern_state: &mut PatternState,
     argument_pattern_state: &mut PatternState,
-    arguments: &[(Variable, Loc<Pattern>)],
+    arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     arg_types: &[Type],
 ) {
     // ensure type matches the one in the annotation
@@ -1510,38 +1557,113 @@ fn constrain_typed_function_arguments(
     };
 
     let it = arguments.iter().zip(arg_types.iter()).enumerate();
-    for (index, ((pattern_var, loc_pattern), loc_ann)) in it {
-        let pattern_expected = PExpected::ForReason(
-            PReason::TypedArg {
-                index: HumanIndex::zero_based(index),
-                opt_name: opt_label,
-            },
-            loc_ann.clone(),
-            loc_pattern.region,
-        );
-
-        constrain_pattern(
-            constraints,
-            env,
-            &loc_pattern.value,
-            loc_pattern.region,
-            pattern_expected,
-            argument_pattern_state,
-        );
-
-        {
-            // NOTE: because we perform an equality with part of the signature
-            // this constraint must be to the def_pattern_state's constraints
-            def_pattern_state.vars.push(*pattern_var);
-
-            let pattern_con = constraints.equal_types_var(
-                *pattern_var,
-                Expected::NoExpectation(loc_ann.clone()),
-                Category::Storage(std::file!(), std::line!()),
+    for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
+        if loc_pattern.value.surely_exhaustive() {
+            // OPT: we don't need to perform any type-level exhaustiveness checking.
+            // Check instead only that the pattern unifies with the annotation type.
+            let pattern_expected = PExpected::ForReason(
+                PReason::TypedArg {
+                    index: HumanIndex::zero_based(index),
+                    opt_name: opt_label,
+                },
+                ann.clone(),
                 loc_pattern.region,
             );
 
-            def_pattern_state.constraints.push(pattern_con);
+            constrain_pattern(
+                constraints,
+                env,
+                &loc_pattern.value,
+                loc_pattern.region,
+                pattern_expected,
+                argument_pattern_state,
+            );
+
+            {
+                // NOTE: because we perform an equality with part of the signature
+                // this constraint must be to the def_pattern_state's constraints
+                def_pattern_state.vars.push(*pattern_var);
+
+                let pattern_con = constraints.equal_types_var(
+                    *pattern_var,
+                    Expected::NoExpectation(ann.clone()),
+                    Category::Storage(std::file!(), std::line!()),
+                    loc_pattern.region,
+                );
+
+                def_pattern_state.constraints.push(pattern_con);
+            }
+        } else {
+            // We need to check the types, and run exhaustiveness checking.
+            let &AnnotatedMark {
+                annotation_var,
+                exhaustive,
+            } = annotated_mark;
+
+            def_pattern_state.vars.push(*pattern_var);
+            def_pattern_state.vars.push(annotation_var);
+
+            {
+                // First, solve the type that the pattern is expecting to match in this
+                // position.
+                let pattern_expected = PExpected::NoExpectation(Type::Variable(*pattern_var));
+                constrain_pattern(
+                    constraints,
+                    env,
+                    &loc_pattern.value,
+                    loc_pattern.region,
+                    pattern_expected,
+                    argument_pattern_state,
+                );
+            }
+
+            {
+                // Store the actual type in a variable.
+                argument_pattern_state
+                    .constraints
+                    .push(constraints.equal_types_var(
+                        annotation_var,
+                        Expected::NoExpectation(ann.clone()),
+                        Category::Storage(file!(), line!()),
+                        Region::zero(),
+                    ));
+            }
+
+            {
+                // let pattern_expected = PExpected::ForReason(
+                //     PReason::TypedArg {
+                //         index: HumanIndex::zero_based(index),
+                //         opt_name: opt_label,
+                //     },
+                //     ann.clone(),
+                //     loc_pattern.region,
+                // );
+
+                // Exhaustiveness-check the type in the pattern against what the
+                // annotation wants.
+                let sketched_rows =
+                    sketch_pattern_to_rows(annotation_var, loc_pattern.region, &loc_pattern.value);
+                let category = loc_pattern.value.category();
+                let expected = PExpected::ForReason(
+                    PReason::TypedArg {
+                        index: HumanIndex::zero_based(index),
+                        opt_name: opt_label,
+                    },
+                    Type::Variable(*pattern_var),
+                    loc_pattern.region,
+                );
+                let exhaustive_constraint = constraints.exhaustive(
+                    annotation_var,
+                    loc_pattern.region,
+                    Err((category, expected)),
+                    sketched_rows,
+                    ExhaustiveContext::BadArg,
+                    exhaustive,
+                );
+                argument_pattern_state
+                    .constraints
+                    .push(exhaustive_constraint)
+            }
         }
     }
 }
@@ -1843,9 +1965,9 @@ pub fn rec_defs_help(
                             headers: SendMap::default(),
                             vars: Vec::with_capacity(arguments.len()),
                             constraints: Vec::with_capacity(1),
+                            delayed_is_open_constraints: vec![],
                         };
                         let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
-                        let mut pattern_types = Vec::with_capacity(state.vars.capacity());
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
                         let closure_ext_var = *closure_ext_var;
@@ -1855,53 +1977,16 @@ pub fn rec_defs_help(
                         vars.push(closure_var);
                         vars.push(closure_ext_var);
 
-                        let it = arguments.iter().zip(arg_types.iter()).enumerate();
-                        for (index, ((pattern_var, loc_pattern), loc_ann)) in it {
-                            {
-                                // ensure type matches the one in the annotation
-                                let opt_label =
-                                    if let Pattern::Identifier(label) = def.loc_pattern.value {
-                                        Some(label)
-                                    } else {
-                                        None
-                                    };
-                                let pattern_type: &Type = loc_ann;
-
-                                let pattern_expected = PExpected::ForReason(
-                                    PReason::TypedArg {
-                                        index: HumanIndex::zero_based(index),
-                                        opt_name: opt_label,
-                                    },
-                                    pattern_type.clone(),
-                                    loc_pattern.region,
-                                );
-
-                                constrain_pattern(
-                                    constraints,
-                                    env,
-                                    &loc_pattern.value,
-                                    loc_pattern.region,
-                                    pattern_expected,
-                                    &mut state,
-                                );
-                            }
-
-                            {
-                                // NOTE: because we perform an equality with part of the signature
-                                // this constraint must be to the def_pattern_state's constraints
-                                def_pattern_state.vars.push(*pattern_var);
-                                pattern_types.push(Type::Variable(*pattern_var));
-
-                                let pattern_con = constraints.equal_types_var(
-                                    *pattern_var,
-                                    Expected::NoExpectation(loc_ann.clone()),
-                                    Category::Storage(std::file!(), std::line!()),
-                                    loc_pattern.region,
-                                );
-
-                                def_pattern_state.constraints.push(pattern_con);
-                            }
-                        }
+                        constrain_typed_function_arguments(
+                            constraints,
+                            env,
+                            def,
+                            &mut def_pattern_state,
+                            &mut state,
+                            arguments,
+                            arg_types,
+                        );
+                        let pattern_types = arguments.iter().map(|a| Type::Variable(a.0)).collect();
 
                         let closure_constraint = constrain_closure_size(
                             constraints,

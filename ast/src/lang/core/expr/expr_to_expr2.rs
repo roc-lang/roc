@@ -173,25 +173,11 @@ pub fn expr_to_expr2<'a>(
             (expr, output)
         }
 
-        GlobalTag(tag) => {
-            // a global tag without any arguments
+        Tag(tag) => {
+            // a tag without any arguments
             (
-                Expr2::GlobalTag {
+                Expr2::Tag {
                     name: PoolStr::new(tag, env.pool),
-                    variant_var: env.var_store.fresh(),
-                    ext_var: env.var_store.fresh(),
-                    arguments: PoolVec::empty(env.pool),
-                },
-                Output::default(),
-            )
-        }
-        PrivateTag(name) => {
-            // a private tag without any arguments
-            let ident_id = env.ident_ids.get_or_insert(&(*name).into());
-            let name = Symbol::new(env.home, ident_id);
-            (
-                Expr2::PrivateTag {
-                    name,
                     variant_var: env.var_store.fresh(),
                     ext_var: env.var_store.fresh(),
                     arguments: PoolVec::empty(env.pool),
@@ -557,23 +543,12 @@ pub fn expr_to_expr2<'a>(
                     // We can't call a runtime error; bail out by propagating it!
                     return (fn_expr, output);
                 }
-                Expr2::GlobalTag {
+                Expr2::Tag {
                     variant_var,
                     ext_var,
                     name,
                     ..
-                } => Expr2::GlobalTag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    arguments: args,
-                },
-                Expr2::PrivateTag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    ..
-                } => Expr2::PrivateTag {
+                } => Expr2::Tag {
                     variant_var,
                     ext_var,
                     name,

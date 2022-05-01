@@ -1,68 +1,63 @@
-procedure List.3 (#Attr.2, #Attr.3):
-    let Test.44 : U64 = lowlevel ListLen #Attr.2;
-    let Test.41 : Int1 = lowlevel NumLt #Attr.3 Test.44;
-    if Test.41 then
-        let Test.43 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-        let Test.42 : [C {}, C I64] = Ok Test.43;
-        ret Test.42;
+procedure List.2 (#Attr.2, #Attr.3):
+    let List.154 : U64 = lowlevel ListLen #Attr.2;
+    let List.151 : Int1 = lowlevel NumLt #Attr.3 List.154;
+    if List.151 then
+        let List.153 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+        let List.152 : [C {}, C I64] = Ok List.153;
+        ret List.152;
     else
-        let Test.40 : {} = Struct {};
-        let Test.39 : [C {}, C I64] = Err Test.40;
-        ret Test.39;
+        let List.150 : {} = Struct {};
+        let List.149 : [C {}, C I64] = Err List.150;
+        ret List.149;
 
-procedure List.4 (#Attr.2, #Attr.3, #Attr.4):
-    let Test.24 : U64 = lowlevel ListLen #Attr.2;
-    let Test.17 : Int1 = lowlevel NumLt #Attr.3 Test.24;
-    if Test.17 then
-        let Test.19 : {List I64, I64} = CallByName List.58 #Attr.2 #Attr.3 #Attr.4;
-        let Test.18 : List I64 = StructAtIndex 0 Test.19;
-        inc Test.18;
-        dec Test.19;
-        ret Test.18;
-    else
-        ret #Attr.2;
+procedure List.3 (List.63, List.64, List.65):
+    let List.142 : {List I64, I64} = CallByName List.57 List.63 List.64 List.65;
+    let List.141 : List I64 = StructAtIndex 0 List.142;
+    inc List.141;
+    dec List.142;
+    ret List.141;
 
-procedure List.58 (#Attr.2, #Attr.3, #Attr.4):
-    let Test.23 : U64 = lowlevel ListLen #Attr.2;
-    let Test.21 : Int1 = lowlevel NumLt #Attr.3 Test.23;
-    if Test.21 then
-        let Test.22 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
-        ret Test.22;
+procedure List.57 (#Attr.2, #Attr.3, #Attr.4):
+    let List.158 : U64 = lowlevel ListLen #Attr.2;
+    let List.156 : Int1 = lowlevel NumLt #Attr.3 List.158;
+    if List.156 then
+        let List.157 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
+        ret List.157;
     else
-        let Test.20 : {List I64, I64} = Struct {#Attr.2, #Attr.4};
-        ret Test.20;
+        let List.155 : {List I64, I64} = Struct {#Attr.2, #Attr.4};
+        ret List.155;
 
 procedure Test.1 (Test.2, Test.3, Test.4):
-    let Test.38 : [C {}, C I64] = CallByName List.3 Test.4 Test.3;
-    let Test.37 : [C {}, C I64] = CallByName List.3 Test.4 Test.2;
-    let Test.13 : {[C {}, C I64], [C {}, C I64]} = Struct {Test.37, Test.38};
-    joinpoint Test.34:
-        let Test.25 : List I64 = Array [];
-        ret Test.25;
+    let Test.29 : [C {}, C I64] = CallByName List.2 Test.4 Test.3;
+    let Test.28 : [C {}, C I64] = CallByName List.2 Test.4 Test.2;
+    let Test.13 : {[C {}, C I64], [C {}, C I64]} = Struct {Test.28, Test.29};
+    joinpoint Test.25:
+        let Test.16 : List I64 = Array [];
+        ret Test.16;
     in
-    let Test.31 : [C {}, C I64] = StructAtIndex 1 Test.13;
-    let Test.32 : U8 = 1i64;
-    let Test.33 : U8 = GetTagId Test.31;
-    let Test.36 : Int1 = lowlevel Eq Test.32 Test.33;
-    if Test.36 then
-        let Test.28 : [C {}, C I64] = StructAtIndex 0 Test.13;
-        let Test.29 : U8 = 1i64;
-        let Test.30 : U8 = GetTagId Test.28;
-        let Test.35 : Int1 = lowlevel Eq Test.29 Test.30;
-        if Test.35 then
-            let Test.27 : [C {}, C I64] = StructAtIndex 0 Test.13;
-            let Test.6 : I64 = UnionAtIndex (Id 1) (Index 0) Test.27;
-            let Test.26 : [C {}, C I64] = StructAtIndex 1 Test.13;
-            let Test.7 : I64 = UnionAtIndex (Id 1) (Index 0) Test.26;
-            let Test.15 : List I64 = CallByName List.4 Test.4 Test.2 Test.7;
-            let Test.14 : List I64 = CallByName List.4 Test.15 Test.3 Test.6;
+    let Test.22 : [C {}, C I64] = StructAtIndex 1 Test.13;
+    let Test.23 : U8 = 1i64;
+    let Test.24 : U8 = GetTagId Test.22;
+    let Test.27 : Int1 = lowlevel Eq Test.23 Test.24;
+    if Test.27 then
+        let Test.19 : [C {}, C I64] = StructAtIndex 0 Test.13;
+        let Test.20 : U8 = 1i64;
+        let Test.21 : U8 = GetTagId Test.19;
+        let Test.26 : Int1 = lowlevel Eq Test.20 Test.21;
+        if Test.26 then
+            let Test.18 : [C {}, C I64] = StructAtIndex 0 Test.13;
+            let Test.6 : I64 = UnionAtIndex (Id 1) (Index 0) Test.18;
+            let Test.17 : [C {}, C I64] = StructAtIndex 1 Test.13;
+            let Test.7 : I64 = UnionAtIndex (Id 1) (Index 0) Test.17;
+            let Test.15 : List I64 = CallByName List.3 Test.4 Test.2 Test.7;
+            let Test.14 : List I64 = CallByName List.3 Test.15 Test.3 Test.6;
             ret Test.14;
         else
             dec Test.4;
-            jump Test.34;
+            jump Test.25;
     else
         dec Test.4;
-        jump Test.34;
+        jump Test.25;
 
 procedure Test.0 ():
     let Test.10 : U64 = 0i64;

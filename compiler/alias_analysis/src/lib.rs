@@ -26,8 +26,16 @@ pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), &proc.ret_layout)
 }
 
-const DEBUG: bool = false;
-const SIZE: usize = if DEBUG { 50 } else { 16 };
+#[inline(always)]
+fn debug() -> bool {
+    use roc_debug_flags::{dbg_do, ROC_DEBUG_ALIAS_ANALYSIS};
+    dbg_do!(ROC_DEBUG_ALIAS_ANALYSIS, {
+        return true;
+    });
+    false
+}
+
+const SIZE: usize = 16;
 
 #[derive(Debug, Clone, Copy, Hash)]
 struct TagUnionId(u64);
@@ -87,7 +95,7 @@ where
         *target = *source;
     }
 
-    if DEBUG {
+    if debug() {
         for (i, c) in (format!("{:?}", symbol)).chars().take(25).enumerate() {
             name_bytes[25 + i] = c as u8;
         }
@@ -175,7 +183,7 @@ where
                 }
             }
 
-            if DEBUG {
+            if debug() {
                 eprintln!(
                     "{:?}: {:?} with {:?} args",
                     proc.name,
@@ -239,7 +247,7 @@ where
         p.build()?
     };
 
-    if DEBUG {
+    if debug() {
         eprintln!("{}", program.to_source_string());
     }
 

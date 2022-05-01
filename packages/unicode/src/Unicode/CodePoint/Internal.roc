@@ -10,7 +10,7 @@ interface Unicode.CodePoint.Internal
         []
 
 ## This is just here so that both Unicode.Scalar and Unicode.CodePoint can access it.
-CodePoint : [ @CodePoint U32 ]
+CodePoint := U32
 
 fromU32Unchecked : U32 -> CodePoint
 fromU32Unchecked = \u32 -> @CodePoint u32

@@ -54,7 +54,7 @@ impl<K: PartialEq, V> VecMap<K, V> {
         }
     }
 
-    pub fn contains(&self, key: &K) -> bool {
+    pub fn contains_key(&self, key: &K) -> bool {
         self.keys.contains(key)
     }
 
@@ -69,12 +69,61 @@ impl<K: PartialEq, V> VecMap<K, V> {
         }
     }
 
+    pub fn get(&self, key: &K) -> Option<&V> {
+        match self.keys.iter().position(|x| x == key) {
+            None => None,
+            Some(index) => Some(&self.values[index]),
+        }
+    }
+
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        match self.keys.iter().position(|x| x == key) {
+            None => None,
+            Some(index) => Some(&mut self.values[index]),
+        }
+    }
+
+    pub fn get_or_insert(&mut self, key: K, default_value: impl Fn() -> V) -> &mut V {
+        match self.keys.iter().position(|x| x == &key) {
+            Some(index) => &mut self.values[index],
+            None => {
+                let value = default_value();
+
+                self.keys.push(key);
+                self.values.push(value);
+
+                self.values.last_mut().unwrap()
+            }
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.keys.iter().zip(self.values.iter())
     }
 
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.keys.iter()
+    }
+
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.values.iter()
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.keys.truncate(len);
+        self.values.truncate(len);
+    }
+
+    pub fn unzip(self) -> (Vec<K>, Vec<V>) {
+        (self.keys, self.values)
+    }
+
+    /// # Safety
+    ///
+    /// keys and values must have the same length, and there must not
+    /// be any duplicates in the keys vector
+    pub unsafe fn zip(keys: Vec<K>, values: Vec<V>) -> Self {
+        Self { keys, values }
     }
 }
 

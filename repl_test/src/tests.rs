@@ -901,33 +901,33 @@ fn parse_problem() {
 
 #[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
-fn mono_problem() {
+fn exhaustiveness_problem() {
     expect_failure(
-        r#"
+        indoc!(
+            r#"
             t : [A, B, C]
             t = A
 
             when t is
                 A -> "a"
-            "#,
+            "#
+        ),
         indoc!(
             r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
+            ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
-                This when does not cover all the possibilities:
-
-                7│>                  when t is
-                8│>                      A -> "a"
-
-                Other possibilities include:
-
-                    B
-                    C
-
-                I would have to crash if I saw one of those! Add branches for them!
-
-
-                Enter an expression, or :help, or :exit/:q."#
+            This when does not cover all the possibilities:
+            
+            7│>      when t is
+            8│>          A -> "a"
+            
+            Other possibilities include:
+            
+                B
+                C
+            
+            I would have to crash if I saw one of those! Add branches for them!
+            "#
         ),
     );
 }
@@ -1019,7 +1019,7 @@ fn opaque_apply() {
             r#"
             Age := U32
 
-            $Age 23
+            @Age 23
             "#
         ),
         "23 : Age",
@@ -1033,7 +1033,7 @@ fn opaque_apply_polymorphic() {
             r#"
             F t u := [ Package t u ]
 
-            $F (Package "" { a: "" })
+            @F (Package "" { a: "" })
             "#
         ),
         r#"Package "" { a: "" } : F Str { a : Str }"#,
@@ -1047,9 +1047,9 @@ fn opaque_pattern_and_call() {
             r#"
             F t u := [ Package t u ]
 
-            f = \$F (Package A {}) -> $F (Package {} A)
+            f = \@F (Package A {}) -> @F (Package {} A)
 
-            f ($F (Package A {}))
+            f (@F (Package A {}))
             "#
         ),
         r#"Package {} A : F {} [ A ]*"#,

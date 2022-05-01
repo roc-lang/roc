@@ -9,11 +9,10 @@ Equating is
     ##
     ## Structural equality works as follows:
     ##
-    ## 1. Tags are equal if they are the same tag, and also their contents (if any) are equal.
+    ## 1. Tags are equal if they have the same tag name, and also their contents (if any) are equal.
     ## 2. Records are equal if all their fields are equal.
     ## 3. Collections ([Str], [List], [Dict], and [Set]) are equal if they are the same length, and also all their corresponding elements are equal.
-    ## 4. [Num] values are equal if their numbers are equal. Note that [Float] numbers don't support [Equating].
-    ## 5. Opaque types are equal if they have the same opaque wrapper and their contents are structurally equal.
+    ## 4. [Num] values are equal if their numbers are equal, with one exception: if both arguments to `isEq` are *NaN*, then `isEq` returns `False`. See `Num.isNaN` for more about *NaN*.
     isEq : a, a -> Bool | a supports Equating
 
 ## The same as calling [isEq] on the given values, then calling [not] on the result.

@@ -1,5 +1,5 @@
 use crate::def::Def;
-use crate::expr::{self, ClosureData, Expr::*, IntValue};
+use crate::expr::{self, AnnotatedMark, ClosureData, Expr::*, IntValue};
 use crate::expr::{Expr, Field, Recursive};
 use crate::num::{FloatBound, IntBound, IntWidth, NumericBound};
 use crate::pattern::Pattern;
@@ -9,7 +9,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
 
 macro_rules! macro_magic {
     (@single $($x:tt)*) => (());
@@ -2622,8 +2622,16 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(sep_sym, sep_var)],
         arguments: vec![
-            (clos_acc_var, no_region(Pattern::Identifier(clos_acc_sym))),
-            (sep_var, no_region(Pattern::Identifier(clos_elem_sym))),
+            (
+                clos_acc_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(clos_acc_sym)),
+            ),
+            (
+                sep_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(clos_elem_sym)),
+            ),
         ],
         loc_body: {
             let append_sep = RunLowLevel {
@@ -2708,9 +2716,14 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
         arguments: vec![
             (
                 clos_start_var,
+                AnnotatedMark::new(var_store),
                 no_region(Pattern::Identifier(clos_start_sym)),
             ),
-            (clos_len_var, no_region(Pattern::Identifier(clos_len_sym))),
+            (
+                clos_len_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(clos_len_sym)),
+            ),
         ],
         loc_body: {
             Box::new(no_region(RunLowLevel {
@@ -2894,7 +2907,11 @@ fn list_drop_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
         name: Symbol::LIST_DROP_IF_PREDICATE,
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(sym_predicate, t_predicate)],
-        arguments: vec![(t_elem, no_region(Pattern::Identifier(Symbol::ARG_3)))],
+        arguments: vec![(
+            t_elem,
+            AnnotatedMark::new(var_store),
+            no_region(Pattern::Identifier(Symbol::ARG_3)),
+        )],
         loc_body: {
             let should_drop = Call(
                 Box::new((
@@ -3078,8 +3095,16 @@ fn list_join_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(Symbol::ARG_2, before2list_after)],
         arguments: vec![
-            (list_after, no_region(Pattern::Identifier(Symbol::ARG_3))),
-            (before, no_region(Pattern::Identifier(Symbol::ARG_4))),
+            (
+                list_after,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_3)),
+            ),
+            (
+                before,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_4)),
+            ),
         ],
         loc_body: {
             let mapper = Box::new((
@@ -3609,8 +3634,16 @@ fn list_sort_desc(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![],
         arguments: vec![
-            (num_var, no_region(Pattern::Identifier(Symbol::ARG_2))),
-            (num_var, no_region(Pattern::Identifier(Symbol::ARG_3))),
+            (
+                num_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_2)),
+            ),
+            (
+                num_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_3)),
+            ),
         ],
         loc_body: {
             Box::new(no_region(RunLowLevel {
@@ -4084,9 +4117,21 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(Symbol::ARG_3, func_var)],
         arguments: vec![
-            (accum_var, no_region(Pattern::Identifier(Symbol::ARG_5))),
-            (key_var, no_region(Pattern::Identifier(Symbol::ARG_6))),
-            (Variable::EMPTY_RECORD, no_region(Pattern::Underscore)),
+            (
+                accum_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_5)),
+            ),
+            (
+                key_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_6)),
+            ),
+            (
+                Variable::EMPTY_RECORD,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Underscore),
+            ),
         ],
         loc_body: Box::new(no_region(call_func)),
     });
@@ -4662,7 +4707,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         // ok branch
         let ok = Tag {
@@ -4686,6 +4731,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4693,7 +4739,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -4716,6 +4762,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4727,6 +4774,8 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -4759,7 +4808,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         // ok branch
         let ok = Tag {
@@ -4783,6 +4832,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4790,7 +4840,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -4813,6 +4863,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4824,6 +4875,8 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -4843,7 +4896,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4856,6 +4909,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_3)),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4863,7 +4917,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4876,6 +4930,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_2)),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4887,6 +4942,8 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -4906,7 +4963,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4918,7 +4975,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let false_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("False".into()),
+            name: TagName::Tag("False".into()),
             arguments: vec![],
         };
 
@@ -4926,6 +4983,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4933,7 +4991,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4945,7 +5003,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let true_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("True".into()),
+            name: TagName::Tag("True".into()),
             arguments: vec![],
         };
 
@@ -4953,6 +5011,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4964,6 +5023,8 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -4983,7 +5044,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4995,7 +5056,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let true_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("True".into()),
+            name: TagName::Tag("True".into()),
             arguments: vec![],
         };
 
@@ -5003,6 +5064,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -5010,7 +5072,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -5022,7 +5084,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let false_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("False".into()),
+            name: TagName::Tag("False".into()),
             arguments: vec![],
         };
 
@@ -5030,6 +5092,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -5041,6 +5104,8 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -5073,7 +5138,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         // ok branch
         let ok = call_func;
@@ -5092,6 +5157,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -5099,7 +5165,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -5122,6 +5188,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -5133,6 +5200,8 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -5157,7 +5226,7 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
     Expr::Tag {
         variant_var: var_store.fresh(),
         ext_var: var_store.fresh(),
-        name: TagName::Global(name.into()),
+        name: TagName::Tag(name.into()),
         arguments: args
             .into_iter()
             .map(|expr| (var_store.fresh(), no_region(expr)))
@@ -5318,7 +5387,13 @@ fn defn_help(
 
     let closure_args = args
         .into_iter()
-        .map(|(var, symbol)| (var, no_region(Identifier(symbol))))
+        .map(|(var, symbol)| {
+            (
+                var,
+                AnnotatedMark::new(var_store),
+                no_region(Identifier(symbol)),
+            )
+        })
         .collect();
 
     Closure(ClosureData {

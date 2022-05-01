@@ -343,8 +343,7 @@ impl LambdaSet {
                 TagName::Closure(symbol) => {
                     layouts.symbols.push(*symbol);
                 }
-                TagName::Global(_) => unreachable!("lambda set tags must be closure tags"),
-                TagName::Private(_) => unreachable!("lambda set tags must be closure tags"),
+                TagName::Tag(_) => unreachable!("lambda set tags must be closure tags"),
             }
         }
 
@@ -678,11 +677,9 @@ impl Layout {
                 }
 
                 match symbol {
-                    Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => Ok(Layout::Decimal),
+                    Symbol::NUM_DECIMAL => Ok(Layout::Decimal),
 
-                    Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
-                        Ok(layouts.usize())
-                    }
+                    Symbol::NUM_NAT | Symbol::NUM_NATURAL => Ok(layouts.usize()),
 
                     _ => {
                         // at this point we throw away alias information

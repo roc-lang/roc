@@ -6,9 +6,6 @@
 #![allow(clippy::float_cmp)]
 
 #[macro_use]
-extern crate pretty_assertions;
-
-#[macro_use]
 extern crate indoc;
 
 /// Used in the with_larger_debug_stack() function, for tests that otherwise
@@ -123,14 +120,12 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
     let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();
-    let mono_problems = loaded.mono_problems.remove(&home).unwrap_or_default();
 
     if !can_problems.is_empty() {
         println!("Ignoring {} canonicalization problems", can_problems.len());
     }
 
     assert!(type_problems.is_empty());
-    assert_eq!(mono_problems, Vec::new());
 
     debug_assert_eq!(exposed_to_host.values.len(), 1);
 
@@ -1323,9 +1318,9 @@ fn specialize_ability_call() {
         Id := U64
 
         hash : Id -> U64
-        hash = \$Id n -> n
+        hash = \@Id n -> n
 
-        main = hash ($Id 1234)
+        main = hash (@Id 1234)
         "#
     )
 }
@@ -1340,7 +1335,7 @@ fn opaque_assign_to_symbol() {
 
         fromUtf8 : U8 -> Result Variable [ InvalidVariableUtf8 ]
         fromUtf8 = \char ->
-            Ok ($Variable char)
+            Ok (@Variable char)
 
         out = fromUtf8 98
         "#

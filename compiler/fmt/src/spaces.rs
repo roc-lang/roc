@@ -117,6 +117,31 @@ fn fmt_comment<'buf>(buf: &mut Buf<'buf>, comment: &str) {
     buf.push_str(comment.trim_end());
 }
 
+pub fn count_leading_newlines<'a, I>(data: I) -> u16
+where
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+{
+    let mut count = 0;
+    let mut allow_counting = false;
+
+    for (index, val) in data.enumerate() {
+        let is_first = index == 0;
+        let is_newline = matches!(val, CommentOrNewline::Newline);
+
+        if is_first && is_newline {
+            allow_counting = true
+        }
+
+        if is_newline && allow_counting {
+            count += 1;
+        } else {
+            break;
+        }
+    }
+
+    count
+}
+
 fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
     buf.push_str("##");
     if !docs.starts_with(' ') {

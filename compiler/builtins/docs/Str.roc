@@ -116,7 +116,7 @@ interface Str
 ## It has many more tools than this module does!
 
 ## A [Unicode](https://unicode.org) text value.
-Str : [ @Str ]
+Str := [ Str ]
 
 ## Convert
 

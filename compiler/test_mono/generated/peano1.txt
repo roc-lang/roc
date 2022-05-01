@@ -1,8 +1,8 @@
 procedure Test.0 ():
-    let Test.14 : TODO = Z ;
-    let Test.13 : TODO = S Test.14;
-    let Test.12 : TODO = S Test.13;
-    let Test.2 : TODO = S Test.12;
+    let Test.14 : [<rnu><null>, C *self] = Z ;
+    let Test.13 : [<rnu><null>, C *self] = S Test.14;
+    let Test.12 : [<rnu><null>, C *self] = S Test.13;
+    let Test.2 : [<rnu><null>, C *self] = S Test.12;
     let Test.9 : Int1 = 1i64;
     let Test.10 : Int1 = GetTagId Test.2;
     dec Test.2;

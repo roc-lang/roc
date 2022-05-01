@@ -1,12 +1,12 @@
 When(
     @5-22 Apply(
-        @5-11 GlobalTag(
+        @5-11 Tag(
             "Delmin",
         ),
         [
             @13-19 ParensAround(
                 Apply(
-                    @13-16 GlobalTag(
+                    @13-16 Tag(
                         "Del",
                     ),
                     [
@@ -29,12 +29,12 @@ When(
             patterns: [
                 @30-48 SpaceBefore(
                     Apply(
-                        @30-36 GlobalTag(
+                        @30-36 Tag(
                             "Delmin",
                         ),
                         [
                             @38-44 Apply(
-                                @38-41 GlobalTag(
+                                @38-41 Tag(
                                     "Del",
                                 ),
                                 [
@@ -54,17 +54,17 @@ When(
                 ),
             ],
             value: @52-73 Apply(
-                @52-56 GlobalTag(
+                @52-56 Tag(
                     "Node",
                 ),
                 [
-                    @57-62 GlobalTag(
+                    @57-62 Tag(
                         "Black",
                     ),
                     @63-64 Num(
                         "0",
                     ),
-                    @65-70 GlobalTag(
+                    @65-70 Tag(
                         "False",
                     ),
                     @71-73 Var {

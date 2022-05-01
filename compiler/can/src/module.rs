@@ -8,9 +8,9 @@ use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::{MutMap, SendMap, VecSet};
+use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
-use roc_module::ident::{Ident, TagName};
-use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_parse::header::HeaderFor;
 use roc_parse::pattern::PatternType;
@@ -47,7 +47,6 @@ pub struct ModuleOutput {
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub problems: Vec<Problem>,
-    pub ident_ids: IdentIds,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
     pub scope: Scope,
@@ -107,32 +106,20 @@ impl GeneratedInfo {
                     env.problem(Problem::UnknownGeneratesWith(unknown));
                 }
 
-                let effect_symbol = scope
-                    .introduce(
-                        name.into(),
-                        &env.exposed_ident_ids,
-                        &mut env.ident_ids,
-                        Region::zero(),
-                    )
-                    .unwrap();
-
-                let effect_tag_name = TagName::Private(effect_symbol);
+                let effect_symbol = scope.introduce(name.into(), Region::zero()).unwrap();
 
                 {
                     let a_var = var_store.fresh();
 
-                    let actual = crate::effect_module::build_effect_actual(
-                        effect_tag_name,
-                        Type::Variable(a_var),
-                        var_store,
-                    );
+                    let actual =
+                        crate::effect_module::build_effect_actual(Type::Variable(a_var), var_store);
 
                     scope.add_alias(
                         effect_symbol,
                         Region::zero(),
                         vec![Loc::at_zero(("a".into(), a_var))],
                         actual,
-                        AliasKind::Structural,
+                        AliasKind::Opaque,
                     );
                 }
 
@@ -175,15 +162,15 @@ pub fn canonicalize_module_defs<'a>(
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
-    dep_idents: &'a MutMap<ModuleId, IdentIds>,
+    dep_idents: &'a IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &VecSet<Symbol>,
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home, var_store);
-    let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
+    let mut scope = Scope::new(home, exposed_ident_ids);
+    let mut env = Env::new(home, dep_idents, module_ids);
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
@@ -290,11 +277,11 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, mut scope, output, symbols_introduced) = canonicalize_defs(
+    let (defs, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
-        &scope,
+        &mut scope,
         &desugared,
         PatternType::TopLevelDef,
     );
@@ -374,7 +361,6 @@ pub fn canonicalize_module_defs<'a>(
 
                 // NOTE this currently builds all functions, not just the ones that the user requested
                 crate::effect_module::build_effect_builtins(
-                    &mut env,
                     &mut scope,
                     effect_symbol,
                     var_store,
@@ -418,8 +404,12 @@ pub fn canonicalize_module_defs<'a>(
                                 GeneratedInfo::Hosted { effect_symbol, .. } => {
                                     let symbol = def.pattern_vars.iter().next().unwrap().0;
                                     let ident_id = symbol.ident_id();
-                                    let ident =
-                                        env.ident_ids.get_name(ident_id).unwrap().to_string();
+                                    let ident = scope
+                                        .locals
+                                        .ident_ids
+                                        .get_name(ident_id)
+                                        .unwrap()
+                                        .to_string();
                                     let def_annotation = def.annotation.clone().unwrap();
                                     let annotation = crate::annotation::Annotation {
                                         typ: def_annotation.signature,
@@ -429,11 +419,10 @@ pub fn canonicalize_module_defs<'a>(
                                     };
 
                                     let hosted_def = crate::effect_module::build_host_exposed_def(
-                                        &mut env,
                                         &mut scope,
                                         *symbol,
                                         &ident,
-                                        TagName::Private(effect_symbol),
+                                        effect_symbol,
                                         var_store,
                                         annotation,
                                     );
@@ -557,7 +546,6 @@ pub fn canonicalize_module_defs<'a>(
                 exposed_imports: can_exposed_imports,
                 problems: env.problems,
                 lookups,
-                ident_ids: env.ident_ids,
             };
 
             Ok(output)
@@ -679,7 +667,7 @@ fn fix_values_captured_in_closure_expr(
             }
 
             // patterns can contain default expressions, so much go over them too!
-            for (_, loc_pat) in arguments.iter_mut() {
+            for (_, _, loc_pat) in arguments.iter_mut() {
                 fix_values_captured_in_closure_pattern(&mut loc_pat.value, no_capture_symbols);
             }
 

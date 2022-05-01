@@ -3253,9 +3253,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.5.4"
+version = "1.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d07a8629359eb56f1e2fb1652bb04212c072a87ba68546a04065d525673ac461"
+checksum = "1a11647b6b25ff05a515cb92c365cec08801e83423a235b51e231e1808747286"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -3366,6 +3366,7 @@ version = "0.1.0"
 dependencies = [
  "morphic_lib",
  "roc_collections",
+ "roc_debug_flags",
  "roc_module",
  "roc_mono",
 ]
@@ -3453,6 +3454,7 @@ dependencies = [
  "roc_builtins",
  "roc_collections",
  "roc_error_macros",
+ "roc_exhaustive",
  "roc_module",
  "roc_parse",
  "roc_problem",
@@ -3538,6 +3540,10 @@ dependencies = [
  "roc_region",
  "roc_types",
 ]
+
+[[package]]
+name = "roc_debug_flags"
+version = "0.1.0"
 
 [[package]]
 name = "roc_docs"
@@ -3678,6 +3684,7 @@ dependencies = [
  "roc_alias_analysis",
  "roc_builtins",
  "roc_collections",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
  "roc_mono",
@@ -3764,6 +3771,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
  "roc_mono",
@@ -3805,6 +3813,7 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_exhaustive",
  "roc_module",
@@ -3936,7 +3945,6 @@ dependencies = [
  "roc_exhaustive",
  "roc_load",
  "roc_module",
- "roc_mono",
  "roc_parse",
  "roc_problem",
  "roc_region",
@@ -3955,11 +3963,14 @@ dependencies = [
  "arrayvec 0.7.2",
  "bumpalo",
  "indoc",
+ "lazy_static",
  "pretty_assertions",
+ "regex",
  "roc_builtins",
  "roc_can",
  "roc_collections",
  "roc_error_macros",
+ "roc_exhaustive",
  "roc_load",
  "roc_module",
  "roc_parse",
@@ -4001,6 +4012,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "roc_collections",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
  "roc_region",
@@ -4014,6 +4026,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "roc_collections",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
  "roc_types",

@@ -158,25 +158,25 @@ interface Num
             Bool.{ Bool }
         ]
 
-Num range : [ @Num range ]
+Num range := range
 Int range : Num (Integer range)
 Float range : Num (FloatingPoint range)
 
-Signed128 : [ @Signed128 ]
-Signed64 : [ @Signed64 ]
-Signed32 : [ @Signed32 ]
-Signed16 : [ @Signed16 ]
-Signed8 : [ @Signed8 ]
+Signed128 := []
+Signed64 := []
+Signed32 := []
+Signed16 := []
+Signed8 := []
 
-Unsigned128 : [ @Unsigned128 ]
-Unsigned64 : [ @Unsigned64 ]
-Unsigned32 : [ @Unsigned32 ]
-Unsigned16 : [ @Unsigned16 ]
-Unsigned8 : [ @Unsigned8 ]
+Unsigned128 := []
+Unsigned64 := []
+Unsigned32 := []
+Unsigned16 := []
+Unsigned8 := []
 
-Natural : [ @Natural ]
+Natural := []
 
-Integer range : [ @Integer range ]
+Integer range := range
 
 I128 : Num (Integer Signed128)
 I64 : Num (Integer Signed64)
@@ -192,11 +192,11 @@ U8 : Num (Integer Unsigned8)
 
 Nat : Num (Integer Natural)
 
-Decimal : [ @Decimal ]
-Binary64 : [ @Binary64 ]
-Binary32 : [ @Binary32 ]
+Decimal := []
+Binary64 := []
+Binary32 := []
 
-FloatingPoint range : [ @FloatingPoint range ]
+FloatingPoint range := range
 
 F64 : Num (FloatingPoint Binary64)
 F32 : Num (FloatingPoint Binary32)

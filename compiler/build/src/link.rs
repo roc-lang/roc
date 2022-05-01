@@ -1072,7 +1072,7 @@ pub fn module_to_dylib(
     opt_level: OptLevel,
 ) -> Result<Library, Error> {
     use crate::target::{self, convert_opt_level};
-    use inkwell::targets::{CodeModel, FileType, RelocMode};
+    use inkwell::targets::{FileType, RelocMode};
 
     let dir = tempfile::tempdir().unwrap();
     let filename = PathBuf::from("Test.roc");
@@ -1083,9 +1083,8 @@ pub fn module_to_dylib(
 
     // Emit the .o file using position-independent code (PIC) - needed for dylibs
     let reloc = RelocMode::PIC;
-    let model = CodeModel::Default;
     let target_machine =
-        target::target_machine(target, convert_opt_level(opt_level), reloc, model).unwrap();
+        target::target_machine(target, convert_opt_level(opt_level), reloc).unwrap();
 
     target_machine
         .write_to_file(module, FileType::Object, &app_o_file)
@@ -1104,6 +1103,21 @@ pub fn module_to_dylib(
 
     // Load the dylib
     let path = dylib_path.as_path().to_str().unwrap();
+
+    if matches!(target.architecture, Architecture::Aarch64(_)) {
+        // On AArch64 darwin machines, calling `ldopen` on Roc-generated libs from multiple threads
+        // sometimes fails with
+        //   cannot dlopen until fork() handlers have completed
+        // This may be due to codesigning. In any case, spinning until we are able to dlopen seems
+        // to be okay.
+        loop {
+            match unsafe { Library::new(path) } {
+                Ok(lib) => return Ok(lib),
+                Err(Error::DlOpen { .. }) => continue,
+                Err(other) => return Err(other),
+            }
+        }
+    }
 
     unsafe { Library::new(path) }
 }
