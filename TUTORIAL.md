@@ -8,7 +8,7 @@ Enjoy!
 
 ## Getting started
 
-Learn how to install roc on your machine [here](https://github.com/rtfeldman/roc#getting-started).
+Learn how to install Roc on your machine [here](https://github.com/rtfeldman/roc#getting-started).
 
 ## Strings and Numbers
 
@@ -25,19 +25,19 @@ You should see this:
 The rockin’ roc repl
 ```
 
-Try typing this in and pressing enter:
+Try typing this and pressing enter:
 
 ```coffee
 >> "Hello, World!"
 "Hello, World!" : Str
 ```
 
-Congratulations! You've just written your first Roc code!
+Congratulations, you've just written your first Roc code!
 
 Specifically, you entered the *expression* `"Hello, World!"` into the REPL,
 and the REPL printed it back out. It also printed `: Str`, which is the
 expression's type. We'll talk about types later; for now, we'll ignore the `:`
-and whatever comes after it whenever the REPL prints them.
+and whatever comes after it.
 
 Let's try putting in a more complicated expression:
 
@@ -140,7 +140,7 @@ You should see this:
 I'm a Roc application!
 ```
 
-Congratulations - you've now written your first Roc application! We'll go over what the parts of
+Congratulations again - you've now written your first Roc application! We'll go over what the parts of
 this file above `main` do later, but first let's play around a bit.
 Try replacing the `main` line with this:
 
@@ -191,7 +191,7 @@ it uses `total`. If you like, you can change the order of these defs to anything
 you like, and everything will still work the same way!
 
 This works because Roc expressions don't have *side effects*. We'll talk more
-about side effects later.
+about effects later.
 
 ## Functions and `if`
 
