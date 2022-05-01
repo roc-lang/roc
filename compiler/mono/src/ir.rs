@@ -4162,7 +4162,7 @@ pub fn with_hole<'a>(
                         layout_cache,
                         lambda_set,
                         name,
-                        symbols,
+                        symbols.iter().copied(),
                         assigned,
                         hole,
                     )
@@ -4734,17 +4734,25 @@ fn get_specialization<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn construct_closure_data<'a>(
+fn construct_closure_data<'a, I>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     lambda_set: LambdaSet<'a>,
     name: Symbol,
-    symbols: &'a [&(Symbol, Variable)],
+    symbols: I,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
-) -> Stmt<'a> {
+) -> Stmt<'a>
+where
+    I: IntoIterator<Item = &'a (Symbol, Variable)>,
+    I::IntoIter: ExactSizeIterator,
+{
     let lambda_set_layout = Layout::LambdaSet(lambda_set);
+    let symbols = symbols.into_iter();
+
+    // arguments with a polymorphic type that we have to deal with
+    let mut polymorphic_arguments = Vec::new_in(env.arena);
 
     let mut result = match lambda_set.layout_for_member(name) {
         ClosureRepresentation::Union {
@@ -4755,10 +4763,14 @@ fn construct_closure_data<'a>(
         } => {
             // captured variables are in symbol-alphabetic order, but now we want
             // them ordered by their alignment requirements
-            let mut combined = Vec::from_iter_in(
-                symbols.iter().map(|&&(s, _)| s).zip(field_layouts.iter()),
-                env.arena,
-            );
+            let mut combined = Vec::with_capacity_in(symbols.len(), env.arena);
+            for ((symbol, variable), layout) in symbols.zip(field_layouts.iter()) {
+                if procs.partial_exprs.contains(*symbol) {
+                    polymorphic_arguments.push((*symbol, *variable));
+                }
+
+                combined.push((*symbol, layout))
+            }
 
             let ptr_bytes = env.target_info;
 
@@ -4786,10 +4798,14 @@ fn construct_closure_data<'a>(
 
             // captured variables are in symbol-alphabetic order, but now we want
             // them ordered by their alignment requirements
-            let mut combined = Vec::from_iter_in(
-                symbols.iter().map(|&(s, _)| s).zip(field_layouts.iter()),
-                env.arena,
-            );
+            let mut combined = Vec::with_capacity_in(symbols.len(), env.arena);
+            for ((symbol, variable), layout) in symbols.zip(field_layouts.iter()) {
+                if procs.partial_exprs.contains(*symbol) {
+                    polymorphic_arguments.push((*symbol, *variable));
+                }
+
+                combined.push((*symbol, layout))
+            }
 
             let ptr_bytes = env.target_info;
 
@@ -4801,7 +4817,7 @@ fn construct_closure_data<'a>(
             });
 
             let symbols =
-                Vec::from_iter_in(combined.iter().map(|(a, _)| **a), env.arena).into_bump_slice();
+                Vec::from_iter_in(combined.iter().map(|(a, _)| *a), env.arena).into_bump_slice();
             let field_layouts =
                 Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
 
@@ -4842,10 +4858,8 @@ fn construct_closure_data<'a>(
     // TODO: this is not quite right. What we should actually be doing is removing references to
     // polymorphic expressions from the captured symbols, and allowing the specializations of those
     // symbols to be inlined when specializing the closure body elsewhere.
-    for &&(symbol, var) in symbols {
-        if procs.partial_exprs.contains(symbol) {
-            result = specialize_symbol(env, procs, layout_cache, Some(var), symbol, result, symbol);
-        }
+    for (symbol, var) in polymorphic_arguments {
+        result = specialize_symbol(env, procs, layout_cache, Some(var), symbol, result, symbol);
     }
 
     result
@@ -6937,7 +6951,7 @@ fn specialize_symbol<'a>(
                             layout_cache,
                             lambda_set,
                             original,
-                            symbols,
+                            symbols.iter().copied(),
                             closure_data,
                             env.arena.alloc(result),
                         )
@@ -7696,7 +7710,7 @@ fn call_specialized_proc<'a>(
                     layout_cache,
                     lambda_set,
                     proc_name,
-                    symbols,
+                    symbols.iter().copied(),
                     closure_data_symbol,
                     env.arena.alloc(new_hole),
                 );
