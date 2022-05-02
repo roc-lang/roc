@@ -58,6 +58,10 @@ impl<T: PartialEq> VecSet<T> {
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.elements.iter()
     }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.elements.iter_mut()
+    }
 }
 
 impl<A: Ord> Extend<A> for VecSet<A> {
