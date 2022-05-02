@@ -69,7 +69,7 @@ not : Bool -> Bool
 ## 1. Tags are equal if they have the same tag name, and also their contents (if any) are equal.
 ## 2. Records are equal if all their fields are equal.
 ## 3. Collections ([Str], [List], [Dict], and [Set]) are equal if they are the same length, and also all their corresponding elements are equal.
-## 4. [Num] values are equal if their numbers are equal, with one exception: if both arguments to `isEq` are *NaN*, then `isEq` returns `False`. See `Num.isNaN` for more about *NaN*.
+## 4. [Num](Num#Num) values are equal if their numbers are equal, with one exception: if both arguments to `isEq` are *NaN*, then `isEq` returns `False`. See `Num.isNaN` for more about *NaN*.
 ##
 ## Note that `isEq` takes `'val` instead of `val`, which means `isEq` does not
 ## accept arguments whose types contain functions.
