@@ -565,7 +565,7 @@ fn fix_values_captured_in_closure_def(
 }
 
 fn fix_values_captured_in_closure_defs(
-    defs: &mut Vec<crate::def::Def>,
+    defs: &mut [crate::def::Def],
     no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     // recursive defs cannot capture each other

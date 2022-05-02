@@ -724,7 +724,7 @@ impl<'a> Specialized<'a> {
             })
     }
 
-    fn is_specialized(&mut self, symbol: Symbol, layout: &ProcLayout<'a>) -> bool {
+    fn is_specialized(&self, symbol: Symbol, layout: &ProcLayout<'a>) -> bool {
         for (i, s) in self.symbols.iter().enumerate() {
             if *s == symbol && &self.proc_layouts[i] == layout {
                 return true;
