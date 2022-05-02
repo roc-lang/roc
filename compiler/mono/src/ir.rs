@@ -7432,14 +7432,11 @@ fn call_by_name_help<'a>(
 
                 let result = build_call(env, call, assigned, *ret_layout, hole);
 
-                let field_symbols = if has_closure {
-                    &field_symbols[..field_symbols.len() - 1]
-                } else {
-                    field_symbols
-                };
-
-                let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
-                let x = assign_to_symbols(env, procs, layout_cache, iter, result);
+                // NOTE: the zip omits the closure symbol, if it exists,
+                // because loc_args then is shorter than field_symbols
+                debug_assert!([0, 1].contains(&(field_symbols.len() - loc_args.len())));
+                let iter = loc_args.into_iter().zip(field_symbols.iter()).rev();
+                let result = assign_to_symbols(env, procs, layout_cache, iter, result);
 
                 if has_closure {
                     let partial_proc = procs.partial_procs.get_symbol(proc_name).unwrap();
@@ -7457,10 +7454,10 @@ fn call_by_name_help<'a>(
                         proc_name,
                         captured.iter(),
                         closure_argument,
-                        env.arena.alloc(x),
+                        env.arena.alloc(result),
                     )
                 } else {
-                    x
+                    result
                 }
             }
             PendingSpecializations::Making => {
