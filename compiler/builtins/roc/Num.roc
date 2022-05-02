@@ -173,7 +173,7 @@ interface Num
 ## technically has the type `Num (Integer *)`, so when you pass two of them to
 ## [Num.add], the answer you get is `2 : Num (Integer *)`.
 ##
-## The type [`Float a`]([Float]) is defined to be an alias for `Num (Fraction a)`,
+## The type [`Float a`](#Float) is defined to be an alias for `Num (Fraction a)`,
 ## so `3.0 : Num (Fraction *)` is the same value as `3.0 : Float *`.
 ## Similarly, the type [`Int a`](#Int) is defined to be an alias for
 ## `Num (Integer a)`, so `2 : Num (Integer *)` is the same value as
@@ -228,23 +228,23 @@ Num range := range
 ## Since integers have a fixed size, the size you choose determines both the
 ## range of numbers it can represent, and also how much memory it takes up.
 ##
-## #U8 is an an example of an integer. It is an unsigned #Int that takes up 8 bits
+## [U8] is an an example of an integer. It is an unsigned [Int] that takes up 8 bits
 ## (aka 1 byte) in memory. The `U` is for Unsigned and the 8 is for 8 bits.
 ## Because it has 8 bits to work with, it can store 256 numbers (2^8),
 ## and because it is unsigned, its min value is 0. This means the 256 numbers
 ## it can store range from 0 to 255.
 ##
-## #I8 is a signed integer that takes up 8 bits. The `I` is for Integer, since
+## [I8] is a signed integer that takes up 8 bits. The `I` is for Integer, since
 ## integers in mathematics are signed by default. Because it has 8 bits just
-## like #U8, it can store 256 numbers (still 2^16), but because it is signed,
+## like [U8], it can store 256 numbers (still 2^16), but because it is signed,
 ## the range is different. Its 256 numbers range from -128 to 127.
 ##
 ## Here are some other examples:
 ##
-## * #U16 is like #U8, except it takes up 16 bytes in memory. It can store 65,536 numbers (2^16), ranging from 0 to 65,536.
-## * #I16 is like #U16, except it is signed. It can still store the same 65,536 numbers (2^16), ranging from -32,768 to 32,767.
+## * [U16] is like [U8], except it takes up 16 bytes in memory. It can store 65,536 numbers (2^16), ranging from 0 to 65,536.
+## * [I16] is like [U16], except it is signed. It can still store the same 65,536 numbers (2^16), ranging from -32,768 to 32,767.
 ##
-## This pattern continues up to #U128 and #I128.
+## This pattern continues up to [U128] and [I128].
 ##
 ## ## Performance notes
 ##
@@ -260,8 +260,8 @@ Num range := range
 ## Minimizing memory usage does not imply maximum runtime speed!
 ## CPUs are typically fastest at performing integer operations on integers that
 ## are the same size as that CPU's native machine word size. That means a 64-bit
-## CPU is typically fastest at executing instructions on #U64 and #I64 values,
-## whereas a 32-bit CPU is typically fastest on #U32 and #I32 values.
+## CPU is typically fastest at executing instructions on [U64] and [I64] values,
+## whereas a 32-bit CPU is typically fastest on [U32] and [I32] values.
 ##
 ## Putting these factors together, here are some reasonable guidelines for optimizing performance through integer size choice:
 ##
@@ -269,13 +269,13 @@ Num range := range
 ## * Next, think about the range of numbers you expect this number to hold. Choose the smallest size you will never expect to overflow, no matter the inputs your program receives. (Validating inputs for size, and presenting the user with an error if they are too big, can help guard against overflow.)
 ## * Finally, if a particular numeric calculation is running too slowly, you can try experimenting with other number sizes. This rarely makes a meaningful difference, but some processors can operate on different number sizes at different speeds.
 ##
-## All number literals without decimal points are compatible with #Int values.
+## All number literals without decimal points are compatible with [Int] values.
 ##
 ## >>> 1
 ##
 ## >>> 0
 ##
-## You can optionally put underscores in your #Int literals.
+## You can optionally put underscores in your [Int] literals.
 ## They have no effect on the number's value, but can make large numbers easier to read.
 ##
 ## >>> 1_000_000
@@ -600,13 +600,13 @@ toFloat : Num * -> Float *
 ##
 ## >>> Num.abs 0.0
 ##
-## This is safe to use with any [Float], but it can cause overflow when used with certain #Int values.
+## This is safe to use with any [Float], but it can cause overflow when used with certain [Int] values.
 ##
 ## For example, calling #Num.abs on the lowest value of a signed integer (such as [Num.minI64] or [Num.minI32]) will cause overflow.
 ## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
 ## the highest value it can represent. (For this reason, calling [Num.neg] on the lowest signed value will also cause overflow.)
 ##
-## Calling this on an unsigned integer (like #U32 or #U64) never does anything.
+## Calling this on an unsigned integer (like [U32] or [U64]) never does anything.
 abs : Num a -> Num a
 
 ## Return a negative number when given a positive one, and vice versa.
@@ -619,20 +619,20 @@ abs : Num a -> Num a
 ##
 ## >>> Num.neg 0.0
 ##
-## This is safe to use with any [Float], but it can cause overflow when used with certain #Int values.
+## This is safe to use with any [Float], but it can cause overflow when used with certain [Int] values.
 ##
 ## For example, calling #Num.neg on the lowest value of a signed integer (such as [Num.minI64] or [Num.minI32]) will cause overflow.
 ## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
 ## the highest value it can represent. (For this reason, calling #Num.abs on the lowest signed value will also cause overflow.)
 ##
-## Additionally, calling #Num.neg on any unsigned integer (such as any #U64 or #U32 value) other than zero will cause overflow.
+## Additionally, calling #Num.neg on any unsigned integer (such as any [U64] or [U32] value) other than zero will cause overflow.
 ##
 ## (It will never crash when given a [Float], however, because of how floating point numbers represent positive and negative numbers.)
 neg : Num a -> Num a
 
 ## Add two numbers of the same type.
 ##
-## (To add an #Int and a [Float], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Float] and the other way around.)
+## (To add an [Int] and a [Float], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Float] and the other way around.)
 ##
 ## `a + b` is shorthand for `Num.add a b`.
 ##
@@ -653,7 +653,7 @@ add : Num a, Num a -> Num a
 
 ## Subtract two numbers of the same type.
 ##
-## (To subtract an #Int and a [Float], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Float] and the other way around.)
+## (To subtract an [Int] and a [Float], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Float] and the other way around.)
 ##
 ## `a - b` is shorthand for `Num.sub a b`.
 ##
@@ -674,7 +674,7 @@ sub : Num a, Num a -> Num a
 
 ## Multiply two numbers of the same type.
 ##
-## (To multiply an #Int and a [Float], first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to [Float] and the other way around.)
+## (To multiply an [Int] and a [Float], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Float] and the other way around.)
 ##
 ## `a * b` is shorthand for `Num.mul a b`.
 ##
@@ -814,7 +814,7 @@ ceiling : Float * -> Int *
 
 ## Raises a [Float] to the power of another [Float].
 ##
-## For an #Int alternative to this function, see [Num.powInt]
+## For an [Int] alternative to this function, see [Num.powInt]
 pow : Float a, Float a -> Float a
 
 ## Raises an integer to the power of another, by multiplying the integer by
