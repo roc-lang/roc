@@ -4711,9 +4711,6 @@ where
     let lambda_set_layout = Layout::LambdaSet(lambda_set);
     let symbols = symbols.into_iter();
 
-    // arguments with a polymorphic type that we have to deal with
-    let mut polymorphic_arguments = Vec::new_in(env.arena);
-
     let result = match lambda_set.layout_for_member(name) {
         ClosureRepresentation::Union {
             tag_id,
@@ -5635,35 +5632,18 @@ pub fn from_can<'a>(
                         // We do need specializations
 
                         let mut stmt = rest;
-                        let needed_specializations = procs
+                        let mut needed_specializations = procs
                             .needed_symbol_specializations
                             .drain_filter(|(s, _), _| s == symbol)
                             .collect::<std::vec::Vec<_>>();
 
-                        for ((_, wanted_layout), (var, specialized_symbol)) in
-                            needed_specializations
-                        {
-                            // let res =
-                            //     roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
-                            let content = env.subs.get_content_without_compacting(def.expr_var);
-                            let c = roc_types::subs::SubsFmtContent(content, env.subs);
-                            let content2 = env.subs.get_content_without_compacting(var);
-                            let c2 = roc_types::subs::SubsFmtContent(content2, env.subs);
-                            let layout = layout_cache
-                                .from_var(env.arena, def.expr_var, env.subs)
-                                .unwrap();
-                            dbg!(
-                                specialized_symbol,
-                                c,
-                                c2,
-                                layout,
-                                wanted_layout,
-                                var,
-                                def.expr_var,
-                            );
-                            stmt = with_hole(
+                        if needed_specializations.len() == 1 {
+                            let ((_, _wanted_layout), (var, specialized_symbol)) =
+                                needed_specializations.pop().unwrap();
+
+                            return with_hole(
                                 env,
-                                def.loc_expr.value.clone(),
+                                def.loc_expr.value,
                                 // def.expr_var,
                                 var,
                                 procs,
@@ -5671,9 +5651,43 @@ pub fn from_can<'a>(
                                 specialized_symbol,
                                 env.arena.alloc(stmt),
                             );
-                        }
+                        } else {
+                            // Need to eat the cost and create a specialized version of the body for each specialization.
+                            for ((_, wanted_layout), (var, specialized_symbol)) in
+                                needed_specializations
+                            {
+                                // let res =
+                                //     roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
+                                let content = env.subs.get_content_without_compacting(def.expr_var);
+                                let c = roc_types::subs::SubsFmtContent(content, env.subs);
+                                let content2 = env.subs.get_content_without_compacting(var);
+                                let c2 = roc_types::subs::SubsFmtContent(content2, env.subs);
+                                let layout = layout_cache
+                                    .from_var(env.arena, def.expr_var, env.subs)
+                                    .unwrap();
+                                dbg!(
+                                    specialized_symbol,
+                                    c,
+                                    c2,
+                                    layout,
+                                    wanted_layout,
+                                    var,
+                                    def.expr_var,
+                                );
+                                stmt = with_hole(
+                                    env,
+                                    def.loc_expr.value.clone(),
+                                    // def.expr_var,
+                                    var,
+                                    procs,
+                                    layout_cache,
+                                    specialized_symbol,
+                                    env.arena.alloc(stmt),
+                                );
+                            }
 
-                        return stmt;
+                            return stmt;
+                        }
                     }
                 }
             }
