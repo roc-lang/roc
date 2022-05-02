@@ -293,7 +293,11 @@ fn start_phase<'a>(
                     }
                 }
 
-                let skip_constraint_gen = state.cached_subs.lock().contains_key(&module_id);
+                let skip_constraint_gen = {
+                    // Give this its own scope to make sure that the Guard from the lock() is dropped
+                    // immediately after contains_key returns
+                    state.cached_subs.lock().contains_key(&module_id)
+                };
 
                 BuildTask::CanonicalizeAndConstrain {
                     parsed,
