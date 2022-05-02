@@ -111,6 +111,11 @@ impl Symbol {
     pub const fn to_ne_bytes(self) -> [u8; 8] {
         self.0.to_ne_bytes()
     }
+
+    #[cfg(debug_assertions)]
+    pub fn contains(self, needle: &str) -> bool {
+        format!("{:?}", self).contains(needle)
+    }
 }
 
 /// Rather than displaying as this:
