@@ -76,6 +76,42 @@ const MODULE_SEPARATOR: char = '.';
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+const PRELUDE_TYPES: [(&'static str, Symbol); 33] = [
+    ("Num", Symbol::NUM_NUM),
+    ("Int", Symbol::NUM_INT),
+    ("Float", Symbol::NUM_FLOAT),
+    ("Integer", Symbol::NUM_INTEGER),
+    ("FloatingPoint", Symbol::NUM_FLOATINGPOINT),
+    ("Binary32", Symbol::NUM_BINARY32),
+    ("Binary64", Symbol::NUM_BINARY64),
+    ("Signed128", Symbol::NUM_SIGNED128),
+    ("Signed64", Symbol::NUM_SIGNED64),
+    ("Signed32", Symbol::NUM_SIGNED32),
+    ("Signed16", Symbol::NUM_SIGNED16),
+    ("Signed8", Symbol::NUM_SIGNED8),
+    ("Unsigned128", Symbol::NUM_UNSIGNED128),
+    ("Unsigned64", Symbol::NUM_UNSIGNED64),
+    ("Unsigned32", Symbol::NUM_UNSIGNED32),
+    ("Unsigned16", Symbol::NUM_UNSIGNED16),
+    ("Unsigned8", Symbol::NUM_UNSIGNED8),
+    ("Natural", Symbol::NUM_NATURAL),
+    ("Decimal", Symbol::NUM_DECIMAL),
+    ("Nat", Symbol::NUM_NAT),
+    ("I8", Symbol::NUM_I8),
+    ("I16", Symbol::NUM_I16),
+    ("I32", Symbol::NUM_I32),
+    ("I64", Symbol::NUM_I64),
+    ("I128", Symbol::NUM_I128),
+    ("U8", Symbol::NUM_U8),
+    ("U16", Symbol::NUM_U16),
+    ("U32", Symbol::NUM_U32),
+    ("U64", Symbol::NUM_U64),
+    ("U128", Symbol::NUM_U128),
+    ("F32", Symbol::NUM_F32),
+    ("F64", Symbol::NUM_F64),
+    ("Dec", Symbol::NUM_DEC),
+];
+
 macro_rules! log {
     ($($arg:tt)*) => (dbg_do!(ROC_PRINT_LOAD_LOG, println!($($arg)*)))
 }
@@ -1800,46 +1836,10 @@ fn update<'a>(
                     .imported_modules
                     .insert(ModuleId::NUM, Region::zero());
 
-                let prelude_types = [
-                    (Ident::from("Num"), Symbol::NUM_NUM),
-                    (Ident::from("Int"), Symbol::NUM_INT),
-                    (Ident::from("Float"), Symbol::NUM_FLOAT),
-                    (Ident::from("Integer"), Symbol::NUM_INTEGER),
-                    (Ident::from("FloatingPoint"), Symbol::NUM_FLOATINGPOINT),
-                    (Ident::from("Binary32"), Symbol::NUM_BINARY32),
-                    (Ident::from("Binary64"), Symbol::NUM_BINARY64),
-                    (Ident::from("Signed128"), Symbol::NUM_SIGNED128),
-                    (Ident::from("Signed64"), Symbol::NUM_SIGNED64),
-                    (Ident::from("Signed32"), Symbol::NUM_SIGNED32),
-                    (Ident::from("Signed16"), Symbol::NUM_SIGNED16),
-                    (Ident::from("Signed8"), Symbol::NUM_SIGNED8),
-                    (Ident::from("Unsigned128"), Symbol::NUM_UNSIGNED128),
-                    (Ident::from("Unsigned64"), Symbol::NUM_UNSIGNED64),
-                    (Ident::from("Unsigned32"), Symbol::NUM_UNSIGNED32),
-                    (Ident::from("Unsigned16"), Symbol::NUM_UNSIGNED16),
-                    (Ident::from("Unsigned8"), Symbol::NUM_UNSIGNED8),
-                    (Ident::from("Natural"), Symbol::NUM_NATURAL),
-                    (Ident::from("Decimal"), Symbol::NUM_DECIMAL),
-                    (Ident::from("Nat"), Symbol::NUM_NAT),
-                    (Ident::from("I8"), Symbol::NUM_I8),
-                    (Ident::from("I16"), Symbol::NUM_I16),
-                    (Ident::from("I32"), Symbol::NUM_I32),
-                    (Ident::from("I64"), Symbol::NUM_I64),
-                    (Ident::from("I128"), Symbol::NUM_I128),
-                    (Ident::from("U8"), Symbol::NUM_U8),
-                    (Ident::from("U16"), Symbol::NUM_U16),
-                    (Ident::from("U32"), Symbol::NUM_U32),
-                    (Ident::from("U64"), Symbol::NUM_U64),
-                    (Ident::from("U128"), Symbol::NUM_U128),
-                    (Ident::from("F32"), Symbol::NUM_F32),
-                    (Ident::from("F64"), Symbol::NUM_F64),
-                    (Ident::from("Dec"), Symbol::NUM_DEC),
-                ];
-
-                for (ident, symbol) in prelude_types {
+                for (type_name, symbol) in PRELUDE_TYPES {
                     header
                         .exposed_imports
-                        .insert(ident, (symbol, Region::zero()));
+                        .insert(Ident::from(type_name), (symbol, Region::zero()));
                 }
             }
 
