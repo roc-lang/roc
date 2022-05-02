@@ -98,7 +98,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
                 );
 
             fs::write(module_dir.join("index.html"), rendered_module)
-                .expect("TODO gracefully handle failing to write html");
+                .expect("TODO gracefully handle failing to write index.html inside module's dir");
         }
     }
 
