@@ -241,7 +241,7 @@ Num range := range
 ##
 ## Here are some other examples:
 ##
-## * [U16] is like [U8], except it takes up 16 bytes in memory. It can store 65,536 numbers (2^16), ranging from 0 to 65,536.
+## * [U16] is like [U8], except it takes up 16 bits in memory. It can store 65,536 numbers (2^16), ranging from 0 to 65,536.
 ## * [I16] is like [U16], except it is signed. It can still store the same 65,536 numbers (2^16), ranging from -32,768 to 32,767.
 ##
 ## This pattern continues up to [U128] and [I128].
