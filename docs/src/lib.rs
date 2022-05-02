@@ -24,8 +24,7 @@ mod html;
 pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
     let loaded_modules = load_modules_for_files(filenames);
 
-    //
-    // TODO: get info from a file like "elm.json"
+    // TODO: get info from a package module; this is all hardcoded for now.
     let mut package = roc_load::docs::Documentation {
         name: "roc/builtins".to_string(),
         version: "1.0.0".to_string(),
