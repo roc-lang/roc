@@ -10,6 +10,7 @@ install-other-libs:
     RUN apt -y install libxcb-shape0-dev libxcb-xfixes0-dev # for editor clipboard
     RUN apt -y install libasound2-dev # for editor sounds
     RUN apt -y install libunwind-dev pkg-config libx11-dev zlib1g-dev
+    RUN apt -y install unzip # for www/build.sh
 
 install-zig-llvm-valgrind-clippy-rustfmt:
     FROM +install-other-libs
@@ -53,7 +54,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros highlight utils test_utils reporting repl_cli repl_eval repl_test repl_wasm roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
+    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros highlight utils test_utils reporting repl_cli repl_eval repl_test repl_wasm repl_www roc_std vendor examples linker Cargo.toml Cargo.lock version.txt www ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -100,6 +101,9 @@ test-rust:
     # RUN echo "4" | cargo run --locked --release --features="target-x86" -- --target=x86_32 examples/benchmarks/NQueens.roc
     # RUN --mount=type=cache,target=$SCCACHE_DIR \
     #    cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
+    # make sure doc generation works (that is, make sure build.sh returns status code 0)
+    RUN bash www/build.sh
+
 
 verify-no-git-changes:
     FROM +test-rust
