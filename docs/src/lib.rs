@@ -410,7 +410,7 @@ fn render_sidebar<'a, I: Iterator<Item = (Vec<String>, &'a ModuleDocumentation)>
 
 pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
     let arena = Bump::new();
-    let mut modules = vec![];
+    let mut modules = Vec::with_capacity(filenames.len());
 
     for filename in filenames {
         let mut src_dir = filename.clone();
