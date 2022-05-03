@@ -3615,8 +3615,13 @@ pub fn with_hole<'a>(
                         );
 
                         for (loc_cond, loc_then) in branches.into_iter().rev() {
-                            let branching_symbol =
-                                possible_reuse_symbol(env, procs, &loc_cond.value);
+                            let branching_symbol = possible_reuse_symbol_or_spec(
+                                env,
+                                procs,
+                                layout_cache,
+                                &loc_cond.value,
+                                cond_var,
+                            );
 
                             let then = with_hole(
                                 env,
@@ -3766,7 +3771,13 @@ pub fn with_hole<'a>(
                 if let Some(literal) = try_make_literal(env, &arg_expr.value) {
                     elements.push(ListLiteralElement::Literal(literal));
                 } else {
-                    let symbol = possible_reuse_symbol(env, procs, &arg_expr.value);
+                    let symbol = possible_reuse_symbol_or_spec(
+                        env,
+                        procs,
+                        layout_cache,
+                        &arg_expr.value,
+                        elem_var,
+                    );
 
                     elements.push(ListLiteralElement::Symbol(symbol));
                     arg_symbols.push(symbol);
@@ -3839,7 +3850,13 @@ pub fn with_hole<'a>(
                 }
             }
 
-            let record_symbol = possible_reuse_symbol(env, procs, &loc_expr.value);
+            let record_symbol = possible_reuse_symbol_or_spec(
+                env,
+                procs,
+                layout_cache,
+                &loc_expr.value,
+                record_var,
+            );
 
             let mut stmt = match field_layouts.as_slice() {
                 [_] => {
@@ -3964,9 +3981,13 @@ pub fn with_hole<'a>(
                         field_layouts.push(field_layout);
 
                         if let Some(field) = updates.get(&label) {
-                            // TODO
-                            let field_symbol =
-                                possible_reuse_symbol(env, procs, &field.loc_expr.value);
+                            let field_symbol = possible_reuse_symbol_or_spec(
+                                env,
+                                procs,
+                                layout_cache,
+                                &field.loc_expr.value,
+                                field.var,
+                            );
 
                             fields.push(UpdateExisting(field));
                             symbols.push(field_symbol);
@@ -4190,8 +4211,14 @@ pub fn with_hole<'a>(
                     // (\f, x -> f x)
 
                     let arg_symbols = Vec::from_iter_in(
-                        loc_args.iter().map(|(_, arg_expr)| {
-                            possible_reuse_symbol(env, procs, &arg_expr.value)
+                        loc_args.iter().map(|(var, arg_expr)| {
+                            possible_reuse_symbol_or_spec(
+                                env,
+                                procs,
+                                layout_cache,
+                                &arg_expr.value,
+                                *var,
+                            )
                         }),
                         arena,
                     )
@@ -4342,8 +4369,14 @@ pub fn with_hole<'a>(
         } => {
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
-            for (_, arg_expr) in args.iter() {
-                arg_symbols.push(possible_reuse_symbol(env, procs, arg_expr));
+            for (var, arg_expr) in args.iter() {
+                arg_symbols.push(possible_reuse_symbol_or_spec(
+                    env,
+                    procs,
+                    layout_cache,
+                    arg_expr,
+                    *var,
+                ));
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -4372,8 +4405,14 @@ pub fn with_hole<'a>(
         RunLowLevel { op, args, ret_var } => {
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
-            for (_, arg_expr) in args.iter() {
-                arg_symbols.push(possible_reuse_symbol(env, procs, arg_expr));
+            for (var, arg_expr) in args.iter() {
+                arg_symbols.push(possible_reuse_symbol_or_spec(
+                    env,
+                    procs,
+                    layout_cache,
+                    arg_expr,
+                    *var,
+                ));
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -5311,7 +5350,13 @@ pub fn from_can<'a>(
             let mut stmt = from_can(env, branch_var, final_else.value, procs, layout_cache);
 
             for (loc_cond, loc_then) in branches.into_iter().rev() {
-                let branching_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
+                let branching_symbol = possible_reuse_symbol_or_spec(
+                    env,
+                    procs,
+                    layout_cache,
+                    &loc_cond.value,
+                    cond_var,
+                );
                 let then = from_can(env, branch_var, loc_then.value, procs, layout_cache);
 
                 stmt = cond(env, branching_symbol, cond_layout, then, stmt, ret_layout);
@@ -6406,7 +6451,7 @@ fn store_tag_pattern<'a>(
                         stmt = new;
                         // only if we bind one of its (sub)fields to a used name should we
                         // extract the field
-                        stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
+                        stmt = Stmt::Let(dbg!(symbol), load, arg_layout, env.arena.alloc(stmt));
                     }
                     StorePattern::NotProductive(new) => {
                         // do nothing
@@ -6459,7 +6504,7 @@ fn store_newtype_pattern<'a>(
         match argument {
             Identifier(symbol) => {
                 // store immediately in the given symbol
-                stmt = Stmt::Let(*symbol, load, arg_layout, env.arena.alloc(stmt));
+                stmt = Stmt::Let(dbg!(*symbol), load, arg_layout, env.arena.alloc(stmt));
                 is_productive = true;
             }
             Underscore => {
@@ -6482,7 +6527,7 @@ fn store_newtype_pattern<'a>(
                         stmt = new;
                         // only if we bind one of its (sub)fields to a used name should we
                         // extract the field
-                        stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
+                        stmt = Stmt::Let(dbg!(symbol), load, arg_layout, env.arena.alloc(stmt));
                     }
                     StorePattern::NotProductive(new) => {
                         // do nothing
@@ -6616,18 +6661,6 @@ fn can_reuse_symbol<'a>(
     }
 }
 
-fn possible_reuse_symbol<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &Procs<'a>,
-    expr: &roc_can::expr::Expr,
-) -> Symbol {
-    match can_reuse_symbol(env, procs, expr) {
-        ReuseSymbol::Value(s) => s,
-        _ => env.unique_symbol(),
-    }
-}
-
-// TODO(POLYEXPR): unify with possible_reuse_symbol
 fn possible_reuse_symbol_or_spec<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -7057,9 +7090,9 @@ fn evaluate_arguments_then_runtime_error<'a>(
 
     // but, we also still evaluate and specialize the arguments to give better error messages
     let arg_symbols = Vec::from_iter_in(
-        loc_args
-            .iter()
-            .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
+        loc_args.iter().map(|(var, arg_expr)| {
+            possible_reuse_symbol_or_spec(env, procs, layout_cache, &arg_expr.value, *var)
+        }),
         arena,
     )
     .into_bump_slice();
