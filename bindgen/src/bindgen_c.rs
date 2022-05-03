@@ -3,7 +3,7 @@ use std::io;
 static TEMPLATE: &[u8] = include_bytes!("../templates/template.c");
 
 pub fn write_template(writer: &mut impl io::Write) -> io::Result<()> {
-    writer.write(TEMPLATE)?;
+    writer.write_all(TEMPLATE)?;
 
     Ok(())
 }
