@@ -943,38 +943,25 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
 
         Expr::Record(Collection::with_items(output))
     } else {
-        let sorted_fields = record_fields.sorted_iterator(subs, Variable::EMPTY_RECORD);
+        // We'll advance this as we iterate through the fields
+        let mut field_addr = addr;
 
         // We recalculate the layouts here because we will have compiled the record so that its fields
         // are sorted by descending alignment, and then alphabetic, but the type of the record is
         // always only sorted alphabetically. We want to arrange the rendered record in the order of
         // the type.
-        let field_to_layout: MutMap<Lowercase, Layout> = sorted_fields
-            .map(|(label, field)| {
-                let layout = layout_cache
-                    .from_var(arena, *field.as_inner(), env.subs)
-                    .unwrap();
-                (label.clone(), layout)
-            })
-            .collect();
-
-        debug_assert_eq!(record_fields.len(), field_to_layout.len());
-
-        // We'll advance this as we iterate through the fields
-        let mut field_addr = addr;
-
         for (label, field) in record_fields.sorted_iterator(subs, Variable::EMPTY_RECORD) {
-            let var = field.into_inner();
-
-            let content = subs.get_content_without_compacting(var);
-            let field_layout = field_to_layout.get(&label).unwrap();
+            let content = subs.get_content_without_compacting(field.into_inner());
+            let field_layout = layout_cache
+                .from_var(arena, field.into_inner(), env.subs)
+                .unwrap();
 
             let loc_expr = &*arena.alloc(Loc {
                 value: addr_to_ast(
                     env,
                     mem,
                     field_addr,
-                    field_layout,
+                    &field_layout,
                     WhenRecursive::Unreachable,
                     content,
                 ),
