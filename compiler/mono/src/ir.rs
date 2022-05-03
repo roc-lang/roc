@@ -3193,6 +3193,7 @@ pub fn with_hole<'a>(
         }
         LetNonRec(def, cont, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
+                dbg!(symbol);
                 if let Closure(closure_data) = def.loc_expr.value {
                     register_noncapturing_closure(env, procs, symbol, closure_data);
 
@@ -3338,6 +3339,7 @@ pub fn with_hole<'a>(
             )
         }
         Var(symbol) => {
+            dbg!(symbol);
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
         Tag {
@@ -5438,6 +5440,7 @@ pub fn from_can<'a>(
         }
         LetNonRec(def, cont, outer_annotation) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
+                dbg!(symbol);
                 match def.loc_expr.value {
                     roc_can::expr::Expr::Closure(closure_data) => {
                         register_capturing_closure(env, procs, layout_cache, *symbol, closure_data);
@@ -5572,8 +5575,7 @@ pub fn from_can<'a>(
                         let needs_def_specializations = procs
                             .needed_symbol_specializations
                             .keys()
-                            .find(|(s, _)| s == symbol)
-                            .is_some();
+                            .any(|(s, _)| s == symbol);
 
                         if !needs_def_specializations {
                             return with_hole(
@@ -6709,8 +6711,7 @@ fn possible_reuse_symbol_or_spec<'a>(
             let needs_fresh_symbol = procs
                 .needed_symbol_specializations
                 .keys()
-                .find(|(s, _)| *s == symbol)
-                .is_some();
+                .any(|(s, _)| *s == symbol);
 
             let (_, specialized_symbol) = procs
                 .needed_symbol_specializations

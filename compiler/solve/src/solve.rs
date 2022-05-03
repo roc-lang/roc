@@ -457,6 +457,10 @@ impl Pools {
         self.0.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn get_mut(&mut self, rank: Rank) -> &mut Vec<Variable> {
         match self.0.get_mut(rank.into_usize()) {
             Some(reference) => reference,

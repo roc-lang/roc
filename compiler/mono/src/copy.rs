@@ -51,20 +51,12 @@ pub fn deep_copy_type_vars_into_expr<'a>(
 
         match expr {
             Num(var, str, val, bound) => Num(sub!(*var), str.clone(), val.clone(), *bound),
-            Int(v1, v2, str, val, bound) => Int(
-                sub!(*v1),
-                sub!(*v2),
-                str.clone(),
-                val.clone(),
-                bound.clone(),
-            ),
-            Float(v1, v2, str, val, bound) => Float(
-                sub!(*v1),
-                sub!(*v2),
-                str.clone(),
-                val.clone(),
-                bound.clone(),
-            ),
+            Int(v1, v2, str, val, bound) => {
+                Int(sub!(*v1), sub!(*v2), str.clone(), val.clone(), *bound)
+            }
+            Float(v1, v2, str, val, bound) => {
+                Float(sub!(*v1), sub!(*v2), str.clone(), *val, *bound)
+            }
             Str(str) => Str(str.clone()),
             SingleQuote(char) => SingleQuote(*char),
             List {
@@ -491,7 +483,7 @@ fn deep_copy_type_vars<'a>(
 
             // Everything else is a mechanical descent.
             Structure(flat_type) => match flat_type {
-                EmptyRecord | EmptyTagUnion | Erroneous(_) => Structure(flat_type.clone()),
+                EmptyRecord | EmptyTagUnion | Erroneous(_) => Structure(flat_type),
                 Apply(symbol, arguments) => {
                     descend_slice!(arguments);
 
