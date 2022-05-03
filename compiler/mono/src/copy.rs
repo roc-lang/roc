@@ -1,11 +1,379 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_can::{
+    def::Def,
+    expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
+};
 use roc_types::subs::{
     AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionTags, Variable,
     VariableSubsSlice,
 };
 
-pub fn deep_copy_type_vars<'a>(
+/// Deep copies the type variables in the type hosted by [`var`] into [`expr`].
+/// Returns [`None`] if the expression does not need to be copied.
+pub fn deep_copy_type_vars_into_expr<'a>(
+    arena: &'a Bump,
+    subs: &mut Subs,
+    var: Variable,
+    expr: &Expr,
+) -> Option<(Variable, Expr)> {
+    let substitutions = deep_copy_type_vars(arena, subs, var);
+
+    if substitutions.is_empty() {
+        return None;
+    }
+
+    let new_var = substitutions
+        .iter()
+        .find_map(|&(original, new)| if original == var { Some(new) } else { None })
+        .expect("Variable marked as cloned, but it isn't");
+
+    return Some((new_var, help(expr, &substitutions)));
+
+    fn help(expr: &Expr, substitutions: &[(Variable, Variable)]) -> Expr {
+        use Expr::*;
+
+        macro_rules! sub {
+            ($var:expr) => {
+                substitutions
+                    .iter()
+                    .find_map(|&(original, new)| if original == $var { Some(new) } else { None })
+                    .unwrap_or($var)
+            };
+        }
+
+        let go_help = |e: &Expr| help(e, substitutions);
+
+        match expr {
+            Num(var, str, val, bound) => Num(sub!(*var), str.clone(), val.clone(), *bound),
+            Int(v1, v2, str, val, bound) => Int(
+                sub!(*v1),
+                sub!(*v2),
+                str.clone(),
+                val.clone(),
+                bound.clone(),
+            ),
+            Float(v1, v2, str, val, bound) => Float(
+                sub!(*v1),
+                sub!(*v2),
+                str.clone(),
+                val.clone(),
+                bound.clone(),
+            ),
+            Str(str) => Str(str.clone()),
+            SingleQuote(char) => SingleQuote(*char),
+            List {
+                elem_var,
+                loc_elems,
+            } => List {
+                elem_var: sub!(*elem_var),
+                loc_elems: loc_elems.iter().map(|le| le.map(go_help)).collect(),
+            },
+            Var(sym) => Var(*sym),
+            When {
+                loc_cond,
+                cond_var,
+                expr_var,
+                region,
+                branches,
+                branches_cond_var,
+                exhaustive,
+            } => When {
+                loc_cond: Box::new(loc_cond.map(go_help)),
+                cond_var: sub!(*cond_var),
+                expr_var: sub!(*expr_var),
+                region: *region,
+                branches: branches
+                    .iter()
+                    .map(
+                        |WhenBranch {
+                             patterns,
+                             value,
+                             guard,
+                             redundant,
+                         }| WhenBranch {
+                            patterns: patterns.clone(),
+                            value: value.map(go_help),
+                            guard: guard.as_ref().map(|le| le.map(go_help)),
+                            redundant: *redundant,
+                        },
+                    )
+                    .collect(),
+                branches_cond_var: sub!(*branches_cond_var),
+                exhaustive: *exhaustive,
+            },
+            If {
+                cond_var,
+                branch_var,
+                branches,
+                final_else,
+            } => If {
+                cond_var: sub!(*cond_var),
+                branch_var: sub!(*branch_var),
+                branches: branches
+                    .iter()
+                    .map(|(c, e)| (c.map(go_help), e.map(go_help)))
+                    .collect(),
+                final_else: Box::new(final_else.map(go_help)),
+            },
+
+            LetRec(defs, body, var) => LetRec(
+                defs.iter()
+                    .map(
+                        |Def {
+                             loc_pattern,
+                             loc_expr,
+                             expr_var,
+                             pattern_vars,
+                             annotation,
+                         }| Def {
+                            loc_pattern: loc_pattern.clone(),
+                            loc_expr: loc_expr.map(go_help),
+                            expr_var: sub!(*expr_var),
+                            pattern_vars: pattern_vars
+                                .iter()
+                                .map(|(s, v)| (*s, sub!(*v)))
+                                .collect(),
+                            annotation: annotation.clone(),
+                        },
+                    )
+                    .collect(),
+                Box::new(body.map(go_help)),
+                sub!(*var),
+            ),
+            LetNonRec(def, body, var) => {
+                let Def {
+                    loc_pattern,
+                    loc_expr,
+                    expr_var,
+                    pattern_vars,
+                    annotation,
+                } = &**def;
+                let def = Def {
+                    loc_pattern: loc_pattern.clone(),
+                    loc_expr: loc_expr.map(go_help),
+                    expr_var: sub!(*expr_var),
+                    pattern_vars: pattern_vars.iter().map(|(s, v)| (*s, sub!(*v))).collect(),
+                    annotation: annotation.clone(),
+                };
+                LetNonRec(Box::new(def), Box::new(body.map(go_help)), sub!(*var))
+            }
+
+            Call(f, args, called_via) => {
+                let (fn_var, fn_expr, clos_var, ret_var) = &**f;
+                Call(
+                    Box::new((
+                        sub!(*fn_var),
+                        fn_expr.map(go_help),
+                        sub!(*clos_var),
+                        sub!(*ret_var),
+                    )),
+                    args.iter()
+                        .map(|(var, expr)| (sub!(*var), expr.map(go_help)))
+                        .collect(),
+                    *called_via,
+                )
+            }
+            RunLowLevel { op, args, ret_var } => RunLowLevel {
+                op: *op,
+                args: args
+                    .iter()
+                    .map(|(var, expr)| (sub!(*var), go_help(expr)))
+                    .collect(),
+                ret_var: sub!(*ret_var),
+            },
+            ForeignCall {
+                foreign_symbol,
+                args,
+                ret_var,
+            } => ForeignCall {
+                foreign_symbol: foreign_symbol.clone(),
+                args: args
+                    .iter()
+                    .map(|(var, expr)| (sub!(*var), go_help(expr)))
+                    .collect(),
+                ret_var: sub!(*ret_var),
+            },
+
+            Closure(ClosureData {
+                function_type,
+                closure_type,
+                closure_ext_var,
+                return_type,
+                name,
+                captured_symbols,
+                recursive,
+                arguments,
+                loc_body,
+            }) => Closure(ClosureData {
+                function_type: sub!(*function_type),
+                closure_type: sub!(*closure_type),
+                closure_ext_var: sub!(*closure_ext_var),
+                return_type: sub!(*return_type),
+                name: *name,
+                captured_symbols: captured_symbols
+                    .iter()
+                    .map(|(s, v)| (*s, sub!(*v)))
+                    .collect(),
+                recursive: *recursive,
+                arguments: arguments
+                    .iter()
+                    .map(|(v, mark, pat)| (sub!(*v), *mark, pat.clone()))
+                    .collect(),
+                loc_body: Box::new(loc_body.map(go_help)),
+            }),
+
+            Record { record_var, fields } => Record {
+                record_var: sub!(*record_var),
+                fields: fields
+                    .iter()
+                    .map(
+                        |(
+                            k,
+                            Field {
+                                var,
+                                region,
+                                loc_expr,
+                            },
+                        )| {
+                            (
+                                k.clone(),
+                                Field {
+                                    var: sub!(*var),
+                                    region: *region,
+                                    loc_expr: Box::new(loc_expr.map(go_help)),
+                                },
+                            )
+                        },
+                    )
+                    .collect(),
+            },
+
+            EmptyRecord => EmptyRecord,
+
+            Access {
+                record_var,
+                ext_var,
+                field_var,
+                loc_expr,
+                field,
+            } => Access {
+                record_var: sub!(*record_var),
+                ext_var: sub!(*ext_var),
+                field_var: sub!(*field_var),
+                loc_expr: Box::new(loc_expr.map(go_help)),
+                field: field.clone(),
+            },
+
+            Accessor(AccessorData {
+                name,
+                function_var,
+                record_var,
+                closure_var,
+                closure_ext_var,
+                ext_var,
+                field_var,
+                field,
+            }) => Accessor(AccessorData {
+                name: *name,
+                function_var: sub!(*function_var),
+                record_var: sub!(*record_var),
+                closure_var: sub!(*closure_var),
+                closure_ext_var: sub!(*closure_ext_var),
+                ext_var: sub!(*ext_var),
+                field_var: sub!(*field_var),
+                field: field.clone(),
+            }),
+
+            Update {
+                record_var,
+                ext_var,
+                symbol,
+                updates,
+            } => Update {
+                record_var: sub!(*record_var),
+                ext_var: sub!(*ext_var),
+                symbol: *symbol,
+                updates: updates
+                    .iter()
+                    .map(
+                        |(
+                            k,
+                            Field {
+                                var,
+                                region,
+                                loc_expr,
+                            },
+                        )| {
+                            (
+                                k.clone(),
+                                Field {
+                                    var: sub!(*var),
+                                    region: *region,
+                                    loc_expr: Box::new(loc_expr.map(go_help)),
+                                },
+                            )
+                        },
+                    )
+                    .collect(),
+            },
+
+            Tag {
+                variant_var,
+                ext_var,
+                name,
+                arguments,
+            } => Tag {
+                variant_var: sub!(*variant_var),
+                ext_var: sub!(*ext_var),
+                name: name.clone(),
+                arguments: arguments
+                    .iter()
+                    .map(|(v, e)| (sub!(*v), e.map(go_help)))
+                    .collect(),
+            },
+
+            ZeroArgumentTag {
+                closure_name,
+                variant_var,
+                ext_var,
+                name,
+            } => ZeroArgumentTag {
+                closure_name: *closure_name,
+                variant_var: sub!(*variant_var),
+                ext_var: sub!(*ext_var),
+                name: name.clone(),
+            },
+
+            OpaqueRef {
+                opaque_var,
+                name,
+                argument,
+                specialized_def_type,
+                type_arguments,
+                lambda_set_variables,
+            } => OpaqueRef {
+                opaque_var: sub!(*opaque_var),
+                name: *name,
+                argument: Box::new((sub!(argument.0), argument.1.map(go_help))),
+                // These shouldn't matter for opaques during mono, because they are only used for reporting
+                // and pretty-printing to the user. During mono we decay immediately into the argument.
+                // NB: if there are bugs, check if not substituting here is the problem!
+                specialized_def_type: specialized_def_type.clone(),
+                type_arguments: type_arguments.clone(),
+                lambda_set_variables: lambda_set_variables.clone(),
+            },
+
+            Expect(e1, e2) => Expect(Box::new(e1.map(go_help)), Box::new(e2.map(go_help))),
+
+            RuntimeError(err) => RuntimeError(err.clone()),
+        }
+    }
+}
+
+/// Deep copies the type variables in [`var`], returning a map of original -> new type variable for
+/// all type variables copied.
+fn deep_copy_type_vars<'a>(
     arena: &'a Bump,
     subs: &mut Subs,
     var: Variable,
