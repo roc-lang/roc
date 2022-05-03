@@ -83,7 +83,7 @@ pub struct CodeGenHelp<'a> {
 
 impl<'a> CodeGenHelp<'a> {
     pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
-        let layout_isize = Layout::usize(target_info);
+        let layout_isize = Layout::isize(target_info);
 
         // Refcount is a boxed isize. TODO: use the new Box layout when dev backends support it
         let union_refcount = UnionLayout::NonNullableUnwrapped(arena.alloc([layout_isize]));

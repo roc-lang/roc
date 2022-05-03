@@ -1,25 +1,25 @@
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.229 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.229;
+    let Num.274 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.274;
 
-procedure Test.3 (Test.5):
-    let Test.15 : Int1 = 1i64;
-    let Test.16 : Int1 = GetTagId Test.5;
-    let Test.17 : Int1 = lowlevel Eq Test.15 Test.16;
-    if Test.17 then
-        let Test.11 : I64 = 0i64;
-        ret Test.11;
-    else
-        let Test.6 : [<rnu><null>, C I64 *self] = UnionAtIndex (Id 0) (Index 1) Test.5;
-        let Test.13 : I64 = 1i64;
-        let Test.14 : I64 = CallByName Test.3 Test.6;
-        let Test.12 : I64 = CallByName Num.19 Test.13 Test.14;
+procedure Test.4 (Test.6):
+    let Test.16 : Int1 = 1i64;
+    let Test.17 : Int1 = GetTagId Test.6;
+    let Test.18 : Int1 = lowlevel Eq Test.16 Test.17;
+    if Test.18 then
+        let Test.12 : I64 = 0i64;
         ret Test.12;
+    else
+        let Test.7 : [<rnu><null>, C I64 *self] = UnionAtIndex (Id 0) (Index 1) Test.6;
+        let Test.14 : I64 = 1i64;
+        let Test.15 : I64 = CallByName Test.4 Test.7;
+        let Test.13 : I64 = CallByName Num.19 Test.14 Test.15;
+        ret Test.13;
 
 procedure Test.0 ():
-    let Test.2 : [<rnu><null>, C I64 *self] = Nil ;
-    let Test.8 : I64 = CallByName Test.3 Test.2;
-    let Test.9 : I64 = CallByName Test.3 Test.2;
-    dec Test.2;
-    let Test.7 : I64 = CallByName Num.19 Test.8 Test.9;
-    ret Test.7;
+    let Test.3 : [<rnu><null>, C I64 *self] = Nil ;
+    let Test.9 : I64 = CallByName Test.4 Test.3;
+    let Test.10 : I64 = CallByName Test.4 Test.3;
+    dec Test.3;
+    let Test.8 : I64 = CallByName Num.19 Test.9 Test.10;
+    ret Test.8;
