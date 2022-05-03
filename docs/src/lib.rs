@@ -56,12 +56,9 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
     .expect("TODO gracefully handle failing to make the favicon");
 
     let template_html = include_str!("./static/index.html")
-        .replace("<!-- search.js -->", &format!("{}search.js", base_url()))
-        .replace("<!-- styles.css -->", &format!("{}styles.css", base_url()))
-        .replace(
-            "<!-- favicon.svg -->",
-            &format!("{}favicon.svg", base_url()),
-        )
+        .replace("<!-- search.js -->", "/search.js")
+        .replace("<!-- styles.css -->", "/styles.css")
+        .replace("<!-- favicon.svg -->", "/favicon.svg")
         .replace(
             "<!-- Module links -->",
             render_sidebar(package.modules.iter().flat_map(|loaded_module| {
