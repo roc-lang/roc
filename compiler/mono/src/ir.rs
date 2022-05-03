@@ -6425,10 +6425,18 @@ fn store_tag_pattern<'a>(
             union_layout,
         };
 
+        // dbg!(&argument, &load);
+
         match argument {
             Identifier(symbol) => {
+                let symbol = procs
+                    .needed_symbol_specializations
+                    .get(&(*symbol, arg_layout))
+                    .map(|(_, sym)| *sym)
+                    .unwrap_or(*symbol);
+
                 // store immediately in the given symbol
-                stmt = Stmt::Let(*symbol, load, arg_layout, env.arena.alloc(stmt));
+                stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
                 is_productive = true;
             }
             Underscore => {
@@ -6670,6 +6678,22 @@ fn possible_reuse_symbol_or_spec<'a>(
 ) -> Symbol {
     match can_reuse_symbol(env, procs, expr) {
         ReuseSymbol::Value(symbol) => {
+            // TODO: for some reason, we can't attempt to specialize the built-in argument symbols.
+            // Figure out why.
+            let arguments = [
+                Symbol::ARG_1,
+                Symbol::ARG_2,
+                Symbol::ARG_3,
+                Symbol::ARG_4,
+                Symbol::ARG_5,
+                Symbol::ARG_6,
+                Symbol::ARG_7,
+            ];
+
+            if arguments.contains(&symbol) {
+                return symbol;
+            }
+
             let wanted_layout = match layout_cache.from_var(env.arena, var, env.subs) {
                 Ok(layout) => layout,
                 // This can happen when the def symbol has a type error. In such cases just use the
@@ -6702,6 +6726,7 @@ fn possible_reuse_symbol_or_spec<'a>(
                     )
                 });
 
+            // dbg!(symbol, *specialized_symbol);
             *specialized_symbol
         }
         _ => env.unique_symbol(),
