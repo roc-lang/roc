@@ -69,6 +69,11 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
                     .documentation
                     .iter()
                     .filter_map(move |(module_id, module)| {
+                        // TODO it seems this `documentation` dictionary has entries for
+                        // every module, but only the current module has any info in it.
+                        // We disregard the others, but probably this shouldn't bother
+                        // being a hash map in the first place if only one of its entries
+                        // actually has interesting information in it?
                         if *module_id == loaded_module.module_id {
                             let exposed_values = loaded_module
                                 .exposed_values
