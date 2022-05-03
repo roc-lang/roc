@@ -3267,6 +3267,7 @@ fn polymophic_expression_captured_inside_closure() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+#[ignore = "Compile polymorphic functions"]
 fn issue_2322() {
     assert_evals_to!(
         indoc!(

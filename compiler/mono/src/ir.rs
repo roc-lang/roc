@@ -4,7 +4,7 @@ use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
     RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
 };
-use bumpalo::collections::Vec;
+use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::AbilitiesStore;
@@ -2580,6 +2580,19 @@ fn specialize_external<'a>(
                 _ => unreachable!("to closure or not to closure?"),
             }
 
+            let proc_args: Vec<_> = proc_args
+                .iter()
+                .map(|&(layout, symbol)| {
+                    let (symbol) = procs
+                        .needed_symbol_specializations
+                        .get(&(symbol, layout))
+                        .map(|(_, specialized_symbol)| *specialized_symbol)
+                        .unwrap_or(symbol);
+
+                    (layout, symbol)
+                })
+                .collect_in(env.arena);
+
             // reset subs, so we don't get type errors when specializing for a different signature
             layout_cache.rollback_to(cache_snapshot);
             env.subs.rollback_to(snapshot);
@@ -2591,7 +2604,7 @@ fn specialize_external<'a>(
 
             let proc = Proc {
                 name: proc_name,
-                args: proc_args,
+                args: proc_args.into_bump_slice(),
                 body: specialized_body,
                 closure_data_layout,
                 ret_layout,
@@ -3246,15 +3259,135 @@ pub fn with_hole<'a>(
                     )
                 } else {
                     let rest = build_rest(env, procs, layout_cache);
-                    with_hole(
-                        env,
-                        def.loc_expr.value,
-                        def.expr_var,
-                        procs,
-                        layout_cache,
-                        symbol,
-                        env.arena.alloc(rest),
-                    )
+                    // with_hole(
+                    //     env,
+                    //     def.loc_expr.value,
+                    //     def.expr_var,
+                    //     procs,
+                    //     layout_cache,
+                    //     symbol,
+                    //     env.arena.alloc(rest),
+                    // )
+
+                    let needs_def_specializations = procs
+                        .needed_symbol_specializations
+                        .keys()
+                        .find(|(s, _)| *s == symbol)
+                        .is_some();
+
+                    if !needs_def_specializations {
+                        return with_hole(
+                            env,
+                            def.loc_expr.value,
+                            def.expr_var,
+                            procs,
+                            layout_cache,
+                            symbol,
+                            env.arena.alloc(rest),
+                        );
+                    }
+
+                    // We do need specializations
+
+                    let mut stmt = rest;
+                    let mut needed_specializations = procs
+                        .needed_symbol_specializations
+                        .drain_filter(|(s, _), _| *s == symbol)
+                        .collect::<std::vec::Vec<_>>();
+
+                    if needed_specializations.len() == 1 {
+                        let ((_, _wanted_layout), (var, specialized_symbol)) =
+                            needed_specializations.pop().unwrap();
+
+                        // Unify the expr_var with the requested specialization once.
+                        let _res = roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
+
+                        return with_hole(
+                            env,
+                            def.loc_expr.value,
+                            def.expr_var,
+                            procs,
+                            layout_cache,
+                            specialized_symbol,
+                            env.arena.alloc(stmt),
+                        );
+                    } else {
+                        // Need to eat the cost and create a specialized version of the body for each specialization.
+                        for ((_, wanted_layout), (var, specialized_symbol)) in
+                            needed_specializations
+                        {
+                            macro_rules! p {
+                                ($v:expr) => {{
+                                    let content = env.subs.get_content_without_compacting($v);
+                                    let c = roc_types::subs::SubsFmtContent(content, env.subs);
+                                    c
+                                }};
+                            }
+                            // let res =
+                            //     roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
+                            // let content = env.subs.get_content_without_compacting(def.expr_var);
+                            // let c = roc_types::subs::SubsFmtContent(content, env.subs);
+                            // let content2 = env.subs.get_content_without_compacting(var);
+                            // let c2 = roc_types::subs::SubsFmtContent(content2, env.subs);
+                            // let layout = layout_cache
+                            //     .from_var(env.arena, def.expr_var, env.subs)
+                            //     .unwrap();
+                            // dbg!(
+                            //     specialized_symbol,
+                            //     c,
+                            //     c2,
+                            //     layout,
+                            //     wanted_layout,
+                            //     var,
+                            //     def.expr_var,
+                            // );
+
+                            use crate::copy::deep_copy_type_vars_into_expr;
+
+                            let (new_def_expr_var, specialized_expr) =
+                                    deep_copy_type_vars_into_expr(
+                                        env.arena,
+                                        env.subs,
+                                        def.expr_var,
+                                        &def.loc_expr.value
+                                    ).expect("expr marked as having specializations, but it has no type variables!");
+
+                            // dbg!(&def.loc_expr.value, &specialized_expr);
+
+                            // dbg!(
+                            //     def.expr_var,
+                            //     p!(def.expr_var),
+                            //     var,
+                            //     p!(var),
+                            //     new_def_expr_var,
+                            //     p!(new_def_expr_var)
+                            // );
+
+                            let _res =
+                                roc_unify::unify::unify(env.subs, var, new_def_expr_var, Mode::EQ);
+
+                            // dbg!(
+                            //     def.expr_var,
+                            //     p!(def.expr_var),
+                            //     var,
+                            //     p!(var),
+                            //     new_def_expr_var,
+                            //     p!(new_def_expr_var)
+                            // );
+
+                            stmt = with_hole(
+                                env,
+                                specialized_expr,
+                                new_def_expr_var,
+                                procs,
+                                layout_cache,
+                                specialized_symbol,
+                                env.arena.alloc(stmt),
+                            );
+                        }
+
+                        return stmt;
+                    }
                 }
             } else {
                 // this may be a destructure pattern
@@ -3397,9 +3530,17 @@ pub fn with_hole<'a>(
         OpaqueRef { argument, .. } => {
             let (arg_var, loc_arg_expr) = *argument;
 
+            // TODO(POLYEXPR): can this just be `possible_reuse_symbol_or_spec`?
             match can_reuse_symbol(env, procs, &loc_arg_expr.value) {
                 // Opaques decay to their argument.
                 ReuseSymbol::Value(real_name) => {
+                    let real_name = possible_reuse_symbol_or_spec(
+                        env,
+                        procs,
+                        layout_cache,
+                        &loc_arg_expr.value,
+                        arg_var,
+                    );
                     let mut result = hole.clone();
                     substitute_in_exprs(arena, &mut result, assigned, real_name);
                     result
@@ -3655,7 +3796,8 @@ pub fn with_hole<'a>(
             branches_cond_var: _,
             exhaustive,
         } => {
-            let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
+            let cond_symbol =
+                possible_reuse_symbol_or_spec(env, procs, layout_cache, &loc_cond.value, cond_var);
 
             let id = JoinPointId(env.unique_symbol());
 
@@ -5335,7 +5477,8 @@ pub fn from_can<'a>(
             branches_cond_var: _,
             exhaustive,
         } => {
-            let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
+            let cond_symbol =
+                possible_reuse_symbol_or_spec(env, procs, layout_cache, &loc_cond.value, cond_var);
 
             let stmt = from_can_when(
                 env,
@@ -5641,11 +5784,14 @@ pub fn from_can<'a>(
                             let ((_, _wanted_layout), (var, specialized_symbol)) =
                                 needed_specializations.pop().unwrap();
 
+                            // Unify the expr_var with the requested specialization once.
+                            let _res =
+                                roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
+
                             return with_hole(
                                 env,
                                 def.loc_expr.value,
-                                // def.expr_var,
-                                var,
+                                def.expr_var,
                                 procs,
                                 layout_cache,
                                 specialized_symbol,
@@ -5656,29 +5802,73 @@ pub fn from_can<'a>(
                             for ((_, wanted_layout), (var, specialized_symbol)) in
                                 needed_specializations
                             {
+                                macro_rules! p {
+                                    ($v:expr) => {{
+                                        let content = env.subs.get_content_without_compacting($v);
+                                        let c = roc_types::subs::SubsFmtContent(content, env.subs);
+                                        c
+                                    }};
+                                }
                                 // let res =
                                 //     roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
-                                let content = env.subs.get_content_without_compacting(def.expr_var);
-                                let c = roc_types::subs::SubsFmtContent(content, env.subs);
-                                let content2 = env.subs.get_content_without_compacting(var);
-                                let c2 = roc_types::subs::SubsFmtContent(content2, env.subs);
-                                let layout = layout_cache
-                                    .from_var(env.arena, def.expr_var, env.subs)
-                                    .unwrap();
-                                dbg!(
-                                    specialized_symbol,
-                                    c,
-                                    c2,
-                                    layout,
-                                    wanted_layout,
+                                // let content = env.subs.get_content_without_compacting(def.expr_var);
+                                // let c = roc_types::subs::SubsFmtContent(content, env.subs);
+                                // let content2 = env.subs.get_content_without_compacting(var);
+                                // let c2 = roc_types::subs::SubsFmtContent(content2, env.subs);
+                                // let layout = layout_cache
+                                //     .from_var(env.arena, def.expr_var, env.subs)
+                                //     .unwrap();
+                                // dbg!(
+                                //     specialized_symbol,
+                                //     c,
+                                //     c2,
+                                //     layout,
+                                //     wanted_layout,
+                                //     var,
+                                //     def.expr_var,
+                                // );
+
+                                use crate::copy::deep_copy_type_vars_into_expr;
+
+                                let (new_def_expr_var, specialized_expr) =
+                                    deep_copy_type_vars_into_expr(
+                                        env.arena,
+                                        env.subs,
+                                        def.expr_var,
+                                        &def.loc_expr.value
+                                    ).expect("expr marked as having specializations, but it has no type variables!");
+
+                                // dbg!(&def.loc_expr.value, &specialized_expr);
+
+                                // dbg!(
+                                //     def.expr_var,
+                                //     p!(def.expr_var),
+                                //     var,
+                                //     p!(var),
+                                //     new_def_expr_var,
+                                //     p!(new_def_expr_var)
+                                // );
+
+                                let _res = roc_unify::unify::unify(
+                                    env.subs,
                                     var,
-                                    def.expr_var,
+                                    new_def_expr_var,
+                                    Mode::EQ,
                                 );
+
+                                // dbg!(
+                                //     def.expr_var,
+                                //     p!(def.expr_var),
+                                //     var,
+                                //     p!(var),
+                                //     new_def_expr_var,
+                                //     p!(new_def_expr_var)
+                                // );
+
                                 stmt = with_hole(
                                     env,
-                                    def.loc_expr.value.clone(),
-                                    // def.expr_var,
-                                    var,
+                                    specialized_expr,
+                                    new_def_expr_var,
                                     procs,
                                     layout_cache,
                                     specialized_symbol,
@@ -6740,23 +6930,45 @@ fn possible_reuse_symbol_or_spec<'a>(
 ) -> Symbol {
     match can_reuse_symbol(env, procs, expr) {
         ReuseSymbol::Value(symbol) => {
-            let wanted_layout = layout_cache.from_var(env.arena, var, env.subs).unwrap();
+            let wanted_layout = match layout_cache.from_var(env.arena, var, env.subs) {
+                Ok(layout) => layout,
+                // This can happen when the def symbol has a type error. In such cases just use the
+                // def symbol, which is erroring.
+                Err(_) => return symbol,
+            };
 
-            let mut fake_subs = env.subs.clone();
-            let new_var = roc_types::subs::deep_copy_var_to(&mut fake_subs, env.subs, var);
-            let content = roc_types::subs::SubsFmtContent(
-                env.subs.get_content_without_compacting(new_var),
-                env.subs,
-            );
-            dbg!(new_var, content);
+            // For the first specialization, always reuse the current symbol. Two reasons for this:
+            //   1. More readable
+            //   2. Will still have bugs where we're not always specializing the original symbol
+            //      will all specialization symbols. In such cases, just re-use the original for
+            //      now.
+            let needs_fresh_symbol = procs
+                .needed_symbol_specializations
+                .keys()
+                .find(|(s, _)| *s == symbol)
+                .is_some();
 
             let (_, specialized_symbol) = procs
                 .needed_symbol_specializations
                 .entry((symbol, wanted_layout))
-                .or_insert_with(|| (new_var, env.unique_symbol()));
+                .or_insert_with(|| {
+                    (
+                        var,
+                        if needs_fresh_symbol {
+                            env.unique_symbol()
+                        } else {
+                            symbol
+                        },
+                    )
+                });
 
-            dbg!(symbol, *specialized_symbol, wanted_layout, var);
-
+            // if format!("{:?}", *specialized_symbol).contains("IdentId(19)") {
+            //     panic!();
+            // }
+            dbg!(symbol, *specialized_symbol, wanted_layout);
+            // if true {
+            //     panic!()
+            // }
             *specialized_symbol
         }
         _ => env.unique_symbol(),
@@ -6820,6 +7032,8 @@ where
     } else {
         // This should be a fully specialized value. Replace the alias with the original symbol.
         let mut result = build_rest(env, procs, layout_cache);
+        // dbg!(&result);
+        dbg!(&procs.needed_symbol_specializations);
 
         // We need to lift all specializations of "left" to be specializations of "right".
         let to_update = procs
@@ -6827,6 +7041,11 @@ where
             .drain_filter(|(s, _), _| s == &left)
             .collect::<std::vec::Vec<_>>();
         let mut scratchpad_update_specializations = std::vec::Vec::new();
+
+        dbg!(left, right, &to_update);
+
+        let left_had_specialization_symbols = !to_update.is_empty();
+
         for ((_, layout), (specialized_var, specialized_sym)) in to_update.into_iter() {
             let old_specialized_sym = procs
                 .needed_symbol_specializations
@@ -6836,12 +7055,21 @@ where
                 scratchpad_update_specializations.push((old_specialized_sym, specialized_sym));
             }
         }
+        dbg!(&procs.needed_symbol_specializations);
 
-        substitute_in_exprs(env.arena, &mut result, left, right);
-        for (old_specialized_sym, specialized_sym) in scratchpad_update_specializations.into_iter()
-        {
-            substitute_in_exprs(env.arena, &mut result, old_specialized_sym, specialized_sym);
+        if left_had_specialization_symbols {
+            // If the symbol is specialized, only the specializations need to be updated.
+            for (old_specialized_sym, specialized_sym) in
+                scratchpad_update_specializations.into_iter()
+            {
+                dbg!((old_specialized_sym, "->", specialized_sym));
+                substitute_in_exprs(env.arena, &mut result, old_specialized_sym, specialized_sym);
+            }
+        } else {
+            dbg!((left, "=>", right));
+            substitute_in_exprs(env.arena, &mut result, left, right);
         }
+
         result
     }
 }

@@ -34,7 +34,8 @@ macro_rules! dbg_do {
     ($flag:path, $expr:expr) => {
         #[cfg(debug_assertions)]
         {
-            if std::env::var($flag).as_ref() == Ok(&"0".to_string()) {
+            let flag = std::env::var($flag);
+            if !flag.is_err() && flag.as_deref() != Ok("0") {
                 $expr
             }
         }

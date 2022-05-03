@@ -1319,7 +1319,7 @@ fn monomorphized_applied_tag() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn monomorphized_tag_with_polymorphic_arg1() {
+fn monomorphized_tag_with_polymorphic_arg() {
     assert_evals_to!(
         indoc!(
             r#"

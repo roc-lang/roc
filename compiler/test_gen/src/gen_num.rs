@@ -612,6 +612,7 @@ fn i64_abs() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+#[should_panic = "integer absolute overflowed because its argument is the minimum value"]
 fn abs_min_int_overflow() {
     assert_evals_to!(
         indoc!(
