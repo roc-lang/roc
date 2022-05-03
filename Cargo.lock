@@ -3450,8 +3450,8 @@ dependencies = [
  "roc_reporting",
  "roc_std",
  "roc_target",
+ "roc_test_utils",
  "roc_types",
- "tempfile",
 ]
 
 [[package]]

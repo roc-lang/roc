@@ -25,4 +25,4 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 regex = "1.5.5"
 roc_load = { path = "../compiler/load" }
 roc_reporting = { path = "../reporting" }
-tempfile = "3.2.0"
+roc_test_utils = { path = "../test_utils" }

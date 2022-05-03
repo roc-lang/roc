@@ -25,22 +25,27 @@ use std::io::Write;
 use std::path::PathBuf;
 
 fn run_load_and_typecheck(
+    subdir: &str,
     src: &str,
     target_info: TargetInfo,
 ) -> Result<(LoadedModule), std::io::Error> {
     use bumpalo::Bump;
-    use tempfile::tempdir;
 
     let arena = &Bump::new();
 
     assert!(
-        src.starts_with("app"),
-        "I need a module source, not an expr"
+        src.starts_with("app \"") || src.starts_with("platform \""),
+        "This test needs a platform or application module, not an expr"
     );
 
     let subs_by_module = Default::default();
     let loaded = {
-        let dir = tempdir()?;
+        // Use a deterministic temporary directory.
+        // We can't have all tests use "tmp" because tests run in parallel,
+        // so append the test name to the tmp path.
+        let tmp = format!("tmp/{}", subdir);
+        let dir = roc_test_utils::TmpDir::new(&tmp);
+
         let filename = PathBuf::from("Test.roc");
         let file_path = dir.path().join(filename);
         let full_file_path = file_path.clone();
@@ -55,16 +60,14 @@ fn run_load_and_typecheck(
             RenderTarget::Generic,
         );
 
-        dir.close()?;
-
         result
     };
 
     Ok(loaded.expect("had problems loading"))
 }
 
-pub fn generate_bindings(src: &str, target_info: TargetInfo) -> String {
-    let (LoadedModule {
+pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> String {
+    let LoadedModule {
         module_id: home,
         mut can_problems,
         mut type_problems,
@@ -72,7 +75,7 @@ pub fn generate_bindings(src: &str, target_info: TargetInfo) -> String {
         mut solved,
         interns,
         ..
-    }) = run_load_and_typecheck(src, target_info).expect("Something went wrong with IO");
+    } = run_load_and_typecheck(subdir, src, target_info).expect("Something went wrong with IO");
 
     let decls = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();
@@ -171,23 +174,30 @@ fn struct_without_different_pointer_alignment() {
 }
 
 #[test]
-fn my_struct_in_rust() {
-    let module = r#"app "main" provides [ main ] to "./platform"
+fn record_type_aliased() {
+    let module = indoc!(
+        r#"
+            app "main" provides [ main ] to "./platform"
 
-MyRcd : { a: U64, b: U128 }
+            MyRcd : { a: U64, b: U128 }
 
-main : MyRcd
-main = { a: 1u64, b: 2u128 }
-"#;
+            main : MyRcd
+            main = { a: 1u64, b: 2u128 }
+        "#
+    );
 
-    let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
+    let bindings_rust =
+        generate_bindings("record_type_aliased", module, TargetInfo::default_x86_64());
 
     assert_eq!(
         bindings_rust,
-        "struct MyRcd {
-    b: u128,
-    a: u64,
-}
-"
+        indoc!(
+            r#"
+                struct MyRcd {
+                    b: u128,
+                    a: u64,
+                }
+            "#
+        )
     );
 }
