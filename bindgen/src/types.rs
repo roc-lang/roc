@@ -76,7 +76,7 @@ impl RocRecord {
     }
 
     /// Use struct ordering, taking into account alignment and alphabetization.
-    fn use_struct_ordering(fields: &mut Vec<(String, Box<RocType>)>, ptr_alignment: usize) {
+    fn use_struct_ordering(fields: &mut [(String, Box<RocType>)], ptr_alignment: usize) {
         fields.sort_by(|(field1, type1), (field2, type2)| {
             let align1 = type1.alignment(ptr_alignment);
             let align2 = type2.alignment(ptr_alignment);
