@@ -1,9 +1,12 @@
 use crate::enums::Enums;
 use crate::structs::Structs;
 use crate::types::RocType;
-use roc_module::symbol::Symbol;
-use roc_mono::layout::Layout;
-use roc_types::subs::{Subs, Variable};
+use bumpalo::Bump;
+use roc_collections::MutMap;
+use roc_module::ident::Lowercase;
+use roc_mono::layout::{Layout, LayoutCache};
+use roc_target::TargetInfo;
+use roc_types::subs::{Content, FlatType, RecordFields, Subs, Variable};
 
 use std::{
     fmt::{self, Write},
@@ -78,9 +81,11 @@ pub fn write_roc_type(
     }
 }
 
-pub fn write_layout_type(
-    layout: Layout<'_>,
-    var: Variable,
+pub fn write_layout_type<'a>(
+    arena: &'a Bump,
+    layout_cache: &mut LayoutCache<'a>,
+    layout: Layout<'a>,
+    content: &Content,
     subs: &Subs,
     buf: &mut String,
 ) -> fmt::Result {
@@ -112,31 +117,103 @@ pub fn write_layout_type(
             Builtin::Str => buf.write_str("RocStr"),
             Builtin::Dict(key_layout, val_layout) => {
                 buf.write_str("RocDict<")?;
-                write_layout_type(*key_layout, var, subs, buf)?;
+                write_layout_type(arena, layout_cache, *key_layout, content, subs, buf)?;
                 buf.write_str(", ")?;
-                write_layout_type(*val_layout, var, subs, buf)?;
+                write_layout_type(arena, layout_cache, *val_layout, content, subs, buf)?;
                 buf.write_char('>')
             }
             Builtin::Set(elem_type) => {
                 buf.write_str("RocSet<")?;
-                write_layout_type(*elem_type, var, subs, buf)?;
+                write_layout_type(arena, layout_cache, *elem_type, content, subs, buf)?;
                 buf.write_char('>')
             }
             Builtin::List(elem_type) => {
                 buf.write_str("RocList<")?;
-                write_layout_type(*elem_type, var, subs, buf)?;
+                write_layout_type(arena, layout_cache, *elem_type, content, subs, buf)?;
                 buf.write_char('>')
             }
         },
-        Layout::Struct {
-            field_order_hash,
-            field_layouts,
-        } => {
-            todo!("support records in host bindgen")
+        Layout::Struct { .. } => {
+            match content {
+                Content::FlexVar(_) => todo!(),
+                Content::RigidVar(_) => todo!(),
+                Content::FlexAbleVar(_, _) => todo!(),
+                Content::RigidAbleVar(_, _) => todo!(),
+                Content::RecursionVar { .. } => todo!(),
+                Content::Structure(FlatType::Record(fields, ext)) => {
+                    write_struct(arena, layout_cache, fields, *ext, subs, buf)
+                }
+                Content::Structure(FlatType::TagUnion(tags, _)) => {
+                    debug_assert_eq!(tags.len(), 1);
+                    todo!()
+
+                    // let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
+                    // single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, payload_vars)
+                }
+                Content::Alias(_, _, _, _) => todo!(),
+                Content::RangedNumber(_, _) => todo!(),
+                Content::Error => todo!(),
+                _ => {
+                    todo!()
+                }
+            }
+
+            // (_, Layout::Struct{field_layouts, ..}) => match raw_content {
+            //     Content::Structure(FlatType::Record(fields, _)) => {
+            //         struct_to_ast(env, mem, addr, *fields)
+            //     }
+            //     Content::Structure(FlatType::TagUnion(tags, _)) => {
+            //         debug_assert_eq!(tags.len(), 1);
+
+            //         let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
+            //         single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, payload_vars)
+            //     }
+            //     Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
+            //         let tag_name = &env.subs[*tag_name];
+            //         single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, &[])
+            //     }
+            //     Content::Structure(FlatType::EmptyRecord) => {
+            //         struct_to_ast(env, mem, addr, RecordFields::empty())
+            //     }
+            //     other => {
+            //         unreachable!(
+            //             "Something had a Struct layout, but instead of a Record type, it had: {:?}",
+            //             other
+            //         );
+            //     }
+            // },
         }
         Layout::Boxed(_) => todo!("support Box in host bindgen"),
         Layout::Union(_) => todo!("support tag unions in host bindgen"),
         Layout::LambdaSet(_) => todo!("support functions in host bindgen"),
         Layout::RecursivePointer => todo!("support recursive pointers in host bindgen"),
     }
+}
+
+fn write_struct<'a>(
+    arena: &'a Bump,
+    layout_cache: &mut LayoutCache<'a>,
+    record_fields: &RecordFields,
+    ext: Variable,
+    subs: &Subs,
+    buf: &mut String,
+) -> fmt::Result {
+    for (label, field) in record_fields.sorted_iterator(subs, ext) {
+        // We recalculate the layouts here because we will have compiled the record so that its fields
+        // are sorted by descending alignment, and then alphabetic, but the type of the record is
+        // always only sorted alphabetically. We want to arrange the rendered record in the order of
+        // the type.
+        let field_content = subs.get_content_without_compacting(field.into_inner());
+        let field_layout = layout_cache
+            .from_var(arena, field.into_inner(), subs)
+            .unwrap();
+
+        buf.write_str(INDENT)?;
+        buf.write_str(label.as_str())?;
+        buf.write_str(": ")?;
+        write_layout_type(arena, layout_cache, field_layout, field_content, subs, buf)?;
+        buf.write_str(",\n")?;
+    }
+
+    Ok(())
 }

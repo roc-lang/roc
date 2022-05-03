@@ -3436,14 +3436,18 @@ dependencies = [
 name = "roc_bindgen"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "indoc",
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
+ "roc_collections",
+ "roc_error_macros",
  "roc_load",
  "roc_module",
  "roc_mono",
  "roc_std",
+ "roc_target",
  "roc_types",
 ]
 
