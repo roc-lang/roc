@@ -1,5 +1,4 @@
-FROM rust:1.60.0-slim-bullseye # make sure to update rust-toolchain.toml and nixpkgs-unstable in sources.json too so that it uses the same rust version > search for cargo on unstable here: https://search.nixos.org/packages
-WORKDIR /earthbuild
+FROM rust:1.60.0-slim-bullseye # make sure to update rust-toolchain.toml too so that everything uses the same rust version
 
 prep-debian:
     RUN apt -y update
