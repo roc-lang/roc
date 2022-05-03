@@ -129,7 +129,8 @@ pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> St
                         .from_var(&arena, *var, &subs)
                         .expect("Something weird ended up in the content");
 
-                    write_layout_type(&mut env, layout, *var, &mut bindgen_result);
+                    write_layout_type(&mut env, layout, *var, &mut bindgen_result)
+                        .expect("I/O error when writing bindgen string");
                 }
                 _ => {
                     // figure out if we need to export non-identifier defs - when would that
