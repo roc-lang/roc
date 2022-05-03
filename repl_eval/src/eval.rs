@@ -5,7 +5,7 @@ use std::cmp::{max_by_key, min_by_key};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::called_via::CalledVia;
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
