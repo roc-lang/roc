@@ -118,8 +118,7 @@ fn unroll_newtypes_and_aliases<'a>(
                 newtype_containers.push(NewtypeKind::RecordField(
                     env.arena.alloc_str(label.as_str()),
                 ));
-                let field_var = *field.as_inner();
-                content = env.subs.get_content_without_compacting(field_var);
+                content = env.subs.get_content_without_compacting(field.into_inner());
             }
             Content::Alias(_, _, real_var, _) => {
                 // We need to pass through aliases too, because their underlying types may have
@@ -912,11 +911,10 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
             .unwrap();
 
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
-
-        let layout = layout_cache
-            .from_var(arena, *field.as_inner(), env.subs)
+        let field_layout = layout_cache
+            .from_var(arena, field.into_inner(), env.subs)
             .unwrap();
-        let inner_layouts = arena.alloc([layout]);
+        let inner_layouts = arena.alloc([field_layout]);
 
         let loc_expr = &*arena.alloc(Loc {
             value: addr_to_ast(
