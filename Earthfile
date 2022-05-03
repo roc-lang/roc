@@ -1,4 +1,5 @@
 FROM rust:1.60.0-slim-bullseye # make sure to update rust-toolchain.toml too so that everything uses the same rust version
+WORKDIR /earthbuild
 
 prep-debian:
     RUN apt -y update
@@ -18,7 +19,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # zig
     RUN wget -c https://ziglang.org/download/0.8.0/zig-linux-x86_64-0.8.0.tar.xz --no-check-certificate
     RUN tar -xf zig-linux-x86_64-0.8.0.tar.xz
-    RUN ln -s /zig-linux-x86_64-0.8.0/zig /usr/bin/zig
+    RUN ln -s /earthbuild/zig-linux-x86_64-0.8.0/zig /bin/zig
     # zig builtins wasm tests
     RUN apt -y install build-essential
     RUN cargo install wasmer-cli --features "singlepass"
@@ -48,7 +49,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN cargo install sccache
     RUN sccache -V
     ENV RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
-    ENV SCCACHE_DIR=/sccache_dir
+    ENV SCCACHE_DIR=/earthbuild/sccache_dir
     ENV CARGO_INCREMENTAL=0 # no need to recompile package when using new function
 
 copy-dirs:
