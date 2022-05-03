@@ -3,9 +3,9 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-21.11";
-    rust-overlay.url = "github:oxalica/rust-overlay";
-    zig.url = "github:roarkanize/zig-overlay";
-    flake-utils.url = "github:numtide/flake-utils";
+    rust-overlay.url = "github:oxalica/rust-overlay"; # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
+    zig.url = "github:roarkanize/zig-overlay"; # zig 8.1 is broken on nixpkgs for M1 macs
+    flake-utils.url = "github:numtide/flake-utils"; # to easily make configs for all architectures
   };
 
   outputs = { self, nixpkgs, rust-overlay, zig, flake-utils }:
