@@ -637,14 +637,9 @@ fn deep_copy_type_vars<'a>(
 mod test {
     use super::deep_copy_type_vars;
     use bumpalo::Bump;
-    use roc_module::ident::TagName;
     use roc_module::symbol::Symbol;
-    use roc_types::{
-        subs::{
-            Content, Content::*, Descriptor, FlatType::*, Mark, OptVariable, Rank, RecordFields,
-            Subs, SubsIndex, UnionTags, Variable,
-        },
-        types::RecordField,
+    use roc_types::subs::{
+        Content, Content::*, Descriptor, Mark, OptVariable, Rank, Subs, SubsIndex, Variable,
     };
 
     #[cfg(test)]
@@ -747,53 +742,5 @@ mod test {
             }
             it => assert!(false, "{:?}", it),
         }
-    }
-
-    #[test]
-    fn copy_type_with_copied_reference() {
-        let mut subs = Subs::new();
-        let arena = Bump::new();
-
-        let flex_var = new_var(&mut subs, FlexVar(None));
-
-        let content = Structure(TagUnion(
-            UnionTags::insert_into_subs(&mut subs, [(TagName::Tag("A".into()), [flex_var])]),
-            Variable::EMPTY_TAG_UNION,
-        ));
-
-        let tag_var = new_var(&mut subs, content);
-
-        let mut copies = deep_copy_type_vars(&arena, &mut subs, tag_var);
-
-        assert_eq!(copies.len(), 2);
-        let (original_flex, new_flex) = copies[0];
-        assert_ne!(original_flex, new_flex);
-        assert_eq!(original_flex, flex_var);
-
-        let (original_tag, new_tag) = copies[1];
-        assert_ne!(original_tag, new_tag);
-        assert_eq!(original_tag, tag_var);
-
-        match subs.get_content_without_compacting(new_tag) {
-            Structure(TagUnion(union_tags, Variable::EMPTY_TAG_UNION)) => {
-                let (tag_name, vars) = union_tags.iter_all().next().unwrap();
-                match &subs[tag_name] {
-                    TagName::Tag(upper) => assert_eq!(upper.as_str(), "A"),
-                    _ => assert!(false, "{:?}", tag_name),
-                }
-
-                let vars = subs[vars];
-                assert_eq!(vars.len(), 1);
-
-                let var = subs[vars.into_iter().next().unwrap()];
-                assert_eq!(var, new_flex);
-            }
-            it => assert!(false, "{:?}", it),
-        }
-
-        assert!(matches!(
-            subs.get_content_without_compacting(new_flex),
-            FlexVar(None)
-        ));
     }
 }
