@@ -52,7 +52,7 @@ fn run_load_and_typecheck(
             full_file_path,
             dir.path(),
             subs_by_module,
-            roc_target::TargetInfo::default_x86_64(),
+            target_info,
             RenderTarget::Generic,
         );
 
