@@ -1,6 +1,10 @@
 use crate::enums::Enums;
 use crate::structs::Structs;
 use crate::types::RocType;
+use roc_module::symbol::Symbol;
+use roc_mono::layout::Layout;
+use roc_types::subs::{Subs, Variable};
+
 use std::{
     fmt::{self, Write},
     io,
@@ -71,5 +75,68 @@ pub fn write_roc_type(
             buf.write_char('>')
         }
         RocType::TagUnion(tag_union) => buf.write_str(&enums.get_name(&tag_union)),
+    }
+}
+
+pub fn write_layout_type(
+    layout: Layout<'_>,
+    var: Variable,
+    subs: &Subs,
+    buf: &mut String,
+) -> fmt::Result {
+    use roc_builtins::bitcode::FloatWidth::*;
+    use roc_builtins::bitcode::IntWidth::*;
+    use roc_mono::layout::Builtin;
+
+    match layout {
+        Layout::Builtin(builtin) => match builtin {
+            Builtin::Int(width) => match width {
+                U8 => buf.write_str("u8"),
+                U16 => buf.write_str("u16"),
+                U32 => buf.write_str("u32"),
+                U64 => buf.write_str("u64"),
+                U128 => buf.write_str("u128"),
+                I8 => buf.write_str("i8"),
+                I16 => buf.write_str("i16"),
+                I32 => buf.write_str("i32"),
+                I64 => buf.write_str("i64"),
+                I128 => buf.write_str("i128"),
+            },
+            Builtin::Float(width) => match width {
+                F32 => buf.write_str("f32"),
+                F64 => buf.write_str("f64"),
+                F128 => buf.write_str("f128"),
+            },
+            Builtin::Bool => buf.write_str("bool"),
+            Builtin::Decimal => buf.write_str("RocDec"),
+            Builtin::Str => buf.write_str("RocStr"),
+            Builtin::Dict(key_layout, val_layout) => {
+                buf.write_str("RocDict<")?;
+                write_layout_type(*key_layout, var, subs, buf)?;
+                buf.write_str(", ")?;
+                write_layout_type(*val_layout, var, subs, buf)?;
+                buf.write_char('>')
+            }
+            Builtin::Set(elem_type) => {
+                buf.write_str("RocSet<")?;
+                write_layout_type(*elem_type, var, subs, buf)?;
+                buf.write_char('>')
+            }
+            Builtin::List(elem_type) => {
+                buf.write_str("RocList<")?;
+                write_layout_type(*elem_type, var, subs, buf)?;
+                buf.write_char('>')
+            }
+        },
+        Layout::Struct {
+            field_order_hash,
+            field_layouts,
+        } => {
+            todo!("support records in host bindgen")
+        }
+        Layout::Boxed(_) => todo!("support Box in host bindgen"),
+        Layout::Union(_) => todo!("support tag unions in host bindgen"),
+        Layout::LambdaSet(_) => todo!("support functions in host bindgen"),
+        Layout::RecursivePointer => todo!("support recursive pointers in host bindgen"),
     }
 }
