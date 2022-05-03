@@ -806,20 +806,24 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
-            let global = if str_literal.len() < env.small_str_bytes() as usize {
+            if str_literal.len() < env.small_str_bytes() as usize {
                 match env.small_str_bytes() {
-                    24 => small_str_ptr_width_8(env, parent, str_literal),
-                    12 => small_str_ptr_width_4(env, parent, str_literal),
+                    24 => small_str_ptr_width_8(env, parent, str_literal).into(),
+                    12 => small_str_ptr_width_4(env, parent, str_literal).into(),
                     _ => unreachable!("incorrect small_str_bytes"),
                 }
             } else {
                 let ptr = define_global_str_literal_ptr(env, *str_literal);
                 let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
 
-                const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements)
-            };
+                let alloca =
+                    const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements);
 
-            global.into()
+                match env.target_info.ptr_width() {
+                    PtrWidth::Bytes4 => env.builder.build_load(alloca, "load_const_str"),
+                    PtrWidth::Bytes8 => alloca.into(),
+                }
+            }
         }
     }
 }
