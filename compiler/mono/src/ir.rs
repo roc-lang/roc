@@ -6451,7 +6451,7 @@ fn store_tag_pattern<'a>(
                         stmt = new;
                         // only if we bind one of its (sub)fields to a used name should we
                         // extract the field
-                        stmt = Stmt::Let(dbg!(symbol), load, arg_layout, env.arena.alloc(stmt));
+                        stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
                     }
                     StorePattern::NotProductive(new) => {
                         // do nothing
@@ -6504,7 +6504,7 @@ fn store_newtype_pattern<'a>(
         match argument {
             Identifier(symbol) => {
                 // store immediately in the given symbol
-                stmt = Stmt::Let(dbg!(*symbol), load, arg_layout, env.arena.alloc(stmt));
+                stmt = Stmt::Let(*symbol, load, arg_layout, env.arena.alloc(stmt));
                 is_productive = true;
             }
             Underscore => {
@@ -6527,7 +6527,7 @@ fn store_newtype_pattern<'a>(
                         stmt = new;
                         // only if we bind one of its (sub)fields to a used name should we
                         // extract the field
-                        stmt = Stmt::Let(dbg!(symbol), load, arg_layout, env.arena.alloc(stmt));
+                        stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
                     }
                     StorePattern::NotProductive(new) => {
                         // do nothing
