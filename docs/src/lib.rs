@@ -89,25 +89,28 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
 
     // Write each package's module docs html file
     for loaded_module in package.modules.iter_mut() {
-        for module_docs in loaded_module.documentation.values() {
-            let module_dir = build_dir.join(module_docs.name.replace('.', "/").as_str());
+        for (module_id, module_docs) in loaded_module.documentation.iter() {
+            if *module_id == loaded_module.module_id {
+                let module_dir = build_dir.join(module_docs.name.replace('.', "/").as_str());
 
-            fs::create_dir_all(&module_dir)
-                .expect("TODO gracefully handle not being able to create the module dir");
+                fs::create_dir_all(&module_dir)
+                    .expect("TODO gracefully handle not being able to create the module dir");
 
-            let rendered_module = template_html
-                .replace(
-                    "<!-- Package Name and Version -->",
-                    render_name_and_version(package.name.as_str(), package.version.as_str())
-                        .as_str(),
-                )
-                .replace(
-                    "<!-- Module Docs -->",
-                    render_module_documentation(module_docs, loaded_module).as_str(),
+                let rendered_module = template_html
+                    .replace(
+                        "<!-- Package Name and Version -->",
+                        render_name_and_version(package.name.as_str(), package.version.as_str())
+                            .as_str(),
+                    )
+                    .replace(
+                        "<!-- Module Docs -->",
+                        render_module_documentation(module_docs, loaded_module).as_str(),
+                    );
+
+                fs::write(module_dir.join("index.html"), rendered_module).expect(
+                    "TODO gracefully handle failing to write index.html inside module's dir",
                 );
-
-            fs::write(module_dir.join("index.html"), rendered_module)
-                .expect("TODO gracefully handle failing to write index.html inside module's dir");
+            }
         }
     }
 
