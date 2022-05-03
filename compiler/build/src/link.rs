@@ -72,12 +72,12 @@ fn find_zig_str_path() -> PathBuf {
 }
 
 fn find_wasi_libc_path() -> PathBuf {
+    use wasi_libc_sys::WASI_LIBC_PATH;
+
     // Environment variable defined in wasi-libc-sys/build.rs
-    if let Ok(wasi_libc_path) = std::env::var("WASI_LIBC_SYS_PATH") {
-        let wasi_libc_pathbuf = PathBuf::from(&wasi_libc_path);
-        if std::path::Path::exists(&wasi_libc_pathbuf) {
-            return wasi_libc_pathbuf;
-        }
+    let wasi_libc_pathbuf = PathBuf::from(WASI_LIBC_PATH);
+    if std::path::Path::exists(&wasi_libc_pathbuf) {
+        return wasi_libc_pathbuf;
     }
 
     panic!("cannot find `wasi-libc.a`")

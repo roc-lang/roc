@@ -1,8 +1,8 @@
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
-
-// Environment variable that can be used from other build scripts
-const WASI_LIBC_SYS_PATH: &str = "WASI_LIBC_SYS_PATH";
+use std::path::Path;
+use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -11,31 +11,36 @@ fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
     let zig_cache_dir = format!("{}/zig-cache", out_dir);
     let out_file = format!("{}/wasi-libc.a", out_dir);
-    println!("cargo:rustc-env={}={}", WASI_LIBC_SYS_PATH, &out_file);
 
-    // Compile a dummy C program with Zig, putting libc into our own private cache directory
-    let args = [
-        "build-exe",
-        "-target",
-        "wasm32-wasi",
-        "-lc",
-        "-O",
-        "ReleaseSmall",
-        "--global-cache-dir",
-        &zig_cache_dir,
-        "src/dummy.c",
-        &format!("-femit-bin={}/dummy.wasm", out_dir),
-    ];
-
+    // Compile a dummy C program with Zig, with our own private cache directory
     let zig = zig_executable();
+    run_command(
+        Path::new("."),
+        &zig,
+        [
+            "build-exe",
+            "-target",
+            "wasm32-wasi",
+            "-lc",
+            "-O",
+            "ReleaseSmall",
+            "--global-cache-dir",
+            &zig_cache_dir,
+            "src/dummy.c",
+            &format!("-femit-bin={}/dummy.wasm", out_dir),
+        ],
+    );
 
-    // println!("{} {}", zig, args.join(" "));
+    // Find the libc.a file that Zig wrote (as a side-effect of compiling the dummy program)
+    let find_cmd_output = run_command(Path::new("."), "find", [&zig_cache_dir, "-name", "libc.a"]);
+    let zig_libc_path = find_cmd_output.trim(); // get rid of a newline
 
-    run_command(Path::new("."), &zig, args);
-    let zig_libc_path = run_command(Path::new("."), "find", [&zig_cache_dir, "-name", "libc.a"]);
+    // Copy libc to where Cargo expects it
+    fs::copy(&zig_libc_path, &out_file).unwrap();
 
-    // Copy libc out of Zig's cache, to where Cargo expects it
-    fs::copy(&zig_libc_path, &out_file);
+    // Generate some Rust code to indicate where the file is
+    let generated_rust = format!("pub const WASI_LIBC_PATH: &str = \"{}\";\n", out_file);
+    fs::write("src/generated.rs", generated_rust).unwrap();
 }
 
 fn zig_executable() -> String {
