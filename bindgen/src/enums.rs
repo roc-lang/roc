@@ -1,5 +1,5 @@
-use crate::types::RocTagUnion;
-use std::collections::HashMap;
+use roc_collections::MutMap;
+use roc_types::subs::Variable;
 
 #[derive(Copy, Clone, Debug, Default)]
 struct EnumId(u64);
@@ -16,13 +16,13 @@ impl EnumId {
 /// same record type, return the same name.
 #[derive(Default)]
 pub struct Enums {
-    by_tag_union: HashMap<RocTagUnion, EnumId>,
+    by_variable: MutMap<Variable, EnumId>,
     next_id: EnumId,
 }
 
 impl Enums {
-    pub fn get_name(&mut self, rec_type: &RocTagUnion) -> String {
-        match self.by_tag_union.get(rec_type) {
+    pub fn get_name(&mut self, var: Variable) -> String {
+        match self.by_variable.get(&var) {
             Some(struct_id) => struct_id.to_name(),
             None => self.next_id().to_name(),
         }

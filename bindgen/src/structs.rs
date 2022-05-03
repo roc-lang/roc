@@ -1,6 +1,5 @@
+use roc_collections::MutMap;
 use roc_types::subs::Variable;
-
-use std::collections::HashMap;
 
 #[derive(Copy, Clone, Debug, Default)]
 struct StructId(u64);
@@ -17,7 +16,7 @@ impl StructId {
 /// same record type, return the same name.
 #[derive(Default)]
 pub struct Structs {
-    by_variable: HashMap<Variable, StructId>,
+    by_variable: MutMap<Variable, StructId>,
     next_id: StructId,
 }
 
