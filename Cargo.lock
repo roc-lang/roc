@@ -3439,6 +3439,7 @@ dependencies = [
  "bumpalo",
  "indoc",
  "pretty_assertions",
+ "regex",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -3446,9 +3447,11 @@ dependencies = [
  "roc_load",
  "roc_module",
  "roc_mono",
+ "roc_reporting",
  "roc_std",
  "roc_target",
  "roc_types",
+ "tempfile",
 ]
 
 [[package]]

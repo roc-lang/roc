@@ -1328,7 +1328,7 @@ impl<'a> Layout<'a> {
 /// But if we're careful when to invalidate certain keys, we still get some benefit
 #[derive(Debug)]
 pub struct LayoutCache<'a> {
-    target_info: TargetInfo,
+    pub target_info: TargetInfo,
     _marker: std::marker::PhantomData<&'a u8>,
 }
 

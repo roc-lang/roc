@@ -3,10 +3,16 @@ use crate::structs::Structs;
 use crate::types::RocType;
 use bumpalo::Bump;
 use roc_collections::MutMap;
-use roc_module::ident::Lowercase;
+use roc_module::{
+    ident::Lowercase,
+    symbol::{Interns, Symbol},
+};
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_target::TargetInfo;
-use roc_types::subs::{Content, FlatType, RecordFields, Subs, Variable};
+use roc_types::{
+    subs::{Content, FlatType, RecordFields, Subs, Variable},
+    types::RecordField,
+};
 
 use std::{
     fmt::{self, Write},
@@ -81,9 +87,14 @@ pub fn write_roc_type(
     }
 }
 
+pub struct Env<'a> {
+    pub arena: &'a Bump,
+    pub layout_cache: &'a mut LayoutCache<'a>,
+    pub interns: &'a Interns,
+}
+
 pub fn write_layout_type<'a>(
-    arena: &'a Bump,
-    layout_cache: &mut LayoutCache<'a>,
+    env: &mut Env<'a>,
     layout: Layout<'a>,
     content: &Content,
     subs: &Subs,
@@ -92,6 +103,14 @@ pub fn write_layout_type<'a>(
     use roc_builtins::bitcode::FloatWidth::*;
     use roc_builtins::bitcode::IntWidth::*;
     use roc_mono::layout::Builtin;
+
+    let (opt_name, content) = match content {
+        Content::Alias(name, _variable, real_var, _kind) => {
+            // todo handle type variables
+            (Some(*name), subs.get_content_without_compacting(*real_var))
+        }
+        _ => (None, content),
+    };
 
     match layout {
         Layout::Builtin(builtin) => match builtin {
@@ -117,19 +136,19 @@ pub fn write_layout_type<'a>(
             Builtin::Str => buf.write_str("RocStr"),
             Builtin::Dict(key_layout, val_layout) => {
                 buf.write_str("RocDict<")?;
-                write_layout_type(arena, layout_cache, *key_layout, content, subs, buf)?;
+                write_layout_type(env, *key_layout, content, subs, buf)?;
                 buf.write_str(", ")?;
-                write_layout_type(arena, layout_cache, *val_layout, content, subs, buf)?;
+                write_layout_type(env, *val_layout, content, subs, buf)?;
                 buf.write_char('>')
             }
             Builtin::Set(elem_type) => {
                 buf.write_str("RocSet<")?;
-                write_layout_type(arena, layout_cache, *elem_type, content, subs, buf)?;
+                write_layout_type(env, *elem_type, content, subs, buf)?;
                 buf.write_char('>')
             }
             Builtin::List(elem_type) => {
                 buf.write_str("RocList<")?;
-                write_layout_type(arena, layout_cache, *elem_type, content, subs, buf)?;
+                write_layout_type(env, *elem_type, content, subs, buf)?;
                 buf.write_char('>')
             }
         },
@@ -141,7 +160,7 @@ pub fn write_layout_type<'a>(
                 Content::RigidAbleVar(_, _) => todo!(),
                 Content::RecursionVar { .. } => todo!(),
                 Content::Structure(FlatType::Record(fields, ext)) => {
-                    write_struct(arena, layout_cache, fields, *ext, subs, buf)
+                    write_struct(env, opt_name, fields, *ext, subs, buf)
                 }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     debug_assert_eq!(tags.len(), 1);
@@ -191,29 +210,55 @@ pub fn write_layout_type<'a>(
 }
 
 fn write_struct<'a>(
-    arena: &'a Bump,
-    layout_cache: &mut LayoutCache<'a>,
+    env: &mut Env<'a>,
+    opt_name: Option<Symbol>,
     record_fields: &RecordFields,
     ext: Variable,
     subs: &Subs,
     buf: &mut String,
 ) -> fmt::Result {
-    for (label, field) in record_fields.sorted_iterator(subs, ext) {
-        // We recalculate the layouts here because we will have compiled the record so that its fields
-        // are sorted by descending alignment, and then alphabetic, but the type of the record is
-        // always only sorted alphabetically. We want to arrange the rendered record in the order of
-        // the type.
-        let field_content = subs.get_content_without_compacting(field.into_inner());
-        let field_layout = layout_cache
-            .from_var(arena, field.into_inner(), subs)
-            .unwrap();
+    let mut pairs = bumpalo::collections::Vec::with_capacity_in(record_fields.len(), env.arena);
+    let it = record_fields
+        .unsorted_iterator(subs, ext)
+        .expect("something weird in content");
+    for (label, field) in it {
+        // drop optional fields
+        let var = match field {
+            RecordField::Optional(_) => continue,
+            RecordField::Required(var) => var,
+            RecordField::Demanded(var) => var,
+        };
+
+        pairs.push((
+            label,
+            var,
+            env.layout_cache.from_var(env.arena, var, subs).unwrap(),
+        ));
+    }
+
+    pairs.sort_by(|(label1, _, layout1), (label2, _, layout2)| {
+        let size1 = layout1.alignment_bytes(env.layout_cache.target_info);
+        let size2 = layout2.alignment_bytes(env.layout_cache.target_info);
+
+        size2.cmp(&size1).then(label1.cmp(label2))
+    });
+
+    let struct_name = opt_name
+        .map(|sym| sym.as_str(env.interns))
+        .unwrap_or("Unknown");
+    buf.write_str("struct ");
+    buf.write_str(struct_name);
+    buf.write_str(" {\n");
+
+    for (label, field_var, field_layout) in pairs.into_iter() {
+        let field_content = subs.get_content_without_compacting(field_var);
 
         buf.write_str(INDENT)?;
         buf.write_str(label.as_str())?;
         buf.write_str(": ")?;
-        write_layout_type(arena, layout_cache, field_layout, field_content, subs, buf)?;
+        write_layout_type(env, field_layout, field_content, subs, buf)?;
         buf.write_str(",\n")?;
     }
 
-    Ok(())
+    buf.write_str("}\n")
 }
