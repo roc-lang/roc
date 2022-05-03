@@ -51,7 +51,7 @@ pub fn deep_copy_type_vars<'a>(
         let mark = desc.mark;
 
         // Unlike `deep_copy_var` in solve, here we are cloning *all* flex and rigid vars.
-        // So we only want to fast-return if we've already done the cloning work for a particular
+        // So we only want to short-circuit if we've already done the cloning work for a particular
         // var.
         if let Some(copy) = desc.copy.into_variable() {
             return Some(copy);
@@ -86,6 +86,23 @@ pub fn deep_copy_type_vars<'a>(
             }};
         }
 
+        macro_rules! perform_clone {
+            ($needs_clone:ident, $do_clone:expr) => {
+                if $needs_clone {
+                    // It may the case that while deep-copying nested variables of this type, we
+                    // ended up copying the type itself (notably if it was self-referencing, in a
+                    // recursive type). In that case, short-circuit with the known copy.
+                    if let Some(copy) = subs.get_ref(var).copy.into_variable() {
+                        return Some(copy);
+                    }
+                    // Perform the clone.
+                    Some($do_clone)
+                } else {
+                    None
+                }
+            };
+        }
+
         // Now we recursively copy the content of the variable.
         // We have already marked the variable as copied, so we
         // will not repeat this work or crawl this variable again.
@@ -103,12 +120,10 @@ pub fn deep_copy_type_vars<'a>(
                     let mut needs_clone = false;
                     descend_slice!(arguments, needs_clone);
 
-                    if needs_clone {
+                    perform_clone!(needs_clone, {
                         let new_arguments = clone_var_slice!(arguments);
-                        Some(Structure(Apply(symbol, new_arguments)))
-                    } else {
-                        None
-                    }
+                        Structure(Apply(symbol, new_arguments))
+                    })
                 }
                 Func(arguments, closure_var, ret_var) => {
                     let mut needs_clone = false;
@@ -118,12 +133,10 @@ pub fn deep_copy_type_vars<'a>(
                     let new_closure_var = descend_var!(closure_var, needs_clone);
                     let new_ret_var = descend_var!(ret_var, needs_clone);
 
-                    if needs_clone {
+                    perform_clone!(needs_clone, {
                         let new_arguments = clone_var_slice!(arguments);
-                        Some(Structure(Func(new_arguments, new_closure_var, new_ret_var)))
-                    } else {
-                        None
-                    }
+                        Structure(Func(new_arguments, new_closure_var, new_ret_var))
+                    })
                 }
                 Record(fields, ext_var) => {
                     let mut needs_clone = false;
@@ -132,7 +145,7 @@ pub fn deep_copy_type_vars<'a>(
 
                     descend_slice!(fields.variables(), needs_clone);
 
-                    if needs_clone {
+                    perform_clone!(needs_clone, {
                         let new_variables = clone_var_slice!(fields.variables());
                         let new_fields = {
                             RecordFields {
@@ -142,10 +155,9 @@ pub fn deep_copy_type_vars<'a>(
                                 field_types_start: fields.field_types_start,
                             }
                         };
-                        Some(Structure(Record(new_fields, new_ext_var)))
-                    } else {
-                        None
-                    }
+
+                        Structure(Record(new_fields, new_ext_var))
+                    })
                 }
                 TagUnion(tags, ext_var) => {
                     let mut needs_clone = false;
@@ -157,7 +169,7 @@ pub fn deep_copy_type_vars<'a>(
                         descend_slice!(variables_slice, needs_clone);
                     }
 
-                    if needs_clone {
+                    perform_clone!(needs_clone, {
                         let new_variable_slices =
                             SubsSlice::reserve_variable_slices(subs, tags.len());
                         let it = (new_variable_slices.indices()).zip(tags.variables());
@@ -170,10 +182,8 @@ pub fn deep_copy_type_vars<'a>(
                         let new_union_tags =
                             UnionTags::from_slices(tags.tag_names(), new_variable_slices);
 
-                        Some(Structure(TagUnion(new_union_tags, new_ext_var)))
-                    } else {
-                        None
-                    }
+                        Structure(TagUnion(new_union_tags, new_ext_var))
+                    })
                 }
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let mut needs_clone = false;
@@ -186,7 +196,7 @@ pub fn deep_copy_type_vars<'a>(
                         descend_slice!(variables_slice, needs_clone);
                     }
 
-                    if needs_clone {
+                    perform_clone!(needs_clone, {
                         let new_variable_slices =
                             SubsSlice::reserve_variable_slices(subs, tags.len());
                         let it = (new_variable_slices.indices()).zip(tags.variables());
@@ -199,23 +209,15 @@ pub fn deep_copy_type_vars<'a>(
                         let new_union_tags =
                             UnionTags::from_slices(tags.tag_names(), new_variable_slices);
 
-                        Some(Structure(RecursiveTagUnion(
-                            new_rec_var,
-                            new_union_tags,
-                            new_ext_var,
-                        )))
-                    } else {
-                        None
-                    }
+                        Structure(RecursiveTagUnion(new_rec_var, new_union_tags, new_ext_var))
+                    })
                 }
                 FunctionOrTagUnion(tag_name, symbol, ext_var) => {
                     let mut needs_clone = false;
                     let new_ext_var = descend_var!(ext_var, needs_clone);
-                    if needs_clone {
-                        Some(Structure(FunctionOrTagUnion(tag_name, symbol, new_ext_var)))
-                    } else {
-                        None
-                    }
+                    perform_clone!(needs_clone, {
+                        Structure(FunctionOrTagUnion(tag_name, symbol, new_ext_var))
+                    })
                 }
             },
 
@@ -227,14 +229,12 @@ pub fn deep_copy_type_vars<'a>(
 
                 let new_structure = descend_var!(structure, needs_clone);
 
-                if needs_clone {
-                    Some(RecursionVar {
+                perform_clone!(needs_clone, {
+                    RecursionVar {
                         opt_name,
                         structure: new_structure,
-                    })
-                } else {
-                    None
-                }
+                    }
+                })
             }
 
             Alias(symbol, arguments, real_type_var, kind) => {
@@ -243,17 +243,15 @@ pub fn deep_copy_type_vars<'a>(
                 let new_real_type_var = descend_var!(real_type_var, needs_clone);
                 descend_slice!(arguments.all_variables(), needs_clone);
 
-                if needs_clone {
+                perform_clone!(needs_clone, {
                     let new_variables = clone_var_slice!(arguments.all_variables());
                     let new_arguments = AliasVariables {
                         variables_start: new_variables.start,
                         ..arguments
                     };
 
-                    Some(Alias(symbol, new_arguments, new_real_type_var, kind))
-                } else {
-                    None
-                }
+                    Alias(symbol, new_arguments, new_real_type_var, kind)
+                })
             }
 
             RangedNumber(typ, range_vars) => {
@@ -262,13 +260,11 @@ pub fn deep_copy_type_vars<'a>(
                 let new_typ = descend_var!(typ, needs_clone);
                 descend_slice!(range_vars, needs_clone);
 
-                if needs_clone {
+                perform_clone!(needs_clone, {
                     let new_range_vars = clone_var_slice!(range_vars);
 
-                    Some(RangedNumber(new_typ, new_range_vars))
-                } else {
-                    None
-                }
+                    RangedNumber(new_typ, new_range_vars)
+                })
             }
             Error => None,
         };
