@@ -65,15 +65,22 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
         .replace(
             "<!-- Module links -->",
             render_sidebar(package.modules.iter().flat_map(|loaded_module| {
-                loaded_module.documentation.values().map(move |d| {
-                    let exposed_values = loaded_module
-                        .exposed_values
-                        .iter()
-                        .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
-                        .collect::<Vec<String>>();
+                loaded_module
+                    .documentation
+                    .iter()
+                    .filter_map(move |(module_id, module)| {
+                        if *module_id == loaded_module.module_id {
+                            let exposed_values = loaded_module
+                                .exposed_values
+                                .iter()
+                                .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
+                                .collect::<Vec<String>>();
 
-                    (exposed_values, d)
-                })
+                            Some((module, exposed_values))
+                        } else {
+                            None
+                        }
+                    })
             }))
             .as_str(),
         );
@@ -334,12 +341,12 @@ fn render_name_and_version(name: &str, version: &str) -> String {
     buf
 }
 
-fn render_sidebar<'a, I: Iterator<Item = (Vec<String>, &'a ModuleDocumentation)>>(
+fn render_sidebar<'a, I: Iterator<Item = (&'a ModuleDocumentation, Vec<String>)>>(
     modules: I,
 ) -> String {
     let mut buf = String::new();
 
-    for (exposed_values, module) in modules {
+    for (module, exposed_values) in modules {
         let mut sidebar_entry_content = String::new();
 
         let name = module.name.as_str();
