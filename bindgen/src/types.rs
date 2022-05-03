@@ -1,5 +1,5 @@
 use core::mem;
-use roc_std::{RocDec, RocList, RocStr};
+use roc_std::RocDec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RocType {

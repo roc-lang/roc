@@ -1,14 +1,8 @@
 use crate::enums::Enums;
 use crate::structs::Structs;
-use crate::types::RocType;
 use bumpalo::Bump;
-use roc_collections::MutMap;
-use roc_module::{
-    ident::Lowercase,
-    symbol::{Interns, Symbol},
-};
+use roc_module::symbol::{Interns, Symbol};
 use roc_mono::layout::{Layout, LayoutCache};
-use roc_target::TargetInfo;
 use roc_types::{
     subs::{Content, FlatType, RecordFields, Subs, Variable},
     types::RecordField,
@@ -26,16 +20,6 @@ pub fn write_template(writer: &mut impl io::Write) -> io::Result<()> {
     writer.write(TEMPLATE)?;
 
     Ok(())
-}
-
-struct RocRecord {
-    name: String,
-}
-
-pub struct Required {
-    name: String,
-    args: Vec<RocType>,
-    ret: RocType,
 }
 
 pub fn write_bindings(_writer: &mut impl io::Write) -> io::Result<()> {

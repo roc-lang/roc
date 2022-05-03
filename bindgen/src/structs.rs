@@ -1,6 +1,5 @@
 use roc_types::subs::Variable;
 
-use crate::types::RocRecord;
 use std::collections::HashMap;
 
 #[derive(Copy, Clone, Debug, Default)]

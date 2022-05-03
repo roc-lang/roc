@@ -9,7 +9,6 @@ use roc_bindgen::{
     bindgen_rs::{write_layout_type, Env},
     enums::Enums,
     structs::Structs,
-    types::{self, RocType},
 };
 use roc_can::{
     def::{Declaration, Def},
@@ -27,9 +26,7 @@ fn run_load_and_typecheck(
     subdir: &str,
     src: &str,
     target_info: TargetInfo,
-) -> Result<(LoadedModule), std::io::Error> {
-    use bumpalo::Bump;
-
+) -> Result<LoadedModule, std::io::Error> {
     let arena = &Bump::new();
 
     assert!(

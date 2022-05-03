@@ -17,7 +17,6 @@ impl EnumId {
 #[derive(Default)]
 pub struct Enums {
     by_tag_union: HashMap<RocTagUnion, EnumId>,
-    by_id: HashMap<EnumId, RocTagUnion>,
     next_id: EnumId,
 }
 
