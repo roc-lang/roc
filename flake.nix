@@ -3,18 +3,16 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-21.11";
-    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     zig.url = "github:roarkanize/zig-overlay";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-unstable, rust-overlay, zig, flake-utils }:
+  outputs = { self, nixpkgs, rust-overlay, zig, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
-        unstable-pkgs = nixpkgs-unstable.legacyPackages.${system};
         llvmPkgs = pkgs.llvmPackages_12;
 
         # get current working directory
