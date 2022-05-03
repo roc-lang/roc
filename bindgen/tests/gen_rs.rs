@@ -5,9 +5,8 @@ extern crate pretty_assertions;
 extern crate indoc;
 
 use bumpalo::Bump;
-use core::mem;
 use roc_bindgen::{
-    bindgen_rs::{write_layout_type, write_roc_type, Env},
+    bindgen_rs::{write_layout_type, Env},
     enums::Enums,
     structs::Structs,
     types::{self, RocType},
@@ -97,6 +96,9 @@ pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> St
         arena: &arena,
         layout_cache: &mut layout_cache,
         interns: &interns,
+        struct_names: Structs::default(),
+        enum_names: Enums::default(),
+        subs,
     };
 
     let mut bindgen_result = String::new();
@@ -129,9 +131,8 @@ pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> St
                         .layout_cache
                         .from_var(&arena, *var, &subs)
                         .expect("Something weird ended up in the content");
-                    let content = subs.get_content_without_compacting(*var);
 
-                    write_layout_type(&mut env, layout, content, subs, &mut bindgen_result);
+                    write_layout_type(&mut env, layout, *var, &mut bindgen_result);
                 }
                 _ => {
                     // figure out if we need to export non-identifier defs - when would that
@@ -142,35 +143,6 @@ pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> St
     }
 
     bindgen_result
-}
-
-#[test]
-fn struct_without_different_pointer_alignment() {
-    let mut structs = Structs::default();
-    let mut enums = Enums::default();
-
-    let mut rec = types::RocRecord::new(vec![
-        ("second".to_string(), Box::new(RocType::Str)),
-        ("first".to_string(), Box::new(RocType::Str)),
-        ("third".to_string(), Box::new(RocType::Str)),
-    ]);
-
-    let mut out = String::default();
-    write_roc_type(RocType::Record(rec), &mut structs, &mut enums, &mut out);
-
-    assert_eq!(
-        indoc!(
-            r#"
-                struct R1 {
-                    first: RocStr,
-                    second: RocStr,
-                    third: RocStr,
-                }
-            "#
-        )
-        .to_string(),
-        out,
-    );
 }
 
 #[test]
@@ -194,6 +166,35 @@ fn record_type_aliased() {
         indoc!(
             r#"
                 struct MyRcd {
+                    b: u128,
+                    a: u64,
+                }
+            "#
+        )
+    );
+}
+
+#[test]
+fn record_type_anonymous() {
+    let module = indoc!(
+        r#"
+            app "main" provides [ main ] to "./platform"
+
+            main = { a: 1u64, b: 2u128 }
+        "#
+    );
+
+    let bindings_rust = generate_bindings(
+        "record_type_anonymous",
+        module,
+        TargetInfo::default_x86_64(),
+    );
+
+    assert_eq!(
+        bindings_rust,
+        indoc!(
+            r#"
+                struct R1 {
                     b: u128,
                     a: u64,
                 }

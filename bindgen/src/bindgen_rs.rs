@@ -50,59 +50,27 @@ pub fn write_bindings(_writer: &mut impl io::Write) -> io::Result<()> {
 // pub fn declare_roc_type(roc_type: RocType, uid: &mut u32, buf: &mut String) {
 // }
 
-pub fn write_roc_type(
-    roc_type: RocType,
-    structs: &mut Structs,
-    enums: &mut Enums,
-    buf: &mut String,
-) -> fmt::Result {
-    match roc_type {
-        RocType::Bool => buf.write_str("bool"),
-        RocType::I8 => buf.write_str("i8"),
-        RocType::U8 => buf.write_str("u8"),
-        RocType::I16 => buf.write_str("i16"),
-        RocType::U16 => buf.write_str("u16"),
-        RocType::I32 => buf.write_str("i32"),
-        RocType::U32 => buf.write_str("u32"),
-        RocType::I64 => buf.write_str("i64"),
-        RocType::U64 => buf.write_str("u64"),
-        RocType::I128 => buf.write_str("i128"),
-        RocType::U128 => buf.write_str("u128"),
-        RocType::F32 => buf.write_str("f32"),
-        RocType::F64 => buf.write_str("f64"),
-        RocType::Dec => buf.write_str("RocDec"),
-        RocType::Str => buf.write_str("RocStr"),
-        RocType::Record(record) => buf.write_str(&structs.get_name(&record)),
-        RocType::RocBox(elem_type) => {
-            buf.write_str("RocBox<")?;
-            write_roc_type(*elem_type, structs, enums, buf)?;
-            buf.write_char('>')
-        }
-        RocType::List(elem_type) => {
-            buf.write_str("RocList<")?;
-            write_roc_type(*elem_type, structs, enums, buf)?;
-            buf.write_char('>')
-        }
-        RocType::TagUnion(tag_union) => buf.write_str(&enums.get_name(&tag_union)),
-    }
-}
-
 pub struct Env<'a> {
     pub arena: &'a Bump,
+    pub subs: &'a Subs,
     pub layout_cache: &'a mut LayoutCache<'a>,
     pub interns: &'a Interns,
+    pub struct_names: Structs,
+    pub enum_names: Enums,
 }
 
 pub fn write_layout_type<'a>(
     env: &mut Env<'a>,
     layout: Layout<'a>,
-    content: &Content,
-    subs: &Subs,
+    var: Variable,
     buf: &mut String,
 ) -> fmt::Result {
     use roc_builtins::bitcode::FloatWidth::*;
     use roc_builtins::bitcode::IntWidth::*;
     use roc_mono::layout::Builtin;
+
+    let subs = env.subs;
+    let content = subs.get_content_without_compacting(var);
 
     let (opt_name, content) = match content {
         Content::Alias(name, _variable, real_var, _kind) => {
@@ -136,19 +104,19 @@ pub fn write_layout_type<'a>(
             Builtin::Str => buf.write_str("RocStr"),
             Builtin::Dict(key_layout, val_layout) => {
                 buf.write_str("RocDict<")?;
-                write_layout_type(env, *key_layout, content, subs, buf)?;
+                write_layout_type(env, *key_layout, var, buf)?;
                 buf.write_str(", ")?;
-                write_layout_type(env, *val_layout, content, subs, buf)?;
+                write_layout_type(env, *val_layout, var, buf)?;
                 buf.write_char('>')
             }
             Builtin::Set(elem_type) => {
                 buf.write_str("RocSet<")?;
-                write_layout_type(env, *elem_type, content, subs, buf)?;
+                write_layout_type(env, *elem_type, var, buf)?;
                 buf.write_char('>')
             }
             Builtin::List(elem_type) => {
                 buf.write_str("RocList<")?;
-                write_layout_type(env, *elem_type, content, subs, buf)?;
+                write_layout_type(env, *elem_type, var, buf)?;
                 buf.write_char('>')
             }
         },
@@ -160,7 +128,7 @@ pub fn write_layout_type<'a>(
                 Content::RigidAbleVar(_, _) => todo!(),
                 Content::RecursionVar { .. } => todo!(),
                 Content::Structure(FlatType::Record(fields, ext)) => {
-                    write_struct(env, opt_name, fields, *ext, subs, buf)
+                    write_struct(env, opt_name, fields, var, *ext, subs, buf)
                 }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     debug_assert_eq!(tags.len(), 1);
@@ -213,6 +181,7 @@ fn write_struct<'a>(
     env: &mut Env<'a>,
     opt_name: Option<Symbol>,
     record_fields: &RecordFields,
+    var: Variable,
     ext: Variable,
     subs: &Subs,
     buf: &mut String,
@@ -243,20 +212,20 @@ fn write_struct<'a>(
         size2.cmp(&size1).then(label1.cmp(label2))
     });
 
-    let struct_name = opt_name
-        .map(|sym| sym.as_str(env.interns))
-        .unwrap_or("Unknown");
-    buf.write_str("struct ");
-    buf.write_str(struct_name);
-    buf.write_str(" {\n");
+    buf.write_str("struct ")?;
+
+    match opt_name {
+        Some(sym) => buf.write_str(sym.as_str(env.interns))?,
+        None => buf.write_str(&env.struct_names.get_name(var))?,
+    }
+
+    buf.write_str(" {\n")?;
 
     for (label, field_var, field_layout) in pairs.into_iter() {
-        let field_content = subs.get_content_without_compacting(field_var);
-
         buf.write_str(INDENT)?;
         buf.write_str(label.as_str())?;
         buf.write_str(": ")?;
-        write_layout_type(env, field_layout, field_content, subs, buf)?;
+        write_layout_type(env, field_layout, field_var, buf)?;
         buf.write_str(",\n")?;
     }
 

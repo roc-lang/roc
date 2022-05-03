@@ -1,3 +1,5 @@
+use roc_types::subs::Variable;
+
 use crate::types::RocRecord;
 use std::collections::HashMap;
 
@@ -16,13 +18,13 @@ impl StructId {
 /// same record type, return the same name.
 #[derive(Default)]
 pub struct Structs {
-    by_record: HashMap<RocRecord, StructId>,
+    by_variable: HashMap<Variable, StructId>,
     next_id: StructId,
 }
 
 impl Structs {
-    pub fn get_name(&mut self, rec_type: &RocRecord) -> String {
-        match self.by_record.get(rec_type) {
+    pub fn get_name(&mut self, var: Variable) -> String {
+        match self.by_variable.get(&var) {
             Some(struct_id) => struct_id.to_name(),
             None => self.next_id().to_name(),
         }
