@@ -1,5 +1,6 @@
 use roc_gen_wasm::wasm32_sized::Wasm32Sized;
 use roc_std::{ReferenceCount, RocDec, RocList, RocOrder, RocStr};
+use std::convert::TryInto;
 
 pub trait FromWasmerMemory: Wasm32Sized {
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self;
@@ -17,9 +18,9 @@ macro_rules! from_wasm_memory_primitive_decode {
             let raw_ptr = ptr as *mut u8;
             let slice = unsafe { std::slice::from_raw_parts_mut(raw_ptr, width) };
 
-            let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset);
-            let foobar = (ptr.deref(memory, 0, width as u32)).unwrap();
-            let wasm_slice = unsafe { std::mem::transmute(foobar) };
+            let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
+            let index = offset as usize;
+            let wasm_slice = &memory_bytes[index..][..width];
 
             slice.copy_from_slice(wasm_slice);
 
@@ -108,12 +109,16 @@ impl<T: FromWasmerMemory> FromWasmerMemory for &'_ T {
 
 impl<T: FromWasmerMemory + Clone, const N: usize> FromWasmerMemory for [T; N] {
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset);
-        let width = <T as Wasm32Sized>::SIZE_OF_WASM as u32 * N as u32;
-        let foobar = (ptr.deref(memory, 0, width)).unwrap();
-        let wasm_slice: &[T; N] = unsafe { &*(foobar as *const _ as *const [T; N]) };
+        let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
+        let index = offset as usize;
 
-        wasm_slice.clone()
+        debug_assert!(memory_bytes.len() >= index + (N * <T as Wasm32Sized>::SIZE_OF_WASM));
+
+        let slice_bytes: &[u8] = &memory_bytes[index..][..N];
+        let slice: &[T] = unsafe { std::mem::transmute(slice_bytes) };
+        let array: &[T; N] = slice.try_into().expect("incorrect length");
+
+        array.clone()
     }
 }
 

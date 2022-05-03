@@ -1,4 +1,3 @@
-use core::cell::Cell;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -280,7 +279,7 @@ where
     // Read the actual refcount values
     let refcount_ptr_array: WasmPtr<WasmPtr<i32>, wasmer::Array> =
         WasmPtr::new(4 + refcount_vector_addr as u32);
-    let refcount_ptrs: &[Cell<WasmPtr<i32>>] = refcount_ptr_array
+    let refcount_ptrs = refcount_ptr_array
         .deref(memory, 0, num_refcounts as u32)
         .unwrap();
 
