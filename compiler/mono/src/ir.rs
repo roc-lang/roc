@@ -3002,6 +3002,16 @@ fn specialize_naked_symbol<'a>(
         }
     }
 
+    use roc_can::expr::Expr;
+    if let ReuseSymbol::Value(_symbol) = can_reuse_symbol(env, procs, &Expr::Var(symbol)) {
+        let real_symbol =
+            possible_reuse_symbol_or_spec(env, procs, layout_cache, &Expr::Var(symbol), variable);
+        return match hole {
+            Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([real_symbol])),
+            _ => Stmt::Ret(real_symbol),
+        };
+    }
+
     let result = match hole {
         Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
         _ => Stmt::Ret(symbol),
@@ -3193,7 +3203,6 @@ pub fn with_hole<'a>(
         }
         LetNonRec(def, cont, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
-                dbg!(symbol);
                 if let Closure(closure_data) = def.loc_expr.value {
                     register_noncapturing_closure(env, procs, symbol, closure_data);
 
@@ -3339,7 +3348,6 @@ pub fn with_hole<'a>(
             )
         }
         Var(symbol) => {
-            dbg!(symbol);
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
         Tag {
@@ -3475,6 +3483,13 @@ pub fn with_hole<'a>(
                             can_fields.push(Field::Function(symbol, variable));
                         }
                         Value(reusable) => {
+                            let reusable = possible_reuse_symbol_or_spec(
+                                env,
+                                procs,
+                                layout_cache,
+                                &roc_can::expr::Expr::Var(reusable),
+                                field.var,
+                            );
                             field_symbols.push(reusable);
                             can_fields.push(Field::ValueSymbol);
                         }
@@ -5440,7 +5455,6 @@ pub fn from_can<'a>(
         }
         LetNonRec(def, cont, outer_annotation) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                dbg!(symbol);
                 match def.loc_expr.value {
                     roc_can::expr::Expr::Closure(closure_data) => {
                         register_capturing_closure(env, procs, layout_cache, *symbol, closure_data);
