@@ -404,6 +404,8 @@ fn deep_copy_type_vars<'a>(
         }
     }
 
+    debug_assert!(result.contains(&(var, cloned_var)));
+
     return result;
 
     #[must_use]
