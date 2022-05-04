@@ -14,6 +14,7 @@ use std::{
 };
 
 static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
+static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 static INDENT: &str = "    ";
 
 pub fn write_template(writer: &mut impl io::Write) -> io::Result<()> {
