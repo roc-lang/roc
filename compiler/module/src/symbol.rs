@@ -5,6 +5,7 @@ use roc_ident::IdentStr;
 use roc_region::all::Region;
 use snafu::OptionExt;
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::{fmt, u32};
 
 // the packed(4) is needed for faster equality comparisons. With it, the structure is
@@ -30,8 +31,14 @@ use std::{fmt, u32};
 #[repr(packed(4))]
 pub struct Symbol {
     ident_id: u32,
-    module_id: u32,
+    module_id: NonZeroU32,
 }
+
+/// An Option<Symbol> will use the 0 that is not used by the NonZeroU32 module_id field to encode
+/// the Nothing case. An Option<Symbol> hence takes no more space than a Symbol.
+#[allow(dead_code)]
+const SYMBOL_HAS_NICHE: () =
+    assert!(std::mem::size_of::<Symbol>() == std::mem::size_of::<Option<Symbol>>());
 
 // When this is `true` (which it normally should be), Symbol's Debug::fmt implementation
 // attempts to pretty print debug symbols using interns recorded using
@@ -157,7 +164,7 @@ impl fmt::Debug for Symbol {
             let ident_id = self.ident_id();
 
             match DEBUG_IDENT_IDS_BY_MODULE_ID.lock() {
-                Ok(names) => match &names.get(&module_id.0) {
+                Ok(names) => match &names.get(&(module_id.to_zero_indexed() as u32)) {
                     Some(ident_ids) => match ident_ids.get_name(ident_id) {
                         Some(ident_str) => write!(f, "`{:?}.{}`", module_id, ident_str),
                         None => fallback_debug_fmt(*self, f),
@@ -316,18 +323,31 @@ lazy_static! {
 
 /// A globally unique ID that gets assigned to each module as it is loaded.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct ModuleId(u32);
+pub struct ModuleId(NonZeroU32);
 
 impl ModuleId {
     // NOTE: the define_builtins! macro adds a bunch of constants to this impl,
     //
     // e.g. pub const NUM: ModuleId = …
 
+    const fn from_zero_indexed(mut id: usize) -> Self {
+        id += 1;
+
+        // only happens on overflow
+        debug_assert!(id != 0);
+
+        ModuleId(unsafe { NonZeroU32::new_unchecked(id as u32) })
+    }
+
+    const fn to_zero_indexed(self) -> usize {
+        (self.0.get() - 1) as usize
+    }
+
     #[cfg(debug_assertions)]
     pub fn register_debug_idents(self, ident_ids: &IdentIds) {
         let mut all = DEBUG_IDENT_IDS_BY_MODULE_ID.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
-        all.insert(self.0, ident_ids.clone());
+        all.insert(self.to_zero_indexed() as u32, ident_ids.clone());
     }
 
     #[cfg(not(debug_assertions))]
@@ -360,7 +380,7 @@ impl fmt::Debug for ModuleId {
                 .expect("Failed to acquire lock for Debug reading from DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
         if PRETTY_PRINT_DEBUG_SYMBOLS {
-            match names.get(&self.0) {
+            match names.get(&(self.to_zero_indexed() as u32)) {
                 Some(str_ref) => write!(f, "{}", str_ref.clone()),
                 None => {
                     panic!(
@@ -418,7 +438,7 @@ impl<'a> PackageModuleIds<'a> {
             Some(id) => *id,
             None => {
                 let by_id = &mut self.by_id;
-                let module_id = ModuleId(by_id.len() as u32);
+                let module_id = ModuleId::from_zero_indexed(by_id.len());
 
                 by_id.push(module_name.clone());
 
@@ -454,7 +474,7 @@ impl<'a> PackageModuleIds<'a> {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
         names
-            .entry(module_id.0)
+            .entry(module_id.to_zero_indexed() as u32)
             .or_insert_with(|| match module_name {
                 PQModuleName::Unqualified(module) => module.as_str().into(),
                 PQModuleName::Qualified(package, module) => {
@@ -474,7 +494,7 @@ impl<'a> PackageModuleIds<'a> {
     }
 
     pub fn get_name(&self, id: ModuleId) -> Option<&PQModuleName> {
-        self.by_id.get(id.0 as usize)
+        self.by_id.get(id.to_zero_indexed())
     }
 
     pub fn available_modules(&self) -> impl Iterator<Item = &PQModuleName> {
@@ -499,7 +519,7 @@ impl ModuleIds {
             Some(id) => *id,
             None => {
                 let by_id = &mut self.by_id;
-                let module_id = ModuleId(by_id.len() as u32);
+                let module_id = ModuleId::from_zero_indexed(by_id.len());
 
                 by_id.push(module_name.clone());
 
@@ -520,7 +540,7 @@ impl ModuleIds {
 
         // TODO make sure modules are never added more than once!
         names
-            .entry(module_id.0)
+            .entry(module_id.to_zero_indexed() as u32)
             .or_insert_with(|| module_name.as_str().to_string().into());
     }
 
@@ -534,7 +554,7 @@ impl ModuleIds {
     }
 
     pub fn get_name(&self, id: ModuleId) -> Option<&ModuleName> {
-        self.by_id.get(id.0 as usize)
+        self.by_id.get(id.to_zero_indexed())
     }
 
     pub fn available_modules(&self) -> impl Iterator<Item = &ModuleName> {
@@ -828,11 +848,11 @@ macro_rules! define_builtins {
                 // This is a builtin ModuleId iff it's below the
                 // total number of builtin modules, since they
                 // take up the first $total ModuleId numbers.
-                self.0 < $total
+                self.to_zero_indexed() < $total
             }
 
             $(
-                pub const $module_const: ModuleId = ModuleId($module_id);
+                pub const $module_const: ModuleId = ModuleId::from_zero_indexed($module_id);
             )+
         }
 
