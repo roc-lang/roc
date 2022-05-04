@@ -3,7 +3,8 @@ extern crate const_format;
 
 use build::BuiltFile;
 use bumpalo::Bump;
-use clap::{App, AppSettings, Arg, ArgMatches};
+use clap::Command;
+use clap::{Arg, ArgMatches};
 use roc_build::link::LinkType;
 use roc_error_macros::user_error;
 use roc_load::LoadingProblem;
@@ -13,7 +14,6 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process;
-use std::process::Command;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
@@ -52,39 +52,39 @@ pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 const VERSION: &str = include_str!("../../version.txt");
 
-pub fn build_app<'a>() -> App<'a> {
-    let app = App::new("roc")
+pub fn build_app<'a>() -> Command<'a> {
+    let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
         .about("Runs the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
-        .subcommand(App::new(CMD_BUILD)
+        .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(
                 Arg::new(ROC_FILE)
-                    .about("The .roc file to build")
+                    .help("The .roc file to build")
                     .required(true),
             )
             .arg(
                 Arg::new(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
-                    .about("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
+                    .help("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_OPT_SIZE)
                     .long(FLAG_OPT_SIZE)
-                    .about("Optimize your compiled Roc program to have a small binary size. (Optimization takes time to complete.)")
+                    .help("Optimize your compiled Roc program to have a small binary size. (Optimization takes time to complete.)")
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_DEV)
                     .long(FLAG_DEV)
-                    .about("Make compilation as fast as possible. (Runtime performance may suffer)")
+                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
-                    .about("Choose a different target")
+                    .help("Choose a different target")
                     .default_value(Target::default().as_str())
                     .possible_values(Target::OPTIONS)
                     .required(false),
@@ -92,66 +92,66 @@ pub fn build_app<'a>() -> App<'a> {
             .arg(
                 Arg::new(FLAG_LIB)
                     .long(FLAG_LIB)
-                    .about("Build a C library instead of an executable.")
+                    .help("Build a C library instead of an executable.")
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_NO_LINK)
                     .long(FLAG_NO_LINK)
-                    .about("Does not link. Instead just outputs the `.o` file")
+                    .help("Does not link. Instead just outputs the `.o` file")
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_DEBUG)
                     .long(FLAG_DEBUG)
-                    .about("Store LLVM debug information in the generated program")
+                    .help("Store LLVM debug information in the generated program")
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_TIME)
                     .long(FLAG_TIME)
-                    .about("Prints detailed compilation time information.")
+                    .help("Prints detailed compilation time information.")
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_LINK)
                     .long(FLAG_LINK)
-                    .about("Deprecated in favor of --linker")
+                    .help("Deprecated in favor of --linker")
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_LINKER)
                     .long(FLAG_LINKER)
-                    .about("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+                    .help("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
                     .possible_values(["surgical", "legacy"])
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_PRECOMPILED)
                     .long(FLAG_PRECOMPILED)
-                    .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using a --target other than `--target host`)")
+                    .help("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using a --target other than `--target host`)")
                     .possible_values(["true", "false"])
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_VALGRIND)
                     .long(FLAG_VALGRIND)
-                    .about("Some assembly instructions are not supported by valgrind, this flag prevents those from being output when building the host.")
+                    .help("Some assembly instructions are not supported by valgrind, this flag prevents those from being output when building the host.")
                     .required(false),
             )
         )
-        .subcommand(App::new(CMD_REPL)
+        .subcommand(Command::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
-        .subcommand(App::new(CMD_RUN)
+        .subcommand(Command::new(CMD_RUN)
             .about("Run a .roc file even if it has build errors")
             .arg(
                 Arg::new(ROC_FILE)
-                    .about("The .roc file of an app to run")
+                    .help("The .roc file of an app to run")
                     .required(true),
             )
         )
-        .subcommand(App::new(CMD_FORMAT)
+        .subcommand(Command::new(CMD_FORMAT)
             .about("Format a .roc file using standard Roc formatting")
             .arg(
                 Arg::new(DIRECTORY_OR_FILES)
@@ -161,112 +161,112 @@ pub fn build_app<'a>() -> App<'a> {
             .arg(
                 Arg::new(FLAG_CHECK)
                     .long(FLAG_CHECK)
-                    .about("Checks that specified files are formatted. If formatting is needed, it will return a non-zero exit code.")
+                    .help("Checks that specified files are formatted. If formatting is needed, it will return a non-zero exit code.")
                     .required(false),
             )
         )
-        .subcommand(App::new(CMD_VERSION)
+        .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
-        .subcommand(App::new(CMD_CHECK)
+        .subcommand(Command::new(CMD_CHECK)
             .about("Check the code for problems, but doesn’t build or run it")
             .arg(
                 Arg::new(FLAG_TIME)
                     .long(FLAG_TIME)
-                    .about("Prints detailed compilation time information.")
+                    .help("Prints detailed compilation time information.")
                     .required(false),
             )
             .arg(
                 Arg::new(ROC_FILE)
-                    .about("The .roc file of an app to check")
+                    .help("The .roc file of an app to check")
                     .required(true),
             )
             )
         .subcommand(
-            App::new(CMD_DOCS)
+            Command::new(CMD_DOCS)
                 .about("Generate documentation for Roc modules (Work In Progress)")
                 .arg(Arg::new(DIRECTORY_OR_FILES)
                     .index(1)
                     .multiple_values(true)
                     .required(false)
-                    .about("The directory or files to build documentation for")
-
+                    .help("The directory or files to build documentation for")
+                    .allow_invalid_utf8(true)
                 )
         )
-        .setting(AppSettings::TrailingVarArg)
+        .trailing_var_arg(true)
         .arg(
             Arg::new(FLAG_OPTIMIZE)
                 .long(FLAG_OPTIMIZE)
-                .about("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
                 .requires(ROC_FILE)
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_OPT_SIZE)
                 .long(FLAG_OPT_SIZE)
-                .about("Optimize the compiled program to have a small binary size. (Optimization takes time to complete.)")
+                .help("Optimize the compiled program to have a small binary size. (Optimization takes time to complete.)")
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_DEV)
                 .long(FLAG_DEV)
-                .about("Make compilation finish as soon as possible, at the expense of runtime performance.")
+                .help("Make compilation finish as soon as possible, at the expense of runtime performance.")
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_DEBUG)
                 .long(FLAG_DEBUG)
-                .about("Store LLVM debug information in the generated program.")
+                .help("Store LLVM debug information in the generated program.")
                 .requires(ROC_FILE)
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_TIME)
                 .long(FLAG_TIME)
-                .about("Prints detailed compilation time information.")
+                .help("Prints detailed compilation time information.")
                     .required(false),
         )
         .arg(
             Arg::new(FLAG_LINK)
                 .long(FLAG_LINK)
-                .about("Deprecated in favor of --linker")
+                .help("Deprecated in favor of --linker")
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_LINKER)
                 .long(FLAG_LINKER)
-                .about("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+                .help("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
                 .possible_values(["surgical", "legacy"])
                 .required(false),
         )
         .arg(
             Arg::new(FLAG_PRECOMPILED)
                 .long(FLAG_PRECOMPILED)
-                .about("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using `roc build` with a --target other than `--target host`)")
+                .help("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using `roc build` with a --target other than `--target host`)")
                 .possible_values(["true", "false"])
                 .required(false),
         )
         .arg(
             Arg::new(ROC_FILE)
-                .about("The .roc file of an app to build and run")
+                .help("The .roc file of an app to build and run")
                 .required(false),
         )
         .arg(
             Arg::new(ARGS_FOR_APP)
-                .about("Arguments to pass into the app being run")
+                .help("Arguments to pass into the app being run")
                 .requires(ROC_FILE)
                 .multiple_values(true),
         );
 
     if cfg!(feature = "editor") {
         app.subcommand(
-            App::new(CMD_EDIT)
+            Command::new(CMD_EDIT)
                 .about("Launch the Roc editor (Work In Progress)")
                 .arg(
                     Arg::new(DIRECTORY_OR_FILES)
                         .index(1)
                         .multiple_values(true)
                         .required(false)
-                        .about("(optional) The directory or files to open on launch."),
+                        .help("(optional) The directory or files to open on launch."),
                 ),
         )
     } else {
@@ -570,7 +570,7 @@ fn roc_run(
             run_with_wasmer(generated_filename, &args);
             return Ok(0);
         }
-        _ => Command::new(&binary_path),
+        _ => std::process::Command::new(&binary_path),
     };
 
     if let Architecture::Wasm32 = triple.architecture {

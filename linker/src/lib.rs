@@ -1,5 +1,5 @@
 use bincode::{deserialize_from, serialize_into};
-use clap::{App, AppSettings, Arg, ArgMatches};
+use clap::{Arg, ArgMatches, Command};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::{Mmap, MmapMut};
 use object::write;
@@ -21,7 +21,6 @@ use std::io::{BufReader, BufWriter};
 use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
 use tempfile::Builder;
@@ -49,64 +48,65 @@ fn report_timing(label: &str, duration: Duration) {
     println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
 }
 
-pub fn build_app<'a>() -> App<'a> {
-    App::new("link")
+pub fn build_app<'a>() -> Command<'a> {
+    Command::new("link")
         .about("Preprocesses a platform and surgically links it to an application.")
-        .setting(AppSettings::SubcommandRequiredElseHelp)
+        .subcommand_required(true)
+        .arg_required_else_help(true)
         .subcommand(
-            App::new(CMD_PREPROCESS)
+            Command::new(CMD_PREPROCESS)
                 .about("Preprocesses a dynamically linked platform to prepare for linking.")
                 .arg(
                     Arg::new(EXEC)
-                        .about("The dynamically linked platform executable")
+                        .help("The dynamically linked platform executable")
                         .required(true),
                 )
                 .arg(
                     Arg::new(METADATA)
-                        .about("Where to save the metadata from preprocessing")
+                        .help("Where to save the metadata from preprocessing")
                         .required(true),
                 )
                 .arg(
                     Arg::new(OUT)
-                        .about("The modified version of the dynamically linked platform executable")
+                        .help("The modified version of the dynamically linked platform executable")
                         .required(true),
                 )
                 .arg(
                     Arg::new(SHARED_LIB)
-                        .about("The name of the shared library used in building the platform")
+                        .help("The name of the shared library used in building the platform")
                         .default_value("libapp.so"),
                 )
                 .arg(
                     Arg::new(FLAG_VERBOSE)
                         .long(FLAG_VERBOSE)
                         .short('v')
-                        .about("Enable verbose printing")
+                        .help("Enable verbose printing")
                         .required(false),
                 )
                 .arg(
                     Arg::new(FLAG_TIME)
                         .long(FLAG_TIME)
                         .short('t')
-                        .about("Print timing information")
+                        .help("Print timing information")
                         .required(false),
                 ),
         )
         .subcommand(
-            App::new(CMD_SURGERY)
+            Command::new(CMD_SURGERY)
                 .about("Links a preprocessed platform with a Roc application.")
                 .arg(
                     Arg::new(APP)
-                        .about("The Roc application object file waiting to be linked")
+                        .help("The Roc application object file waiting to be linked")
                         .required(true),
                 )
                 .arg(
                     Arg::new(METADATA)
-                        .about("The metadata created by preprocessing the platform")
+                        .help("The metadata created by preprocessing the platform")
                         .required(true),
                 )
                 .arg(
                     Arg::new(OUT)
-                        .about(
+                        .help(
                             "The modified version of the dynamically linked platform. \
                                 It will be consumed to make linking faster.",
                         )
@@ -116,14 +116,14 @@ pub fn build_app<'a>() -> App<'a> {
                     Arg::new(FLAG_VERBOSE)
                         .long(FLAG_VERBOSE)
                         .short('v')
-                        .about("Enable verbose printing")
+                        .help("Enable verbose printing")
                         .required(false),
                 )
                 .arg(
                     Arg::new(FLAG_TIME)
                         .long(FLAG_TIME)
                         .short('t')
-                        .about("Print timing information")
+                        .help("Print timing information")
                         .required(false),
                 ),
         )
@@ -243,7 +243,7 @@ fn generate_dynamic_lib(
     )
     .expect("failed to write object to file");
 
-    let output = Command::new("ld")
+    let output = std::process::Command::new("ld")
         .args(&[
             "-shared",
             "-soname",
