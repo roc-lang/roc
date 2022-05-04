@@ -189,7 +189,7 @@ pub fn build_app<'a>() -> Command<'a> {
                     .multiple_values(true)
                     .required(false)
                     .help("The directory or files to build documentation for")
-
+                    .allow_invalid_utf8(true)
                 )
         )
         .trailing_var_arg(true)
