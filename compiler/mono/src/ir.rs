@@ -2465,6 +2465,17 @@ fn specialize_external<'a>(
                 (Some(closure_layout), CapturedSymbols::Captured(captured)) => {
                     // debug_assert!(!captured.is_empty());
 
+                    // An argument from the closure list may have taken on a specialized symbol
+                    // name during the evaluation of the def body. If this is the case, load the
+                    // specialized name rather than the original captured name!
+                    // let get_specialized_name = |symbol, layout| {
+                    //     procs
+                    //         .needed_symbol_specializations
+                    //         .get(&(symbol, layout))
+                    //         .map(|(_, specialized)| *specialized)
+                    //         .unwrap_or(symbol)
+                    // };
+
                     match closure_layout.layout_for_member(proc_name) {
                         ClosureRepresentation::Union {
                             alphabetic_order_fields: field_layouts,
@@ -2498,6 +2509,8 @@ fn specialize_external<'a>(
                                     index: index as u64,
                                     union_layout,
                                 };
+
+                                // let symbol = get_specialized_name(**symbol, **layout);
 
                                 specialized_body = Stmt::Let(
                                     **symbol,
@@ -2539,6 +2552,8 @@ fn specialize_external<'a>(
                                     field_layouts,
                                     structure: Symbol::ARG_CLOSURE,
                                 };
+
+                                // let symbol = get_specialized_name(**symbol, **layout);
 
                                 specialized_body = Stmt::Let(
                                     **symbol,
@@ -2585,8 +2600,9 @@ fn specialize_external<'a>(
                 .map(|&(layout, symbol)| {
                     let symbol = procs
                         .needed_symbol_specializations
-                        .get(&(symbol, layout))
-                        .map(|(_, specialized_symbol)| *specialized_symbol)
+                        // We can remove the specialization since this is the definition site.
+                        .remove(&(symbol, layout))
+                        .map(|(_, specialized_symbol)| specialized_symbol)
                         .unwrap_or(symbol);
 
                     (layout, symbol)
@@ -3002,19 +3018,25 @@ fn specialize_naked_symbol<'a>(
         }
     }
 
-    use roc_can::expr::Expr;
-    if let ReuseSymbol::Value(_symbol) = can_reuse_symbol(env, procs, &Expr::Var(symbol)) {
-        let real_symbol =
-            possible_reuse_symbol_or_spec(env, procs, layout_cache, &Expr::Var(symbol), variable);
-        return match hole {
-            Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([real_symbol])),
-            _ => Stmt::Ret(real_symbol),
-        };
-    }
-
+    let mut symbol = symbol;
     let result = match hole {
         Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
-        _ => Stmt::Ret(symbol),
+        _ => {
+            use roc_can::expr::Expr;
+            if let ReuseSymbol::Value(_symbol) = can_reuse_symbol(env, procs, &Expr::Var(symbol)) {
+                let real_symbol = possible_reuse_symbol_or_spec(
+                    env,
+                    procs,
+                    layout_cache,
+                    &Expr::Var(symbol),
+                    variable,
+                );
+                symbol = real_symbol;
+                Stmt::Ret(real_symbol)
+            } else {
+                Stmt::Ret(symbol)
+            }
+        }
     };
 
     // if the symbol is a function symbol, ensure it is properly specialized!
@@ -4717,6 +4739,7 @@ fn get_specialization<'a>(
 #[allow(clippy::too_many_arguments)]
 fn construct_closure_data<'a, I>(
     env: &mut Env<'a, '_>,
+    // procs: &mut Procs<'a>,
     lambda_set: LambdaSet<'a>,
     name: Symbol,
     symbols: I,
@@ -4729,6 +4752,16 @@ where
 {
     let lambda_set_layout = Layout::LambdaSet(lambda_set);
     let symbols = symbols.into_iter();
+
+    // It may be the case that while capturing a symbol, we actually want to capture it under a
+    // different name than what the
+    // let get_specialized_name = |symbol, layout| {
+    //     procs
+    //         .needed_symbol_specializations
+    //         .get(&(symbol, layout))
+    //         .map(|(_, specialized)| *specialized)
+    //         .unwrap_or(symbol)
+    // };
 
     let result = match lambda_set.layout_for_member(name) {
         ClosureRepresentation::Union {
