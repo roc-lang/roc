@@ -12,7 +12,7 @@ use roc_can::{
     def::{Declaration, Def},
     pattern::Pattern,
 };
-use roc_load::LoadedModule;
+use roc_load::{LoadedModule, Threading};
 use roc_mono::layout::LayoutCache;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
@@ -48,6 +48,7 @@ fn run_load_and_typecheck(
             subs_by_module,
             target_info,
             RenderTarget::Generic,
+            Threading::Single,
         );
 
         dir.close()?;
