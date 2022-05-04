@@ -3212,6 +3212,7 @@ fn upcast_of_int_is_zext() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+#[ignore = "https://github.com/rtfeldman/roc/issues/2997"]
 // https://github.com/rtfeldman/roc/issues/2696
 fn upcast_of_int_checked_is_zext() {
     assert_evals_to!(
