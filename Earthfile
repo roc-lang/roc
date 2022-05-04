@@ -61,14 +61,19 @@ test-zig:
     COPY --dir compiler/builtins/bitcode ./
     RUN cd bitcode && ./run-tests.sh && ./run-wasm-tests.sh
 
-check-clippy:
+build-rust-test:
     FROM +copy-dirs
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo test --locked --release --features with_sound --workspace --no-run && sccache --show-stats
+
+check-clippy:
+    FROM +build-rust-test
     RUN cargo clippy -V
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo clippy -- -D warnings
 
 check-rustfmt:
-    FROM +copy-dirs
+    FROM +build-rust-test
     RUN cargo fmt --version
     RUN cargo fmt --all -- --check
 
@@ -78,7 +83,7 @@ check-typos:
     RUN typos
 
 test-rust:
-    FROM +copy-dirs
+    FROM +build-rust-test
     ENV RUST_BACKTRACE=1
     # for race condition problem with cli test
     ENV ROC_NUM_WORKERS=1
