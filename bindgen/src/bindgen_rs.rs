@@ -1,13 +1,11 @@
 use crate::types::{RocType, TypeId, Types};
 use std::fmt::{self, Write};
 
-static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
+// static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
 static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 static INDENT: &str = "    ";
 
-pub fn write_types<'a>(types: &Types) -> Result<String, fmt::Error> {
-    let mut buf = std::str::from_utf8(HEADER).unwrap().to_string();
-
+pub fn write_types<'a>(types: &Types, buf: &mut String) -> fmt::Result {
     for id in types.sorted_ids() {
         match types.get(id) {
             RocType::Struct { name, fields } => write_struct(name, fields, id, types, &mut buf)?,
@@ -41,7 +39,7 @@ pub fn write_types<'a>(types: &Types) -> Result<String, fmt::Error> {
         }
     }
 
-    Ok(buf)
+    Ok(())
 }
 
 fn write_struct(
@@ -54,7 +52,7 @@ fn write_struct(
     write_deriving(struct_id, types, buf)?;
 
     buf.write_str("\n#[repr(C)]\npub struct ")?;
-    buf.write_str(name);
+    buf.write_str(name)?;
     buf.write_str(" {\n")?;
 
     for (label, field_id) in fields {
@@ -98,14 +96,14 @@ fn write_type_name<'a>(id: TypeId, types: &Types, buf: &mut String) -> fmt::Resu
             write_type_name(*elem_id, types, buf)?;
             buf.write_char('>')
         }
-        RocType::RocList(elem_type) => {
+        RocType::RocList(elem_id) => {
             buf.write_str("roc_std::RocList<")?;
-            write_type_name(id, types, buf)?;
+            write_type_name(*elem_id, types, buf)?;
             buf.write_char('>')
         }
-        RocType::RocBox(elem_type) => {
+        RocType::RocBox(elem_id) => {
             buf.write_str("roc_std::RocBox<")?;
-            write_type_name(id, types, buf)?;
+            write_type_name(*elem_id, types, buf)?;
             buf.write_char('>')
         }
         RocType::Struct { name, .. }
