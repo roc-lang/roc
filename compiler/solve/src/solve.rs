@@ -327,6 +327,7 @@ impl Aliases {
         }
 
         let old_type_variables = delayed_variables.type_variables(&mut self.variables);
+        #[allow(clippy::needless_collect)] // otherwise we borrow self.variables immutably twice
         let variable_opt_abilities: Vec<_> =
             old_type_variables.iter().map(|ov| ov.opt_ability).collect();
         let new_type_variables = &subs.variables[alias_variables.type_variables().indices()];

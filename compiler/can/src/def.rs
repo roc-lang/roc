@@ -1843,6 +1843,7 @@ fn make_tag_union_recursive_help<'a, 'b>(
             // NB: We need to collect the type arguments to shut off rustc's closure type
             // instantiator. Otherwise we get unfortunate errors like
             //   reached the recursion limit while instantiating `make_tag_union_recursive_help::<...n/src/def.rs:1879:65: 1879:77]>>`
+            #[allow(clippy::needless_collect)]
             let type_arguments: Vec<&Type> = type_arguments.iter().map(|ta| &ta.typ).collect();
             let recursive_alias = Loc::at_zero((symbol, type_arguments.into_iter()));
 
