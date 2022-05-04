@@ -21,10 +21,11 @@ use std::path::PathBuf;
 use std::{fs::File, mem::ManuallyDrop};
 
 fn run_load_and_typecheck(
-    subdir: &str,
     src: &str,
     target_info: TargetInfo,
 ) -> Result<LoadedModule, std::io::Error> {
+    use tempfile::tempdir;
+
     let arena = &Bump::new();
 
     assert!(
@@ -34,12 +35,7 @@ fn run_load_and_typecheck(
 
     let subs_by_module = Default::default();
     let loaded = {
-        // Use a deterministic temporary directory.
-        // We can't have all tests use "tmp" because tests run in parallel,
-        // so append the test name to the tmp path.
-        let tmp = format!("tmp/{}", subdir);
-        let dir = roc_test_utils::TmpDir::new(&tmp);
-
+        let dir = tempdir()?;
         let filename = PathBuf::from("Test.roc");
         let file_path = dir.path().join(filename);
         let full_file_path = file_path.clone();
@@ -54,13 +50,15 @@ fn run_load_and_typecheck(
             RenderTarget::Generic,
         );
 
+        dir.close()?;
+
         result
     };
 
     Ok(loaded.expect("had problems loading"))
 }
 
-pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> String {
+pub fn generate_bindings(src: &str, target_info: TargetInfo) -> String {
     let LoadedModule {
         module_id: home,
         mut can_problems,
@@ -69,7 +67,7 @@ pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> St
         mut solved,
         interns,
         ..
-    } = run_load_and_typecheck(subdir, src, target_info).expect("Something went wrong with IO");
+    } = run_load_and_typecheck(src, target_info).expect("Something went wrong with IO");
 
     let decls = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();
@@ -158,7 +156,7 @@ fn record_aliased() {
         "#
     );
 
-    let bindings_rust = generate_bindings("record_aliased", module, TargetInfo::default_x86_64());
+    let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
 
     assert_eq!(
         bindings_rust.strip_prefix("\n").unwrap(),
@@ -190,11 +188,7 @@ fn nested_record_aliased() {
         "#
     );
 
-    let bindings_rust = generate_bindings(
-        "nested_record_aliased",
-        module,
-        TargetInfo::default_x86_64(),
-    );
+    let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
 
     assert_eq!(
         bindings_rust.strip_prefix("\n").unwrap(),
@@ -229,7 +223,7 @@ fn record_anonymous() {
         "#
     );
 
-    let bindings_rust = generate_bindings("record_anonymous", module, TargetInfo::default_x86_64());
+    let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
 
     assert_eq!(
         bindings_rust.strip_prefix("\n").unwrap(),
@@ -256,11 +250,7 @@ fn nested_record_anonymous() {
         "#
     );
 
-    let bindings_rust = generate_bindings(
-        "nested_record_anonymous",
-        module,
-        TargetInfo::default_x86_64(),
-    );
+    let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
 
     assert_eq!(
         bindings_rust.strip_prefix("\n").unwrap(),
@@ -298,8 +288,7 @@ fn tag_union_aliased() {
         "#
     );
 
-    let bindings_rust =
-        generate_bindings("tag_union_aliased", module, TargetInfo::default_x86_64());
+    let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
 
     assert_eq!(
         bindings_rust.strip_prefix("\n").unwrap(),
