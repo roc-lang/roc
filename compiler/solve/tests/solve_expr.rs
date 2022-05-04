@@ -6243,7 +6243,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn ability_member_takes_different_able_variable() {
+    fn ability_member_binds_different_able_variable() {
         infer_queries(
             indoc!(
                 r#"
@@ -6254,22 +6254,22 @@ mod solve_expr {
                 IntoHash has intoHash : a -> b | a has IntoHash, b has Hash
 
                 Id := U64
-                hash = \$Id n -> n
+                hash = \@Id n -> n
                 #^^^^{-1}
 
                 User := Id
-                intoHash = \$User id, _ -> id
+                intoHash = \@User id -> id
                 #^^^^^^^^{-1}
 
-                result = hash (intoHash ($User ($Id 123)))
+                result = hash (intoHash (@User (@Id 123)))
                 #        ^^^^  ^^^^^^^^
                 "#
             ),
             &[
                 "hash : Id -> U64",
-                "intoHash : User, Id -> Id",
-                "hash : Id -> U64",
-                "intoHash : User, Id -> Id",
+                "intoHash : User -> Id",
+                "hash : a -> U64 | a has Hash",
+                "intoHash : User -> a | a has Hash",
             ],
         )
     }
