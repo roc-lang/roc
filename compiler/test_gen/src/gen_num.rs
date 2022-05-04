@@ -3225,7 +3225,7 @@ fn upcast_of_int_checked_is_zext() {
             "#
         ),
         1,
-        u16
+        u8
     )
 }
 
