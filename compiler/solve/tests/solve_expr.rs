@@ -6251,7 +6251,7 @@ mod solve_expr {
 
                 Hash has hash : a -> U64 | a has Hash
 
-                IntoHash has intoHash : a, b -> b | a has IntoHash, b has Hash
+                IntoHash has intoHash : a -> b | a has IntoHash, b has Hash
 
                 Id := U64
                 hash = \$Id n -> n
@@ -6261,7 +6261,7 @@ mod solve_expr {
                 intoHash = \$User id, _ -> id
                 #^^^^^^^^{-1}
 
-                result = hash (intoHash ($User ($Id 123)) ($Id 1))
+                result = hash (intoHash ($User ($Id 123)))
                 #        ^^^^  ^^^^^^^^
                 "#
             ),

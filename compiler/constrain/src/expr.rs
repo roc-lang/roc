@@ -606,15 +606,6 @@ pub fn constrain_expr(
                 )
             };
 
-            let branches_region = {
-                debug_assert!(!branches.is_empty());
-                Region::span_across(
-                    &loc_cond.region,
-                    // &branches.first().unwrap().region(),
-                    &branches.last().unwrap().region(),
-                )
-            };
-
             let branch_expr_reason =
                 |expected: &Expected<Type>, index, branch_region| match expected {
                     FromAnnotation(name, arity, ann_source, _typ) => {
@@ -675,17 +666,6 @@ pub fn constrain_expr(
                         },
                         branches_cond_type.clone(),
                         sub_region,
-                    )
-                };
-
-                let expected_pattern = |sub_pattern| {
-                    PExpected::ForReason(
-                        PReason::WhenMatch {
-                            index: HumanIndex::zero_based(index),
-                            sub_pattern,
-                        },
-                        cond_type.clone(),
-                        pattern_region,
                     )
                 };
 
