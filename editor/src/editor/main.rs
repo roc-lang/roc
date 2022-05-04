@@ -26,6 +26,7 @@ use pipelines::RectResources;
 use roc_ast::lang::env::Env;
 use roc_ast::mem_pool::pool::Pool;
 use roc_ast::module::load_module;
+use roc_load::Threading;
 use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
 use std::collections::HashSet;
@@ -128,7 +129,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
     let file_path = Path::new(&file_path_str);
 
-    let loaded_module = load_module(file_path);
+    let loaded_module = load_module(file_path, Threading::Multi);
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);

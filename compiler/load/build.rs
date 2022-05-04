@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use bumpalo::Bump;
+use roc_load_internal::file::Threading;
 use roc_module::symbol::ModuleId;
 
 const MODULES: &[(ModuleId, &str)] = &[
@@ -37,6 +38,7 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
         Default::default(),
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
+        Threading::Multi,
     );
 
     let module = res_module.unwrap();

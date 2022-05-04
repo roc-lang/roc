@@ -956,6 +956,7 @@ pub fn load_and_typecheck_str<'a>(
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
+    threading: Threading,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
@@ -974,6 +975,7 @@ pub fn load_and_typecheck_str<'a>(
         target_info,
         cached_subs,
         render,
+        threading,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
@@ -1091,6 +1093,12 @@ pub enum LoadResult<'a> {
     Monomorphized(MonomorphizedModule<'a>),
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Threading {
+    Single,
+    Multi,
+}
+
 /// The loading process works like this, starting from the given filename (e.g. "main.roc"):
 ///
 /// 1. Open the file.
@@ -1144,10 +1152,11 @@ pub fn load<'a>(
     target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     render: RenderTarget,
+    threading: Threading,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     // When compiling to wasm, we cannot spawn extra threads
     // so we have a single-threaded implementation
-    if cfg!(target_family = "wasm") {
+    if threading == Threading::Single || cfg!(target_family = "wasm") {
         load_single_threaded(
             arena,
             load_start,

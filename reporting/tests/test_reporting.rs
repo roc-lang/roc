@@ -12,7 +12,7 @@ mod test_reporting {
     use bumpalo::Bump;
     use indoc::indoc;
     use roc_can::abilities::AbilitiesStore;
-    use roc_load::{self, LoadedModule, LoadingProblem};
+    use roc_load::{self, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
@@ -92,6 +92,7 @@ mod test_reporting {
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 RenderTarget::Generic,
+                Threading::Single,
             );
             drop(file);
 

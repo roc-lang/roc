@@ -7,7 +7,7 @@ use clap::Command;
 use clap::{Arg, ArgMatches};
 use roc_build::link::LinkType;
 use roc_error_macros::user_error;
-use roc_load::LoadingProblem;
+use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use std::env;
 use std::io;
@@ -386,6 +386,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         surgically_link,
         precompiled,
         target_valgrind,
+        Threading::Multi,
     );
 
     match res_binary_path {
