@@ -17,6 +17,7 @@ roc_collections = { path = "../compiler/collections" }
 roc_target = { path = "../compiler/roc_target" }
 roc_error_macros = { path = "../error_macros" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
+ven_graph = { path = "../vendor/pathfinding" }
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"

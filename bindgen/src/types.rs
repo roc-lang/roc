@@ -1,7 +1,7 @@
 use core::mem::align_of;
 use roc_collections::VecMap;
 use roc_std::RocDec;
-use std::io::BufRead;
+use ven_graph::topological_sort;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
@@ -13,7 +13,7 @@ pub struct Types {
     /// Dependencies - that is, which type depends on which other type.
     /// This is important for declaration order in C; we need to output a
     /// type declaration earlier in the file than where it gets referenced by another type.
-    deps: VecMap<TypeId, TypeId>,
+    deps: VecMap<TypeId, Vec<TypeId>>,
 }
 
 impl Types {
@@ -33,7 +33,7 @@ impl Types {
     }
 
     pub fn depends(&mut self, id: TypeId, depends_on: TypeId) {
-        self.deps.insert(id, depends_on);
+        self.deps.get_or_insert(id, Vec::new).push(depends_on);
     }
 
     pub fn get(&self, id: TypeId) -> &RocType {
@@ -43,15 +43,25 @@ impl Types {
         }
     }
 
+    pub fn ids(&self) -> impl ExactSizeIterator<Item = TypeId> {
+        (0..self.by_id.len()).map(TypeId)
+    }
+
+    pub fn sorted_ids(&self) -> Vec<TypeId> {
+        topological_sort(self.ids(), |id| match self.deps.get(id) {
+            Some(dep_ids) => dep_ids.iter().map(|dep_id| *dep_id).collect(),
+            None => Vec::new(),
+        })
+        .unwrap_or_else(|err| {
+            unreachable!("Cyclic type definitions: {:?}", err);
+        })
+    }
+
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &RocType> {
         TypesIter {
             types: self.by_id.as_slice(),
             len: self.by_id.len(),
         }
-    }
-
-    fn len(&self) -> usize {
-        self.by_id.len()
     }
 }
 

@@ -18,25 +18,11 @@ pub struct Env<'a> {
     pub enum_names: Enums,
 }
 
-pub fn to_types<'a, I: Iterator<Item = Layout<'a>>>(
-    env: &mut Env<'a>,
-    layouts: I,
-    var: Variable,
-) -> Types {
-    let mut types = Types::with_capacity(layouts.size_hint().1.unwrap_or(0));
-
-    for layout in layouts {
-        add_type(env, layout, var, &mut types);
-    }
-
-    types
-}
-
-fn add_type<'a, 'b>(
+pub fn add_type<'a>(
     env: &mut Env<'a>,
     layout: Layout<'a>,
     var: Variable,
-    types: &'b mut Types,
+    types: &mut Types,
 ) -> TypeId {
     use roc_builtins::bitcode::FloatWidth::*;
     use roc_builtins::bitcode::IntWidth::*;
