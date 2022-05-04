@@ -19,6 +19,8 @@ use crate::mem_pool::shallow_clone::ShallowClone;
 
 pub type TypeId = NodeId<Type2>;
 
+const TYPE2_SIZE: () = assert!(std::mem::size_of::<Type2>() == 3 * 8 + 4);
+
 #[derive(Debug)]
 pub enum Type2 {
     Variable(Variable), // 4B
@@ -45,11 +47,6 @@ pub enum Type2 {
     Apply(Symbol, PoolVec<Type2>),            // 16B = 8B + 8B
 
     Erroneous(Problem2), // 24B
-}
-
-#[test]
-fn type2_size() {
-    assert_eq!(std::mem::size_of::<Type2>(), 28); // 24B + pad
 }
 
 #[derive(Debug)]
