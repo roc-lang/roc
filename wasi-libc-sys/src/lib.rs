@@ -11,9 +11,8 @@ extern "C" {
     pub fn memset(dst: *mut c_void, ch: i32, n: usize) -> *mut c_void;
 }
 
+// Tell users of this crate where to find the Wasm .a file
 // If a non-Wasm target is using this crate, we assume it is a build script that wants to emit Wasm
-// Tell it where to find the Wasm .a file
-#[cfg(not(target_family = "wasm"))]
+// For Wasm target, it won't ever be used, but we expose it just to keep things simple
 mod generated;
-#[cfg(not(target_family = "wasm"))]
 pub use generated::WASI_LIBC_PATH;
