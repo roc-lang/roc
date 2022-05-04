@@ -150,14 +150,12 @@ impl Aliases {
             {
                 let start = self.variables.len() as _;
 
-                self.variables
-                    // TODO: propogate ability?
-                    .extend(
-                        alias
-                            .type_variables
-                            .iter()
-                            .map(|x| OptAbleVar::from(&x.value)),
-                    );
+                self.variables.extend(
+                    alias
+                        .type_variables
+                        .iter()
+                        .map(|x| OptAbleVar::from(&x.value)),
+                );
 
                 self.variables.extend(alias.lambda_set_variables.iter().map(
                     |x| match x.as_inner() {
