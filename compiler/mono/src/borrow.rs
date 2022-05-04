@@ -6,9 +6,11 @@ use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
-pub const OWNED: bool = false;
-pub const BORROWED: bool = true;
+pub(crate) const OWNED: bool = false;
+pub(crate) const BORROWED: bool = true;
 
+/// For reference-counted types (lists, (big) strings, recursive tags), owning a value
+/// means incrementing its reference count. Hence, we prefer borrowing for these types
 fn should_borrow_layout(layout: &Layout) -> bool {
     layout.is_refcounted()
 }

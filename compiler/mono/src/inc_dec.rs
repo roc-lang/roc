@@ -8,6 +8,41 @@ use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
 
+/// Data and Function ownership relation
+///
+/// Normally, the borrowing algorithm figures out how to own/borrow data so that
+/// the borrows match up. But that fails for our higher-order lowlevels, because
+/// they are rigid (cannot add extra inc/dec in there dynamically) and opaque to
+/// the borrow inference.
+///
+/// So, we must fix this up ourselves. This code is deliberately verbose to make
+/// it easier to understand without full context.
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+enum DataFunction {
+    DataOwnedFunctionOwns,
+    DataOwnedFunctionBorrows,
+    DataBorrowedFunctionBorrows,
+    DataBorrowedFunctionOwns,
+}
+
+impl DataFunction {
+    fn new(vars: &VarMap, lowlevel_argument: Symbol, passed_function_argument: Param) -> Self {
+        use DataFunction::*;
+
+        let data_borrowed = !vars[&lowlevel_argument].consume;
+        let function_borrows = passed_function_argument.borrow;
+
+        match (data_borrowed, function_borrows) {
+            (BORROWED, BORROWED) => DataBorrowedFunctionBorrows,
+            (BORROWED, OWNED) => DataBorrowedFunctionOwns,
+            (OWNED, BORROWED) => DataOwnedFunctionBorrows,
+            (OWNED, OWNED) => DataOwnedFunctionOwns,
+        }
+    }
+}
+
 pub fn free_variables(stmt: &Stmt<'_>) -> MutSet<Symbol> {
     let (mut occurring, bound) = occurring_variables(stmt);
 
@@ -519,49 +554,65 @@ impl<'a> Context<'a> {
         b: &'a Stmt<'a>,
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
+        use crate::low_level::HigherOrder::*;
+        use DataFunction::*;
+
         let HigherOrderLowLevel {
             op,
-            closure_env_layout,
-            update_mode,
             passed_function,
             ..
         } = lowlevel;
 
-        // setup
-        use crate::low_level::HigherOrder::*;
-
         macro_rules! create_call {
             ($borrows:expr) => {
-                Expr::Call(crate::ir::Call {
-                    call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
-                        let mut passed_function = *passed_function;
-                        passed_function.owns_captured_environment = true;
-
-                        let higher_order = HigherOrderLowLevel {
-                            op: *op,
-                            closure_env_layout: *closure_env_layout,
-                            update_mode: *update_mode,
-                            passed_function,
-                        };
-
-                        CallType::HigherOrder(self.arena.alloc(higher_order))
-                    } else {
-                        CallType::HigherOrder(lowlevel)
-                    },
-                    arguments,
-                })
+                create_holl_call(self.arena, lowlevel, $borrows, arguments)
             };
         }
 
-        macro_rules! decref_if_owned {
-            ($borrows:expr, $argument:expr, $stmt:expr) => {
-                if !$borrows {
-                    self.arena.alloc(Stmt::Refcounting(
-                        ModifyRc::DecRef($argument),
-                        self.arena.alloc($stmt),
-                    ))
-                } else {
-                    $stmt
+        macro_rules! handle_ownership_post {
+            ($ownership:expr, $argument:expr, $stmt:expr) => {
+                match $ownership {
+                    DataOwnedFunctionOwns | DataBorrowedFunctionOwns => {
+                        // elements have been consumed, must still consume the list itself
+                        let rest = self.arena.alloc($stmt);
+                        let rc = Stmt::Refcounting(ModifyRc::DecRef($argument), rest);
+
+                        &*self.arena.alloc(rc)
+                    }
+                    DataOwnedFunctionBorrows => {
+                        // must consume list and elements
+                        let rest = self.arena.alloc($stmt);
+                        let rc = Stmt::Refcounting(ModifyRc::Dec($argument), rest);
+
+                        &*self.arena.alloc(rc)
+                    }
+                    DataBorrowedFunctionBorrows => {
+                        // list borrows, function borrows, so there is nothing to do
+                        $stmt
+                    }
+                }
+            };
+        }
+
+        macro_rules! handle_ownership_pre {
+            ($ownership:expr, $argument:expr, $stmt:expr) => {
+                match $ownership {
+                    DataBorrowedFunctionOwns => {
+                        // the data is borrowed;
+                        // increment it to own the values so the function can use them
+                        let rest = self.arena.alloc($stmt);
+                        let rc = Stmt::Refcounting(ModifyRc::Inc($argument, 1), rest);
+
+                        self.arena.alloc(rc)
+                    }
+                    DataOwnedFunctionOwns | DataOwnedFunctionBorrows => {
+                        // we actually own the data; nothing to do
+                        $stmt
+                    }
+                    DataBorrowedFunctionBorrows => {
+                        // list borrows, function borrows, so there is nothing to do
+                        $stmt
+                    }
                 }
             };
         }
@@ -582,7 +633,7 @@ impl<'a> Context<'a> {
             None => unreachable!(),
         };
 
-        match op {
+        match *op {
             ListMap { xs }
             | ListKeepIf { xs }
             | ListKeepOks { xs }
@@ -590,116 +641,136 @@ impl<'a> Context<'a> {
             | ListAny { xs }
             | ListAll { xs }
             | ListFindUnsafe { xs } => {
-                let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
+                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
 
-                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+                let borrows = [FUNCTION, CLOSURE_DATA];
+                let b = self.add_dec_after_lowlevel(&arguments[1..], &borrows, b, b_live_vars);
 
-                // if the list is owned, then all elements have been consumed, but not the list itself
-                println!("function borrows element? {}", borrows[0]);
-
-                let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+                let b = handle_ownership_post!(ownership1, xs, b);
 
                 let v = create_call!(function_ps.get(1));
 
-                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                handle_ownership_pre!(ownership1, xs, b)
             }
             ListMap2 { xs, ys } => {
-                let borrows = [
-                    function_ps[0].borrow,
-                    function_ps[1].borrow,
-                    FUNCTION,
-                    CLOSURE_DATA,
-                ];
+                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
+                let ownership2 = DataFunction::new(&self.vars, ys, function_ps[1]);
 
-                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+                let borrows = [FUNCTION, CLOSURE_DATA];
 
-                let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
-                let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
+                let b = self.add_dec_after_lowlevel(&arguments[2..], &borrows, b, b_live_vars);
+
+                let b = handle_ownership_post!(ownership1, xs, b);
+                let b = handle_ownership_post!(ownership2, ys, b);
 
                 let v = create_call!(function_ps.get(2));
 
-                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                let b = handle_ownership_pre!(ownership1, xs, b);
+                handle_ownership_pre!(ownership2, ys, b)
             }
             ListMap3 { xs, ys, zs } => {
-                let borrows = [
-                    function_ps[0].borrow,
-                    function_ps[1].borrow,
-                    function_ps[2].borrow,
-                    FUNCTION,
-                    CLOSURE_DATA,
-                ];
+                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
+                let ownership2 = DataFunction::new(&self.vars, ys, function_ps[1]);
+                let ownership3 = DataFunction::new(&self.vars, zs, function_ps[2]);
 
-                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+                let borrows = [FUNCTION, CLOSURE_DATA];
+                let b = self.add_dec_after_lowlevel(&arguments[3..], &borrows, b, b_live_vars);
 
-                let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
-                let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
-                let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
+                let b = handle_ownership_post!(ownership1, xs, b);
+                let b = handle_ownership_post!(ownership2, ys, b);
+                let b = handle_ownership_post!(ownership3, zs, b);
 
                 let v = create_call!(function_ps.get(3));
 
-                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                let b = handle_ownership_pre!(ownership1, xs, b);
+                let b = handle_ownership_pre!(ownership2, ys, b);
+                handle_ownership_pre!(ownership3, zs, b)
             }
             ListMap4 { xs, ys, zs, ws } => {
-                let borrows = [
-                    function_ps[0].borrow,
-                    function_ps[1].borrow,
-                    function_ps[2].borrow,
-                    function_ps[3].borrow,
-                    FUNCTION,
-                    CLOSURE_DATA,
-                ];
+                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
+                let ownership2 = DataFunction::new(&self.vars, ys, function_ps[1]);
+                let ownership3 = DataFunction::new(&self.vars, zs, function_ps[2]);
+                let ownership4 = DataFunction::new(&self.vars, ws, function_ps[3]);
 
-                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+                let borrows = [FUNCTION, CLOSURE_DATA];
 
-                let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
-                let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
-                let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
-                let b = decref_if_owned!(function_ps[3].borrow, *ws, b);
+                let b = self.add_dec_after_lowlevel(&arguments[4..], &borrows, b, b_live_vars);
+
+                let b = handle_ownership_post!(ownership1, xs, b);
+                let b = handle_ownership_post!(ownership2, ys, b);
+                let b = handle_ownership_post!(ownership3, zs, b);
+                let b = handle_ownership_post!(ownership4, ws, b);
 
                 let v = create_call!(function_ps.get(3));
 
-                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                let b = handle_ownership_pre!(ownership1, xs, b);
+                let b = handle_ownership_pre!(ownership2, ys, b);
+                handle_ownership_pre!(ownership3, zs, b)
             }
             ListMapWithIndex { xs } => {
-                let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
+                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[1]);
 
-                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+                let borrows = [FUNCTION, CLOSURE_DATA];
+                let b = self.add_dec_after_lowlevel(&arguments[1..], &borrows, b, b_live_vars);
 
-                let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
+                let b = handle_ownership_post!(ownership1, xs, b);
 
                 let v = create_call!(function_ps.get(2));
 
-                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                handle_ownership_pre!(ownership1, xs, b)
             }
-            ListSortWith { xs: _ } => {
-                let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
+            ListSortWith { xs } => {
+                // NOTE: we may apply the function to the same argument multiple times.
+                // for that to be valid, the function must borrow its argument. This is not
+                // enforced at the moment
+                //
+                // we also don't check that both arguments have the same ownership characteristics
+                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
 
-                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+                let borrows = [FUNCTION, CLOSURE_DATA];
+                let b = self.add_dec_after_lowlevel(&arguments[1..], &borrows, b, b_live_vars);
+
+                let b = handle_ownership_post!(ownership1, xs, b);
 
                 let v = create_call!(function_ps.get(2));
 
-                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                handle_ownership_pre!(ownership1, xs, b)
             }
-            ListWalk { xs, state: _ }
-            | ListWalkUntil { xs, state: _ }
-            | ListWalkBackwards { xs, state: _ }
-            | DictWalk { xs, state: _ } => {
-                // borrow data structure based on first argument of the folded function
-                // borrow the default based on second argument of the folded function
-                let borrows = [
-                    function_ps[1].borrow,
-                    function_ps[0].borrow,
-                    FUNCTION,
-                    CLOSURE_DATA,
-                ];
+            ListWalk { xs, state }
+            | ListWalkUntil { xs, state }
+            | ListWalkBackwards { xs, state }
+            | DictWalk { xs, state } => {
+                // borrow data structure based on second argument of the folded function
+                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[1]);
 
-                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+                // borrow the default based on first argument of the folded function
+                // let ownership2 = DataFunction::new(&self.vars, state, function_ps[0]);
 
-                let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
+                let borrows = [FUNCTION, CLOSURE_DATA];
+                let b = self.add_dec_after_lowlevel(&arguments[2..], &borrows, b, b_live_vars);
+
+                let b = handle_ownership_post!(ownership1, xs, b);
+                // let b = handle_ownership_post!(ownership2, state, b);
 
                 let v = create_call!(function_ps.get(2));
 
-                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                let b = handle_ownership_pre!(ownership1, xs, b);
+                // handle_ownership_pre!(ownership2, state, b)
+                b
             }
         }
     }
@@ -1051,6 +1122,34 @@ impl<'a> Context<'a> {
             RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
+}
+
+fn create_holl_call<'a>(
+    arena: &'a Bump,
+    holl: &'a crate::ir::HigherOrderLowLevel,
+    param: Option<&Param>,
+    arguments: &'a [Symbol],
+) -> Expr<'a> {
+    let call = crate::ir::Call {
+        call_type: if let Some(OWNED) = param.map(|p| p.borrow) {
+            let mut passed_function = holl.passed_function;
+            passed_function.owns_captured_environment = true;
+
+            let higher_order = HigherOrderLowLevel {
+                op: holl.op,
+                closure_env_layout: holl.closure_env_layout,
+                update_mode: holl.update_mode,
+                passed_function,
+            };
+
+            CallType::HigherOrder(arena.alloc(higher_order))
+        } else {
+            CallType::HigherOrder(holl)
+        },
+        arguments,
+    };
+
+    Expr::Call(call)
 }
 
 pub fn collect_stmt(
