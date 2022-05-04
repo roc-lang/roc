@@ -8,7 +8,7 @@ static INDENT: &str = "    ";
 pub fn write_types<'a>(types: &Types, buf: &mut String) -> fmt::Result {
     for id in types.sorted_ids() {
         match types.get(id) {
-            RocType::Struct { name, fields } => write_struct(name, fields, id, types, &mut buf)?,
+            RocType::Struct { name, fields } => write_struct(name, fields, id, types, buf)?,
             RocType::TagUnion { name, tags } => {
                 todo!();
             }
@@ -51,7 +51,7 @@ fn write_struct(
 ) -> fmt::Result {
     write_deriving(struct_id, types, buf)?;
 
-    buf.write_str("\n#[repr(C)]\npub struct ")?;
+    buf.write_str("#[repr(C)]\npub struct ")?;
     buf.write_str(name)?;
     buf.write_str(" {\n")?;
 
@@ -115,7 +115,7 @@ fn write_type_name<'a>(id: TypeId, types: &Types, buf: &mut String) -> fmt::Resu
 fn write_deriving<'a>(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
     let typ = types.get(id);
 
-    buf.write_str("#[derive(Clone, PartialEq, PartialOrd, ")?;
+    buf.write_str("\n#[derive(Clone, PartialEq, PartialOrd, ")?;
 
     if !typ.has_pointer(types) {
         buf.write_str("Copy, ")?;

@@ -5,7 +5,9 @@ extern crate pretty_assertions;
 extern crate indoc;
 
 use bumpalo::Bump;
-use roc_bindgen::bindgen_rs::{write_layout_type, Env};
+use roc_bindgen::bindgen::{self, Env};
+use roc_bindgen::bindgen_rs;
+use roc_bindgen::types::Types;
 use roc_can::{
     def::{Declaration, Def},
     pattern::Pattern,
@@ -91,11 +93,10 @@ pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> St
         interns: &interns,
         struct_names: Default::default(),
         enum_names: Default::default(),
-        deriving: Default::default(),
         subs,
     };
 
-    let mut bindgen_result = String::new();
+    let types = &mut Types::default();
 
     for decl in decls.into_iter() {
         let defs = match decl {
@@ -110,6 +111,7 @@ pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> St
                 vec![]
             }
         };
+
         for Def {
             loc_pattern,
             pattern_vars,
@@ -126,8 +128,7 @@ pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> St
                         .from_var(&arena, *var, &subs)
                         .expect("Something weird ended up in the content");
 
-                    write_layout_type(&mut env, layout, *var, &mut bindgen_result)
-                        .expect("I/O error when writing bindgen string");
+                    bindgen::add_type(&mut env, layout, *var, types);
                 }
                 _ => {
                     // figure out if we need to export non-identifier defs - when would that
@@ -137,7 +138,11 @@ pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> St
         }
     }
 
-    bindgen_result
+    let mut buf = String::new();
+
+    bindgen_rs::write_types(&types, &mut buf).expect("I/O error when writing bindgen string");
+
+    buf
 }
 
 #[test]
@@ -153,11 +158,10 @@ fn record_aliased() {
         "#
     );
 
-    let bindings_rust =
-        generate_bindings("record_type_aliased", module, TargetInfo::default_x86_64());
+    let bindings_rust = generate_bindings("record_aliased", module, TargetInfo::default_x86_64());
 
     assert_eq!(
-        bindings_rust,
+        bindings_rust.strip_prefix("\n").unwrap(),
         indoc!(
             r#"
                 #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
@@ -186,22 +190,25 @@ fn nested_record_aliased() {
         "#
     );
 
-    let bindings_rust =
-        generate_bindings("record_type_aliased", module, TargetInfo::default_x86_64());
+    let bindings_rust = generate_bindings(
+        "nested_record_aliased",
+        module,
+        TargetInfo::default_x86_64(),
+    );
 
     assert_eq!(
-        bindings_rust,
+        bindings_rust.strip_prefix("\n").unwrap(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
+                #[derive(Clone, PartialEq, PartialOrd, Default, Debug)]
                 #[repr(C)]
                 pub struct Outer {
-                    y: RocStr,
-                    z: RocList<u8>,
+                    y: roc_std::RocStr,
+                    z: roc_std::RocList<u8>,
                     x: Inner,
                 }
 
-                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
+                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Debug)]
                 #[repr(C)]
                 pub struct Inner {
                     b: f32,
@@ -222,14 +229,10 @@ fn record_anonymous() {
         "#
     );
 
-    let bindings_rust = generate_bindings(
-        "record_type_anonymous",
-        module,
-        TargetInfo::default_x86_64(),
-    );
+    let bindings_rust = generate_bindings("record_anonymous", module, TargetInfo::default_x86_64());
 
     assert_eq!(
-        bindings_rust,
+        bindings_rust.strip_prefix("\n").unwrap(),
         indoc!(
             r#"
                 #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
@@ -253,24 +256,27 @@ fn nested_record_anonymous() {
         "#
     );
 
-    let bindings_rust =
-        generate_bindings("record_type_aliased", module, TargetInfo::default_x86_64());
+    let bindings_rust = generate_bindings(
+        "nested_record_anonymous",
+        module,
+        TargetInfo::default_x86_64(),
+    );
 
     assert_eq!(
-        bindings_rust,
+        bindings_rust.strip_prefix("\n").unwrap(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Default, Eq, Ord, Hash, Debug)]
-                #[repr(C)]
-                pub struct R1 {
-                    y: RocStr,
-                    z: RocList<u8>,
-                    x: R2,
-                }
-
-                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
+                #[derive(Clone, PartialEq, PartialOrd, Default, Debug)]
                 #[repr(C)]
                 pub struct R2 {
+                    y: roc_std::RocStr,
+                    z: roc_std::RocList<u8>,
+                    x: R1,
+                }
+
+                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Debug)]
+                #[repr(C)]
+                pub struct R1 {
                     b: f32,
                     a: u16,
                 }
@@ -280,7 +286,7 @@ fn nested_record_anonymous() {
 }
 
 #[test]
-fn tag_union_type_aliased() {
+fn tag_union_aliased() {
     let module = indoc!(
         r#"
             app "main" provides [ main ] to "./platform"
@@ -292,14 +298,11 @@ fn tag_union_type_aliased() {
         "#
     );
 
-    let bindings_rust = generate_bindings(
-        "tag_union_type_aliased",
-        module,
-        TargetInfo::default_x86_64(),
-    );
+    let bindings_rust =
+        generate_bindings("tag_union_aliased", module, TargetInfo::default_x86_64());
 
     assert_eq!(
-        bindings_rust,
+        bindings_rust.strip_prefix("\n").unwrap(),
         indoc!(
             r#"
                 pub struct MyTagUnion {
