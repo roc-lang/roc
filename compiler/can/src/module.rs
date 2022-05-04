@@ -18,7 +18,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, AliasKind, Type};
+use roc_types::types::{Alias, AliasKind, AliasVar, Type};
 
 #[derive(Debug)]
 pub struct Module {
@@ -119,7 +119,7 @@ impl GeneratedInfo {
                     scope.add_alias(
                         effect_symbol,
                         Region::zero(),
-                        vec![Loc::at_zero(("a".into(), a_var))],
+                        vec![Loc::at_zero(AliasVar::unbound("a".into(), a_var))],
                         actual,
                         AliasKind::Opaque,
                     );

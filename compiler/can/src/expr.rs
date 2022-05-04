@@ -19,7 +19,7 @@ use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
-use roc_types::types::{Alias, Category, LambdaSet, Type};
+use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
 
@@ -191,7 +191,8 @@ pub enum Expr {
         // for the expression from the opaque definition. `type_arguments` is something like
         // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
         specialized_def_type: Box<Type>,
-        type_arguments: Vec<Variable>,
+        // Fresh type variable and any ability it is bound to
+        type_arguments: Vec<OptAbleVar>,
         lambda_set_variables: Vec<LambdaSet>,
     },
 

@@ -6243,33 +6243,47 @@ mod solve_expr {
     }
 
     #[test]
-    fn ability_member_binds_different_able_variable() {
+    fn encoder() {
         infer_queries(
             indoc!(
                 r#"
-                app "test" provides [ result ] to "./platform"
+                app "test" provides [ myU8Bytes ] to "./platform"
 
-                Hash has hash : a -> U64 | a has Hash
+                Encoder fmt := List U8, fmt -> List U8 | fmt has Format
 
-                IntoHash has intoHash : a -> b | a has IntoHash, b has Hash
+                Encoding has
+                  toEncoder : val -> Encoder fmt | val has Encoding, fmt has Format
 
-                Id := U64
-                hash = \@Id n -> n
-                #^^^^{-1}
+                Format has
+                  u8 : U8 -> Encoder fmt | fmt has Format
 
-                User := Id
-                intoHash = \@User id -> id
-                #^^^^^^^^{-1}
+                appendWith : List U8, Encoder fmt, fmt -> List U8 | fmt has Format
+                appendWith = \lst, (@Encoder doFormat), fmt -> doFormat lst fmt
 
-                result = hash (intoHash (@User (@Id 123)))
-                #        ^^^^  ^^^^^^^^
+                toBytes : val, fmt -> List U8 | val has Encoding, fmt has Format
+                toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
+
+
+                Linear := {} 
+
+                # impl Format for Linear
+                u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
+                #^^{-1}
+
+                MyU8 := U8
+
+                # impl Encoding for MyU8
+                toEncoder = \@MyU8 n -> u8 n
+                #^^^^^^^^^{-1}
+
+                myU8Bytes = toBytes (@MyU8 15) (@Linear {})
+                #^^^^^^^^^{-1}
                 "#
             ),
             &[
-                "hash : Id -> U64",
-                "intoHash : User -> Id",
-                "hash : a -> U64 | a has Hash",
-                "intoHash : User -> a | a has Hash",
+                "u8 : U8 -> Encoder Linear",
+                "toEncoder : MyU8 -> Encoder fmt | fmt has Format",
+                "myU8Bytes : List U8",
             ],
         )
     }

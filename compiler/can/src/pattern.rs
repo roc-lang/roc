@@ -13,7 +13,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{LambdaSet, PatternCategory, Type};
+use roc_types::types::{LambdaSet, OptAbleVar, PatternCategory, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -47,7 +47,8 @@ pub enum Pattern {
         // for the expression from the opaque definition. `type_arguments` is something like
         // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
         specialized_def_type: Box<Type>,
-        type_arguments: Vec<Variable>,
+        // Fresh type variable and any ability it is bound to
+        type_arguments: Vec<OptAbleVar>,
         lambda_set_variables: Vec<LambdaSet>,
     },
     RecordDestructure {

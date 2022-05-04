@@ -1,3 +1,4 @@
+use crate::annotation::IntroducedVariables;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
@@ -13,12 +14,13 @@ pub struct MemberVariables {
 /// Stores information about an ability member definition, including the parent ability, the
 /// defining type, and what type variables need to be instantiated with instances of the ability.
 // TODO: SoA and put me in an arena
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct AbilityMemberData {
     pub parent_ability: Symbol,
     pub signature_var: Variable,
     pub signature: Type,
     pub variables: MemberVariables,
+    pub introduced_variables: IntroducedVariables,
     pub region: Region,
 }
 
@@ -33,7 +35,7 @@ pub struct MemberSpecialization {
 /// ability, and what types implement them.
 // TODO(abilities): this should probably go on the Scope, I don't put it there for now because we
 // are only dealing with inter-module abilities for now.
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone)]
 pub struct AbilitiesStore {
     /// Maps an ability to the members defining it.
     members_of_ability: MutMap<Symbol, Vec<Symbol>>,
@@ -61,10 +63,19 @@ impl AbilitiesStore {
     pub fn register_ability(
         &mut self,
         ability: Symbol,
-        members: Vec<(Symbol, Region, Variable, Type, MemberVariables)>,
+        members: Vec<(
+            Symbol,
+            Region,
+            Variable,
+            Type,
+            MemberVariables,
+            IntroducedVariables,
+        )>,
     ) {
         let mut members_vec = Vec::with_capacity(members.len());
-        for (member, region, signature_var, signature, variables) in members.into_iter() {
+        for (member, region, signature_var, signature, variables, introduced_variables) in
+            members.into_iter()
+        {
             members_vec.push(member);
             let old_member = self.ability_members.insert(
                 member,
@@ -74,6 +85,7 @@ impl AbilitiesStore {
                     signature,
                     region,
                     variables,
+                    introduced_variables,
                 },
             );
             debug_assert!(old_member.is_none(), "Replacing existing member definition");

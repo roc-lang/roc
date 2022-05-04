@@ -1,10 +1,9 @@
 use roc_collections::VecMap;
-use roc_module::ident::{Ident, Lowercase};
+use roc_module::ident::Ident;
 use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::Variable;
-use roc_types::types::{Alias, AliasKind, Type};
+use roc_types::types::{Alias, AliasKind, AliasVar, Type};
 
 use crate::abilities::AbilitiesStore;
 
@@ -335,7 +334,7 @@ impl Scope {
         &mut self,
         name: Symbol,
         region: Region,
-        vars: Vec<Loc<(Lowercase, Variable)>>,
+        vars: Vec<Loc<AliasVar>>,
         typ: Type,
         kind: AliasKind,
     ) {
@@ -394,7 +393,7 @@ impl Scope {
 pub fn create_alias(
     name: Symbol,
     region: Region,
-    vars: Vec<Loc<(Lowercase, Variable)>>,
+    vars: Vec<Loc<AliasVar>>,
     typ: Type,
     kind: AliasKind,
 ) -> Alias {
@@ -408,7 +407,7 @@ pub fn create_alias(
         let mut hidden = type_variables;
 
         for loc_var in vars.iter() {
-            hidden.remove(&loc_var.value.1);
+            hidden.remove(&loc_var.value.var);
         }
 
         if !hidden.is_empty() {

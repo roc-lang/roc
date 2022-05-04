@@ -17,8 +17,8 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, PatternCategory,
-    Reason, TypeExtension,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, LambdaSet,
+    OptAbleType, OptAbleVar, PatternCategory, Reason, TypeExtension,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
 
@@ -115,7 +115,7 @@ struct DelayedAliasVariables {
 }
 
 impl DelayedAliasVariables {
-    fn recursion_variables(self, variables: &mut [Variable]) -> &mut [Variable] {
+    fn recursion_variables(self, variables: &mut [OptAbleVar]) -> &mut [OptAbleVar] {
         let start = self.start as usize
             + (self.type_variables_len + self.lambda_set_variables_len) as usize;
         let length = self.recursion_variables_len as usize;
@@ -123,14 +123,14 @@ impl DelayedAliasVariables {
         &mut variables[start..][..length]
     }
 
-    fn lambda_set_variables(self, variables: &mut [Variable]) -> &mut [Variable] {
+    fn lambda_set_variables(self, variables: &mut [OptAbleVar]) -> &mut [OptAbleVar] {
         let start = self.start as usize + self.type_variables_len as usize;
         let length = self.lambda_set_variables_len as usize;
 
         &mut variables[start..][..length]
     }
 
-    fn type_variables(self, variables: &mut [Variable]) -> &mut [Variable] {
+    fn type_variables(self, variables: &mut [OptAbleVar]) -> &mut [OptAbleVar] {
         let start = self.start as usize;
         let length = self.type_variables_len as usize;
 
@@ -141,7 +141,7 @@ impl DelayedAliasVariables {
 #[derive(Debug, Default)]
 pub struct Aliases {
     aliases: Vec<(Symbol, Type, DelayedAliasVariables, AliasKind)>,
-    variables: Vec<Variable>,
+    variables: Vec<OptAbleVar>,
 }
 
 impl Aliases {
@@ -151,17 +151,29 @@ impl Aliases {
                 let start = self.variables.len() as _;
 
                 self.variables
-                    .extend(alias.type_variables.iter().map(|x| x.value.1));
+                    // TODO: propogate ability?
+                    .extend(
+                        alias
+                            .type_variables
+                            .iter()
+                            .map(|x| OptAbleVar::from(&x.value)),
+                    );
 
                 self.variables.extend(alias.lambda_set_variables.iter().map(
                     |x| match x.as_inner() {
-                        Type::Variable(v) => *v,
+                        Type::Variable(v) => OptAbleVar::unbound(*v),
                         _ => unreachable!("lambda set type is not a variable"),
                     },
                 ));
 
                 let recursion_variables_len = alias.recursion_variables.len() as _;
-                self.variables.extend(alias.recursion_variables);
+                self.variables.extend(
+                    alias
+                        .recursion_variables
+                        .iter()
+                        .copied()
+                        .map(OptAbleVar::unbound),
+                );
 
                 DelayedAliasVariables {
                     start,
@@ -303,25 +315,31 @@ impl Aliases {
 
         let mut substitutions: MutMap<_, _> = Default::default();
 
-        for rec_var in delayed_variables
+        for OptAbleVar {
+            var: rec_var,
+            opt_ability,
+        } in delayed_variables
             .recursion_variables(&mut self.variables)
             .iter_mut()
         {
+            debug_assert!(opt_ability.is_none());
             let new_var = subs.fresh_unnamed_flex_var();
             substitutions.insert(*rec_var, new_var);
             *rec_var = new_var;
         }
 
         let old_type_variables = delayed_variables.type_variables(&mut self.variables);
+        let variable_opt_abilities: Vec<_> =
+            old_type_variables.iter().map(|ov| ov.opt_ability).collect();
         let new_type_variables = &subs.variables[alias_variables.type_variables().indices()];
 
         for (old, new) in old_type_variables.iter_mut().zip(new_type_variables) {
             // if constraint gen duplicated a type these variables could be the same
             // (happens very often in practice)
-            if *old != *new {
-                substitutions.insert(*old, *new);
+            if old.var != *new {
+                substitutions.insert(old.var, *new);
 
-                *old = *new;
+                old.var = *new;
             }
         }
 
@@ -333,9 +351,10 @@ impl Aliases {
             .iter_mut()
             .zip(new_lambda_set_variables)
         {
-            if *old != *new {
-                substitutions.insert(*old, *new);
-                *old = *new;
+            debug_assert!(old.opt_ability.is_none());
+            if old.var != *new {
+                substitutions.insert(old.var, *new);
+                old.var = *new;
             }
         }
 
@@ -1937,8 +1956,46 @@ fn type_to_variable<'a>(
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
-                        let copy_var = helper!(arg_type);
+                    for (target_index, OptAbleType { typ, opt_ability }) in
+                        (new_variables.indices()).zip(type_arguments)
+                    {
+                        let copy_var = match opt_ability {
+                            None => helper!(typ),
+                            Some(ability) => {
+                                match RegisterVariable::from_type(subs, rank, pools, arena, typ) {
+                                    RegisterVariable::Direct(var) => {
+                                        use Content::*;
+                                        match *subs.get_content_without_compacting(var) {
+                                            FlexVar(opt_name) => subs
+                                                .set_content(var, FlexAbleVar(opt_name, *ability)),
+                                            RigidVar(name) => subs.set_content(
+                                                var,
+                                                FlexAbleVar(Some(name), *ability),
+                                            ),
+                                            RigidAbleVar(name, existing_ability) => {
+                                                debug_assert_eq!(existing_ability, *ability);
+                                                subs.set_content(
+                                                    var,
+                                                    FlexAbleVar(Some(name), existing_ability),
+                                                );
+                                            }
+                                            _ => {
+                                                // TODO associate the type to the bound ability, and check
+                                                // that it correctly implements the ability.
+                                            }
+                                        }
+                                        var
+                                    }
+                                    RegisterVariable::Deferred => {
+                                        // TODO associate the type to the bound ability, and check
+                                        // that it correctly implements the ability.
+                                        let var = subs.fresh_unnamed_flex_var();
+                                        stack.push(TypeToVar::Defer(typ, var));
+                                        var
+                                    }
+                                }
+                            }
+                        };
                         subs.variables[target_index] = copy_var;
                     }
 
