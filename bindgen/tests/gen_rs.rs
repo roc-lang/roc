@@ -141,12 +141,12 @@ pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> St
 }
 
 #[test]
-fn record_type_aliased() {
+fn record_aliased() {
     let module = indoc!(
         r#"
             app "main" provides [ main ] to "./platform"
 
-            MyRcd : { a: U64, b: U128 }
+            MyRcd : { a : U64, b : U128 }
 
             main : MyRcd
             main = { a: 1u64, b: 2u128 }
@@ -172,7 +172,48 @@ fn record_type_aliased() {
 }
 
 #[test]
-fn record_type_anonymous() {
+fn nested_record_aliased() {
+    let module = indoc!(
+        r#"
+            app "main" provides [ main ] to "./platform"
+
+            Outer : { x : Inner, y : Str, z : List U8 }
+
+            Inner : { a : U16, b : F32 }
+
+            main : Outer
+            main = { x: { a: 5, b: 24 }, y: "foo", z: [ 1, 2 ] }
+        "#
+    );
+
+    let bindings_rust =
+        generate_bindings("record_type_aliased", module, TargetInfo::default_x86_64());
+
+    assert_eq!(
+        bindings_rust,
+        indoc!(
+            r#"
+                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
+                #[repr(C)]
+                pub struct Outer {
+                    y: RocStr,
+                    z: RocList<u8>,
+                    x: Inner,
+                }
+
+                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
+                #[repr(C)]
+                pub struct Inner {
+                    b: f32,
+                    a: u16,
+                }
+            "#
+        )
+    );
+}
+
+#[test]
+fn record_anonymous() {
     let module = indoc!(
         r#"
             app "main" provides [ main ] to "./platform"
@@ -196,6 +237,42 @@ fn record_type_anonymous() {
                 pub struct R1 {
                     b: u128,
                     a: u64,
+                }
+            "#
+        )
+    );
+}
+
+#[test]
+fn nested_record_anonymous() {
+    let module = indoc!(
+        r#"
+            app "main" provides [ main ] to "./platform"
+
+            main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }
+        "#
+    );
+
+    let bindings_rust =
+        generate_bindings("record_type_aliased", module, TargetInfo::default_x86_64());
+
+    assert_eq!(
+        bindings_rust,
+        indoc!(
+            r#"
+                #[derive(Clone, PartialEq, PartialOrd, Default, Eq, Ord, Hash, Debug)]
+                #[repr(C)]
+                pub struct R1 {
+                    y: RocStr,
+                    z: RocList<u8>,
+                    x: R2,
+                }
+
+                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
+                #[repr(C)]
+                pub struct R2 {
+                    b: f32,
+                    a: u16,
                 }
             "#
         )
