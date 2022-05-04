@@ -2468,13 +2468,13 @@ fn specialize_external<'a>(
                     // An argument from the closure list may have taken on a specialized symbol
                     // name during the evaluation of the def body. If this is the case, load the
                     // specialized name rather than the original captured name!
-                    // let get_specialized_name = |symbol, layout| {
-                    //     procs
-                    //         .needed_symbol_specializations
-                    //         .get(&(symbol, layout))
-                    //         .map(|(_, specialized)| *specialized)
-                    //         .unwrap_or(symbol)
-                    // };
+                    let get_specialized_name = |symbol, layout| {
+                        procs
+                            .needed_symbol_specializations
+                            .get(&(symbol, layout))
+                            .map(|(_, specialized)| *specialized)
+                            .unwrap_or(symbol)
+                    };
 
                     match closure_layout.layout_for_member(proc_name) {
                         ClosureRepresentation::Union {
@@ -2510,10 +2510,10 @@ fn specialize_external<'a>(
                                     union_layout,
                                 };
 
-                                // let symbol = get_specialized_name(**symbol, **layout);
+                                let symbol = get_specialized_name(**symbol, **layout);
 
                                 specialized_body = Stmt::Let(
-                                    **symbol,
+                                    symbol,
                                     expr,
                                     **layout,
                                     env.arena.alloc(specialized_body),
@@ -2553,10 +2553,10 @@ fn specialize_external<'a>(
                                     structure: Symbol::ARG_CLOSURE,
                                 };
 
-                                // let symbol = get_specialized_name(**symbol, **layout);
+                                let symbol = get_specialized_name(**symbol, **layout);
 
                                 specialized_body = Stmt::Let(
-                                    **symbol,
+                                    symbol,
                                     expr,
                                     **layout,
                                     env.arena.alloc(specialized_body),
