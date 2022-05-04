@@ -7,9 +7,31 @@ use snafu::OptionExt;
 use std::collections::HashMap;
 use std::{fmt, u32};
 
-// TODO: benchmark this as { ident_id: u32, module_id: u32 } and see if perf stays the same
+// the packed(4) is needed for faster equality comparisons. With it, the structure is
+// treated as a single u64, and comparison is one instruction
+//
+//  example::eq_sym64:
+//          cmp     rdi, rsi
+//          sete    al
+//          ret
+//
+// while without it we get 2 extra instructions
+//
+//  example::eq_sym64:
+//          xor     edi, edx
+//          xor     esi, ecx
+//          or      esi, edi
+//          sete    al
+//          ret
+//
+// #[repr(packed)] gives you #[repr(packed(1))], and then all your reads are unaligned
+// so we set the alignment to (the natural) 4
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Symbol(u64);
+#[repr(packed(4))]
+pub struct Symbol {
+    ident_id: u32,
+    module_id: u32,
+}
 
 // When this is `true` (which it normally should be), Symbol's Debug::fmt implementation
 // attempts to pretty print debug symbols using interns recorded using
@@ -28,7 +50,7 @@ impl Symbol {
     // e.g. pub const NUM_NUM: Symbol = …
 
     pub const fn new(module_id: ModuleId, ident_id: IdentId) -> Symbol {
-        // The bit layout of the u64 inside a Symbol is:
+        // The bit layout of the inside of a Symbol is:
         //
         // |------ 32 bits -----|------ 32 bits -----|
         // |      ident_id      |      module_id     |
@@ -37,20 +59,22 @@ impl Symbol {
         // module_id comes second because we need to query it more often,
         // and this way we can get it by truncating the u64 to u32,
         // whereas accessing the first slot requires a bit shift first.
-        let bits = ((ident_id.0 as u64) << 32) | (module_id.0 as u64);
 
-        Symbol(bits)
+        Self {
+            module_id: module_id.0,
+            ident_id: ident_id.0,
+        }
     }
 
-    pub fn module_id(self) -> ModuleId {
-        ModuleId(self.0 as u32)
+    pub const fn module_id(self) -> ModuleId {
+        ModuleId(self.module_id)
     }
 
-    pub fn ident_id(self) -> IdentId {
-        IdentId((self.0 >> 32) as u32)
+    pub const fn ident_id(self) -> IdentId {
+        IdentId(self.ident_id)
     }
 
-    pub fn is_builtin(self) -> bool {
+    pub const fn is_builtin(self) -> bool {
         self.module_id().is_builtin()
     }
 
@@ -88,8 +112,8 @@ impl Symbol {
         })
     }
 
-    pub fn as_u64(self) -> u64 {
-        self.0
+    pub const fn as_u64(self) -> u64 {
+        u64::from_ne_bytes(self.to_ne_bytes())
     }
 
     pub fn fully_qualified(self, interns: &Interns, home: ModuleId) -> ModuleName {
@@ -109,7 +133,7 @@ impl Symbol {
     }
 
     pub const fn to_ne_bytes(self) -> [u8; 8] {
-        self.0.to_ne_bytes()
+        unsafe { std::mem::transmute(self) }
     }
 
     #[cfg(debug_assertions)]
@@ -174,7 +198,7 @@ impl fmt::Display for Symbol {
 
 impl From<Symbol> for u64 {
     fn from(symbol: Symbol) -> Self {
-        symbol.0
+        symbol.as_u64()
     }
 }
 
@@ -800,7 +824,7 @@ macro_rules! define_builtins {
         }
 
         impl ModuleId {
-            pub fn is_builtin(&self) -> bool {
+            pub const fn is_builtin(self) -> bool {
                 // This is a builtin ModuleId iff it's below the
                 // total number of builtin modules, since they
                 // take up the first $total ModuleId numbers.
