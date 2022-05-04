@@ -467,186 +467,8 @@ impl<'a> Context<'a> {
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            HigherOrder(HigherOrderLowLevel {
-                op,
-                closure_env_layout,
-                update_mode,
-                passed_function,
-                ..
-            }) => {
-                // setup
-                use crate::low_level::HigherOrder::*;
-
-                macro_rules! create_call {
-                    ($borrows:expr) => {
-                        Expr::Call(crate::ir::Call {
-                            call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
-                                let mut passed_function = *passed_function;
-                                passed_function.owns_captured_environment = true;
-
-                                let higher_order = HigherOrderLowLevel {
-                                    op: *op,
-                                    closure_env_layout: *closure_env_layout,
-                                    update_mode: *update_mode,
-                                    passed_function,
-                                };
-
-                                CallType::HigherOrder(self.arena.alloc(higher_order))
-                            } else {
-                                call_type
-                            },
-                            arguments,
-                        })
-                    };
-                }
-
-                macro_rules! decref_if_owned {
-                    ($borrows:expr, $argument:expr, $stmt:expr) => {
-                        if !$borrows {
-                            self.arena.alloc(Stmt::Refcounting(
-                                ModifyRc::DecRef($argument),
-                                self.arena.alloc($stmt),
-                            ))
-                        } else {
-                            $stmt
-                        }
-                    };
-                }
-
-                const FUNCTION: bool = BORROWED;
-                const CLOSURE_DATA: bool = BORROWED;
-
-                let function_layout = ProcLayout {
-                    arguments: passed_function.argument_layouts,
-                    result: passed_function.return_layout,
-                };
-
-                let function_ps = match self
-                    .param_map
-                    .get_symbol(passed_function.name, function_layout)
-                {
-                    Some(function_ps) => function_ps,
-                    None => unreachable!(),
-                };
-
-                match op {
-                    ListMap { xs }
-                    | ListKeepIf { xs }
-                    | ListKeepOks { xs }
-                    | ListKeepErrs { xs }
-                    | ListAny { xs }
-                    | ListAll { xs }
-                    | ListFindUnsafe { xs } => {
-                        let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        // if the list is owned, then all elements have been consumed, but not the list itself
-                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
-
-                        let v = create_call!(function_ps.get(1));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListMap2 { xs, ys } => {
-                        let borrows = [
-                            function_ps[0].borrow,
-                            function_ps[1].borrow,
-                            FUNCTION,
-                            CLOSURE_DATA,
-                        ];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
-                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
-
-                        let v = create_call!(function_ps.get(2));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListMap3 { xs, ys, zs } => {
-                        let borrows = [
-                            function_ps[0].borrow,
-                            function_ps[1].borrow,
-                            function_ps[2].borrow,
-                            FUNCTION,
-                            CLOSURE_DATA,
-                        ];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
-                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
-                        let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
-
-                        let v = create_call!(function_ps.get(3));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListMap4 { xs, ys, zs, ws } => {
-                        let borrows = [
-                            function_ps[0].borrow,
-                            function_ps[1].borrow,
-                            function_ps[2].borrow,
-                            function_ps[3].borrow,
-                            FUNCTION,
-                            CLOSURE_DATA,
-                        ];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
-                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
-                        let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
-                        let b = decref_if_owned!(function_ps[3].borrow, *ws, b);
-
-                        let v = create_call!(function_ps.get(3));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListMapWithIndex { xs } => {
-                        let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
-
-                        let v = create_call!(function_ps.get(2));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListSortWith { xs: _ } => {
-                        let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let v = create_call!(function_ps.get(2));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListWalk { xs, state: _ }
-                    | ListWalkUntil { xs, state: _ }
-                    | ListWalkBackwards { xs, state: _ }
-                    | DictWalk { xs, state: _ } => {
-                        // borrow data structure based on first argument of the folded function
-                        // borrow the default based on second argument of the folded function
-                        let borrows = [
-                            function_ps[1].borrow,
-                            function_ps[0].borrow,
-                            FUNCTION,
-                            CLOSURE_DATA,
-                        ];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
-
-                        let v = create_call!(function_ps.get(2));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                }
+            HigherOrder(lowlevel) => {
+                self.visit_higher_order_lowlevel(z, lowlevel, arguments, l, b, b_live_vars)
             }
 
             Foreign { .. } => {
@@ -684,6 +506,200 @@ impl<'a> Context<'a> {
                 let b = self.arena.alloc(Stmt::Let(z, v, l, b));
 
                 self.add_inc_before(arguments, ps, b, b_live_vars)
+            }
+        }
+    }
+
+    fn visit_higher_order_lowlevel(
+        &self,
+        z: Symbol,
+        lowlevel: &'a crate::ir::HigherOrderLowLevel,
+        arguments: &'a [Symbol],
+        l: Layout<'a>,
+        b: &'a Stmt<'a>,
+        b_live_vars: &LiveVarSet,
+    ) -> &'a Stmt<'a> {
+        let HigherOrderLowLevel {
+            op,
+            closure_env_layout,
+            update_mode,
+            passed_function,
+            ..
+        } = lowlevel;
+
+        // setup
+        use crate::low_level::HigherOrder::*;
+
+        macro_rules! create_call {
+            ($borrows:expr) => {
+                Expr::Call(crate::ir::Call {
+                    call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
+                        let mut passed_function = *passed_function;
+                        passed_function.owns_captured_environment = true;
+
+                        let higher_order = HigherOrderLowLevel {
+                            op: *op,
+                            closure_env_layout: *closure_env_layout,
+                            update_mode: *update_mode,
+                            passed_function,
+                        };
+
+                        CallType::HigherOrder(self.arena.alloc(higher_order))
+                    } else {
+                        CallType::HigherOrder(lowlevel)
+                    },
+                    arguments,
+                })
+            };
+        }
+
+        macro_rules! decref_if_owned {
+            ($borrows:expr, $argument:expr, $stmt:expr) => {
+                if !$borrows {
+                    self.arena.alloc(Stmt::Refcounting(
+                        ModifyRc::DecRef($argument),
+                        self.arena.alloc($stmt),
+                    ))
+                } else {
+                    $stmt
+                }
+            };
+        }
+
+        const FUNCTION: bool = BORROWED;
+        const CLOSURE_DATA: bool = BORROWED;
+
+        let function_layout = ProcLayout {
+            arguments: passed_function.argument_layouts,
+            result: passed_function.return_layout,
+        };
+
+        let function_ps = match self
+            .param_map
+            .get_symbol(passed_function.name, function_layout)
+        {
+            Some(function_ps) => function_ps,
+            None => unreachable!(),
+        };
+
+        match op {
+            ListMap { xs }
+            | ListKeepIf { xs }
+            | ListKeepOks { xs }
+            | ListKeepErrs { xs }
+            | ListAny { xs }
+            | ListAll { xs }
+            | ListFindUnsafe { xs } => {
+                let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
+
+                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+
+                // if the list is owned, then all elements have been consumed, but not the list itself
+                println!("function borrows element? {}", borrows[0]);
+
+                let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+
+                let v = create_call!(function_ps.get(1));
+
+                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+            ListMap2 { xs, ys } => {
+                let borrows = [
+                    function_ps[0].borrow,
+                    function_ps[1].borrow,
+                    FUNCTION,
+                    CLOSURE_DATA,
+                ];
+
+                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+
+                let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+                let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
+
+                let v = create_call!(function_ps.get(2));
+
+                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+            ListMap3 { xs, ys, zs } => {
+                let borrows = [
+                    function_ps[0].borrow,
+                    function_ps[1].borrow,
+                    function_ps[2].borrow,
+                    FUNCTION,
+                    CLOSURE_DATA,
+                ];
+
+                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+
+                let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+                let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
+                let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
+
+                let v = create_call!(function_ps.get(3));
+
+                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+            ListMap4 { xs, ys, zs, ws } => {
+                let borrows = [
+                    function_ps[0].borrow,
+                    function_ps[1].borrow,
+                    function_ps[2].borrow,
+                    function_ps[3].borrow,
+                    FUNCTION,
+                    CLOSURE_DATA,
+                ];
+
+                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+
+                let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
+                let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
+                let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
+                let b = decref_if_owned!(function_ps[3].borrow, *ws, b);
+
+                let v = create_call!(function_ps.get(3));
+
+                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+            ListMapWithIndex { xs } => {
+                let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
+
+                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+
+                let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
+
+                let v = create_call!(function_ps.get(2));
+
+                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+            ListSortWith { xs: _ } => {
+                let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
+
+                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+
+                let v = create_call!(function_ps.get(2));
+
+                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+            ListWalk { xs, state: _ }
+            | ListWalkUntil { xs, state: _ }
+            | ListWalkBackwards { xs, state: _ }
+            | DictWalk { xs, state: _ } => {
+                // borrow data structure based on first argument of the folded function
+                // borrow the default based on second argument of the folded function
+                let borrows = [
+                    function_ps[1].borrow,
+                    function_ps[0].borrow,
+                    FUNCTION,
+                    CLOSURE_DATA,
+                ];
+
+                let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
+
+                let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
+
+                let v = create_call!(function_ps.get(2));
+
+                &*self.arena.alloc(Stmt::Let(z, v, l, b))
             }
         }
     }
