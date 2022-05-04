@@ -5,11 +5,7 @@ extern crate pretty_assertions;
 extern crate indoc;
 
 use bumpalo::Bump;
-use roc_bindgen::{
-    bindgen_rs::{write_layout_type, Env},
-    enums::Enums,
-    structs::Structs,
-};
+use roc_bindgen::bindgen_rs::{write_layout_type, Env};
 use roc_can::{
     def::{Declaration, Def},
     pattern::Pattern,
@@ -93,8 +89,9 @@ pub fn generate_bindings(subdir: &str, src: &str, target_info: TargetInfo) -> St
         arena: &arena,
         layout_cache: &mut layout_cache,
         interns: &interns,
-        struct_names: Structs::default(),
-        enum_names: Enums::default(),
+        struct_names: Default::default(),
+        enum_names: Default::default(),
+        deriving: Default::default(),
         subs,
     };
 
@@ -163,7 +160,9 @@ fn record_type_aliased() {
         bindings_rust,
         indoc!(
             r#"
-                struct MyRcd {
+                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
+                #[repr(C)]
+                pub struct MyRcd {
                     b: u128,
                     a: u64,
                 }
@@ -192,7 +191,9 @@ fn record_type_anonymous() {
         bindings_rust,
         indoc!(
             r#"
-                struct R1 {
+                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
+                #[repr(C)]
+                pub struct R1 {
                     b: u128,
                     a: u64,
                 }

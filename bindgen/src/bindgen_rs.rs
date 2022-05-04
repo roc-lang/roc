@@ -22,17 +22,22 @@ pub fn write_template(writer: &mut impl io::Write) -> io::Result<()> {
     Ok(())
 }
 
-pub fn write_bindings(_writer: &mut impl io::Write) -> io::Result<()> {
-    // extern "C" {
-    //     #[link_name = "roc__mainForHost_1_exposed"]
-    //     fn roc_main() -> RocStr;
-    // }
-
-    Ok(())
+/// Floats don't get eq, hash, or ord
+pub struct Deriving {
+    no_floats: bool,
+    copy: bool,
+    default: bool,
 }
 
-// pub fn declare_roc_type(roc_type: RocType, uid: &mut u32, buf: &mut String) {
-// }
+impl Default for Deriving {
+    fn default() -> Self {
+        Self {
+            no_floats: true,
+            copy: true,
+            default: true,
+        }
+    }
+}
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
@@ -41,6 +46,7 @@ pub struct Env<'a> {
     pub interns: &'a Interns,
     pub struct_names: Structs,
     pub enum_names: Enums,
+    pub deriving: Deriving,
 }
 
 pub fn write_layout_type<'a>(
@@ -78,15 +84,25 @@ pub fn write_layout_type<'a>(
                 I64 => buf.write_str("i64"),
                 I128 => buf.write_str("i128"),
             },
-            Builtin::Float(width) => match width {
-                F32 => buf.write_str("f32"),
-                F64 => buf.write_str("f64"),
-                F128 => buf.write_str("f128"),
-            },
+            Builtin::Float(width) => {
+                env.deriving.no_floats = false;
+
+                match width {
+                    F32 => buf.write_str("f32"),
+                    F64 => buf.write_str("f64"),
+                    F128 => buf.write_str("f128"),
+                }
+            }
             Builtin::Bool => buf.write_str("bool"),
             Builtin::Decimal => buf.write_str("RocDec"),
-            Builtin::Str => buf.write_str("RocStr"),
+            Builtin::Str => {
+                env.deriving.copy = false;
+
+                buf.write_str("RocStr")
+            }
             Builtin::Dict(key_layout, val_layout) => {
+                env.deriving.copy = false;
+
                 buf.write_str("RocDict<")?;
                 write_layout_type(env, *key_layout, var, buf)?;
                 buf.write_str(", ")?;
@@ -94,11 +110,15 @@ pub fn write_layout_type<'a>(
                 buf.write_char('>')
             }
             Builtin::Set(elem_type) => {
+                env.deriving.copy = false;
+
                 buf.write_str("RocSet<")?;
                 write_layout_type(env, *elem_type, var, buf)?;
                 buf.write_char('>')
             }
             Builtin::List(elem_type) => {
+                env.deriving.copy = false;
+
                 buf.write_str("RocList<")?;
                 write_layout_type(env, *elem_type, var, buf)?;
                 buf.write_char('>')
@@ -106,53 +126,45 @@ pub fn write_layout_type<'a>(
         },
         Layout::Struct { .. } => {
             match content {
-                Content::FlexVar(_) => todo!(),
-                Content::RigidVar(_) => todo!(),
-                Content::FlexAbleVar(_, _) => todo!(),
-                Content::RigidAbleVar(_, _) => todo!(),
-                Content::RecursionVar { .. } => todo!(),
+                Content::FlexVar(_)
+                | Content::RigidVar(_)
+                | Content::FlexAbleVar(_, _)
+                | Content::RigidAbleVar(_, _)
+                | Content::RecursionVar { .. } => {
+                    todo!("TODO give a nice error message for a non-concrete type being passed to the host")
+                }
                 Content::Structure(FlatType::Record(fields, ext)) => {
                     write_struct(env, opt_name, fields, var, *ext, subs, buf)
                 }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
+                    env.deriving.default = false;
+
                     debug_assert_eq!(tags.len(), 1);
                     todo!()
 
                     // let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
                     // single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, payload_vars)
                 }
+
+                Content::Structure(FlatType::Apply(_, _)) => {
+                    todo!()
+                }
+                Content::Structure(FlatType::Func(_, _, _)) => {
+                    todo!()
+                }
+                Content::Structure(FlatType::FunctionOrTagUnion(_, _, _)) => {
+                    todo!()
+                }
+                Content::Structure(FlatType::RecursiveTagUnion(_, _, _)) => {
+                    todo!()
+                }
+                Content::Structure(FlatType::Erroneous(_)) => todo!(),
+                Content::Structure(FlatType::EmptyRecord) => todo!(),
+                Content::Structure(FlatType::EmptyTagUnion) => todo!(),
                 Content::Alias(_, _, _, _) => todo!(),
                 Content::RangedNumber(_, _) => todo!(),
                 Content::Error => todo!(),
-                _ => {
-                    todo!()
-                }
             }
-
-            // (_, Layout::Struct{field_layouts, ..}) => match raw_content {
-            //     Content::Structure(FlatType::Record(fields, _)) => {
-            //         struct_to_ast(env, mem, addr, *fields)
-            //     }
-            //     Content::Structure(FlatType::TagUnion(tags, _)) => {
-            //         debug_assert_eq!(tags.len(), 1);
-
-            //         let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
-            //         single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, payload_vars)
-            //     }
-            //     Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
-            //         let tag_name = &env.subs[*tag_name];
-            //         single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, &[])
-            //     }
-            //     Content::Structure(FlatType::EmptyRecord) => {
-            //         struct_to_ast(env, mem, addr, RecordFields::empty())
-            //     }
-            //     other => {
-            //         unreachable!(
-            //             "Something had a Struct layout, but instead of a Record type, it had: {:?}",
-            //             other
-            //         );
-            //     }
-            // },
         }
         Layout::Boxed(_) => todo!("support Box in host bindgen"),
         Layout::Union(_) => todo!("support tag unions in host bindgen"),
@@ -196,7 +208,8 @@ fn write_struct<'a>(
         size2.cmp(&size1).then(label1.cmp(label2))
     });
 
-    buf.write_str("struct ")?;
+    write_deriving(&env.deriving, buf)?;
+    buf.write_str("#[repr(C)]\npub struct ")?;
 
     match opt_name {
         Some(sym) => buf.write_str(sym.as_str(env.interns))?,
@@ -214,4 +227,22 @@ fn write_struct<'a>(
     }
 
     buf.write_str("}\n")
+}
+
+fn write_deriving<'a>(deriving: &Deriving, buf: &mut String) -> fmt::Result {
+    buf.write_str("#[derive(Clone, PartialEq, PartialOrd, ")?;
+
+    if deriving.copy {
+        buf.write_str("Copy, ")?;
+    }
+
+    if deriving.default {
+        buf.write_str("Default, ")?;
+    }
+
+    if deriving.no_floats {
+        buf.write_str("Eq, Ord, Hash, ")?;
+    }
+
+    buf.write_str("Debug)]\n")
 }
