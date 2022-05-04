@@ -1771,7 +1771,7 @@ pub struct InstantiateRigids {
     pub new_infer_variables: Vec<Variable>,
 }
 
-fn instantiate_rigids(
+pub fn instantiate_rigids(
     annotation: &Type,
     introduced_vars: &IntroducedVariables,
     loc_pattern: &Loc<Pattern>,

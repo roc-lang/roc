@@ -1,3 +1,7 @@
+use crate::expr::{
+    constrain_def_make_constraint, constrain_def_pattern, instantiate_rigids, Env,
+    InstantiateRigids,
+};
 use roc_builtins::std::StdLib;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
@@ -171,38 +175,53 @@ pub fn frontload_ability_constraints(
     constraints: &mut Constraints,
     abilities_store: &AbilitiesStore,
     mut constraint: Constraint,
+    home: ModuleId,
 ) -> Constraint {
     for (member_name, member_data) in abilities_store.root_ability_members().iter() {
-        // 1. Attach the type of member signature to the reserved signature_var. This is
-        //    infallible.
-        let unify_with_signature_var = constraints.equal_types_var(
-            member_data.signature_var,
-            Expected::NoExpectation(member_data.signature.clone()),
-            Category::Storage(std::file!(), std::column!()),
-            Region::zero(),
+        let rigids = Default::default();
+        let env = Env { home, rigids };
+        let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(*member_name));
+
+        let mut def_pattern_state = constrain_def_pattern(
+            constraints,
+            &env,
+            &pattern,
+            Type::Variable(member_data.signature_var),
         );
 
-        // 2. Store the member signature on the member symbol. This makes sure we generalize it on
-        //    the toplevel, as appropriate.
-        let vars = &member_data.variables;
-        let rigids = (vars.rigid_vars.iter())
-            // For our purposes, in the let constraint, able vars are treated like rigids.
-            .chain(vars.able_vars.iter())
-            .copied();
-        let flex = vars.flex_vars.iter().copied();
+        def_pattern_state.vars.push(member_data.signature_var);
 
-        let let_constr = constraints.let_constraint(
-            rigids,
-            flex,
-            [(
-                *member_name,
-                Loc::at_zero(Type::Variable(member_data.signature_var)),
-            )],
+        let mut ftv = env.rigids;
+
+        let InstantiateRigids {
+            signature,
+            new_rigid_variables,
+            new_infer_variables,
+        } = instantiate_rigids(
+            &member_data.signature,
+            &member_data.introduced_variables,
+            &pattern,
+            &mut ftv,
+            &mut def_pattern_state.headers,
+        );
+
+        def_pattern_state
+            .constraints
+            .push(constraints.equal_types_var(
+                member_data.signature_var,
+                Expected::NoExpectation(signature.clone()),
+                Category::Storage(file!(), line!()),
+                Region::zero(),
+            ));
+
+        constraint = constrain_def_make_constraint(
+            constraints,
+            new_rigid_variables,
+            new_infer_variables,
             Constraint::True,
             constraint,
+            def_pattern_state,
         );
-
-        constraint = constraints.and_constraint([unify_with_signature_var, let_constr]);
     }
     constraint
 }
