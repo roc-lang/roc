@@ -49,7 +49,7 @@ pub enum Type2 {
 
 #[test]
 fn type2_size() {
-    assert_eq!(std::mem::size_of::<Type2>(), 32); // 24B + pad
+    assert_eq!(std::mem::size_of::<Type2>(), 28); // 24B + pad
 }
 
 #[derive(Debug)]
