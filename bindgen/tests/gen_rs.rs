@@ -29,14 +29,14 @@ fn run_load_and_typecheck(
     let arena = &Bump::new();
 
     assert!(
-        src.starts_with("app \"") || src.starts_with("platform \""),
-        "This test needs a platform or application module, not an expr"
+        src.starts_with("platform \""),
+        "This test needs a platform module, not an expr"
     );
 
     let subs_by_module = Default::default();
     let loaded = {
         let dir = tempdir()?;
-        let filename = PathBuf::from("Test.roc");
+        let filename = PathBuf::from("Package-Config.roc");
         let file_path = dir.path().join(filename);
         let full_file_path = file_path.clone();
         let mut file = File::create(file_path).unwrap();
@@ -58,7 +58,22 @@ fn run_load_and_typecheck(
     Ok(loaded.expect("had problems loading"))
 }
 
-pub fn generate_bindings(src: &str, target_info: TargetInfo) -> String {
+pub fn generate_bindings(decl_src: &str, target_info: TargetInfo) -> String {
+    let mut src = indoc!(
+        r#"
+            platform "main"
+                requires {} { nothing : {} }
+                exposes []
+                packages {}
+                imports []
+                provides [ main ]
+
+        "#
+    )
+    .to_string();
+
+    src.push_str(decl_src);
+
     let LoadedModule {
         module_id: home,
         mut can_problems,
@@ -67,7 +82,7 @@ pub fn generate_bindings(src: &str, target_info: TargetInfo) -> String {
         mut solved,
         interns,
         ..
-    } = run_load_and_typecheck(src, target_info).expect("Something went wrong with IO");
+    } = run_load_and_typecheck(src.as_str(), target_info).expect("Something went wrong with IO");
 
     let decls = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();
@@ -147,8 +162,6 @@ pub fn generate_bindings(src: &str, target_info: TargetInfo) -> String {
 fn record_aliased() {
     let module = indoc!(
         r#"
-            app "main" provides [ main ] to "./platform"
-
             MyRcd : { a : U64, b : U128 }
 
             main : MyRcd
@@ -177,8 +190,6 @@ fn record_aliased() {
 fn nested_record_aliased() {
     let module = indoc!(
         r#"
-            app "main" provides [ main ] to "./platform"
-
             Outer : { x : Inner, y : Str, z : List U8 }
 
             Inner : { a : U16, b : F32 }
@@ -215,14 +226,7 @@ fn nested_record_aliased() {
 
 #[test]
 fn record_anonymous() {
-    let module = indoc!(
-        r#"
-            app "main" provides [ main ] to "./platform"
-
-            main = { a: 1u64, b: 2u128 }
-        "#
-    );
-
+    let module = "main = { a: 1u64, b: 2u128 }";
     let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
 
     assert_eq!(
@@ -242,14 +246,7 @@ fn record_anonymous() {
 
 #[test]
 fn nested_record_anonymous() {
-    let module = indoc!(
-        r#"
-            app "main" provides [ main ] to "./platform"
-
-            main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }
-        "#
-    );
-
+    let module = r#"main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }"#;
     let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
 
     assert_eq!(
@@ -279,8 +276,6 @@ fn nested_record_anonymous() {
 fn tag_union_aliased() {
     let module = indoc!(
         r#"
-            app "main" provides [ main ] to "./platform"
-
             MyTagUnion : [ Foo U64, Bar U128 ]
 
             main : MyTagUnion
