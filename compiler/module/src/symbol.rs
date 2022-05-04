@@ -736,7 +736,8 @@ macro_rules! define_builtins {
                 let mut exposed_idents_by_module = VecMap::with_capacity(extra_capacity + $total);
 
                 $(
-                    debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), r"Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
+                    let module_id = ModuleId::$module_const;
+                    debug_assert!(!exposed_idents_by_module.contains_key(&module_id), r"Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
 
                     let ident_ids = {
                         const TOTAL : usize = [ $($ident_name),+ ].len();
@@ -780,8 +781,6 @@ macro_rules! define_builtins {
                     };
 
                     if cfg!(debug_assertions) {
-                        let module_id = ModuleId($module_id);
-
                         let name = PQModuleName::Unqualified($module_name.into());
                         PackageModuleIds::insert_debug_name(module_id, &name);
                         module_id.register_debug_idents(&ident_ids);
@@ -789,7 +788,7 @@ macro_rules! define_builtins {
 
 
                     exposed_idents_by_module.insert(
-                        ModuleId($module_id),
+                        module_id,
                         ident_ids
                     );
                 )+
@@ -833,7 +832,7 @@ macro_rules! define_builtins {
                 };
 
                 $(
-                    insert_both(ModuleId($module_id), $module_name);
+                    insert_both(ModuleId::$module_const, $module_name);
                 )+
 
                 ModuleIds { by_name, by_id }
@@ -861,7 +860,7 @@ macro_rules! define_builtins {
                 };
 
                 $(
-                    insert_both(ModuleId($module_id), $module_name);
+                    insert_both(ModuleId::$module_const, $module_name);
                 )+
 
                 PackageModuleIds { by_name, by_id }
@@ -871,7 +870,7 @@ macro_rules! define_builtins {
         impl Symbol {
             $(
                 $(
-                    pub const $ident_const: Symbol = Symbol::new(ModuleId($module_id), IdentId($ident_id));
+                    pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
                 )+
             )+
 
@@ -892,7 +891,7 @@ macro_rules! define_builtins {
                             let $imported = true;
 
                             if $imported {
-                                scope.insert($ident_name.into(), (Symbol::new(ModuleId($module_id), IdentId($ident_id)), Region::zero()));
+                                scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
                             }
                         )?
                     )+
