@@ -39,7 +39,7 @@ fn main() {
     fs::copy(&zig_libc_path, &out_file).unwrap();
 
     // Generate some Rust code to indicate where the file is
-    let generated_rust = format!("pub const WASI_LIBC_PATH: &str =\n\t\"{}\";\n", out_file);
+    let generated_rust = format!("pub const WASI_LIBC_PATH: &str =\n    \"{}\";\n", out_file);
     fs::write("src/generated.rs", generated_rust).unwrap();
 }
 
