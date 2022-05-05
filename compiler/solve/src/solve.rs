@@ -440,7 +440,7 @@ impl Env {
 const DEFAULT_POOLS: usize = 8;
 
 #[derive(Clone, Debug)]
-pub struct Pools(Vec<Vec<Variable>>);
+struct Pools(Vec<Vec<Variable>>);
 
 impl Default for Pools {
     fn default() -> Self {
@@ -455,10 +455,6 @@ impl Pools {
 
     pub fn len(&self) -> usize {
         self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     pub fn get_mut(&mut self, rank: Rank) -> &mut Vec<Variable> {
@@ -2872,7 +2868,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     }
 }
 
-pub fn deep_copy_var_in(
+fn deep_copy_var_in(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
