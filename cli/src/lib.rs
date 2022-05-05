@@ -669,15 +669,15 @@ impl std::fmt::Display for Target {
 }
 
 impl std::str::FromStr for Target {
-    type Err = ();
+    type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
+    fn from_str(string: &str) -> Result<Self, Self::Err> {
+        match string {
             "system" => Ok(Target::System),
             "linux32" => Ok(Target::Linux32),
             "linux64" => Ok(Target::Linux64),
             "wasm32" => Ok(Target::Wasm32),
-            _ => Err(()),
+            _ => Err(format!("Roc does not know how to compile to {}", string)),
         }
     }
 }

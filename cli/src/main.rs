@@ -67,14 +67,7 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_BUILD, matches)) => {
-            use std::str::FromStr;
-
-            let target = match matches.value_of(FLAG_TARGET) {
-                Some(name) => Target::from_str(name).unwrap(),
-                None => Target::default(),
-            };
-
-            let triple = target.to_triple();
+            let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
 
             let link_type = match (
                 matches.is_present(FLAG_LIB),
@@ -86,7 +79,12 @@ fn main() -> io::Result<()> {
                 (false, false) => LinkType::Executable,
             };
 
-            Ok(build(matches, BuildConfig::BuildOnly, triple, link_type)?)
+            Ok(build(
+                matches,
+                BuildConfig::BuildOnly,
+                target.to_triple(),
+                link_type,
+            )?)
         }
         Some((CMD_CHECK, matches)) => {
             let arena = bumpalo::Bump::new();
