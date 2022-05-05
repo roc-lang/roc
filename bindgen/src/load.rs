@@ -14,7 +14,10 @@ use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
 
 pub fn load_types(full_file_path: PathBuf, dir: &Path) -> Result<Types, io::Error> {
+    // TODO: generate both 32-bit and 64-bit #[cfg] macros if structs are different
+    // depending on 32-bit vs 64-bit targets.
     let target_info = (&Triple::host()).into();
+
     let arena = &Bump::new();
     let subs_by_module = Default::default();
     let LoadedModule {

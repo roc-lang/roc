@@ -4,62 +4,15 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 
-use bumpalo::Bump;
-use roc_bindgen::bindgen::{self, Env};
 use roc_bindgen::bindgen_rs;
-use roc_bindgen::types::Types;
-use roc_can::{
-    def::{Declaration, Def},
-    pattern::Pattern,
-};
-use roc_load::{LoadedModule, Threading};
-use roc_mono::layout::LayoutCache;
-use roc_reporting::report::RenderTarget;
-use roc_target::TargetInfo;
+use roc_bindgen::load::load_types;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
-fn run_load_and_typecheck(
-    src: &str,
-    target_info: TargetInfo,
-) -> Result<LoadedModule, std::io::Error> {
+fn generate_bindings(decl_src: &str) -> String {
     use tempfile::tempdir;
 
-    let arena = &Bump::new();
-
-    assert!(
-        src.starts_with("platform \""),
-        "This test needs a platform module, not an expr"
-    );
-
-    let subs_by_module = Default::default();
-    let loaded = {
-        let dir = tempdir()?;
-        let filename = PathBuf::from("Package-Config.roc");
-        let file_path = dir.path().join(filename);
-        let full_file_path = file_path.clone();
-        let mut file = File::create(file_path).unwrap();
-        writeln!(file, "{}", &src).unwrap();
-        let result = roc_load::load_and_typecheck(
-            arena,
-            full_file_path,
-            dir.path(),
-            subs_by_module,
-            target_info,
-            RenderTarget::Generic,
-            Threading::Single,
-        );
-
-        dir.close()?;
-
-        result
-    };
-
-    Ok(loaded.expect("had problems loading"))
-}
-
-fn generate_bindings(decl_src: &str, target_info: TargetInfo) -> String {
     let mut src = indoc!(
         r#"
             platform "main"
@@ -75,84 +28,29 @@ fn generate_bindings(decl_src: &str, target_info: TargetInfo) -> String {
 
     src.push_str(decl_src);
 
-    let LoadedModule {
-        module_id: home,
-        mut can_problems,
-        mut type_problems,
-        mut declarations_by_id,
-        mut solved,
-        interns,
-        ..
-    } = run_load_and_typecheck(src.as_str(), target_info).expect("Something went wrong with IO");
+    assert!(
+        src.starts_with("platform \""),
+        "This test needs a platform module, not an expr"
+    );
 
-    let decls = declarations_by_id.remove(&home).unwrap();
-    let subs = solved.inner_mut();
+    let types = {
+        let dir = tempdir().expect("Unable to create tempdir");
+        let filename = PathBuf::from("Package-Config.roc");
+        let file_path = dir.path().join(filename);
+        let full_file_path = file_path.clone();
+        let mut file = File::create(file_path).unwrap();
+        writeln!(file, "{}", &src).unwrap();
 
-    let can_problems = can_problems.remove(&home).unwrap_or_default();
-    let type_problems = type_problems.remove(&home).unwrap_or_default();
+        let result = load_types(full_file_path, dir.path());
 
-    if !can_problems.is_empty() || !type_problems.is_empty() {
-        assert!(
-            false,
-            "There were problems: {:?}, {:?}",
-            can_problems, type_problems
-        );
-    }
+        dir.close().expect("Unable to close tempdir");
 
-    let arena = Bump::new();
-    let mut layout_cache = LayoutCache::new(target_info);
-    let mut env = Env {
-        arena: &arena,
-        layout_cache: &mut layout_cache,
-        interns: &interns,
-        struct_names: Default::default(),
-        enum_names: Default::default(),
-        subs,
+        result.expect("had problems loading")
     };
 
-    let types = &mut Types::default();
-
-    for decl in decls.into_iter() {
-        let defs = match decl {
-            Declaration::Declare(def) => {
-                vec![def]
-            }
-            Declaration::DeclareRec(defs) => defs,
-            Declaration::Builtin(..) => {
-                unreachable!("Builtin decl in userspace module?")
-            }
-            Declaration::InvalidCycle(..) => {
-                vec![]
-            }
-        };
-
-        for Def {
-            loc_pattern,
-            pattern_vars,
-            ..
-        } in defs.into_iter()
-        {
-            match loc_pattern.value {
-                Pattern::Identifier(sym) => {
-                    let var = pattern_vars
-                        .get(&sym)
-                        .expect("Indetifier known but it has no var?");
-                    let layout = env
-                        .layout_cache
-                        .from_var(&arena, *var, &subs)
-                        .expect("Something weird ended up in the content");
-
-                    bindgen::add_type(&mut env, layout, *var, types);
-                }
-                _ => {
-                    // figure out if we need to export non-identifier defs - when would that
-                    // happen?
-                }
-            }
-        }
-    }
-
-    let mut buf = String::new();
+    // Reuse the `src` allocation since we're done with it.
+    let mut buf = src;
+    buf.clear();
 
     bindgen_rs::write_types(&types, &mut buf).expect("I/O error when writing bindgen string");
 
@@ -170,7 +68,7 @@ fn record_aliased() {
         "#
     );
 
-    let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
+    let bindings_rust = generate_bindings(module);
 
     assert_eq!(
         bindings_rust.strip_prefix("\n").unwrap(),
@@ -200,7 +98,7 @@ fn nested_record_aliased() {
         "#
     );
 
-    let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
+    let bindings_rust = generate_bindings(module);
 
     assert_eq!(
         bindings_rust.strip_prefix("\n").unwrap(),
@@ -228,7 +126,7 @@ fn nested_record_aliased() {
 #[test]
 fn record_anonymous() {
     let module = "main = { a: 1u64, b: 2u128 }";
-    let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
+    let bindings_rust = generate_bindings(module);
 
     assert_eq!(
         bindings_rust.strip_prefix("\n").unwrap(),
@@ -248,7 +146,7 @@ fn record_anonymous() {
 #[test]
 fn nested_record_anonymous() {
     let module = r#"main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }"#;
-    let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
+    let bindings_rust = generate_bindings(module);
 
     assert_eq!(
         bindings_rust.strip_prefix("\n").unwrap(),
@@ -285,7 +183,7 @@ fn tag_union_aliased() {
         "#
     );
 
-    let bindings_rust = generate_bindings(module, TargetInfo::default_x86_64());
+    let bindings_rust = generate_bindings(module);
 
     assert_eq!(
         bindings_rust.strip_prefix("\n").unwrap(),
