@@ -14,6 +14,7 @@ pub use roc_load_internal::file::{
     LoadResult, LoadStart, LoadedModule, LoadingProblem, MonomorphizedModule, Phase,
 };
 
+#[allow(clippy::too_many_arguments)]
 fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
@@ -63,6 +64,7 @@ pub fn load_single_threaded<'a>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn load_and_monomorphize_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
