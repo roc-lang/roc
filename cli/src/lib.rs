@@ -40,7 +40,6 @@ pub const FLAG_LIB: &str = "lib";
 pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
-pub const FLAG_LINK: &str = "roc-linker";
 pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const FLAG_VALGRIND: &str = "valgrind";
@@ -53,34 +52,63 @@ pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 const VERSION: &str = include_str!("../../version.txt");
 
 pub fn build_app<'a>() -> Command<'a> {
+    let flag_optimize = Arg::new(FLAG_OPTIMIZE)
+        .long(FLAG_OPTIMIZE)
+        .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+        .requires(ROC_FILE)
+        .required(false);
+
+    let flag_opt_size = Arg::new(FLAG_OPT_SIZE)
+        .long(FLAG_OPT_SIZE)
+        .help("Optimize the compiled program to have a small binary size. (Optimization takes time to complete.)")
+        .required(false);
+
+    let flag_dev = Arg::new(FLAG_DEV)
+        .long(FLAG_DEV)
+        .help("Make compilation finish as soon as possible, at the expense of runtime performance.")
+        .required(false);
+
+    let flag_debug = Arg::new(FLAG_DEBUG)
+        .long(FLAG_DEBUG)
+        .help("Store LLVM debug information in the generated program.")
+        .requires(ROC_FILE)
+        .required(false);
+
+    let flag_valgrind = Arg::new(FLAG_VALGRIND)
+        .long(FLAG_VALGRIND)
+        .help("Some assembly instructions are not supported by valgrind, this flag prevents those from being output when building the host.")
+        .required(false);
+
+    let flag_time = Arg::new(FLAG_TIME)
+        .long(FLAG_TIME)
+        .help("Prints detailed compilation time information.")
+        .required(false);
+
+    let flag_linker = Arg::new(FLAG_LINKER)
+        .long(FLAG_LINKER)
+        .help("Sets which linker to use. The surgical linker is enabled by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+        .possible_values(["surgical", "legacy"])
+        .required(false);
+
+    let flag_precompiled = Arg::new(FLAG_PRECOMPILED)
+        .long(FLAG_PRECOMPILED)
+        .help("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using `roc build` with a --target other than `--target host`)")
+        .possible_values(["true", "false"])
+        .required(false);
+
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
         .about("Runs the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
-            .arg(
-                Arg::new(ROC_FILE)
-                    .help("The .roc file to build")
-                    .required(true),
-            )
-            .arg(
-                Arg::new(FLAG_OPTIMIZE)
-                    .long(FLAG_OPTIMIZE)
-                    .help("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
-                    .required(false),
-            )
-            .arg(
-                Arg::new(FLAG_OPT_SIZE)
-                    .long(FLAG_OPT_SIZE)
-                    .help("Optimize your compiled Roc program to have a small binary size. (Optimization takes time to complete.)")
-                    .required(false),
-            )
-            .arg(
-                Arg::new(FLAG_DEV)
-                    .long(FLAG_DEV)
-                    .help("Make compilation as fast as possible. (Runtime performance may suffer)")
-                    .required(false),
-            )
+            .arg(flag_optimize.clone())
+            .arg(flag_opt_size.clone())
+            .arg(flag_dev.clone())
+            .arg(flag_debug.clone())
+            .arg(flag_time.clone())
+            .arg(flag_linker.clone())
+            .arg(flag_precompiled.clone())
+            .arg(flag_valgrind.clone())
             .arg(
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
@@ -102,42 +130,9 @@ pub fn build_app<'a>() -> Command<'a> {
                     .required(false),
             )
             .arg(
-                Arg::new(FLAG_DEBUG)
-                    .long(FLAG_DEBUG)
-                    .help("Store LLVM debug information in the generated program")
-                    .required(false),
-            )
-            .arg(
-                Arg::new(FLAG_TIME)
-                    .long(FLAG_TIME)
-                    .help("Prints detailed compilation time information.")
-                    .required(false),
-            )
-            .arg(
-                Arg::new(FLAG_LINK)
-                    .long(FLAG_LINK)
-                    .help("Deprecated in favor of --linker")
-                    .required(false),
-            )
-            .arg(
-                Arg::new(FLAG_LINKER)
-                    .long(FLAG_LINKER)
-                    .help("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
-                    .possible_values(["surgical", "legacy"])
-                    .required(false),
-            )
-            .arg(
-                Arg::new(FLAG_PRECOMPILED)
-                    .long(FLAG_PRECOMPILED)
-                    .help("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using a --target other than `--target host`)")
-                    .possible_values(["true", "false"])
-                    .required(false),
-            )
-            .arg(
-                Arg::new(FLAG_VALGRIND)
-                    .long(FLAG_VALGRIND)
-                    .help("Some assembly instructions are not supported by valgrind, this flag prevents those from being output when building the host.")
-                    .required(false),
+                Arg::new(ROC_FILE)
+                    .help("The .roc file to build")
+                    .required(true),
             )
         )
         .subcommand(Command::new(CMD_REPL)
@@ -145,6 +140,14 @@ pub fn build_app<'a>() -> Command<'a> {
         )
         .subcommand(Command::new(CMD_RUN)
             .about("Run a .roc file even if it has build errors")
+            .arg(flag_optimize.clone())
+            .arg(flag_opt_size.clone())
+            .arg(flag_dev.clone())
+            .arg(flag_debug.clone())
+            .arg(flag_time.clone())
+            .arg(flag_linker.clone())
+            .arg(flag_precompiled.clone())
+            .arg(flag_valgrind.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file of an app to run")
@@ -170,12 +173,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
         .subcommand(Command::new(CMD_CHECK)
             .about("Check the code for problems, but doesn’t build or run it")
-            .arg(
-                Arg::new(FLAG_TIME)
-                    .long(FLAG_TIME)
-                    .help("Prints detailed compilation time information.")
-                    .required(false),
-            )
+            .arg(flag_time.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file of an app to check")
@@ -194,58 +192,14 @@ pub fn build_app<'a>() -> Command<'a> {
                 )
         )
         .trailing_var_arg(true)
-        .arg(
-            Arg::new(FLAG_OPTIMIZE)
-                .long(FLAG_OPTIMIZE)
-                .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
-                .requires(ROC_FILE)
-                .required(false),
-        )
-        .arg(
-            Arg::new(FLAG_OPT_SIZE)
-                .long(FLAG_OPT_SIZE)
-                .help("Optimize the compiled program to have a small binary size. (Optimization takes time to complete.)")
-                .required(false),
-        )
-        .arg(
-            Arg::new(FLAG_DEV)
-                .long(FLAG_DEV)
-                .help("Make compilation finish as soon as possible, at the expense of runtime performance.")
-                .required(false),
-        )
-        .arg(
-            Arg::new(FLAG_DEBUG)
-                .long(FLAG_DEBUG)
-                .help("Store LLVM debug information in the generated program.")
-                .requires(ROC_FILE)
-                .required(false),
-        )
-        .arg(
-            Arg::new(FLAG_TIME)
-                .long(FLAG_TIME)
-                .help("Prints detailed compilation time information.")
-                    .required(false),
-        )
-        .arg(
-            Arg::new(FLAG_LINK)
-                .long(FLAG_LINK)
-                .help("Deprecated in favor of --linker")
-                .required(false),
-        )
-        .arg(
-            Arg::new(FLAG_LINKER)
-                .long(FLAG_LINKER)
-                .help("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
-                .possible_values(["surgical", "legacy"])
-                .required(false),
-        )
-        .arg(
-            Arg::new(FLAG_PRECOMPILED)
-                .long(FLAG_PRECOMPILED)
-                .help("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using `roc build` with a --target other than `--target host`)")
-                .possible_values(["true", "false"])
-                .required(false),
-        )
+        .arg(flag_optimize)
+        .arg(flag_opt_size)
+        .arg(flag_dev)
+        .arg(flag_debug)
+        .arg(flag_time)
+        .arg(flag_linker)
+        .arg(flag_precompiled)
+        .arg(flag_valgrind)
         .arg(
             Arg::new(ROC_FILE)
                 .help("The .roc file of an app to build and run")
@@ -291,17 +245,14 @@ pub enum FormatMode {
     CheckOnly,
 }
 
-pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
+pub fn build(
+    matches: &ArgMatches,
+    config: BuildConfig,
+    triple: Triple,
+    link_type: LinkType,
+) -> io::Result<i32> {
     use build::build_file;
-    use std::str::FromStr;
     use BuildConfig::*;
-
-    let target = match matches.value_of(FLAG_TARGET) {
-        Some(name) => Target::from_str(name).unwrap(),
-        None => Target::default(),
-    };
-
-    let triple = target.to_triple();
 
     let arena = Bump::new();
     let filename = matches.value_of(ROC_FILE).unwrap();
@@ -321,22 +272,6 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
 
-    let link_type = match (
-        matches.is_present(FLAG_LIB),
-        matches.is_present(FLAG_NO_LINK),
-    ) {
-        (true, false) => LinkType::Dylib,
-        (true, true) => user_error!("build can only be one of `--lib` or `--no-link`"),
-        (false, true) => LinkType::None,
-        (false, false) => LinkType::Executable,
-    };
-
-    // TODO remove FLAG_LINK from the code base anytime after the end of May 2022
-    if matches.is_present(FLAG_LINK) {
-        eprintln!("ERROR: The --roc-linker flag has been deprecated because the roc linker is now used automatically where it's supported. (Currently that's only x64 Linux.) No need to use --roc-linker anymore, but you can use the --linker flag to switch linkers.");
-        process::exit(1);
-    }
-
     // Use surgical linking when supported, or when explicitly requested with --linker surgical
     let surgically_link = if matches.is_present(FLAG_LINKER) {
         matches.value_of(FLAG_LINKER) == Some("surgical")
@@ -349,7 +284,7 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
     } else {
         // When compiling for a different target, default to assuming a precompiled host.
         // Otherwise compilation would most likely fail!
-        target != Target::System
+        triple != Triple::host()
     };
     let path = Path::new(filename);
 
@@ -658,7 +593,7 @@ fn run_with_wasmer(_wasm_path: &std::path::Path, _args: &[String]) {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum Target {
+pub enum Target {
     System,
     Linux32,
     Linux64,
@@ -691,7 +626,7 @@ impl Target {
         Target::Wasm32.as_str(),
     ];
 
-    fn to_triple(self) -> Triple {
+    pub fn to_triple(self) -> Triple {
         use Target::*;
 
         match self {
@@ -734,15 +669,15 @@ impl std::fmt::Display for Target {
 }
 
 impl std::str::FromStr for Target {
-    type Err = ();
+    type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
+    fn from_str(string: &str) -> Result<Self, Self::Err> {
+        match string {
             "system" => Ok(Target::System),
             "linux32" => Ok(Target::Linux32),
             "linux64" => Ok(Target::Linux64),
             "wasm32" => Ok(Target::Wasm32),
-            _ => Err(()),
+            _ => Err(format!("Roc does not know how to compile to {}", string)),
         }
     }
 }
