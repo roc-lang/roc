@@ -3044,25 +3044,9 @@ fn specialize_naked_symbol<'a>(
         }
     }
 
-    let mut symbol = symbol;
     let result = match hole {
         Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
-        _ => {
-            use roc_can::expr::Expr;
-            if let ReuseSymbol::Value(_symbol) = can_reuse_symbol(env, procs, &Expr::Var(symbol)) {
-                let real_symbol = possible_reuse_symbol_or_specialize(
-                    env,
-                    procs,
-                    layout_cache,
-                    &Expr::Var(symbol),
-                    variable,
-                );
-                symbol = real_symbol;
-                Stmt::Ret(real_symbol)
-            } else {
-                Stmt::Ret(symbol)
-            }
-        }
+        _ => Stmt::Ret(symbol),
     };
 
     // if the symbol is a function symbol, ensure it is properly specialized!
@@ -3395,7 +3379,16 @@ pub fn with_hole<'a>(
                 hole,
             )
         }
-        Var(symbol) => {
+        Var(mut symbol) => {
+            // If this symbol is a raw value, find the real name we gave to its specialized usage.
+            if let ReuseSymbol::Value(_symbol) =
+                can_reuse_symbol(env, procs, &roc_can::expr::Expr::Var(symbol))
+            {
+                let real_symbol =
+                    reuse_symbol_or_specialize(env, procs, layout_cache, symbol, variable);
+                symbol = real_symbol;
+            }
+
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
         Tag {
