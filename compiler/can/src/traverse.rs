@@ -1,11 +1,12 @@
 //! Traversals over the can ast.
 
+use roc_module::ident::Lowercase;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 
 use crate::{
     def::{Annotation, Declaration, Def},
-    expr::{ClosureData, Expr, WhenBranch},
+    expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
     pattern::Pattern,
 };
 
@@ -31,7 +32,7 @@ fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
         }
         Declaration::Builtin(def) => visitor.visit_def(def),
         Declaration::InvalidCycle(_cycles) => {
-            todo!()
+            // ignore
         }
     }
 }
@@ -71,13 +72,105 @@ fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr) {
         } => {
             walk_when(visitor, *cond_var, *expr_var, loc_cond, branches);
         }
-        Expr::Call(f, loc_args, _) => {
-            walk_call(visitor, f, loc_args);
+        Expr::Num(..) => { /* terminal */ }
+        Expr::Int(..) => { /* terminal */ }
+        Expr::Float(..) => { /* terminal */ }
+        Expr::Str(..) => { /* terminal */ }
+        Expr::SingleQuote(..) => { /* terminal */ }
+        Expr::List {
+            elem_var,
+            loc_elems,
+        } => {
+            walk_list(visitor, *elem_var, loc_elems);
         }
-        e => todo!("{:?}", e),
+        Expr::Var(..) => { /* terminal */ }
+        Expr::If {
+            cond_var,
+            branches,
+            branch_var,
+            final_else,
+        } => walk_if(visitor, *cond_var, branches, *branch_var, final_else),
+        Expr::LetRec(defs, body, body_var) => {
+            defs.iter().for_each(|def| visitor.visit_def(def));
+            visitor.visit_expr(&body.value, body.region, *body_var);
+        }
+        Expr::LetNonRec(def, body, body_var) => {
+            visitor.visit_def(def);
+            visitor.visit_expr(&body.value, body.region, *body_var);
+        }
+        Expr::Call(f, args, _called_via) => {
+            let (fn_var, loc_fn, _closure_var, _ret_var) = &**f;
+            walk_call(visitor, *fn_var, loc_fn, args);
+        }
+        Expr::RunLowLevel {
+            op: _,
+            args,
+            ret_var: _,
+        } => {
+            args.iter()
+                .for_each(|(v, e)| visitor.visit_expr(e, Region::zero(), *v));
+        }
+        Expr::ForeignCall {
+            foreign_symbol: _,
+            args,
+            ret_var: _,
+        } => {
+            args.iter()
+                .for_each(|(v, e)| visitor.visit_expr(e, Region::zero(), *v));
+        }
+        Expr::Record {
+            record_var: _,
+            fields,
+        } => {
+            walk_record_fields(visitor, fields.iter());
+        }
+        Expr::EmptyRecord => { /* terminal */ }
+        Expr::Access {
+            field_var,
+            loc_expr,
+            field: _,
+            record_var: _,
+            ext_var: _,
+        } => visitor.visit_expr(&loc_expr.value, loc_expr.region, *field_var),
+        Expr::Accessor(AccessorData { .. }) => { /* terminal */ }
+        Expr::Update {
+            record_var: _,
+            ext_var: _,
+            symbol: _,
+            updates,
+        } => {
+            walk_record_fields(visitor, updates.iter());
+        }
+        Expr::Tag {
+            variant_var: _,
+            ext_var: _,
+            name: _,
+            arguments,
+        } => arguments
+            .iter()
+            .for_each(|(v, le)| visitor.visit_expr(&le.value, le.region, *v)),
+        Expr::ZeroArgumentTag { .. } => { /* terminal */ }
+        Expr::OpaqueRef {
+            opaque_var: _,
+            name: _,
+            argument,
+            specialized_def_type: _,
+            type_arguments: _,
+            lambda_set_variables: _,
+        } => {
+            let (var, le) = &**argument;
+            visitor.visit_expr(&le.value, le.region, *var);
+        }
+        Expr::Expect(e1, e2) => {
+            // TODO: what type does an expect have?
+            visitor.visit_expr(&e1.value, e1.region, Variable::NULL);
+            visitor.visit_expr(&e2.value, e2.region, Variable::NULL);
+        }
+        Expr::RuntimeError(..) => { /* terminal */ }
     }
 }
 
+#[inline(always)]
 fn walk_closure<V: Visitor>(visitor: &mut V, clos: &ClosureData) {
     let ClosureData {
         arguments,
@@ -93,6 +186,7 @@ fn walk_closure<V: Visitor>(visitor: &mut V, clos: &ClosureData) {
     visitor.visit_expr(&loc_body.value, loc_body.region, *return_type);
 }
 
+#[inline(always)]
 fn walk_when<V: Visitor>(
     visitor: &mut V,
     cond_var: Variable,
@@ -107,6 +201,7 @@ fn walk_when<V: Visitor>(
         .for_each(|branch| walk_when_branch(visitor, branch, expr_var));
 }
 
+#[inline(always)]
 fn walk_when_branch<V: Visitor>(visitor: &mut V, branch: &WhenBranch, expr_var: Variable) {
     let WhenBranch {
         patterns,
@@ -124,23 +219,58 @@ fn walk_when_branch<V: Visitor>(visitor: &mut V, branch: &WhenBranch, expr_var: 
     }
 }
 
+#[inline(always)]
+fn walk_list<V: Visitor>(visitor: &mut V, elem_var: Variable, loc_elems: &[Loc<Expr>]) {
+    loc_elems
+        .iter()
+        .for_each(|le| visitor.visit_expr(&le.value, le.region, elem_var));
+}
+
+#[inline(always)]
+fn walk_if<V: Visitor>(
+    visitor: &mut V,
+    cond_var: Variable,
+    branches: &[(Loc<Expr>, Loc<Expr>)],
+    branch_var: Variable,
+    final_else: &Loc<Expr>,
+) {
+    branches.iter().for_each(|(cond, body)| {
+        visitor.visit_expr(&cond.value, cond.region, cond_var);
+        visitor.visit_expr(&body.value, body.region, branch_var);
+    });
+    visitor.visit_expr(&final_else.value, final_else.region, branch_var);
+}
+
+#[inline(always)]
 fn walk_call<V: Visitor>(
     visitor: &mut V,
-    f: &(Variable, Loc<Expr>, Variable, Variable),
-    loc_args: &[(Variable, Loc<Expr>)],
+    fn_var: Variable,
+    fn_expr: &Loc<Expr>,
+    args: &[(Variable, Loc<Expr>)],
 ) {
-    let (fn_var, loc_fn_expr, _lambda_set, _ret) = f;
-    visitor.visit_expr(&loc_fn_expr.value, loc_fn_expr.region, *fn_var);
-    loc_args
-        .iter()
-        .for_each(|(v, e)| visitor.visit_expr(&e.value, e.region, *v));
+    visitor.visit_expr(&fn_expr.value, fn_expr.region, fn_var);
+    args.iter()
+        .for_each(|(v, le)| visitor.visit_expr(&le.value, le.region, *v));
 }
 
-fn walk_pattern<V: Visitor>(_visitor: &mut V, _pat: &Pattern) {
-    todo!()
+#[inline(always)]
+fn walk_record_fields<'a, V: Visitor>(
+    visitor: &mut V,
+    fields: impl Iterator<Item = (&'a Lowercase, &'a Field)>,
+) {
+    fields.for_each(
+        |(
+            _name,
+            Field {
+                var,
+                loc_expr,
+                region: _,
+            },
+        )| { visitor.visit_expr(&loc_expr.value, loc_expr.region, *var) },
+    )
 }
 
-trait Visitor: Sized {
+trait Visitor: Sized + PatternVisitor {
     fn visit_decls(&mut self, decls: &[Declaration]) {
         walk_decls(self, decls);
     }
@@ -153,16 +283,22 @@ trait Visitor: Sized {
         walk_def(self, def);
     }
 
-    fn visit_pattern(&mut self, pat: &Pattern, _region: Region, _opt_var: Option<Variable>) {
-        walk_pattern(self, pat)
-    }
-
     fn visit_annotation(&mut self, _pat: &Annotation) {
-        // TODO
+        // ignore by default
     }
 
     fn visit_expr(&mut self, expr: &Expr, _region: Region, _var: Variable) {
         walk_expr(self, expr);
+    }
+}
+
+fn walk_pattern<V: PatternVisitor>(_visitor: &mut V, _pattern: &Pattern) {
+    // ignore for now
+}
+
+trait PatternVisitor: Sized {
+    fn visit_pattern(&mut self, pattern: &Pattern, _region: Region, _opt_var: Option<Variable>) {
+        walk_pattern(self, pattern);
     }
 }
 
@@ -171,6 +307,18 @@ struct TypeAtVisitor {
     typ: Option<Variable>,
 }
 
+impl PatternVisitor for TypeAtVisitor {
+    fn visit_pattern(&mut self, pat: &Pattern, region: Region, opt_var: Option<Variable>) {
+        if region == self.region {
+            debug_assert!(self.typ.is_none());
+            self.typ = opt_var;
+            return;
+        }
+        if region.contains(&self.region) {
+            walk_pattern(self, pat)
+        }
+    }
+}
 impl Visitor for TypeAtVisitor {
     fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
         if region == self.region {
@@ -180,17 +328,6 @@ impl Visitor for TypeAtVisitor {
         }
         if region.contains(&self.region) {
             walk_expr(self, expr);
-        }
-    }
-
-    fn visit_pattern(&mut self, pat: &Pattern, region: Region, opt_var: Option<Variable>) {
-        if region == self.region {
-            debug_assert!(self.typ.is_none());
-            self.typ = opt_var;
-            return;
-        }
-        if region.contains(&self.region) {
-            walk_pattern(self, pat)
         }
     }
 }
