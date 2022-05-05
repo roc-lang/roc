@@ -157,7 +157,8 @@ pub fn build_app<'a>() -> Command<'a> {
                 Arg::new(DIRECTORY_OR_FILES)
                     .index(1)
                     .multiple_values(true)
-                    .required(false))
+                    .required(false)
+                    .allow_invalid_utf8(true))
             .arg(
                 Arg::new(FLAG_CHECK)
                     .long(FLAG_CHECK)
