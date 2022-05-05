@@ -40,7 +40,6 @@ pub const FLAG_LIB: &str = "lib";
 pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
-pub const FLAG_LINK: &str = "roc-linker";
 pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PRECOMPILED: &str = "precompiled-host";
 pub const FLAG_VALGRIND: &str = "valgrind";
@@ -111,12 +110,6 @@ pub fn build_app<'a>() -> Command<'a> {
                 Arg::new(FLAG_TIME)
                     .long(FLAG_TIME)
                     .help("Prints detailed compilation time information.")
-                    .required(false),
-            )
-            .arg(
-                Arg::new(FLAG_LINK)
-                    .long(FLAG_LINK)
-                    .help("Deprecated in favor of --linker")
                     .required(false),
             )
             .arg(
@@ -227,12 +220,6 @@ pub fn build_app<'a>() -> Command<'a> {
                     .required(false),
         )
         .arg(
-            Arg::new(FLAG_LINK)
-                .long(FLAG_LINK)
-                .help("Deprecated in favor of --linker")
-                .required(false),
-        )
-        .arg(
             Arg::new(FLAG_LINKER)
                 .long(FLAG_LINKER)
                 .help("Sets which linker to use. The surgical linker is enabeld by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
@@ -330,12 +317,6 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
         (false, true) => LinkType::None,
         (false, false) => LinkType::Executable,
     };
-
-    // TODO remove FLAG_LINK from the code base anytime after the end of May 2022
-    if matches.is_present(FLAG_LINK) {
-        eprintln!("ERROR: The --roc-linker flag has been deprecated because the roc linker is now used automatically where it's supported. (Currently that's only x64 Linux.) No need to use --roc-linker anymore, but you can use the --linker flag to switch linkers.");
-        process::exit(1);
-    }
 
     // Use surgical linking when supported, or when explicitly requested with --linker surgical
     let surgically_link = if matches.is_present(FLAG_LINKER) {
