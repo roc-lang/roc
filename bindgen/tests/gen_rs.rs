@@ -28,11 +28,6 @@ fn generate_bindings(decl_src: &str) -> String {
 
     src.push_str(decl_src);
 
-    assert!(
-        src.starts_with("platform \""),
-        "This test needs a platform module, not an expr"
-    );
-
     let types = {
         let dir = tempdir().expect("Unable to create tempdir");
         let filename = PathBuf::from("Package-Config.roc");
