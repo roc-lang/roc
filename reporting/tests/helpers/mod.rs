@@ -35,7 +35,6 @@ pub fn infer_expr(
     abilities_store: &mut AbilitiesStore,
     expr_var: Variable,
 ) -> (Content, Subs) {
-    let env = solve::Env::default();
     let (solved, _) = solve::run(
         constraints,
         problems,
