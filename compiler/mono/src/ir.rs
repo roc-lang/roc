@@ -6810,22 +6810,6 @@ fn reuse_symbol_or_specialize<'a>(
     symbol: Symbol,
     var: Variable,
 ) -> Symbol {
-    // TODO: for some reason, we can't attempt to specialize the built-in argument symbols.
-    // Figure out why.
-    let arguments = [
-        Symbol::ARG_1,
-        Symbol::ARG_2,
-        Symbol::ARG_3,
-        Symbol::ARG_4,
-        Symbol::ARG_5,
-        Symbol::ARG_6,
-        Symbol::ARG_7,
-    ];
-
-    if arguments.contains(&symbol) {
-        return symbol;
-    }
-
     let wanted_layout = match layout_cache.from_var(env.arena, var, env.subs) {
         Ok(layout) => layout,
         // This can happen when the def symbol has a type error. In such cases just use the
