@@ -3267,6 +3267,7 @@ fn polymophic_expression_captured_inside_closure() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+#[ignore = "Compile polymorphic functions"]
 fn issue_2322() {
     assert_evals_to!(
         indoc!(
@@ -3394,5 +3395,44 @@ fn issue_2894() {
         ),
         1u32,
         u32
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymorphic_def_used_in_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            a : I64 -> _
+            a = \g ->
+                f = { r: g, h: 32 }
+            
+                h1 : U64
+                h1 = (\{} -> f.h) {}
+                h1
+            a 1
+            "#
+        ),
+        32,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+#[ignore = "This still doesn't work... yet"]
+fn polymorphic_lambda_set_usage() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            id1 = \x -> x
+            id2 = \y -> y
+            id = if True then id1 else id2
+            id 9u8
+            "#
+        ),
+        9,
+        u8
     )
 }

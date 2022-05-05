@@ -1228,6 +1228,7 @@ fn monomorphized_applied_tag() {
 }
 
 #[mono_test]
+#[ignore = "Cannot compile polymorphic closures yet"]
 fn aliased_polymorphic_closure() {
     indoc!(
         r#"

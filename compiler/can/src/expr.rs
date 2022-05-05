@@ -356,7 +356,7 @@ pub struct Field {
     pub loc_expr: Box<Loc<Expr>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Recursive {
     NotRecursive = 0,
     Recursive = 1,
