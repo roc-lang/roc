@@ -54,7 +54,7 @@ pub struct Annotation {
 pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
     def_ordering: DefOrdering,
-    pub(crate) abilities_in_scope: Vec<Symbol>,
+
     aliases: VecMap<Symbol, Alias>,
 }
 
@@ -523,7 +523,6 @@ pub(crate) fn canonicalize_defs<'a>(
         CanDefs {
             defs,
             def_ordering,
-            abilities_in_scope,
             // The result needs a thread-safe `SendMap`
             aliases,
         },
@@ -767,10 +766,7 @@ pub(crate) fn sort_can_defs(
         mut defs,
         def_ordering,
         aliases,
-        abilities_in_scope,
     } = defs;
-
-    output.abilities_in_scope = abilities_in_scope;
 
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
