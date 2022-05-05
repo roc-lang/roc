@@ -4778,16 +4778,6 @@ where
     let lambda_set_layout = Layout::LambdaSet(lambda_set);
     let symbols = symbols.into_iter();
 
-    // It may be the case that while capturing a symbol, we actually want to capture it under a
-    // different name than what the
-    // let get_specialized_name = |symbol, layout| {
-    //     procs
-    //         .needed_symbol_specializations
-    //         .get(&(symbol, layout))
-    //         .map(|(_, specialized)| *specialized)
-    //         .unwrap_or(symbol)
-    // };
-
     let result = match lambda_set.layout_for_member(name) {
         ClosureRepresentation::Union {
             tag_id,
@@ -5670,6 +5660,9 @@ pub fn from_can<'a>(
                         // We do need specializations
 
                         let mut stmt = rest;
+
+                        // Remove all the requested symbol specializations now, since this is the
+                        // def site and hence we won't need them any higher up.
                         let mut needed_specializations = procs
                             .needed_symbol_specializations
                             .drain_filter(|(s, _), _| s == symbol)
@@ -6541,11 +6534,9 @@ fn store_tag_pattern<'a>(
 
         match argument {
             Identifier(symbol) => {
-                // TODO: use procs.remove_single_symbol_specialization
+                // Pattern can define only one specialization
                 let symbol = procs
-                    .needed_symbol_specializations
-                    .remove(&(*symbol, arg_layout))
-                    .map(|(_, sym)| sym)
+                    .remove_single_symbol_specialization(*symbol)
                     .unwrap_or(*symbol);
 
                 // store immediately in the given symbol
