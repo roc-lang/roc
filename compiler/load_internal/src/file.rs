@@ -513,7 +513,7 @@ struct ModuleHeader<'a> {
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parse_state: roc_parse::state::State<'a>,
     header_for: HeaderFor<'a>,
-    symbols_from_requires: Vec<(Symbol, Loc<TypeAnnotation<'a>>)>,
+    symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     module_timing: ModuleTiming,
 }
 
@@ -604,7 +604,7 @@ struct ParsedModule<'a> {
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parsed_defs: &'a [Loc<roc_parse::ast::Def<'a>>],
     module_name: ModuleNameEnum<'a>,
-    symbols_from_requires: Vec<(Symbol, Loc<TypeAnnotation<'a>>)>,
+    symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     header_for: HeaderFor<'a>,
 }
 
@@ -3376,7 +3376,7 @@ fn send_header_two<'a>(
                 debug_assert!(!scope.contains_key(&ident.clone()));
 
                 scope.insert(ident, (symbol, entry.ident.region));
-                symbols_from_requires.push((symbol, entry.ann));
+                symbols_from_requires.push((Loc::at(entry.ident.region, symbol), entry.ann));
             }
 
             for entry in requires_types {

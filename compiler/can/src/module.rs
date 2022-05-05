@@ -50,7 +50,7 @@ pub struct ModuleOutput {
     pub problems: Vec<Problem>,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
-    pub symbols_from_requires: Vec<(Symbol, Loc<Type>)>,
+    pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     pub scope: Scope,
 }
 
@@ -168,7 +168,7 @@ pub fn canonicalize_module_defs<'a>(
     aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &VecSet<Symbol>,
-    symbols_from_requires: &[(Symbol, Loc<TypeAnnotation<'a>>)],
+    symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
