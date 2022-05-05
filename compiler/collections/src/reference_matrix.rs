@@ -1,4 +1,3 @@
-// see if we get better performance with different integer types
 type Order = bitvec::order::Lsb0;
 type Element = usize;
 type BitVec = bitvec::vec::BitVec<Element, Order>;
@@ -9,7 +8,7 @@ type BitSlice = bitvec::prelude::BitSlice<Element, Order>;
 /// We use this for sorting definitions so every definition is defined before it is used.
 /// This functionality is also used to spot and report invalid recursion.
 #[derive(Debug)]
-pub(crate) struct ReferenceMatrix {
+pub struct ReferenceMatrix {
     bitvec: BitVec,
     length: usize,
 }
@@ -156,7 +155,7 @@ impl ReferenceMatrix {
 }
 
 #[allow(dead_code)]
-pub(crate) enum TopologicalSort {
+pub enum TopologicalSort {
     /// There were no cycles, all nodes have been partitioned into groups
     Groups { groups: Vec<Vec<u32>> },
     /// Cycles were found. All nodes that are not part of a cycle have been partitioned
@@ -259,7 +258,7 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
 }
 
 #[derive(Debug)]
-pub(crate) struct Sccs {
+pub struct Sccs {
     components: usize,
     matrix: ReferenceMatrix,
 }
