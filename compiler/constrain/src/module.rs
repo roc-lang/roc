@@ -134,7 +134,7 @@ fn constrain_symbols_from_requires(
                 let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(loc_symbol.value));
 
                 let def_pattern_state =
-                    constrain_def_pattern(constraints, &env, &pattern, loc_type.value.clone());
+                    constrain_def_pattern(constraints, &env, &pattern, loc_type.value);
 
                 constrain_def_make_constraint(
                     constraints,
