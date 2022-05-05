@@ -1344,6 +1344,38 @@ fn opaque_assign_to_symbol() {
     )
 }
 
+#[mono_test]
+fn encode() {
+    indoc!(
+        r#"
+        app "test" provides [ myU8Bytes ] to "./platform"
+
+        Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+
+        Encoding has
+          toEncoder : val -> Encoder fmt | val has Encoding, fmt has Format
+
+        Format has
+          u8 : U8 -> Encoder fmt | fmt has Format
+
+
+        Linear := {}
+
+        # impl Format for Linear
+        u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
+
+        MyU8 := U8
+
+        # impl Encoding for MyU8
+        toEncoder = \@MyU8 n -> u8 n
+
+        myU8Bytes =
+            when toEncoder (@MyU8 15) is
+                @Encoder doEncode -> doEncode [] (@Linear {})
+        "#
+    )
+}
+
 // #[ignore]
 // #[mono_test]
 // fn static_str_closure() {

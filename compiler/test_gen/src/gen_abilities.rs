@@ -10,6 +10,9 @@ use crate::helpers::wasm::assert_evals_to;
 #[cfg(test)]
 use indoc::indoc;
 
+#[cfg(test)]
+use roc_std::RocList;
+
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn hash_specialization() {
@@ -218,27 +221,42 @@ fn ability_used_as_type_still_compiles() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn ability_member_takes_different_able_variable() {
+#[cfg(any(feature = "gen-llvm"))]
+fn encode() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ result ] to "./platform"
+            app "test" provides [ myU8Bytes ] to "./platform"
 
-            Hash has hash : a -> U64 | a has Hash
+            Encoder fmt := List U8, fmt -> List U8 | fmt has Format
 
-            IntoHash has intoHash : a, b -> b | a has IntoHash, b has Hash
+            Encoding has
+              toEncoder : val -> Encoder fmt | val has Encoding, fmt has Format
 
-            Id := U64
-            hash = \$Id n -> n
+            Format has
+              u8 : U8 -> Encoder fmt | fmt has Format
 
-            User := Id
-            intoHash = \$User id, _ -> id
+            appendWith : List U8, Encoder fmt, fmt -> List U8 | fmt has Format
+            appendWith = \lst, (@Encoder doFormat), fmt -> doFormat lst fmt
 
-            result = hash (intoHash ($User ($Id 123)) ($Id 1))
+            toBytes : val, fmt -> List U8 | val has Encoding, fmt has Format
+            toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
+
+
+            Linear := {} 
+
+            # impl Format for Linear
+            u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
+
+            MyU8 := U8
+
+            # impl Encoding for MyU8
+            toEncoder = \@MyU8 n -> u8 n
+
+            myU8Bytes = toBytes (@MyU8 15) (@Linear {})
             "#
         ),
-        123,
-        u64
+        RocList::from_slice(&[15]),
+        RocList<u8>
     )
 }

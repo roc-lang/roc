@@ -6264,7 +6264,7 @@ mod solve_expr {
                 toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 
-                Linear := {} 
+                Linear := {}
 
                 # impl Format for Linear
                 u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
