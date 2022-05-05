@@ -38,7 +38,6 @@ pub fn infer_expr(
     let env = solve::Env::default();
     let (solved, _) = solve::run(
         constraints,
-        &env,
         problems,
         subs,
         aliases,
