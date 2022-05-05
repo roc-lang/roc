@@ -56,11 +56,11 @@ roc_error_macros::assert_sizeof_aarch64!(Call, 7 * 8);
 roc_error_macros::assert_sizeof_aarch64!(CallType, 5 * 8);
 
 roc_error_macros::assert_sizeof_wasm!(Literal, 24);
-roc_error_macros::assert_sizeof_wasm!(Expr, 56);
+roc_error_macros::assert_sizeof_wasm!(Expr, 48);
 roc_error_macros::assert_sizeof_wasm!(Stmt, 120);
 roc_error_macros::assert_sizeof_wasm!(ProcLayout, 32);
-roc_error_macros::assert_sizeof_wasm!(Call, 40);
-roc_error_macros::assert_sizeof_wasm!(CallType, 32);
+roc_error_macros::assert_sizeof_wasm!(Call, 36);
+roc_error_macros::assert_sizeof_wasm!(CallType, 28);
 
 roc_error_macros::assert_sizeof_default!(Literal, 3 * 8);
 roc_error_macros::assert_sizeof_default!(Expr, 10 * 8);
