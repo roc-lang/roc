@@ -3438,7 +3438,6 @@ dependencies = [
  "clap 3.1.15",
  "indoc",
  "pretty_assertions",
- "regex",
  "roc_builtins",
  "roc_can",
  "roc_collections",

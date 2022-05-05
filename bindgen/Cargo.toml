@@ -35,6 +35,4 @@ clap = { version = "3.1.15", default-features = false, features = ["std", "color
 [dev-dependencies]
 pretty_assertions = "1.0.0"
 indoc = "1.0.3"
-bumpalo = { version = "3.8.0", features = ["collections"] }
-regex = "1.5.5"
 tempfile = "3.2.0"
