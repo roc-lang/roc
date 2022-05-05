@@ -59,7 +59,7 @@ fn run_load_and_typecheck(
     Ok(loaded.expect("had problems loading"))
 }
 
-pub fn generate_bindings(decl_src: &str, target_info: TargetInfo) -> String {
+fn generate_bindings(decl_src: &str, target_info: TargetInfo) -> String {
     let mut src = indoc!(
         r#"
             platform "main"
