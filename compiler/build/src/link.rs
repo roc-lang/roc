@@ -72,16 +72,12 @@ fn find_zig_str_path() -> PathBuf {
 }
 
 fn find_wasi_libc_path() -> PathBuf {
-    let wasi_libc_path = PathBuf::from("compiler/builtins/bitcode/wasi-libc.a");
+    use wasi_libc_sys::WASI_LIBC_PATH;
 
-    if std::path::Path::exists(&wasi_libc_path) {
-        return wasi_libc_path;
-    }
-
-    // when running the tests, we start in the /cli directory
-    let wasi_libc_path = PathBuf::from("../compiler/builtins/bitcode/wasi-libc.a");
-    if std::path::Path::exists(&wasi_libc_path) {
-        return wasi_libc_path;
+    // Environment variable defined in wasi-libc-sys/build.rs
+    let wasi_libc_pathbuf = PathBuf::from(WASI_LIBC_PATH);
+    if std::path::Path::exists(&wasi_libc_pathbuf) {
+        return wasi_libc_pathbuf;
     }
 
     panic!("cannot find `wasi-libc.a`")

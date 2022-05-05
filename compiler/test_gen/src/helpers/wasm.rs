@@ -36,12 +36,12 @@ fn promote_expr_to_module(src: &str) -> String {
 pub fn compile_and_load<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    _test_wrapper_type_info: PhantomData<T>,
+    test_wrapper_type_info: PhantomData<T>,
 ) -> wasmer::Instance {
     let platform_bytes = load_platform_and_builtins();
 
     let compiled_bytes =
-        compile_roc_to_wasm_bytes(arena, &platform_bytes, src, _test_wrapper_type_info);
+        compile_roc_to_wasm_bytes(arena, &platform_bytes, src, test_wrapper_type_info);
 
     if DEBUG_LOG_SETTINGS.keep_test_binary {
         let build_dir_hash = src_hash(src);

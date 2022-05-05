@@ -46,6 +46,7 @@ members = [
     "utils",
     "docs",
     "linker",
+    "wasi-libc-sys",
 ]
 exclude = [
     "ci/bench-runner",
