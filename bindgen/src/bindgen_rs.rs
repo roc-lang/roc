@@ -1,18 +1,18 @@
 use crate::types::{RocType, TypeId, Types};
 use std::fmt::{self, Write};
 
-// static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
-static HEADER: &[u8] = include_bytes!("../templates/header.rs");
+pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
+pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 static INDENT: &str = "    ";
 
 pub fn write_types<'a>(types: &Types, buf: &mut String) -> fmt::Result {
     for id in types.sorted_ids() {
         match types.get(id) {
             RocType::Struct { name, fields } => write_struct(name, fields, id, types, buf)?,
-            RocType::TagUnion { name, tags } => {
+            RocType::TagUnion { .. } => {
                 todo!();
             }
-            RocType::RecursiveTagUnion { name, tags } => {
+            RocType::RecursiveTagUnion { .. } => {
                 todo!();
             }
             // These types don't need to be declared in Rust.

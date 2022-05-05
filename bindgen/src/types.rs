@@ -194,7 +194,7 @@ impl RocType {
     /// Useful when determining whether to derive Default in a Rust type.
     pub fn has_tag_union(&self, types: &Types) -> bool {
         match self {
-            RocType::RecursiveTagUnion { tags, .. } | RocType::TagUnion { tags, .. } => true,
+            RocType::RecursiveTagUnion { .. } | RocType::TagUnion { .. } => true,
             RocType::RocStr
             | RocType::Bool
             | RocType::I8
