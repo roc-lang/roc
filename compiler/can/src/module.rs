@@ -704,6 +704,7 @@ fn fix_values_captured_in_closure_expr(
         | Str(_)
         | SingleQuote(_)
         | Var(_)
+        | AbilityMember(..)
         | EmptyRecord
         | RuntimeError(_)
         | ZeroArgumentTag { .. }

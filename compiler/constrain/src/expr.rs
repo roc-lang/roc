@@ -336,6 +336,11 @@ pub fn constrain_expr(
             // make lookup constraint to lookup this symbol's type in the environment
             constraints.lookup(*symbol, expected, region)
         }
+        AbilityMember(symbol, _specialization) => {
+            // make lookup constraint to lookup this symbol's type in the environment
+            constraints.lookup(*symbol, expected, region)
+            // TODO: consider trying to solve `_specialization` here.
+        }
         Closure(ClosureData {
             function_type: fn_var,
             closure_type: closure_var,

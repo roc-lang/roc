@@ -21,6 +21,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
+use std::sync::{Arc, Mutex};
 use std::{char, u32};
 
 #[derive(Clone, Default, Debug)]
@@ -83,6 +84,13 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol),
+    AbilityMember(
+        /// Actual member name
+        Symbol,
+        /// Specialization to use
+        Arc<Mutex<Option<Symbol>>>,
+    ),
+
     // Branching
     When {
         /// The actual condition of the when expression.
@@ -213,6 +221,7 @@ impl Expr {
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym) => Category::Lookup(sym),
+            &Self::AbilityMember(sym, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
             Self::LetRec(_, expr) => expr.value.category(),
@@ -1368,6 +1377,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Accessor { .. }
         | other @ Update { .. }
         | other @ Var(_)
+        | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
         | other @ ForeignCall { .. } => other,
 

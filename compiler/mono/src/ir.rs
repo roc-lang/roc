@@ -15,7 +15,7 @@ use roc_debug_flags::{
     dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
     ROC_PRINT_IR_AFTER_SPECIALIZATION,
 };
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -3564,6 +3564,7 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
+        AbilityMember(..) => todo_abilities!(),
         Tag {
             variant_var,
             name: tag_name,
