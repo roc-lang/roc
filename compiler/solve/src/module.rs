@@ -40,8 +40,6 @@ pub fn run_solve(
     Vec<solve::TypeError>,
     AbilitiesStore,
 ) {
-    let env = solve::Env::default();
-
     for (var, name) in rigid_variables.named {
         subs.rigid_var(var, name);
     }
@@ -61,7 +59,6 @@ pub fn run_solve(
     // Run the solver to populate Subs.
     let (solved_subs, solved_env) = solve::run(
         constraints,
-        &env,
         &mut problems,
         subs,
         &mut aliases,

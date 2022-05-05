@@ -496,7 +496,6 @@ struct State {
 
 pub fn run(
     constraints: &Constraints,
-    env: &Env,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
     aliases: &mut Aliases,
@@ -505,7 +504,6 @@ pub fn run(
 ) -> (Solved<Subs>, Env) {
     let env = run_in_place(
         constraints,
-        env,
         problems,
         &mut subs,
         aliases,
@@ -517,9 +515,8 @@ pub fn run(
 }
 
 /// Modify an existing subs in-place instead
-pub fn run_in_place(
+fn run_in_place(
     constraints: &Constraints,
-    env: &Env,
     problems: &mut Vec<TypeError>,
     subs: &mut Subs,
     aliases: &mut Aliases,
@@ -529,11 +526,10 @@ pub fn run_in_place(
     let mut pools = Pools::default();
 
     let state = State {
-        env: env.clone(),
+        env: Env::default(),
         mark: Mark::NONE.next(),
     };
     let rank = Rank::toplevel();
-
     let arena = Bump::new();
 
     let mut deferred_must_implement_abilities = DeferredMustImplementAbility::default();
@@ -541,7 +537,6 @@ pub fn run_in_place(
     let state = solve(
         &arena,
         constraints,
-        env,
         state,
         rank,
         &mut pools,
@@ -600,7 +595,6 @@ enum Work<'a> {
 fn solve(
     arena: &Bump,
     constraints: &Constraints,
-    env: &Env,
     mut state: State,
     rank: Rank,
     pools: &mut Pools,
@@ -612,7 +606,7 @@ fn solve(
     deferred_must_implement_abilities: &mut DeferredMustImplementAbility,
 ) -> State {
     let initial = Work::Constraint {
-        env,
+        env: &Env::default(),
         rank,
         constraint,
     };
