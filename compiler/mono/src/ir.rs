@@ -2156,6 +2156,12 @@ pub fn specialize_all<'a>(
 
     specialize_host_specializations(env, &mut procs, layout_cache, specializations_for_host);
 
+    debug_assert!(
+        procs.needed_symbol_specializations.is_empty(),
+        "{:?}",
+        &procs.needed_symbol_specializations
+    );
+
     procs
 }
 
