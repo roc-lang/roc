@@ -2494,7 +2494,7 @@ fn load_pkg_config<'a>(
                     let pkg_config_module_msg = fabricate_pkg_config_module(
                         arena,
                         shorthand,
-                        app_module_id,
+                        Some(app_module_id),
                         filename,
                         parser_state,
                         module_ids.clone(),
@@ -2942,11 +2942,18 @@ fn parse_header<'a>(
                 To::NewPackage(_package_name) => Ok((module_id, app_module_header_msg)),
             }
         }
-        Ok((ast::Module::Platform { header }, _parse_state)) => {
-            Err(LoadingProblem::UnexpectedHeader(format!(
-                "got an unexpected platform header\n{:?}",
-                header
-            )))
+        Ok((ast::Module::Platform { header }, parse_state)) => {
+            Ok(fabricate_pkg_config_module(
+                arena,
+                "", // Use a shorthand of "" - it will be fine for `roc check` and bindgen
+                None,
+                filename,
+                parse_state,
+                module_ids.clone(),
+                ident_ids_by_module,
+                &header,
+                module_timing,
+            ))
         }
 
         Err(fail) => Err(LoadingProblem::ParsingFailed(
@@ -3232,7 +3239,7 @@ struct PlatformHeaderInfo<'a> {
     filename: PathBuf,
     is_root_module: bool,
     shorthand: &'a str,
-    app_module_id: ModuleId,
+    opt_app_module_id: Option<ModuleId>,
     packages: &'a [Loc<PackageEntry<'a>>],
     provides: &'a [Loc<ExposedName<'a>>],
     requires: &'a [Loc<TypedIdent<'a>>],
@@ -3253,7 +3260,7 @@ fn send_header_two<'a>(
         filename,
         shorthand,
         is_root_module,
-        app_module_id,
+        opt_app_module_id,
         packages,
         provides,
         requires,
@@ -3271,12 +3278,16 @@ fn send_header_two<'a>(
     let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
         HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
 
-    // add standard imports
-    imported_modules.insert(app_module_id, Region::zero());
-    deps_by_name.insert(
-        PQModuleName::Unqualified(ModuleName::APP.into()),
-        app_module_id,
-    );
+    // Add standard imports, if there is an app module.
+    // (There might not be, e.g. when running `roc check Package-Config.roc` or
+    // when generating bindings.)
+    if let Some(app_module_id) = opt_app_module_id {
+        imported_modules.insert(app_module_id, Region::zero());
+        deps_by_name.insert(
+            PQModuleName::Unqualified(ModuleName::APP.into()),
+            app_module_id,
+        );
+    }
 
     let mut scope_size = 0;
 
@@ -3341,14 +3352,21 @@ fn send_header_two<'a>(
         }
 
         {
-            let ident_ids = ident_ids_by_module.get_or_insert(app_module_id);
+            // If we don't have an app module id (e.g. because we're doing
+            // `roc check Package-Config.roc` or because we're doing bindgen),
+            // insert the `requires` symbols into the platform module's IdentIds.
+            //
+            // Otherwise, get them from the app module's IdentIds, because it
+            // should already have a symbol for each `requires` entry, and we
+            // want to make sure we're referencing the same symbols!
+            let module_id = opt_app_module_id.unwrap_or(home);
+            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
             for entry in requires {
                 let entry = entry.value;
-
                 let ident: Ident = entry.ident.value.into();
                 let ident_id = ident_ids.get_or_insert(&ident);
-                let symbol = Symbol::new(app_module_id, ident_id);
+                let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
                 debug_assert!(!scope.contains_key(&ident.clone()));
@@ -3360,11 +3378,10 @@ fn send_header_two<'a>(
                 let string: &str = entry.value.into();
                 let ident: Ident = string.into();
                 let ident_id = ident_ids.get_or_insert(&ident);
-                let symbol = Symbol::new(app_module_id, ident_id);
+                let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
                 debug_assert!(!scope.contains_key(&ident.clone()));
-
                 scope.insert(ident, (symbol, entry.region));
             }
         }
@@ -3739,7 +3756,7 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
 fn fabricate_pkg_config_module<'a>(
     arena: &'a Bump,
     shorthand: &'a str,
-    app_module_id: ModuleId,
+    opt_app_module_id: Option<ModuleId>,
     filename: PathBuf,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
@@ -3747,11 +3764,15 @@ fn fabricate_pkg_config_module<'a>(
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
+    // If we have an app module, then it's the root module;
+    // otherwise, we must be the root.
+    let is_root_module = opt_app_module_id.is_none();
+
     let info = PlatformHeaderInfo {
         filename,
-        is_root_module: false,
+        is_root_module,
         shorthand,
-        app_module_id,
+        opt_app_module_id,
         packages: &[],
         provides: unspace(arena, header.provides.items),
         requires: &*arena.alloc([Loc::at(
