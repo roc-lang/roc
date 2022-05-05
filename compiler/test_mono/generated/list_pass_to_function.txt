@@ -6,14 +6,14 @@ procedure List.3 (List.63, List.64, List.65):
     ret List.139;
 
 procedure List.57 (#Attr.2, #Attr.3, #Attr.4):
-    let List.144 : U64 = lowlevel ListLen #Attr.2;
-    let List.142 : Int1 = lowlevel NumLt #Attr.3 List.144;
-    if List.142 then
-        let List.143 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
-        ret List.143;
+    let List.145 : U64 = lowlevel ListLen #Attr.2;
+    let List.143 : Int1 = lowlevel NumLt #Attr.3 List.145;
+    if List.143 then
+        let List.144 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
+        ret List.144;
     else
-        let List.141 : {List I64, I64} = Struct {#Attr.2, #Attr.4};
-        ret List.141;
+        let List.142 : {List I64, I64} = Struct {#Attr.2, #Attr.4};
+        ret List.142;
 
 procedure Test.2 (Test.3):
     let Test.6 : U64 = 0i64;
