@@ -46,16 +46,16 @@ pub fn load_types(full_file_path: PathBuf, dir: &Path) -> Result<Types, io::Erro
     let type_problems = type_problems.remove(&home).unwrap_or_default();
 
     if !can_problems.is_empty() || !type_problems.is_empty() {
-        assert!(
-            false,
-            "There were problems: {:?}, {:?}",
-            can_problems, type_problems
+        todo!(
+            "Gracefully report compilation problems during bindgen: {:?}, {:?}",
+            can_problems,
+            type_problems
         );
     }
 
     let mut layout_cache = LayoutCache::new(target_info);
     let mut env = Env {
-        arena: &arena,
+        arena,
         layout_cache: &mut layout_cache,
         interns: &interns,
         struct_names: Default::default(),
@@ -85,22 +85,19 @@ pub fn load_types(full_file_path: PathBuf, dir: &Path) -> Result<Types, io::Erro
             ..
         } in defs.into_iter()
         {
-            match loc_pattern.value {
-                Pattern::Identifier(sym) => {
-                    let var = pattern_vars
-                        .get(&sym)
-                        .expect("Indetifier known but it has no var?");
-                    let layout = env
-                        .layout_cache
-                        .from_var(&arena, *var, &subs)
-                        .expect("Something weird ended up in the content");
+            if let Pattern::Identifier(sym) = loc_pattern.value {
+                let var = pattern_vars
+                    .get(&sym)
+                    .expect("Indetifier known but it has no var?");
+                let layout = env
+                    .layout_cache
+                    .from_var(arena, *var, subs)
+                    .expect("Something weird ended up in the content");
 
-                    bindgen::add_type(&mut env, layout, *var, &mut types);
-                }
-                _ => {
-                    // figure out if we need to export non-identifier defs - when would that
-                    // happen?
-                }
+                bindgen::add_type(&mut env, layout, *var, &mut types);
+            } else {
+                // figure out if we need to export non-identifier defs - when would that
+                // happen?
             }
         }
     }

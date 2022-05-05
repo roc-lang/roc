@@ -5,7 +5,7 @@ pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
 pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 static INDENT: &str = "    ";
 
-pub fn write_types<'a>(types: &Types, buf: &mut String) -> fmt::Result {
+pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
     for id in types.sorted_ids() {
         match types.get(id) {
             RocType::Struct { name, fields } => write_struct(name, fields, id, types, buf)?,
@@ -66,7 +66,7 @@ fn write_struct(
     buf.write_str("}\n")
 }
 
-fn write_type_name<'a>(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
+fn write_type_name(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
     match types.get(id) {
         RocType::U8 => buf.write_str("u8"),
         RocType::U16 => buf.write_str("u16"),
@@ -112,7 +112,7 @@ fn write_type_name<'a>(id: TypeId, types: &Types, buf: &mut String) -> fmt::Resu
     }
 }
 
-fn write_deriving<'a>(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
+fn write_deriving(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
     let typ = types.get(id);
 
     buf.write_str("\n#[derive(Clone, PartialEq, PartialOrd, ")?;

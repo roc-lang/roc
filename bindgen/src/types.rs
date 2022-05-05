@@ -49,7 +49,7 @@ impl Types {
 
     pub fn sorted_ids(&self) -> Vec<TypeId> {
         topological_sort(self.ids(), |id| match self.deps.get(id) {
-            Some(dep_ids) => dep_ids.iter().map(|dep_id| *dep_id).collect(),
+            Some(dep_ids) => dep_ids.to_vec(),
             None => Vec::new(),
         })
         .unwrap_or_else(|err| {
