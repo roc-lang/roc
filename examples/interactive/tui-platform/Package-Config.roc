@@ -1,5 +1,5 @@
 platform "tui"
-    requires { Model } { main : Effect {} }
+    requires { Model } { main : { init : ({} -> Model), update : (Model, Str -> Model), view : (Model -> Str) } }
     exposes []
     packages {}
     imports []

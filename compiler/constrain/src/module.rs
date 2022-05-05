@@ -11,6 +11,8 @@ use roc_types::solved_types::{FreeVars, SolvedType};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Category, Type};
 
+use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
+
 /// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
 pub struct ExposedByModule {
@@ -116,28 +118,43 @@ fn constrain_symbols_from_requires(
     home: ModuleId,
     constraint: Constraint,
 ) -> Constraint {
-    // TODO thread through rigid_vars and flex_vars
-    let rigid_vars = std::iter::empty();
-    let flex_vars = std::iter::empty();
-
     symbols_from_requires
         .into_iter()
         .fold(constraint, |constraint, (symbol, loc_type)| {
             if symbol.module_id() == home {
-                constraints.let_constraint(
-                    rigid_vars.clone(),
-                    flex_vars.clone(),
-                    std::iter::once((symbol, loc_type)),
+                // 1. Required symbols can only be specified in package modules
+                // 2. Required symbols come from app modules
+                // But, if we are running e.g. `roc check` on a package module, there is no app
+                // module, and we will have instead put the required symbols in the package module
+                // namespace. If this is the case, we want to introduce the symbols as if they had
+                // the types they are annotated with.
+                let rigids = Default::default();
+                let env = Env { home, rigids };
+                let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(symbol));
+
+                let def_pattern_state =
+                    constrain_def_pattern(constraints, &env, &pattern, loc_type.value.clone());
+
+                constrain_def_make_constraint(
+                    constraints,
+                    // No new rigids or flex vars because they are represented in the type
+                    // annotation.
+                    vec![],
+                    vec![],
                     Constraint::True,
                     constraint,
+                    def_pattern_state,
                 )
             } else {
-                constraints.lookup(
+                // Otherwise, this symbol comes from an app module - we want to check that the type
+                // provided by the app is in fact what the package module requires.
+                let provided_eq_requires_constr = constraints.lookup(
                     symbol,
                     // TODO give it a real expectation, so errors can be helpful
                     Expected::NoExpectation(loc_type.value),
                     loc_type.region,
-                )
+                );
+                constraints.and_constraint([provided_eq_requires_constr, constraint])
             }
         })
 }
