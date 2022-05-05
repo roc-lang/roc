@@ -612,13 +612,15 @@ fn i64_abs() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic = "integer absolute overflowed because its argument is the minimum value"]
+#[should_panic(
+    expected = r#"Roc failed with message: "integer absolute overflowed because its argument is the minimum value"#
+)]
 fn abs_min_int_overflow() {
     assert_evals_to!(
         indoc!(
             r#"
-            Num.abs Num.minI64
-            "#
+                Num.abs Num.minI64
+                "#
         ),
         0,
         i64
@@ -3070,7 +3072,7 @@ fn sub_saturated() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn monomorphized_ints1() {
+fn monomorphized_ints() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -3212,7 +3214,6 @@ fn upcast_of_int_is_zext() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore = "https://github.com/rtfeldman/roc/issues/2997"]
 // https://github.com/rtfeldman/roc/issues/2696
 fn upcast_of_int_checked_is_zext() {
     assert_evals_to!(
