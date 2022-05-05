@@ -59,10 +59,7 @@ fn list_int_inc() {
         ),
         RocList<RocList<i64>>,
         &[
-            // TODO be smarter about coalescing polymorphic list values
-            Live(1), // list0
-            Live(1), // list1
-            Live(1), // list2
+            Live(3), // list
             Live(1)  // result
         ]
     );
@@ -80,10 +77,7 @@ fn list_int_dealloc() {
         ),
         usize,
         &[
-            // TODO be smarter about coalescing polymorphic list values
-            Deallocated, // list0
-            Deallocated, // list1
-            Deallocated, // list2
+            Deallocated, // list
             Deallocated  // result
         ]
     );
