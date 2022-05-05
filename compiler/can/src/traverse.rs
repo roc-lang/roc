@@ -18,11 +18,11 @@ macro_rules! visit_list {
     };
 }
 
-fn walk_decls<V: Visitor>(visitor: &mut V, decls: &[Declaration]) {
+pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &[Declaration]) {
     visit_list!(visitor, visit_decl, decls)
 }
 
-fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
+pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
     match decl {
         Declaration::Declare(def) => {
             visitor.visit_def(def);
@@ -37,7 +37,7 @@ fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
     }
 }
 
-fn walk_def<V: Visitor>(visitor: &mut V, def: &Def) {
+pub fn walk_def<V: Visitor>(visitor: &mut V, def: &Def) {
     let Def {
         loc_pattern,
         loc_expr,
@@ -58,7 +58,7 @@ fn walk_def<V: Visitor>(visitor: &mut V, def: &Def) {
     }
 }
 
-fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr) {
+pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr) {
     match expr {
         Expr::Closure(closure_data) => walk_closure(visitor, closure_data),
         Expr::When {
@@ -84,6 +84,7 @@ fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr) {
             walk_list(visitor, *elem_var, loc_elems);
         }
         Expr::Var(..) => { /* terminal */ }
+        Expr::AbilityMember(..) => { /* terminal */ }
         Expr::If {
             cond_var,
             branches,
@@ -171,7 +172,7 @@ fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr) {
 }
 
 #[inline(always)]
-fn walk_closure<V: Visitor>(visitor: &mut V, clos: &ClosureData) {
+pub fn walk_closure<V: Visitor>(visitor: &mut V, clos: &ClosureData) {
     let ClosureData {
         arguments,
         loc_body,
@@ -187,7 +188,7 @@ fn walk_closure<V: Visitor>(visitor: &mut V, clos: &ClosureData) {
 }
 
 #[inline(always)]
-fn walk_when<V: Visitor>(
+pub fn walk_when<V: Visitor>(
     visitor: &mut V,
     cond_var: Variable,
     expr_var: Variable,
@@ -202,7 +203,7 @@ fn walk_when<V: Visitor>(
 }
 
 #[inline(always)]
-fn walk_when_branch<V: Visitor>(visitor: &mut V, branch: &WhenBranch, expr_var: Variable) {
+pub fn walk_when_branch<V: Visitor>(visitor: &mut V, branch: &WhenBranch, expr_var: Variable) {
     let WhenBranch {
         patterns,
         value,
@@ -220,14 +221,14 @@ fn walk_when_branch<V: Visitor>(visitor: &mut V, branch: &WhenBranch, expr_var: 
 }
 
 #[inline(always)]
-fn walk_list<V: Visitor>(visitor: &mut V, elem_var: Variable, loc_elems: &[Loc<Expr>]) {
+pub fn walk_list<V: Visitor>(visitor: &mut V, elem_var: Variable, loc_elems: &[Loc<Expr>]) {
     loc_elems
         .iter()
         .for_each(|le| visitor.visit_expr(&le.value, le.region, elem_var));
 }
 
 #[inline(always)]
-fn walk_if<V: Visitor>(
+pub fn walk_if<V: Visitor>(
     visitor: &mut V,
     cond_var: Variable,
     branches: &[(Loc<Expr>, Loc<Expr>)],
@@ -242,7 +243,7 @@ fn walk_if<V: Visitor>(
 }
 
 #[inline(always)]
-fn walk_call<V: Visitor>(
+pub fn walk_call<V: Visitor>(
     visitor: &mut V,
     fn_var: Variable,
     fn_expr: &Loc<Expr>,
@@ -254,7 +255,7 @@ fn walk_call<V: Visitor>(
 }
 
 #[inline(always)]
-fn walk_record_fields<'a, V: Visitor>(
+pub fn walk_record_fields<'a, V: Visitor>(
     visitor: &mut V,
     fields: impl Iterator<Item = (&'a Lowercase, &'a Field)>,
 ) {
@@ -270,7 +271,7 @@ fn walk_record_fields<'a, V: Visitor>(
     )
 }
 
-trait Visitor: Sized + PatternVisitor {
+pub trait Visitor: Sized + PatternVisitor {
     fn visit_decls(&mut self, decls: &[Declaration]) {
         walk_decls(self, decls);
     }
@@ -292,11 +293,11 @@ trait Visitor: Sized + PatternVisitor {
     }
 }
 
-fn walk_pattern<V: PatternVisitor>(_visitor: &mut V, _pattern: &Pattern) {
+pub fn walk_pattern<V: PatternVisitor>(_visitor: &mut V, _pattern: &Pattern) {
     // ignore for now
 }
 
-trait PatternVisitor: Sized {
+pub trait PatternVisitor: Sized {
     fn visit_pattern(&mut self, pattern: &Pattern, _region: Region, _opt_var: Option<Variable>) {
         walk_pattern(self, pattern);
     }
