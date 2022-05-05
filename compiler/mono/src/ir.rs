@@ -772,14 +772,23 @@ impl<'a> Procs<'a> {
     }
 
     /// Expects and removes a single specialization symbol for the given requested symbol.
-    fn remove_single_symbol_specialization(&mut self, symbol: Symbol) -> Option<Symbol> {
+    /// In debug builds, we assert that the layout of the specialization is the layout expected by
+    /// the requested symbol.
+    fn remove_single_symbol_specialization(
+        &mut self,
+        symbol: Symbol,
+        layout: Layout,
+    ) -> Option<Symbol> {
         let mut specialized_symbols = self
             .needed_symbol_specializations
             .drain_filter(|(sym, _), _| sym == &symbol);
 
         let specialization_symbol = specialized_symbols
             .next()
-            .map(|(_, (_, specialized_symbol))| specialized_symbol);
+            .map(|((_, specialized_layout), (_, specialized_symbol))| {
+                debug_assert_eq!(specialized_layout, layout, "Requested the single specialization of {:?}, but the specialization layout ({:?}) doesn't match the expected layout ({:?})", symbol, specialized_layout, layout);
+                specialized_symbol
+            });
 
         debug_assert_eq!(
             specialized_symbols.count(),
@@ -3342,7 +3351,18 @@ pub fn with_hole<'a>(
                 );
 
                 let outer_symbol = env.unique_symbol();
-                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
+                let pattern_layout = layout_cache
+                    .from_var(env.arena, def.expr_var, env.subs)
+                    .expect("Pattern has no layout");
+                stmt = store_pattern(
+                    env,
+                    procs,
+                    layout_cache,
+                    &mono_pattern,
+                    pattern_layout,
+                    outer_symbol,
+                    stmt,
+                );
 
                 // convert the def body, store in outer_symbol
                 with_hole(
@@ -5750,8 +5770,11 @@ pub fn from_can<'a>(
 
                 // layer on any default record fields
                 for (symbol, variable, expr) in assignments {
+                    let layout = layout_cache
+                        .from_var(env.arena, variable, env.subs)
+                        .expect("Default field has no layout");
                     let specialization_symbol = procs
-                        .remove_single_symbol_specialization(symbol)
+                        .remove_single_symbol_specialization(symbol, layout)
                         // Can happen when the symbol was never used under this body, and hence has no
                         // requested specialization.
                         .unwrap_or(symbol);
@@ -5768,12 +5791,30 @@ pub fn from_can<'a>(
                     );
                 }
 
+                let pattern_layout = layout_cache
+                    .from_var(env.arena, def.expr_var, env.subs)
+                    .expect("Pattern has no layout");
                 if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
-                    store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+                    store_pattern(
+                        env,
+                        procs,
+                        layout_cache,
+                        &mono_pattern,
+                        pattern_layout,
+                        outer_symbol,
+                        stmt,
+                    )
                 } else {
                     let outer_symbol = env.unique_symbol();
-                    stmt =
-                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
+                    stmt = store_pattern(
+                        env,
+                        procs,
+                        layout_cache,
+                        &mono_pattern,
+                        pattern_layout,
+                        outer_symbol,
+                        stmt,
+                    );
 
                     // convert the def body, store in outer_symbol
                     with_hole(
@@ -6339,10 +6380,19 @@ pub fn store_pattern<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     can_pat: &Pattern<'a>,
+    pattern_layout: Layout,
     outer_symbol: Symbol,
     stmt: Stmt<'a>,
 ) -> Stmt<'a> {
-    match store_pattern_help(env, procs, layout_cache, can_pat, outer_symbol, stmt) {
+    match store_pattern_help(
+        env,
+        procs,
+        layout_cache,
+        can_pat,
+        pattern_layout,
+        outer_symbol,
+        stmt,
+    ) {
         StorePattern::Productive(new) => new,
         StorePattern::NotProductive(new) => new,
     }
@@ -6362,6 +6412,7 @@ fn store_pattern_help<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     can_pat: &Pattern<'a>,
+    pattern_layout: Layout,
     outer_symbol: Symbol,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
@@ -6372,7 +6423,7 @@ fn store_pattern_help<'a>(
             // An identifier in a pattern can define at most one specialization!
             // Remove any requested specializations for this name now, since this is the definition site.
             let specialization_symbol = procs
-                .remove_single_symbol_specialization(*symbol)
+                .remove_single_symbol_specialization(*symbol, pattern_layout)
                 // Can happen when the symbol was never used under this body, and hence has no
                 // requested specialization.
                 .unwrap_or(*symbol);
@@ -6393,8 +6444,16 @@ fn store_pattern_help<'a>(
             return StorePattern::NotProductive(stmt);
         }
         NewtypeDestructure { arguments, .. } => match arguments.as_slice() {
-            [single] => {
-                return store_pattern_help(env, procs, layout_cache, &single.0, outer_symbol, stmt);
+            [(pattern, layout)] => {
+                return store_pattern_help(
+                    env,
+                    procs,
+                    layout_cache,
+                    pattern,
+                    *layout,
+                    outer_symbol,
+                    stmt,
+                );
             }
             _ => {
                 let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
@@ -6431,7 +6490,16 @@ fn store_pattern_help<'a>(
             );
         }
         OpaqueUnwrap { argument, .. } => {
-            return store_pattern_help(env, procs, layout_cache, &argument.0, outer_symbol, stmt);
+            let (pattern, layout) = &**argument;
+            return store_pattern_help(
+                env,
+                procs,
+                layout_cache,
+                pattern,
+                *layout,
+                outer_symbol,
+                stmt,
+            );
         }
 
         RecordDestructure(destructs, [_single_field]) => {
@@ -6439,7 +6507,7 @@ fn store_pattern_help<'a>(
                 match &destruct.typ {
                     DestructType::Required(symbol) => {
                         let specialization_symbol = procs
-                            .remove_single_symbol_specialization(*symbol)
+                            .remove_single_symbol_specialization(*symbol, destruct.layout)
                             // Can happen when the symbol was never used under this body, and hence has no
                             // requested specialization.
                             .unwrap_or(*symbol);
@@ -6457,6 +6525,7 @@ fn store_pattern_help<'a>(
                             procs,
                             layout_cache,
                             guard_pattern,
+                            destruct.layout,
                             outer_symbol,
                             stmt,
                         );
@@ -6529,7 +6598,7 @@ fn store_tag_pattern<'a>(
             Identifier(symbol) => {
                 // Pattern can define only one specialization
                 let symbol = procs
-                    .remove_single_symbol_specialization(*symbol)
+                    .remove_single_symbol_specialization(*symbol, arg_layout)
                     .unwrap_or(*symbol);
 
                 // store immediately in the given symbol
@@ -6550,7 +6619,15 @@ fn store_tag_pattern<'a>(
                 let symbol = env.unique_symbol();
 
                 // first recurse, continuing to unpack symbol
-                match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
+                match store_pattern_help(
+                    env,
+                    procs,
+                    layout_cache,
+                    argument,
+                    arg_layout,
+                    symbol,
+                    stmt,
+                ) {
                     StorePattern::Productive(new) => {
                         is_productive = true;
                         stmt = new;
@@ -6610,7 +6687,7 @@ fn store_newtype_pattern<'a>(
             Identifier(symbol) => {
                 // store immediately in the given symbol, removing it specialization if it had any
                 let specialization_symbol = procs
-                    .remove_single_symbol_specialization(*symbol)
+                    .remove_single_symbol_specialization(*symbol, arg_layout)
                     // Can happen when the symbol was never used under this body, and hence has no
                     // requested specialization.
                     .unwrap_or(*symbol);
@@ -6637,7 +6714,15 @@ fn store_newtype_pattern<'a>(
                 let symbol = env.unique_symbol();
 
                 // first recurse, continuing to unpack symbol
-                match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
+                match store_pattern_help(
+                    env,
+                    procs,
+                    layout_cache,
+                    argument,
+                    arg_layout,
+                    symbol,
+                    stmt,
+                ) {
                     StorePattern::Productive(new) => {
                         is_productive = true;
                         stmt = new;
@@ -6685,7 +6770,7 @@ fn store_record_destruct<'a>(
             // A destructure can define at most one specialization!
             // Remove any requested specializations for this name now, since this is the definition site.
             let specialization_symbol = procs
-                .remove_single_symbol_specialization(*symbol)
+                .remove_single_symbol_specialization(*symbol, destruct.layout)
                 // Can happen when the symbol was never used under this body, and hence has no
                 // requested specialization.
                 .unwrap_or(*symbol);
@@ -6700,7 +6785,7 @@ fn store_record_destruct<'a>(
         DestructType::Guard(guard_pattern) => match &guard_pattern {
             Identifier(symbol) => {
                 let specialization_symbol = procs
-                    .remove_single_symbol_specialization(*symbol)
+                    .remove_single_symbol_specialization(*symbol, destruct.layout)
                     // Can happen when the symbol was never used under this body, and hence has no
                     // requested specialization.
                     .unwrap_or(*symbol);
@@ -6738,7 +6823,15 @@ fn store_record_destruct<'a>(
             _ => {
                 let symbol = env.unique_symbol();
 
-                match store_pattern_help(env, procs, layout_cache, guard_pattern, symbol, stmt) {
+                match store_pattern_help(
+                    env,
+                    procs,
+                    layout_cache,
+                    guard_pattern,
+                    destruct.layout,
+                    symbol,
+                    stmt,
+                ) {
                     StorePattern::Productive(new) => {
                         stmt = new;
                         stmt = Stmt::Let(symbol, load, destruct.layout, env.arena.alloc(stmt));
