@@ -2,7 +2,7 @@ use crate::ir::{Expr, HigherOrderLowLevel, JoinPointId, Param, Proc, ProcLayout,
 use crate::layout::Layout;
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
-use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_collections::all::{MutMap, MutSet};
 use roc_collections::ReferenceMatrix;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
@@ -49,126 +49,27 @@ pub fn infer_borrow<'a>(
     // component (in top-sorted order, from primitives (std-lib) to main)
 
     let mut matrix = ReferenceMatrix::new(procs.len());
-    let keys: Vec<_> = procs.keys().collect_in(arena);
-    {
-        for (row, proc) in procs.values().enumerate() {
-            let mut call_info = CallInfo {
-                keys: Vec::new_in(arena),
-            };
-            call_info_stmt(arena, &proc.body, &mut call_info);
 
-            for key in call_info.keys.iter() {
-                // the same symbol can be in `keys` multiple times (with different layouts)
-                for (col, (k, _)) in keys.iter().enumerate() {
-                    if k == key {
-                        matrix.set_row_col(row, col, true);
-                    }
-                }
-            }
-        }
-
-        let nodes: Vec<_> = (0..procs.len() as u32).collect_in(arena);
-
-        for group in matrix
-            .strongly_connected_components(nodes.as_slice())
-            .groups()
-        {
-            println!("== new group ====");
-            for index in group.iter_ones() {
-                println!("{:?}", keys[index].0);
-            }
-        }
-    }
-
-    let successor_map = &make_successor_mapping(arena, procs);
-    let successors = move |key: &Symbol| {
-        let slice = match successor_map.get(key) {
-            None => &[] as &[_],
-            Some(s) => s.as_slice(),
+    for (row, proc) in procs.values().enumerate() {
+        let mut call_info = CallInfo {
+            keys: Vec::new_in(arena),
         };
+        call_info_stmt(arena, &proc.body, &mut call_info);
 
-        slice.iter().copied()
-    };
-
-    let mut symbols = Vec::with_capacity_in(procs.len(), arena);
-    symbols.extend(procs.keys().map(|x| x.0));
-
-    let sccs = ven_graph::strongly_connected_components(&symbols, successors);
-
-    let mut symbol_to_component = MutMap::default();
-    for (i, symbols) in sccs.iter().enumerate() {
-        for symbol in symbols {
-            symbol_to_component.insert(*symbol, i);
-        }
-    }
-
-    let mut component_to_successors = Vec::with_capacity_in(sccs.len(), arena);
-    for (i, symbols) in sccs.iter().enumerate() {
-        // guess: every function has ~1 successor
-        let mut succs = Vec::with_capacity_in(symbols.len(), arena);
-
-        for symbol in symbols {
-            for s in successors(symbol) {
-                let c = symbol_to_component[&s];
-
-                // don't insert self to prevent cycles
-                if c != i {
-                    succs.push(c);
+        for key in call_info.keys.iter() {
+            // the same symbol can be in `keys` multiple times (with different layouts)
+            for (col, (k, _)) in procs.keys().enumerate() {
+                if k == key {
+                    matrix.set_row_col(row, col, true);
                 }
             }
         }
-
-        succs.sort_unstable();
-        succs.dedup();
-
-        component_to_successors.push(succs);
     }
 
-    let mut components = Vec::with_capacity_in(component_to_successors.len(), arena);
-    components.extend(0..component_to_successors.len());
+    let nodes: Vec<_> = (0..procs.len() as u32).collect_in(arena);
+    let sccs = matrix.strongly_connected_components(nodes.as_slice());
 
-    let mut groups = Vec::new_in(arena);
-
-    let component_to_successors = &component_to_successors;
-    match ven_graph::topological_sort_into_groups(&components, |c: &usize| {
-        component_to_successors[*c].iter().copied()
-    }) {
-        Ok(component_groups) => {
-            let mut component_to_group = bumpalo::vec![in arena; usize::MAX; components.len()];
-
-            // for each component, store which group it is in
-            for (group_index, component_group) in component_groups.iter().enumerate() {
-                for component in component_group {
-                    component_to_group[*component] = group_index;
-                }
-            }
-
-            // prepare groups
-            groups.reserve(component_groups.len());
-            for _ in 0..component_groups.len() {
-                groups.push(Vec::new_in(arena));
-            }
-
-            for (key, proc) in procs {
-                let symbol = key.0;
-                let offset = param_map.get_param_offset(key.0, key.1);
-
-                // the component this symbol is a part of
-                let component = symbol_to_component[&symbol];
-
-                // now find the group that this component belongs to
-                let group = component_to_group[component];
-
-                groups[group].push((proc, offset));
-            }
-        }
-        Err((_groups, _remainder)) => {
-            unreachable!("because we find strongly-connected components first");
-        }
-    }
-
-    for group in groups.into_iter().rev() {
-        println!("\n -- new group ----------------");
+    for group in sccs.groups() {
         // This is a fixed-point analysis
         //
         // all functions initiall own all their parameters
@@ -177,9 +78,10 @@ pub fn infer_borrow<'a>(
         //
         // when the signatures no longer change, the analysis stops and returns the signatures
         loop {
-            for (proc, param_offset) in group.iter() {
-                println!("{:?}", proc.name);
-                env.collect_proc(&mut param_map, proc, *param_offset);
+            for index in group.iter_ones() {
+                let (key, proc) = &procs.iter().nth(index).unwrap();
+                let param_offset = param_map.get_param_offset(key.0, key.1);
+                env.collect_proc(&mut param_map, proc, param_offset);
             }
 
             if !env.modified {
@@ -1078,28 +980,6 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
             unreachable!("Only inserted *after* borrow checking: {:?}", op);
         }
     }
-}
-
-fn make_successor_mapping<'a>(
-    arena: &'a Bump,
-    procs: &MutMap<(Symbol, ProcLayout<'_>), Proc<'a>>,
-) -> MutMap<Symbol, Vec<'a, Symbol>> {
-    let mut result = MutMap::with_capacity_and_hasher(procs.len(), default_hasher());
-
-    for (key, proc) in procs {
-        let mut call_info = CallInfo {
-            keys: Vec::new_in(arena),
-        };
-        call_info_stmt(arena, &proc.body, &mut call_info);
-
-        let mut keys = call_info.keys;
-        keys.sort_unstable();
-        keys.dedup();
-
-        result.insert(key.0, keys);
-    }
-
-    result
 }
 
 struct CallInfo<'a> {
