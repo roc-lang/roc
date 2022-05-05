@@ -3024,7 +3024,7 @@ fn specialize_naked_symbol<'a>(
         _ => {
             use roc_can::expr::Expr;
             if let ReuseSymbol::Value(_symbol) = can_reuse_symbol(env, procs, &Expr::Var(symbol)) {
-                let real_symbol = possible_reuse_symbol_or_spec(
+                let real_symbol = possible_reuse_symbol_or_specialize(
                     env,
                     procs,
                     layout_cache,
@@ -3442,17 +3442,11 @@ pub fn with_hole<'a>(
         OpaqueRef { argument, .. } => {
             let (arg_var, loc_arg_expr) = *argument;
 
-            // TODO(POLYEXPR): can this just be `possible_reuse_symbol_or_spec`?
             match can_reuse_symbol(env, procs, &loc_arg_expr.value) {
                 // Opaques decay to their argument.
-                ReuseSymbol::Value(_real_name) => {
-                    let real_name = possible_reuse_symbol_or_spec(
-                        env,
-                        procs,
-                        layout_cache,
-                        &loc_arg_expr.value,
-                        arg_var,
-                    );
+                ReuseSymbol::Value(symbol) => {
+                    let real_name =
+                        reuse_symbol_or_specialize(env, procs, layout_cache, symbol, arg_var);
                     let mut result = hole.clone();
                     substitute_in_exprs(arena, &mut result, assigned, real_name);
                     result
@@ -3504,12 +3498,12 @@ pub fn with_hole<'a>(
                             field_symbols.push(symbol);
                             can_fields.push(Field::Function(symbol, variable));
                         }
-                        Value(reusable) => {
-                            let reusable = possible_reuse_symbol_or_spec(
+                        Value(symbol) => {
+                            let reusable = reuse_symbol_or_specialize(
                                 env,
                                 procs,
                                 layout_cache,
-                                &roc_can::expr::Expr::Var(reusable),
+                                symbol,
                                 field.var,
                             );
                             field_symbols.push(reusable);
@@ -3654,7 +3648,7 @@ pub fn with_hole<'a>(
                         );
 
                         for (loc_cond, loc_then) in branches.into_iter().rev() {
-                            let branching_symbol = possible_reuse_symbol_or_spec(
+                            let branching_symbol = possible_reuse_symbol_or_specialize(
                                 env,
                                 procs,
                                 layout_cache,
@@ -3720,8 +3714,13 @@ pub fn with_hole<'a>(
             branches_cond_var: _,
             exhaustive,
         } => {
-            let cond_symbol =
-                possible_reuse_symbol_or_spec(env, procs, layout_cache, &loc_cond.value, cond_var);
+            let cond_symbol = possible_reuse_symbol_or_specialize(
+                env,
+                procs,
+                layout_cache,
+                &loc_cond.value,
+                cond_var,
+            );
 
             let id = JoinPointId(env.unique_symbol());
 
@@ -3810,7 +3809,7 @@ pub fn with_hole<'a>(
                 if let Some(literal) = try_make_literal(env, &arg_expr.value) {
                     elements.push(ListLiteralElement::Literal(literal));
                 } else {
-                    let symbol = possible_reuse_symbol_or_spec(
+                    let symbol = possible_reuse_symbol_or_specialize(
                         env,
                         procs,
                         layout_cache,
@@ -3889,7 +3888,7 @@ pub fn with_hole<'a>(
                 }
             }
 
-            let record_symbol = possible_reuse_symbol_or_spec(
+            let record_symbol = possible_reuse_symbol_or_specialize(
                 env,
                 procs,
                 layout_cache,
@@ -4020,7 +4019,7 @@ pub fn with_hole<'a>(
                         field_layouts.push(field_layout);
 
                         if let Some(field) = updates.get(&label) {
-                            let field_symbol = possible_reuse_symbol_or_spec(
+                            let field_symbol = possible_reuse_symbol_or_specialize(
                                 env,
                                 procs,
                                 layout_cache,
@@ -4251,7 +4250,7 @@ pub fn with_hole<'a>(
 
                     let arg_symbols = Vec::from_iter_in(
                         loc_args.iter().map(|(var, arg_expr)| {
-                            possible_reuse_symbol_or_spec(
+                            possible_reuse_symbol_or_specialize(
                                 env,
                                 procs,
                                 layout_cache,
@@ -4409,7 +4408,7 @@ pub fn with_hole<'a>(
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
             for (var, arg_expr) in args.iter() {
-                arg_symbols.push(possible_reuse_symbol_or_spec(
+                arg_symbols.push(possible_reuse_symbol_or_specialize(
                     env,
                     procs,
                     layout_cache,
@@ -4445,7 +4444,7 @@ pub fn with_hole<'a>(
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
             for (var, arg_expr) in args.iter() {
-                arg_symbols.push(possible_reuse_symbol_or_spec(
+                arg_symbols.push(possible_reuse_symbol_or_specialize(
                     env,
                     procs,
                     layout_cache,
@@ -5205,7 +5204,7 @@ fn sorted_field_symbols<'a>(
 
         let alignment = layout.alignment_bytes(env.target_info);
 
-        let symbol = possible_reuse_symbol_or_spec(env, procs, layout_cache, &arg.value, var);
+        let symbol = possible_reuse_symbol_or_specialize(env, procs, layout_cache, &arg.value, var);
         field_symbols_temp.push((alignment, symbol, ((var, arg), &*env.arena.alloc(symbol))));
     }
     field_symbols_temp.sort_by(|a, b| b.0.cmp(&a.0));
@@ -5358,8 +5357,13 @@ pub fn from_can<'a>(
             branches_cond_var: _,
             exhaustive,
         } => {
-            let cond_symbol =
-                possible_reuse_symbol_or_spec(env, procs, layout_cache, &loc_cond.value, cond_var);
+            let cond_symbol = possible_reuse_symbol_or_specialize(
+                env,
+                procs,
+                layout_cache,
+                &loc_cond.value,
+                cond_var,
+            );
 
             let stmt = from_can_when(
                 env,
@@ -5400,7 +5404,7 @@ pub fn from_can<'a>(
             let mut stmt = from_can(env, branch_var, final_else.value, procs, layout_cache);
 
             for (loc_cond, loc_then) in branches.into_iter().rev() {
-                let branching_symbol = possible_reuse_symbol_or_spec(
+                let branching_symbol = possible_reuse_symbol_or_specialize(
                     env,
                     procs,
                     layout_cache,
@@ -6474,8 +6478,6 @@ fn store_tag_pattern<'a>(
             union_layout,
         };
 
-        // dbg!(&argument, &load);
-
         match argument {
             Identifier(symbol) => {
                 let symbol = procs
@@ -6718,7 +6720,62 @@ fn can_reuse_symbol<'a>(
     }
 }
 
-fn possible_reuse_symbol_or_spec<'a>(
+/// Reuses the specialized symbol for a given symbol and instance type. If no specialization symbol
+/// yet exists, one is created.
+fn reuse_symbol_or_specialize<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    symbol: Symbol,
+    var: Variable,
+) -> Symbol {
+    // TODO: for some reason, we can't attempt to specialize the built-in argument symbols.
+    // Figure out why.
+    let arguments = [
+        Symbol::ARG_1,
+        Symbol::ARG_2,
+        Symbol::ARG_3,
+        Symbol::ARG_4,
+        Symbol::ARG_5,
+        Symbol::ARG_6,
+        Symbol::ARG_7,
+    ];
+
+    if arguments.contains(&symbol) {
+        return symbol;
+    }
+
+    let wanted_layout = match layout_cache.from_var(env.arena, var, env.subs) {
+        Ok(layout) => layout,
+        // This can happen when the def symbol has a type error. In such cases just use the
+        // def symbol, which is erroring.
+        Err(_) => return symbol,
+    };
+
+    // For the first specialization, always reuse the current symbol. The vast majority of defs
+    // only have one instance type, so this preserves readability of the IR.
+    let needs_fresh_symbol = procs
+        .needed_symbol_specializations
+        .keys()
+        .any(|(s, _)| *s == symbol);
+
+    let mut make_specialized_symbol = || {
+        if needs_fresh_symbol {
+            env.unique_symbol()
+        } else {
+            symbol
+        }
+    };
+
+    let (_, specialized_symbol) = procs
+        .needed_symbol_specializations
+        .entry((symbol, wanted_layout))
+        .or_insert_with(|| (var, make_specialized_symbol()));
+
+    *specialized_symbol
+}
+
+fn possible_reuse_symbol_or_specialize<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
@@ -6727,55 +6784,7 @@ fn possible_reuse_symbol_or_spec<'a>(
 ) -> Symbol {
     match can_reuse_symbol(env, procs, expr) {
         ReuseSymbol::Value(symbol) => {
-            // TODO: for some reason, we can't attempt to specialize the built-in argument symbols.
-            // Figure out why.
-            let arguments = [
-                Symbol::ARG_1,
-                Symbol::ARG_2,
-                Symbol::ARG_3,
-                Symbol::ARG_4,
-                Symbol::ARG_5,
-                Symbol::ARG_6,
-                Symbol::ARG_7,
-            ];
-
-            if arguments.contains(&symbol) {
-                return symbol;
-            }
-
-            let wanted_layout = match layout_cache.from_var(env.arena, var, env.subs) {
-                Ok(layout) => layout,
-                // This can happen when the def symbol has a type error. In such cases just use the
-                // def symbol, which is erroring.
-                Err(_) => return symbol,
-            };
-
-            // For the first specialization, always reuse the current symbol. Two reasons for this:
-            //   1. More readable
-            //   2. Will still have bugs where we're not always specializing the original symbol
-            //      will all specialization symbols. In such cases, just re-use the original for
-            //      now.
-            let needs_fresh_symbol = procs
-                .needed_symbol_specializations
-                .keys()
-                .any(|(s, _)| *s == symbol);
-
-            let (_, specialized_symbol) = procs
-                .needed_symbol_specializations
-                .entry((symbol, wanted_layout))
-                .or_insert_with(|| {
-                    (
-                        var,
-                        if needs_fresh_symbol {
-                            env.unique_symbol()
-                        } else {
-                            symbol
-                        },
-                    )
-                });
-
-            // dbg!(symbol, *specialized_symbol);
-            *specialized_symbol
+            reuse_symbol_or_specialize(env, procs, layout_cache, symbol, var)
         }
         _ => env.unique_symbol(),
     }
@@ -7164,7 +7173,7 @@ fn evaluate_arguments_then_runtime_error<'a>(
     // but, we also still evaluate and specialize the arguments to give better error messages
     let arg_symbols = Vec::from_iter_in(
         loc_args.iter().map(|(var, arg_expr)| {
-            possible_reuse_symbol_or_spec(env, procs, layout_cache, &arg_expr.value, *var)
+            possible_reuse_symbol_or_specialize(env, procs, layout_cache, &arg_expr.value, *var)
         }),
         arena,
     )
@@ -7231,7 +7240,7 @@ fn call_by_name<'a>(
                     let arena = env.arena;
                     let arg_symbols = Vec::from_iter_in(
                         loc_args.iter().map(|(arg_var, arg_expr)| {
-                            possible_reuse_symbol_or_spec(
+                            possible_reuse_symbol_or_specialize(
                                 env,
                                 procs,
                                 layout_cache,
@@ -7329,7 +7338,7 @@ fn call_by_name_help<'a>(
     // the arguments given to the function, stored in symbols
     let mut field_symbols = Vec::with_capacity_in(loc_args.len(), arena);
     field_symbols.extend(loc_args.iter().map(|(arg_var, arg_expr)| {
-        possible_reuse_symbol_or_spec(env, procs, layout_cache, &arg_expr.value, *arg_var)
+        possible_reuse_symbol_or_specialize(env, procs, layout_cache, &arg_expr.value, *arg_var)
     }));
 
     // If required, add an extra argument to the layout that is the captured environment
