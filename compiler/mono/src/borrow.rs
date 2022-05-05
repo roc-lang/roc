@@ -1,8 +1,9 @@
 use crate::ir::{Expr, HigherOrderLowLevel, JoinPointId, Param, Proc, ProcLayout, Stmt};
 use crate::layout::Layout;
-use bumpalo::collections::Vec;
+use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_collections::ReferenceMatrix;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
@@ -46,6 +47,38 @@ pub fn infer_borrow<'a>(
     // next we first partition the functions into strongly connected components, then do a
     // topological sort on these components, finally run the fix-point borrow analysis on each
     // component (in top-sorted order, from primitives (std-lib) to main)
+
+    let mut matrix = ReferenceMatrix::new(procs.len());
+    let keys: Vec<_> = procs.keys().collect_in(arena);
+    {
+        for (row, proc) in procs.values().enumerate() {
+            let mut call_info = CallInfo {
+                keys: Vec::new_in(arena),
+            };
+            call_info_stmt(arena, &proc.body, &mut call_info);
+
+            for key in call_info.keys.iter() {
+                // the same symbol can be in `keys` multiple times (with different layouts)
+                for (col, (k, _)) in keys.iter().enumerate() {
+                    if k == key {
+                        matrix.set_row_col(row, col, true);
+                    }
+                }
+            }
+        }
+
+        let nodes: Vec<_> = (0..procs.len() as u32).collect_in(arena);
+
+        for group in matrix
+            .strongly_connected_components(nodes.as_slice())
+            .groups()
+        {
+            println!("== new group ====");
+            for index in group.iter_ones() {
+                println!("{:?}", keys[index].0);
+            }
+        }
+    }
 
     let successor_map = &make_successor_mapping(arena, procs);
     let successors = move |key: &Symbol| {
@@ -135,6 +168,7 @@ pub fn infer_borrow<'a>(
     }
 
     for group in groups.into_iter().rev() {
+        println!("\n -- new group ----------------");
         // This is a fixed-point analysis
         //
         // all functions initiall own all their parameters
@@ -144,6 +178,7 @@ pub fn infer_borrow<'a>(
         // when the signatures no longer change, the analysis stops and returns the signatures
         loop {
             for (proc, param_offset) in group.iter() {
+                println!("{:?}", proc.name);
                 env.collect_proc(&mut param_map, proc, *param_offset);
             }
 
