@@ -1,4 +1,5 @@
 use crate::abilities::AbilitiesStore;
+use crate::annotation::canonicalize_annotation;
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
@@ -11,7 +12,7 @@ use roc_collections::{MutMap, SendMap, VecSet};
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
-use roc_parse::ast;
+use roc_parse::ast::{self, TypeAnnotation};
 use roc_parse::header::HeaderFor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
@@ -49,6 +50,7 @@ pub struct ModuleOutput {
     pub problems: Vec<Problem>,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
+    pub symbols_from_requires: Vec<(Symbol, Loc<Type>)>,
     pub scope: Scope,
 }
 
@@ -156,16 +158,17 @@ fn has_no_implementation(expr: &Expr) -> bool {
 // TODO trim these down
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
-    arena: &Bump,
+    arena: &'a Bump,
     loc_defs: &'a [Loc<ast::Def<'a>>],
     header_for: &roc_parse::header::HeaderFor,
     home: ModuleId,
-    module_ids: &ModuleIds,
+    module_ids: &'a ModuleIds,
     exposed_ident_ids: IdentIds,
     dep_idents: &'a IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &VecSet<Symbol>,
+    symbols_from_requires: &[(Symbol, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
@@ -349,8 +352,36 @@ pub fn canonicalize_module_defs<'a>(
     };
 
     match sort_can_defs(&mut env, defs, new_output) {
-        (Ok(mut declarations), output) => {
+        (Ok(mut declarations), mut output) => {
             use crate::def::Declaration::*;
+
+            let symbols_from_requires = symbols_from_requires
+                .iter()
+                .map(|(symbol, loc_ann)| {
+                    let ann = canonicalize_annotation(
+                        &mut env,
+                        &mut scope,
+                        &loc_ann.value,
+                        loc_ann.region,
+                        var_store,
+                        &output.abilities_in_scope,
+                    );
+
+                    ann.add_to(
+                        &mut output.aliases,
+                        &mut output.references,
+                        &mut output.introduced_variables,
+                    );
+
+                    (
+                        *symbol,
+                        Loc {
+                            value: ann.typ,
+                            region: loc_ann.region,
+                        },
+                    )
+                })
+                .collect();
 
             if let GeneratedInfo::Hosted {
                 effect_symbol,
@@ -545,6 +576,7 @@ pub fn canonicalize_module_defs<'a>(
                 referenced_types,
                 exposed_imports: can_exposed_imports,
                 problems: env.problems,
+                symbols_from_requires,
                 lookups,
             };
 

@@ -94,18 +94,52 @@ pub enum ExposedModuleTypes {
 
 pub fn constrain_module(
     constraints: &mut Constraints,
+    symbols_from_requires: Vec<(Symbol, Loc<Type>)>,
     abilities_store: &AbilitiesStore,
     declarations: &[Declaration],
     home: ModuleId,
 ) -> Constraint {
     let constraint = crate::expr::constrain_decls(constraints, home, declarations);
-
+    let constraint =
+        constrain_symbols_from_requires(constraints, symbols_from_requires, home, constraint);
     let constraint = frontload_ability_constraints(constraints, abilities_store, constraint);
 
     // The module constraint should always save the environment at the end.
     debug_assert!(constraints.contains_save_the_environment(&constraint));
 
     constraint
+}
+
+fn constrain_symbols_from_requires(
+    constraints: &mut Constraints,
+    symbols_from_requires: Vec<(Symbol, Loc<Type>)>,
+    home: ModuleId,
+    constraint: Constraint,
+) -> Constraint {
+    // TODO thread through rigid_vars and flex_vars
+    let rigid_vars = std::iter::empty();
+    let flex_vars = std::iter::empty();
+
+    symbols_from_requires
+        .into_iter()
+        .fold(constraint, |constraint, (symbol, loc_type)| {
+            if symbol.module_id() == home {
+                constraints.let_constraint(
+                    rigid_vars.clone(),
+                    flex_vars.clone(),
+                    std::iter::once((symbol, loc_type)),
+                    Constraint::True,
+                    constraint,
+                )
+            } else {
+                constraints.lookup(
+                    symbol,
+                    // TODO give it a real expectation, so errors can be helpful
+                    Expected::NoExpectation(loc_type.value),
+                    loc_type.region,
+                )
+            }
+        })
 }
 
 pub fn frontload_ability_constraints(

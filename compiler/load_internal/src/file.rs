@@ -30,7 +30,7 @@ use roc_mono::ir::{
     UpdateModeIds,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
-use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral};
+use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
@@ -512,8 +512,9 @@ struct ModuleHeader<'a> {
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parse_state: roc_parse::state::State<'a>,
-    module_timing: ModuleTiming,
     header_for: HeaderFor<'a>,
+    symbols_from_requires: Vec<(Symbol, Loc<TypeAnnotation<'a>>)>,
+    module_timing: ModuleTiming,
 }
 
 #[derive(Debug)]
@@ -603,6 +604,7 @@ struct ParsedModule<'a> {
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parsed_defs: &'a [Loc<roc_parse::ast::Def<'a>>],
     module_name: ModuleNameEnum<'a>,
+    symbols_from_requires: Vec<(Symbol, Loc<TypeAnnotation<'a>>)>,
     header_for: HeaderFor<'a>,
 }
 
@@ -3228,8 +3230,9 @@ fn send_header<'a>(
             exposes: exposed,
             parse_state,
             exposed_imports: scope,
-            module_timing,
+            symbols_from_requires: Vec::new(),
             header_for: extra,
+            module_timing,
         }),
     )
 }
@@ -3269,6 +3272,7 @@ fn send_header_two<'a>(
     } = info;
 
     let declared_name: ModuleName = "".into();
+    let mut symbols_from_requires = Vec::with_capacity(requires.len());
 
     let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
         Vec::with_capacity(imports.len());
@@ -3372,6 +3376,7 @@ fn send_header_two<'a>(
                 debug_assert!(!scope.contains_key(&ident.clone()));
 
                 scope.insert(ident, (symbol, entry.ident.region));
+                symbols_from_requires.push((symbol, entry.ann));
             }
 
             for entry in requires_types {
@@ -3471,6 +3476,7 @@ fn send_header_two<'a>(
             parse_state,
             exposed_imports: scope,
             module_timing,
+            symbols_from_requires,
             header_for: extra,
         }),
     )
@@ -3814,6 +3820,7 @@ fn canonicalize_and_constrain<'a>(
         exposed_imports,
         imported_modules,
         mut module_timing,
+        symbols_from_requires,
         ..
     } = parsed;
 
@@ -3831,6 +3838,7 @@ fn canonicalize_and_constrain<'a>(
         aliases,
         exposed_imports,
         &exposed_symbols,
+        &symbols_from_requires,
         &mut var_store,
     );
 
@@ -3875,6 +3883,7 @@ fn canonicalize_and_constrain<'a>(
             } else {
                 constrain_module(
                     &mut constraints,
+                    module_output.symbols_from_requires,
                     &module_output.scope.abilities_store,
                     &module_output.declarations,
                     module_id,
@@ -3986,6 +3995,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         exposed_imports,
         module_path,
         header_for,
+        symbols_from_requires,
         ..
     } = header;
 
@@ -4000,6 +4010,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         exposed_ident_ids,
         exposed_imports,
         parsed_defs,
+        symbols_from_requires,
         header_for,
     };
 
