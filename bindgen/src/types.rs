@@ -48,6 +48,9 @@ impl Types {
     }
 
     pub fn sorted_ids(&self) -> Vec<TypeId> {
+        // TODO: instead use the bitvec matrix type we use in the Roc compiler -
+        // it's more efficient and also would bring us one step closer to dropping
+        // the dependency on this topological_sort implementation!
         topological_sort(self.ids(), |id| match self.deps.get(id) {
             Some(dep_ids) => dep_ids.to_vec(),
             None => Vec::new(),
