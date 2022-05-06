@@ -222,6 +222,7 @@ fn ability_used_as_type_still_compiles() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+#[ignore]
 fn encode() {
     assert_evals_to!(
         indoc!(
