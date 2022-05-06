@@ -20,7 +20,7 @@ mod cli_run {
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use strum::IntoEnumIterator;
     use strum_macros::EnumIter;
 
@@ -101,17 +101,23 @@ mod cli_run {
         assert_eq!(out.status.success(), expects_success_exit_code);
     }
 
-    fn run_roc_on<'a, IA: IntoIterator<Item = &'a str>, IF: IntoIterator<Item = &'a str>>(
+    fn run_roc_on<'a, I: IntoIterator<Item = &'a str>>(
         file: &'a Path,
-        args: IA,
+        args: I,
         stdin: &[&str],
-        input_files: IF,
+        input_file: Option<PathBuf>,
     ) -> Out {
-        let compile_out = run_roc(
-            args.into_iter()
-                .chain(iter::once(file.to_str().unwrap()).chain(input_files)),
-            stdin,
-        );
+        let compile_out = match input_file {
+            Some(input_file) => run_roc(
+                args.into_iter()
+                    .chain([file.to_str().unwrap(), input_file.to_str().unwrap()]),
+                stdin,
+            ),
+            None => run_roc(
+                args.into_iter().chain(iter::once(file.to_str().unwrap())),
+                stdin,
+            ),
+        };
 
         if !compile_out.stderr.is_empty() &&
             // If there is any stderr, it should be reporting the runtime and that's it!
@@ -129,12 +135,12 @@ mod cli_run {
         compile_out
     }
 
-    fn check_output_with_stdin<'a, I: IntoIterator<Item = &'a str>>(
-        file: &'a Path,
+    fn check_output_with_stdin(
+        file: &Path,
         stdin: &[&str],
         executable_filename: &str,
-        flags: &[&'a str],
-        input_files: I,
+        flags: &[&str],
+        input_file: Option<PathBuf>,
         expected_ending: &str,
         use_valgrind: bool,
     ) {
@@ -154,21 +160,20 @@ mod cli_run {
                     run_roc_on(file, iter::once(CMD_BUILD).chain(flags.clone()), &[], None);
 
                     if use_valgrind && ALLOW_VALGRIND {
-                        let (valgrind_out, raw_xml) =
-                            if let Some(ref input_file) = input_files.into_iter().next() {
-                                run_with_valgrind(
-                                    stdin.clone().iter().copied(),
-                                    &[
-                                        file.with_file_name(executable_filename).to_str().unwrap(),
-                                        input_file.clone(),
-                                    ],
-                                )
-                            } else {
-                                run_with_valgrind(
-                                    stdin.clone().iter().copied(),
-                                    &[file.with_file_name(executable_filename).to_str().unwrap()],
-                                )
-                            };
+                        let (valgrind_out, raw_xml) = if let Some(ref input_file) = input_file {
+                            run_with_valgrind(
+                                stdin.clone().iter().copied(),
+                                &[
+                                    file.with_file_name(executable_filename).to_str().unwrap(),
+                                    input_file.clone().to_str().unwrap(),
+                                ],
+                            )
+                        } else {
+                            run_with_valgrind(
+                                stdin.clone().iter().copied(),
+                                &[file.with_file_name(executable_filename).to_str().unwrap()],
+                            )
+                        };
 
                         if valgrind_out.status.success() {
                             let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
@@ -205,11 +210,11 @@ mod cli_run {
                         }
 
                         valgrind_out
-                    } else if let Some(ref input_file) = input_files.into_iter().next() {
+                    } else if let Some(ref input_file) = input_file {
                         run_cmd(
                             file.with_file_name(executable_filename).to_str().unwrap(),
                             stdin.iter().copied(),
-                            &[input_file],
+                            &[input_file.to_str().unwrap()],
                         )
                     } else {
                         run_cmd(
@@ -219,12 +224,12 @@ mod cli_run {
                         )
                     }
                 }
-                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, input_files),
+                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, input_file.clone()),
                 CliMode::RocRun => run_roc_on(
                     file,
                     iter::once(CMD_RUN).chain(flags.clone()),
                     stdin,
-                    input_files,
+                    input_file.clone(),
                 ),
             };
 
@@ -313,7 +318,7 @@ mod cli_run {
                         }
                         "hello-gui" | "breakout" => {
                             // Since these require opening a window, we do `roc build` on them but don't run them.
-                            run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], iter::empty());
+                            run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], None);
 
                             return;
                         }
@@ -326,7 +331,7 @@ mod cli_run {
                         example.stdin,
                         example.executable_filename,
                         &[],
-                        example.input_file.and_then(|file| example_file(dir_name, file).to_str()),
+                        example.input_file.and_then(|file| Some(example_file(dir_name, file))),
                         example.expected_ending,
                         example.use_valgrind,
                     );
@@ -339,7 +344,7 @@ mod cli_run {
                         example.stdin,
                         example.executable_filename,
                         &[OPTIMIZE_FLAG],
-                        example.input_file.and_then(|file| example_file(dir_name, file).to_str()),
+                        example.input_file.and_then(|file| Some(example_file(dir_name, file))),
                         example.expected_ending,
                         example.use_valgrind,
                     );
@@ -352,7 +357,7 @@ mod cli_run {
                             example.stdin,
                             example.executable_filename,
                             &[LINKER_FLAG, "legacy"],
-                            example.input_file.and_then(|file| example_file(dir_name, file).to_str()),
+                            example.input_file.and_then(|file| Some(example_file(dir_name, file))),
                             example.expected_ending,
                             example.use_valgrind,
                         );
@@ -559,7 +564,7 @@ mod cli_run {
                         benchmark.stdin,
                         benchmark.executable_filename,
                         &[],
-                        benchmark.input_file.and_then(|file| examples_dir("benchmarks").join(file).to_str()),
+                        benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
                     );
@@ -569,7 +574,7 @@ mod cli_run {
                         benchmark.stdin,
                         benchmark.executable_filename,
                         &[OPTIMIZE_FLAG],
-                        benchmark.input_file.and_then(|file| examples_dir("benchmarks").join(file).to_str()),
+                        benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
                     );
@@ -858,7 +863,7 @@ mod cli_run {
             &[],
             "multi-dep-str",
             &[],
-            iter::empty(),
+            None,
             "I am Dep2.str2\n",
             true,
         );
@@ -872,7 +877,7 @@ mod cli_run {
             &[],
             "multi-dep-str",
             &[OPTIMIZE_FLAG],
-            iter::empty(),
+            None,
             "I am Dep2.str2\n",
             true,
         );
@@ -886,7 +891,7 @@ mod cli_run {
             &[],
             "multi-dep-thunk",
             &[],
-            iter::empty(),
+            None,
             "I am Dep2.value2\n",
             true,
         );
@@ -900,7 +905,7 @@ mod cli_run {
             &[],
             "multi-dep-thunk",
             &[OPTIMIZE_FLAG],
-            iter::empty(),
+            None,
             "I am Dep2.value2\n",
             true,
         );
