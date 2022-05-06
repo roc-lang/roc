@@ -7000,34 +7000,41 @@ fn can_reuse_symbol<'a>(
     procs: &Procs<'a>,
     expr: &roc_can::expr::Expr,
 ) -> ReuseSymbol {
+    use roc_can::expr::Expr::*;
     use ReuseSymbol::*;
 
-    if let roc_can::expr::Expr::Var(symbol) = expr {
-        let symbol = *symbol;
-
-        let arguments = [
-            Symbol::ARG_1,
-            Symbol::ARG_2,
-            Symbol::ARG_3,
-            Symbol::ARG_4,
-            Symbol::ARG_5,
-            Symbol::ARG_6,
-            Symbol::ARG_7,
-        ];
-
-        if arguments.contains(&symbol) {
-            Value(symbol)
-        } else if env.is_imported_symbol(symbol) {
-            Imported(symbol)
-        } else if procs.partial_procs.contains_key(symbol) {
-            LocalFunction(symbol)
-        } else if procs.ability_member_aliases.get(symbol).is_some() {
-            UnspecializedExpr(symbol)
-        } else {
-            Value(symbol)
+    let symbol = match expr {
+        AbilityMember(_, specialization) => {
+            let specialization_symbol = specialization
+                .read()
+                .unwrap()
+                .expect("Specialization must be known!");
+            specialization_symbol
         }
+        Var(symbol) => *symbol,
+        _ => return NotASymbol,
+    };
+
+    let arguments = [
+        Symbol::ARG_1,
+        Symbol::ARG_2,
+        Symbol::ARG_3,
+        Symbol::ARG_4,
+        Symbol::ARG_5,
+        Symbol::ARG_6,
+        Symbol::ARG_7,
+    ];
+
+    if arguments.contains(&symbol) {
+        Value(symbol)
+    } else if env.is_imported_symbol(symbol) {
+        Imported(symbol)
+    } else if procs.partial_procs.contains_key(symbol) {
+        LocalFunction(symbol)
+    } else if procs.ability_member_aliases.get(symbol).is_some() {
+        UnspecializedExpr(symbol)
     } else {
-        NotASymbol
+        Value(symbol)
     }
 }
 
