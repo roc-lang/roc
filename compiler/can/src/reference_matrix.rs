@@ -183,10 +183,10 @@ enum Preorder {
 struct Params {
     preorders: Vec<Preorder>,
     c: usize,
-    p: BitVec,
+    p: Vec<u32>,
     s: Vec<u32>,
     scc: Sccs,
-    scca: BitVec,
+    scca: Vec<u32>,
 }
 
 impl Params {
@@ -201,12 +201,12 @@ impl Params {
             preorders,
             c: 0,
             s: Vec::new(),
-            p: BitVec::repeat(false, length),
+            p: Vec::new(),
             scc: Sccs {
                 matrix: ReferenceMatrix::new(length),
                 components: 0,
             },
-            scca: BitVec::repeat(false, length),
+            scca: Vec::new(),
         }
     }
 }
@@ -217,19 +217,19 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
     params.c += 1;
 
     params.s.push(v as u32);
-    params.p.set(v, true);
+    params.p.push(v as u32);
 
     for w in bitvec[v * length..][..length].iter_ones() {
-        if !params.scca[w] {
+        if !params.scca.contains(&(w as u32)) {
             match params.preorders[w] {
                 Preorder::Filled(pw) => loop {
-                    let index = params.p.last_one().unwrap();
+                    let index = *params.p.last().unwrap();
 
                     match params.preorders[index as usize] {
                         Preorder::Empty => unreachable!(),
                         Preorder::Filled(current) => {
                             if current > pw {
-                                params.p.set(index, false);
+                                params.p.pop();
                             } else {
                                 break;
                             }
@@ -243,15 +243,15 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
         }
     }
 
-    if params.p.last_one() == Some(v) {
-        params.p.set(v, false);
+    if params.p.last() == Some(&(v as u32)) {
+        params.p.pop();
 
         while let Some(node) = params.s.pop() {
             params
                 .scc
                 .matrix
                 .set_row_col(params.scc.components, node as usize, true);
-            params.scca.set(node as usize, true);
+            params.scca.push(node);
             params.preorders[node as usize] = Preorder::Removed;
             if node as usize == v {
                 break;
