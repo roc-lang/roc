@@ -81,7 +81,7 @@ fn main() -> io::Result<()> {
             let arena = bumpalo::Bump::new();
 
             let emit_timings = matches.is_present(FLAG_TIME);
-            let filename = matches.value_of(ROC_FILE).unwrap();
+            let filename = matches.value_of_os(ROC_FILE).unwrap();
             let roc_file_path = PathBuf::from(filename);
             let src_dir = roc_file_path.parent().unwrap().to_owned();
 

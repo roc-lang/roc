@@ -3,16 +3,15 @@ extern crate const_format;
 
 use build::BuiltFile;
 use bumpalo::Bump;
-use clap::Command;
-use clap::{Arg, ArgMatches};
+use clap::{Arg, ArgMatches, Command};
 use roc_build::link::LinkType;
 use roc_error_macros::user_error;
 use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use std::env;
+use std::ffi::OsStr;
 use std::io;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
@@ -96,6 +95,17 @@ pub fn build_app<'a>() -> Command<'a> {
         .possible_values(["true", "false"])
         .required(false);
 
+    let roc_file_to_run = Arg::new(ROC_FILE)
+        .help("The .roc file of an app to run")
+        .allow_invalid_utf8(true)
+        .required(true);
+
+    let args_for_app = Arg::new(ARGS_FOR_APP)
+        .help("Arguments to pass into the app being run")
+        .requires(ROC_FILE)
+        .allow_invalid_utf8(true)
+        .multiple_values(true);
+
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
         .about("Runs the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
@@ -132,6 +142,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file to build")
+                    .allow_invalid_utf8(true)
                     .required(true),
             )
         )
@@ -148,17 +159,8 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_linker.clone())
             .arg(flag_precompiled.clone())
             .arg(flag_valgrind.clone())
-            .arg(
-                Arg::new(ROC_FILE)
-                    .help("The .roc file of an app to run")
-                    .required(true),
-            )
-            .arg(
-                Arg::new(ARGS_FOR_APP)
-                    .help("Arguments to pass into the app being run")
-                    .requires(ROC_FILE)
-                    .multiple_values(true),
-            )
+            .arg(roc_file_to_run.clone())
+            .arg(args_for_app.clone())
         )
         .subcommand(Command::new(CMD_FORMAT)
             .about("Format a .roc file using standard Roc formatting")
@@ -183,6 +185,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file of an app to check")
+                    .allow_invalid_utf8(true)
                     .required(true),
             )
             )
@@ -206,17 +209,8 @@ pub fn build_app<'a>() -> Command<'a> {
         .arg(flag_linker)
         .arg(flag_precompiled)
         .arg(flag_valgrind)
-        .arg(
-            Arg::new(ROC_FILE)
-                .help("The .roc file of an app to build and run")
-                .required(false),
-        )
-        .arg(
-            Arg::new(ARGS_FOR_APP)
-                .help("Arguments to pass into the app being run")
-                .requires(ROC_FILE)
-                .multiple_values(true),
-        );
+        .arg(roc_file_to_run)
+        .arg(args_for_app);
 
     if cfg!(feature = "editor") {
         app.subcommand(
@@ -261,7 +255,7 @@ pub fn build(
     use BuildConfig::*;
 
     let arena = Bump::new();
-    let filename = matches.value_of(ROC_FILE).unwrap();
+    let filename = matches.value_of_os(ROC_FILE).unwrap();
 
     let original_cwd = std::env::current_dir()?;
     let opt_level = match (
@@ -466,7 +460,7 @@ pub fn build(
                                 "warnings"
                             },
                             total_time.as_millis(),
-                            filename
+                            filename.to_string_lossy()
                         );
 
                         Ok(problems.exit_code())
