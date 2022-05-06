@@ -58,15 +58,9 @@ impl<K: PartialEq, V> VecMap<K, V> {
         self.keys.contains(key)
     }
 
-    pub fn remove(&mut self, key: &K) {
-        match self.keys.iter().position(|x| x == key) {
-            None => {
-                // just do nothing
-            }
-            Some(index) => {
-                self.swap_remove(index);
-            }
-        }
+    pub fn remove(&mut self, key: &K) -> Option<(K, V)> {
+        let index = self.keys.iter().position(|x| x == key)?;
+        Some(self.swap_remove(index))
     }
 
     pub fn get(&self, key: &K) -> Option<&V> {
@@ -83,7 +77,7 @@ impl<K: PartialEq, V> VecMap<K, V> {
         }
     }
 
-    pub fn get_or_insert(&mut self, key: K, default_value: impl Fn() -> V) -> &mut V {
+    pub fn get_or_insert(&mut self, key: K, default_value: impl FnOnce() -> V) -> &mut V {
         match self.keys.iter().position(|x| x == &key) {
             Some(index) => &mut self.values[index],
             None => {
@@ -97,15 +91,19 @@ impl<K: PartialEq, V> VecMap<K, V> {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&K, &V)> {
         self.keys.iter().zip(self.values.iter())
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &K> {
+    pub fn into_iter(self) -> impl ExactSizeIterator<Item = (K, V)> {
+        self.keys.into_iter().zip(self.values.into_iter())
+    }
+
+    pub fn keys(&self) -> impl ExactSizeIterator<Item = &K> {
         self.keys.iter()
     }
 
-    pub fn values(&self) -> impl Iterator<Item = &V> {
+    pub fn values(&self) -> impl ExactSizeIterator<Item = &V> {
         self.values.iter()
     }
 

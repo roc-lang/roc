@@ -10,6 +10,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
+use roc_collections::VecMap;
 use roc_debug_flags::{
     dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
     ROC_PRINT_IR_AFTER_SPECIALIZATION,
@@ -743,6 +744,158 @@ impl<'a> Specialized<'a> {
     }
 }
 
+/// Uniquely determines the specialization of a polymorphic (non-proc) value symbol.
+/// Two specializations are equivalent if their [`SpecializationMark`]s are equal.
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+struct SpecializationMark<'a> {
+    /// The layout of the symbol itself.
+    layout: Layout<'a>,
+
+    /// If this symbol is a closure def, we must also keep track of what function it specializes,
+    /// because the [`layout`] field will only keep track of its closure and lambda set - which can
+    /// be the same for two different function specializations. For example,
+    ///
+    ///   id = if True then \x -> x else \y -> y
+    ///   { a: id "", b: id 1u8 }
+    ///
+    /// The lambda set and captures of `id` is the same in both usages inside the record, but the
+    /// reified specializations of `\x -> x` and `\y -> y` must be for Str and U8.
+    ///
+    /// Note that this field is not relevant for anything that is not a function.
+    function_mark: Option<RawFunctionLayout<'a>>,
+}
+
+/// When walking a function body, we may encounter specialized usages of polymorphic symbols. For
+/// example
+///
+///  myTag = A
+///  use1 : [A, B]
+///  use1 = myTag
+///  use2 : [A, B, C]
+///  use2 = myTag
+///
+/// We keep track of the specializations of `myTag` and create fresh symbols when there is more
+/// than one, so that a unique def can be created for each.
+#[derive(Default, Debug, Clone)]
+struct SymbolSpecializations<'a>(
+    // THEORY:
+    //  1. the number of symbols in a def is very small
+    //  2. the number of specializations of a symbol in a def is even smaller (almost always only one)
+    // So, a linear VecMap is preferrable. Use a two-layered one to make (1) extraction of defs easy
+    // and (2) reads of a certain symbol be determined by its first occurence, not its last.
+    VecMap<Symbol, VecMap<SpecializationMark<'a>, (Variable, Symbol)>>,
+);
+
+impl<'a> SymbolSpecializations<'a> {
+    /// Gets a specialization for a symbol, or creates a new one.
+    #[inline(always)]
+    fn get_or_insert(
+        &mut self,
+        env: &mut Env<'a, '_>,
+        layout_cache: &mut LayoutCache<'a>,
+        symbol: Symbol,
+        specialization_var: Variable,
+    ) -> Symbol {
+        let arena = env.arena;
+        let subs: &Subs = env.subs;
+
+        // let is_closure = matches!(
+        //     subs.get_content_without_compacting(specialization_var),
+        //     Content::Structure(FlatType::Func(..))
+        // );
+
+        let layout = match layout_cache.from_var(arena, specialization_var, subs) {
+            Ok(layout) => layout,
+            // This can happen when the def symbol has a type error. In such cases just use the
+            // def symbol, which is erroring.
+            Err(_) => return symbol,
+        };
+
+        // let function_mark = if is_closure {
+        //     let fn_layout = match layout_cache.raw_from_var(arena, specialization_var, subs) {
+        //         Ok(layout) => layout,
+        //         // This can happen when the def symbol has a type error. In such cases just use the
+        //         // def symbol, which is erroring.
+        //         Err(_) => return symbol,
+        //     };
+        //     Some(fn_layout)
+        // } else {
+        //     None
+        // };
+
+        let specialization_mark = SpecializationMark {
+            layout,
+            function_mark: None,
+        };
+
+        let symbol_specializations = self.0.get_or_insert(symbol, || Default::default());
+
+        // For the first specialization, always reuse the current symbol. The vast majority of defs
+        // only have one instance type, so this preserves readability of the IR.
+        // TODO: turn me off and see what breaks.
+        let needs_fresh_symbol = !symbol_specializations.is_empty();
+
+        let mut make_specialized_symbol = || {
+            if needs_fresh_symbol {
+                env.unique_symbol()
+            } else {
+                symbol
+            }
+        };
+
+        let (_var, specialized_symbol) = symbol_specializations
+            .get_or_insert(specialization_mark, || {
+                (specialization_var, make_specialized_symbol())
+            });
+
+        *specialized_symbol
+    }
+
+    /// Inserts a known specialization for a symbol. Returns the overwritten specialization, if any.
+    pub fn get_or_insert_known(
+        &mut self,
+        symbol: Symbol,
+        mark: SpecializationMark<'a>,
+        specialization_var: Variable,
+        specialization_symbol: Symbol,
+    ) -> Option<(Variable, Symbol)> {
+        self.0
+            .get_or_insert(symbol, Default::default)
+            .insert(mark, (specialization_var, specialization_symbol))
+    }
+
+    /// Removes all specializations for a symbol, returning the type and symbol of each specialization.
+    pub fn remove(
+        &mut self,
+        symbol: Symbol,
+    ) -> impl ExactSizeIterator<Item = (SpecializationMark<'a>, (Variable, Symbol))> {
+        self.0
+            .remove(&symbol)
+            .map(|(_, specializations)| specializations)
+            .unwrap_or_default()
+            .into_iter()
+    }
+
+    /// Expects and removes at most a single specialization symbol for the given requested symbol.
+    /// A symbol may have no specializations if it is never referenced in a body, so it is possible
+    /// for this to return None.
+    pub fn remove_single(&mut self, symbol: Symbol) -> Option<Symbol> {
+        let mut specializations = self.remove(symbol);
+
+        debug_assert!(
+            specializations.len() < 2,
+            "Symbol {:?} has multiple specializations",
+            symbol
+        );
+
+        specializations.next().map(|(_, (_, symbol))| symbol)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
@@ -753,7 +906,7 @@ pub struct Procs<'a> {
     specialized: Specialized<'a>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations>,
-    pub needed_symbol_specializations: BumpMap<(Symbol, Layout<'a>), (Variable, Symbol)>,
+    symbol_specializations: SymbolSpecializations<'a>,
 }
 
 impl<'a> Procs<'a> {
@@ -767,37 +920,8 @@ impl<'a> Procs<'a> {
             specialized: Specialized::default(),
             runtime_errors: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
-            needed_symbol_specializations: BumpMap::new_in(arena),
+            symbol_specializations: Default::default(),
         }
-    }
-
-    /// Expects and removes a single specialization symbol for the given requested symbol.
-    /// In debug builds, we assert that the layout of the specialization is the layout expected by
-    /// the requested symbol.
-    fn remove_single_symbol_specialization(
-        &mut self,
-        symbol: Symbol,
-        layout: Layout,
-    ) -> Option<Symbol> {
-        let mut specialized_symbols = self
-            .needed_symbol_specializations
-            .drain_filter(|(sym, _), _| sym == &symbol);
-
-        let specialization_symbol = specialized_symbols
-            .next()
-            .map(|((_, specialized_layout), (_, specialized_symbol))| {
-                debug_assert_eq!(specialized_layout, layout, "Requested the single specialization of {:?}, but the specialization layout ({:?}) doesn't match the expected layout ({:?})", symbol, specialized_layout, layout);
-                specialized_symbol
-            });
-
-        debug_assert_eq!(
-            specialized_symbols.count(),
-            0,
-            "Symbol {:?} has multiple specializations",
-            symbol
-        );
-
-        specialization_symbol
     }
 }
 
@@ -2166,9 +2290,9 @@ pub fn specialize_all<'a>(
     specialize_host_specializations(env, &mut procs, layout_cache, specializations_for_host);
 
     debug_assert!(
-        procs.needed_symbol_specializations.is_empty(),
+        procs.symbol_specializations.is_empty(),
         "{:?}",
-        &procs.needed_symbol_specializations
+        &procs.symbol_specializations
     );
 
     procs
@@ -2503,11 +2627,10 @@ fn specialize_external<'a>(
                     // An argument from the closure list may have taken on a specialized symbol
                     // name during the evaluation of the def body. If this is the case, load the
                     // specialized name rather than the original captured name!
-                    let mut get_specialized_name = |symbol, layout| {
+                    let mut get_specialized_name = |symbol| {
                         procs
-                            .needed_symbol_specializations
-                            .remove(&(symbol, layout))
-                            .map(|(_, specialized)| specialized)
+                            .symbol_specializations
+                            .remove_single(symbol)
                             .unwrap_or(symbol)
                     };
 
@@ -2545,7 +2668,7 @@ fn specialize_external<'a>(
                                     union_layout,
                                 };
 
-                                let symbol = get_specialized_name(**symbol, **layout);
+                                let symbol = get_specialized_name(**symbol);
 
                                 specialized_body = Stmt::Let(
                                     symbol,
@@ -2588,7 +2711,7 @@ fn specialize_external<'a>(
                                     structure: Symbol::ARG_CLOSURE,
                                 };
 
-                                let symbol = get_specialized_name(**symbol, **layout);
+                                let symbol = get_specialized_name(**symbol);
 
                                 specialized_body = Stmt::Let(
                                     symbol,
@@ -2633,11 +2756,10 @@ fn specialize_external<'a>(
             let proc_args: Vec<_> = proc_args
                 .iter()
                 .map(|&(layout, symbol)| {
+                    // Grab the specialization symbol, if it exists.
                     let symbol = procs
-                        .needed_symbol_specializations
-                        // We can remove the specialization since this is the definition site.
-                        .remove(&(symbol, layout))
-                        .map(|(_, specialized_symbol)| specialized_symbol)
+                        .symbol_specializations
+                        .remove_single(symbol)
                         .unwrap_or(symbol);
 
                     (layout, symbol)
@@ -3351,18 +3473,7 @@ pub fn with_hole<'a>(
                 );
 
                 let outer_symbol = env.unique_symbol();
-                let pattern_layout = layout_cache
-                    .from_var(env.arena, def.expr_var, env.subs)
-                    .expect("Pattern has no layout");
-                stmt = store_pattern(
-                    env,
-                    procs,
-                    layout_cache,
-                    &mono_pattern,
-                    pattern_layout,
-                    outer_symbol,
-                    stmt,
-                );
+                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
 
                 // convert the def body, store in outer_symbol
                 with_hole(
@@ -3405,7 +3516,9 @@ pub fn with_hole<'a>(
                 can_reuse_symbol(env, procs, &roc_can::expr::Expr::Var(symbol))
             {
                 let real_symbol =
-                    reuse_symbol_or_specialize(env, procs, layout_cache, symbol, variable);
+                    procs
+                        .symbol_specializations
+                        .get_or_insert(env, layout_cache, symbol, variable);
                 symbol = real_symbol;
             }
 
@@ -3484,8 +3597,12 @@ pub fn with_hole<'a>(
             match can_reuse_symbol(env, procs, &loc_arg_expr.value) {
                 // Opaques decay to their argument.
                 ReuseSymbol::Value(symbol) => {
-                    let real_name =
-                        reuse_symbol_or_specialize(env, procs, layout_cache, symbol, arg_var);
+                    let real_name = procs.symbol_specializations.get_or_insert(
+                        env,
+                        layout_cache,
+                        symbol,
+                        arg_var,
+                    );
                     let mut result = hole.clone();
                     substitute_in_exprs(arena, &mut result, assigned, real_name);
                     result
@@ -3538,9 +3655,8 @@ pub fn with_hole<'a>(
                             can_fields.push(Field::Function(symbol, variable));
                         }
                         Value(symbol) => {
-                            let reusable = reuse_symbol_or_specialize(
+                            let reusable = procs.symbol_specializations.get_or_insert(
                                 env,
-                                procs,
                                 layout_cache,
                                 symbol,
                                 field.var,
@@ -4354,9 +4470,8 @@ pub fn with_hole<'a>(
                             }
                         }
                         Value(function_symbol) => {
-                            let function_symbol = reuse_symbol_or_specialize(
+                            let function_symbol = procs.symbol_specializations.get_or_insert(
                                 env,
-                                procs,
                                 layout_cache,
                                 function_symbol,
                                 fn_var,
@@ -5666,12 +5781,14 @@ pub fn from_can<'a>(
                     _ => {
                         let rest = from_can(env, variable, cont.value, procs, layout_cache);
 
-                        let needs_def_specializations = procs
-                            .needed_symbol_specializations
-                            .keys()
-                            .any(|(s, _)| s == symbol);
+                        // Remove all the requested symbol specializations now, since this is the
+                        // def site and hence we won't need them any higher up.
+                        let mut needed_specializations =
+                            procs.symbol_specializations.remove(*symbol);
 
-                        if !needs_def_specializations {
+                        if needed_specializations.len() == 0 {
+                            // We don't need any specializations, that means this symbol is never
+                            // referenced.
                             return with_hole(
                                 env,
                                 def.loc_expr.value,
@@ -5687,16 +5804,9 @@ pub fn from_can<'a>(
 
                         let mut stmt = rest;
 
-                        // Remove all the requested symbol specializations now, since this is the
-                        // def site and hence we won't need them any higher up.
-                        let mut needed_specializations = procs
-                            .needed_symbol_specializations
-                            .drain_filter(|(s, _), _| s == symbol)
-                            .collect::<std::vec::Vec<_>>();
-
                         if needed_specializations.len() == 1 {
-                            let ((_, _wanted_layout), (var, specialized_symbol)) =
-                                needed_specializations.pop().unwrap();
+                            let (_specialization_mark, (var, specialized_symbol)) =
+                                needed_specializations.next().unwrap();
 
                             // Unify the expr_var with the requested specialization once.
                             let _res =
@@ -5713,7 +5823,7 @@ pub fn from_can<'a>(
                             );
                         } else {
                             // Need to eat the cost and create a specialized version of the body for each specialization.
-                            for ((_original_symbol, _wanted_layout), (var, specialized_symbol)) in
+                            for (_specialization_mark, (var, specialized_symbol)) in
                                 needed_specializations
                             {
                                 use crate::copy::deep_copy_type_vars_into_expr;
@@ -5783,11 +5893,9 @@ pub fn from_can<'a>(
 
                 // layer on any default record fields
                 for (symbol, variable, expr) in assignments {
-                    let layout = layout_cache
-                        .from_var(env.arena, variable, env.subs)
-                        .expect("Default field has no layout");
                     let specialization_symbol = procs
-                        .remove_single_symbol_specialization(symbol, layout)
+                        .symbol_specializations
+                        .remove_single(symbol)
                         // Can happen when the symbol was never used under this body, and hence has no
                         // requested specialization.
                         .unwrap_or(symbol);
@@ -5804,30 +5912,12 @@ pub fn from_can<'a>(
                     );
                 }
 
-                let pattern_layout = layout_cache
-                    .from_var(env.arena, def.expr_var, env.subs)
-                    .expect("Pattern has no layout");
                 if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
-                    store_pattern(
-                        env,
-                        procs,
-                        layout_cache,
-                        &mono_pattern,
-                        pattern_layout,
-                        outer_symbol,
-                        stmt,
-                    )
+                    store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
                 } else {
                     let outer_symbol = env.unique_symbol();
-                    stmt = store_pattern(
-                        env,
-                        procs,
-                        layout_cache,
-                        &mono_pattern,
-                        pattern_layout,
-                        outer_symbol,
-                        stmt,
-                    );
+                    stmt =
+                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
 
                     // convert the def body, store in outer_symbol
                     with_hole(
@@ -6393,19 +6483,10 @@ pub fn store_pattern<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     can_pat: &Pattern<'a>,
-    pattern_layout: Layout,
     outer_symbol: Symbol,
     stmt: Stmt<'a>,
 ) -> Stmt<'a> {
-    match store_pattern_help(
-        env,
-        procs,
-        layout_cache,
-        can_pat,
-        pattern_layout,
-        outer_symbol,
-        stmt,
-    ) {
+    match store_pattern_help(env, procs, layout_cache, can_pat, outer_symbol, stmt) {
         StorePattern::Productive(new) => new,
         StorePattern::NotProductive(new) => new,
     }
@@ -6425,7 +6506,6 @@ fn store_pattern_help<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     can_pat: &Pattern<'a>,
-    pattern_layout: Layout,
     outer_symbol: Symbol,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
@@ -6436,7 +6516,8 @@ fn store_pattern_help<'a>(
             // An identifier in a pattern can define at most one specialization!
             // Remove any requested specializations for this name now, since this is the definition site.
             let specialization_symbol = procs
-                .remove_single_symbol_specialization(*symbol, pattern_layout)
+                .symbol_specializations
+                .remove_single(*symbol)
                 // Can happen when the symbol was never used under this body, and hence has no
                 // requested specialization.
                 .unwrap_or(*symbol);
@@ -6457,16 +6538,8 @@ fn store_pattern_help<'a>(
             return StorePattern::NotProductive(stmt);
         }
         NewtypeDestructure { arguments, .. } => match arguments.as_slice() {
-            [(pattern, layout)] => {
-                return store_pattern_help(
-                    env,
-                    procs,
-                    layout_cache,
-                    pattern,
-                    *layout,
-                    outer_symbol,
-                    stmt,
-                );
+            [(pattern, _layout)] => {
+                return store_pattern_help(env, procs, layout_cache, pattern, outer_symbol, stmt);
             }
             _ => {
                 let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
@@ -6503,16 +6576,8 @@ fn store_pattern_help<'a>(
             );
         }
         OpaqueUnwrap { argument, .. } => {
-            let (pattern, layout) = &**argument;
-            return store_pattern_help(
-                env,
-                procs,
-                layout_cache,
-                pattern,
-                *layout,
-                outer_symbol,
-                stmt,
-            );
+            let (pattern, _layout) = &**argument;
+            return store_pattern_help(env, procs, layout_cache, pattern, outer_symbol, stmt);
         }
 
         RecordDestructure(destructs, [_single_field]) => {
@@ -6520,7 +6585,8 @@ fn store_pattern_help<'a>(
                 match &destruct.typ {
                     DestructType::Required(symbol) => {
                         let specialization_symbol = procs
-                            .remove_single_symbol_specialization(*symbol, destruct.layout)
+                            .symbol_specializations
+                            .remove_single(*symbol)
                             // Can happen when the symbol was never used under this body, and hence has no
                             // requested specialization.
                             .unwrap_or(*symbol);
@@ -6538,7 +6604,6 @@ fn store_pattern_help<'a>(
                             procs,
                             layout_cache,
                             guard_pattern,
-                            destruct.layout,
                             outer_symbol,
                             stmt,
                         );
@@ -6611,7 +6676,8 @@ fn store_tag_pattern<'a>(
             Identifier(symbol) => {
                 // Pattern can define only one specialization
                 let symbol = procs
-                    .remove_single_symbol_specialization(*symbol, arg_layout)
+                    .symbol_specializations
+                    .remove_single(*symbol)
                     .unwrap_or(*symbol);
 
                 // store immediately in the given symbol
@@ -6632,15 +6698,7 @@ fn store_tag_pattern<'a>(
                 let symbol = env.unique_symbol();
 
                 // first recurse, continuing to unpack symbol
-                match store_pattern_help(
-                    env,
-                    procs,
-                    layout_cache,
-                    argument,
-                    arg_layout,
-                    symbol,
-                    stmt,
-                ) {
+                match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
                     StorePattern::Productive(new) => {
                         is_productive = true;
                         stmt = new;
@@ -6700,7 +6758,8 @@ fn store_newtype_pattern<'a>(
             Identifier(symbol) => {
                 // store immediately in the given symbol, removing it specialization if it had any
                 let specialization_symbol = procs
-                    .remove_single_symbol_specialization(*symbol, arg_layout)
+                    .symbol_specializations
+                    .remove_single(*symbol)
                     // Can happen when the symbol was never used under this body, and hence has no
                     // requested specialization.
                     .unwrap_or(*symbol);
@@ -6727,15 +6786,7 @@ fn store_newtype_pattern<'a>(
                 let symbol = env.unique_symbol();
 
                 // first recurse, continuing to unpack symbol
-                match store_pattern_help(
-                    env,
-                    procs,
-                    layout_cache,
-                    argument,
-                    arg_layout,
-                    symbol,
-                    stmt,
-                ) {
+                match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
                     StorePattern::Productive(new) => {
                         is_productive = true;
                         stmt = new;
@@ -6783,7 +6834,8 @@ fn store_record_destruct<'a>(
             // A destructure can define at most one specialization!
             // Remove any requested specializations for this name now, since this is the definition site.
             let specialization_symbol = procs
-                .remove_single_symbol_specialization(*symbol, destruct.layout)
+                .symbol_specializations
+                .remove_single(*symbol)
                 // Can happen when the symbol was never used under this body, and hence has no
                 // requested specialization.
                 .unwrap_or(*symbol);
@@ -6798,7 +6850,8 @@ fn store_record_destruct<'a>(
         DestructType::Guard(guard_pattern) => match &guard_pattern {
             Identifier(symbol) => {
                 let specialization_symbol = procs
-                    .remove_single_symbol_specialization(*symbol, destruct.layout)
+                    .symbol_specializations
+                    .remove_single(*symbol)
                     // Can happen when the symbol was never used under this body, and hence has no
                     // requested specialization.
                     .unwrap_or(*symbol);
@@ -6836,15 +6889,7 @@ fn store_record_destruct<'a>(
             _ => {
                 let symbol = env.unique_symbol();
 
-                match store_pattern_help(
-                    env,
-                    procs,
-                    layout_cache,
-                    guard_pattern,
-                    destruct.layout,
-                    symbol,
-                    stmt,
-                ) {
+                match store_pattern_help(env, procs, layout_cache, guard_pattern, symbol, stmt) {
                     StorePattern::Productive(new) => {
                         stmt = new;
                         stmt = Stmt::Let(symbol, load, destruct.layout, env.arena.alloc(stmt));
@@ -6907,45 +6952,6 @@ fn can_reuse_symbol<'a>(
     }
 }
 
-/// Reuses the specialized symbol for a given symbol and instance type. If no specialization symbol
-/// yet exists, one is created.
-fn reuse_symbol_or_specialize<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    symbol: Symbol,
-    var: Variable,
-) -> Symbol {
-    let wanted_layout = match layout_cache.from_var(env.arena, var, env.subs) {
-        Ok(layout) => layout,
-        // This can happen when the def symbol has a type error. In such cases just use the
-        // def symbol, which is erroring.
-        Err(_) => return symbol,
-    };
-
-    // For the first specialization, always reuse the current symbol. The vast majority of defs
-    // only have one instance type, so this preserves readability of the IR.
-    let needs_fresh_symbol = procs
-        .needed_symbol_specializations
-        .keys()
-        .any(|(s, _)| *s == symbol);
-
-    let mut make_specialized_symbol = || {
-        if needs_fresh_symbol {
-            env.unique_symbol()
-        } else {
-            symbol
-        }
-    };
-
-    let (_, specialized_symbol) = procs
-        .needed_symbol_specializations
-        .entry((symbol, wanted_layout))
-        .or_insert_with(|| (var, make_specialized_symbol()));
-
-    *specialized_symbol
-}
-
 fn possible_reuse_symbol_or_specialize<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -6955,7 +6961,9 @@ fn possible_reuse_symbol_or_specialize<'a>(
 ) -> Symbol {
     match can_reuse_symbol(env, procs, expr) {
         ReuseSymbol::Value(symbol) => {
-            reuse_symbol_or_specialize(env, procs, layout_cache, symbol, var)
+            procs
+                .symbol_specializations
+                .get_or_insert(env, layout_cache, symbol, var)
         }
         _ => env.unique_symbol(),
     }
@@ -7000,16 +7008,13 @@ where
     let result = build_rest(env, procs, layout_cache);
 
     // The specializations we wanted of the symbol on the LHS of this alias.
-    let needed_specializations_of_left = procs
-        .needed_symbol_specializations
-        .drain_filter(|(s, _), _| s == &left)
-        .collect::<std::vec::Vec<_>>();
+    let needed_specializations_of_left = procs.symbol_specializations.remove(left);
 
     if procs.is_imported_module_thunk(right) {
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
         let mut result = result;
-        for (_, (variable, left)) in needed_specializations_of_left.into_iter() {
+        for (_, (variable, left)) in needed_specializations_of_left {
             add_needed_external(procs, env, variable, right);
 
             let res_layout = layout_cache.from_var(env.arena, variable, env.subs);
@@ -7029,14 +7034,17 @@ where
         // We need to lift all specializations of "left" to be specializations of "right".
         let mut scratchpad_update_specializations = std::vec::Vec::new();
 
-        let left_had_specialization_symbols = !needed_specializations_of_left.is_empty();
+        let left_had_specialization_symbols = needed_specializations_of_left.len() > 0;
 
-        for ((_, layout), (specialized_var, specialized_sym)) in
-            needed_specializations_of_left.into_iter()
+        for (specialization_mark, (specialized_var, specialized_sym)) in
+            needed_specializations_of_left
         {
-            let old_specialized_sym = procs
-                .needed_symbol_specializations
-                .insert((right, layout), (specialized_var, specialized_sym));
+            let old_specialized_sym = procs.symbol_specializations.get_or_insert_known(
+                right,
+                specialization_mark,
+                specialized_var,
+                specialized_sym,
+            );
 
             if let Some((_, old_specialized_sym)) = old_specialized_sym {
                 scratchpad_update_specializations.push((old_specialized_sym, specialized_sym));
