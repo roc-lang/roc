@@ -782,7 +782,7 @@ struct SymbolSpecializations<'a>(
     //  1. the number of symbols in a def is very small
     //  2. the number of specializations of a symbol in a def is even smaller (almost always only one)
     // So, a linear VecMap is preferrable. Use a two-layered one to make (1) extraction of defs easy
-    // and (2) reads of a certain symbol be determined by its first occurence, not its last.
+    // and (2) reads of a certain symbol be determined by its first occurrence, not its last.
     VecMap<Symbol, VecMap<SpecializationMark<'a>, (Variable, Symbol)>>,
 );
 
