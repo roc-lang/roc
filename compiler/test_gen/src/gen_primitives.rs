@@ -3436,3 +3436,24 @@ fn polymorphic_lambda_set_usage() {
         u8
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_map2_conslist() {
+    // this had an RC problem, https://github.com/rtfeldman/roc/issues/2968
+    assert_evals_to!(
+        indoc!(
+            r#"
+            ConsList a : [ Nil, Cons a (ConsList a) ]
+
+            x : List (ConsList Str)
+            x = List.map2 [ ] [ Nil ] Cons
+
+            when List.first x is
+                _ -> ""
+            "#
+        ),
+        RocStr::default(),
+        RocStr
+    )
+}
