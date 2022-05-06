@@ -6,7 +6,7 @@ use ven_graph::topological_sort;
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Types {
     by_id: Vec<RocType>,
 
