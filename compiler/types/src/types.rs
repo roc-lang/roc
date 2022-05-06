@@ -1123,8 +1123,17 @@ impl Type {
                     ext.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
                 }
             }
-            DelayedAlias(AliasCommon { .. }) => {
-                // do nothing, yay
+            DelayedAlias(AliasCommon {
+                type_arguments,
+                lambda_set_variables,
+                symbol: _,
+            }) => {
+                debug_assert!(lambda_set_variables
+                    .iter()
+                    .all(|lambda_set| matches!(lambda_set.0, Type::Variable(..))));
+                type_arguments.iter_mut().for_each(|t| {
+                    t.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables)
+                });
             }
             HostExposedAlias {
                 type_arguments: type_args,
