@@ -7,6 +7,7 @@ extern crate tempfile;
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
+use std::ffi::OsStr;
 use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
@@ -44,8 +45,7 @@ pub fn path_to_roc_binary() -> PathBuf {
     path
 }
 
-#[allow(dead_code)]
-pub fn run_roc(args: &[&str]) -> Out {
+pub fn run_roc<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I) -> Out {
     let mut cmd = Command::new(path_to_roc_binary());
 
     for arg in args {
@@ -63,8 +63,11 @@ pub fn run_roc(args: &[&str]) -> Out {
     }
 }
 
-#[allow(dead_code)]
-pub fn run_cmd(cmd_name: &str, stdin_vals: &[&str], args: &[&str]) -> Out {
+pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>>(
+    cmd_name: &str,
+    stdin_vals: I,
+    args: &[&str],
+) -> Out {
     let mut cmd = Command::new(cmd_name);
 
     for arg in args {
@@ -99,8 +102,10 @@ pub fn run_cmd(cmd_name: &str, stdin_vals: &[&str], args: &[&str]) -> Out {
     }
 }
 
-#[allow(dead_code)]
-pub fn run_with_valgrind(stdin_vals: &[&str], args: &[&str]) -> (Out, String) {
+pub fn run_with_valgrind<'a, I: IntoIterator<Item = &'a str>>(
+    stdin_vals: I,
+    args: &[&str],
+) -> (Out, String) {
     //TODO: figure out if there is a better way to get the valgrind executable.
     let mut cmd = Command::new("valgrind");
     let named_tempfile =

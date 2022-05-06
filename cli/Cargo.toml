@@ -85,6 +85,8 @@ indoc = "1.0.3"
 serial_test = "0.5.1"
 criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 cli_utils = { path = "../cli_utils" }
+strum = "0.24.0"
+strum_macros = "0.24"
 
 # Wasmer singlepass compiler only works on x86_64.
 [target.'cfg(target_arch = "x86_64")'.dev-dependencies]
