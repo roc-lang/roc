@@ -540,10 +540,10 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.f64_floor();
                     }
                     (F32, NumRound) => {
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND[FloatWidth::F32])
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F32[IntWidth::I32])
                     }
                     (F64, NumRound) => {
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND[FloatWidth::F64])
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F64[IntWidth::I64])
                     }
                     _ => internal_error!("Invalid argument type for ceiling: {:?}", arg_type),
                 }

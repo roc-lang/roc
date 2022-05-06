@@ -554,7 +554,7 @@ trait Backend<'a> {
             }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
-                bitcode::NUM_ROUND[FloatWidth::F64].to_string(),
+                bitcode::NUM_ROUND_F64[IntWidth::I64].to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
