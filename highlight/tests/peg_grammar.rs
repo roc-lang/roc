@@ -72,10 +72,7 @@ mod test_peg_grammar {
 
 
             rule tag() =
-              private_tag()
-              / [T::UppercaseIdent]
-
-            rule private_tag() = [T::PrivateTag] {}
+              [T::UppercaseIdent]
 
 
             rule list() = empty_list()
@@ -368,7 +365,6 @@ mod test_peg_grammar {
               / [T::OpSlash]
               / [T::OpDoubleSlash]
               / [T::OpPercent]
-              / [T::OpDoublePercent]
             rule mul_level_expr() =
               unary_expr() (mul_level_op() unary_expr())*
 

@@ -1,6 +1,6 @@
-interface Dict
-    exposes 
-        [ 
+interface Set
+    exposes
+        [
             empty,
             single,
             walk,
@@ -14,12 +14,19 @@ interface Dict
             intersection,
             difference,
         ]
-    imports [ ]
+    imports [ List, Bool.{ Bool }, Dict.{ values } ]
 
+## An empty set.
 empty : Set k
 single : k -> Set k
+
+## Make sure never to insert a *NaN* to a [Set]! Because *NaN* is defined to be
+## unequal to *NaN*, adding a *NaN* results in an entry that can never be
+## retrieved or removed from the [Set].
 insert : Set k, k -> Set k
 len : Set k -> Nat
+
+## Drops the given element from the set.
 remove : Set k, k -> Set k
 contains : Set k, k -> Bool
 
@@ -35,4 +42,4 @@ toDict : Set k -> Dict k {}
 
 walk : Set k, state, (state, k -> state) -> state
 walk = \set, state, step ->
-    Dict.walk (toDict set) state (\s, k, _ -> step s k)
+    Dict.walk (Set.toDict set) state (\s, k, _ -> step s k)

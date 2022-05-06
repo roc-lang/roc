@@ -137,8 +137,10 @@ impl FunctionLayout {
         use LayoutError::*;
 
         match content {
-            Content::FlexVar(_) => Err(UnresolvedVariable(var)),
-            Content::RigidVar(_) => Err(UnresolvedVariable(var)),
+            Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _) => Err(UnresolvedVariable(var)),
             Content::RecursionVar { .. } => Err(TypeError(())),
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(_, _, actual, _) => Self::from_var_help(layouts, subs, *actual),
@@ -243,8 +245,10 @@ impl LambdaSet {
         use LayoutError::*;
 
         match content {
-            Content::FlexVar(_) => Err(UnresolvedVariable(var)),
-            Content::RigidVar(_) => Err(UnresolvedVariable(var)),
+            Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _) => Err(UnresolvedVariable(var)),
             Content::RecursionVar { .. } => {
                 unreachable!("lambda sets cannot currently be recursive")
             }
@@ -339,8 +343,7 @@ impl LambdaSet {
                 TagName::Closure(symbol) => {
                     layouts.symbols.push(*symbol);
                 }
-                TagName::Global(_) => unreachable!("lambda set tags must be closure tags"),
-                TagName::Private(_) => unreachable!("lambda set tags must be closure tags"),
+                TagName::Tag(_) => unreachable!("lambda set tags must be closure tags"),
             }
         }
 
@@ -627,8 +630,10 @@ impl Layout {
         use LayoutError::*;
 
         match content {
-            Content::FlexVar(_) => Err(UnresolvedVariable(var)),
-            Content::RigidVar(_) => Err(UnresolvedVariable(var)),
+            Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _) => Err(UnresolvedVariable(var)),
             Content::RecursionVar {
                 structure,
                 opt_name: _,
@@ -672,11 +677,9 @@ impl Layout {
                 }
 
                 match symbol {
-                    Symbol::NUM_DECIMAL | Symbol::NUM_AT_DECIMAL => Ok(Layout::Decimal),
+                    Symbol::NUM_DECIMAL => Ok(Layout::Decimal),
 
-                    Symbol::NUM_NAT | Symbol::NUM_NATURAL | Symbol::NUM_AT_NATURAL => {
-                        Ok(layouts.usize())
-                    }
+                    Symbol::NUM_NAT | Symbol::NUM_NATURAL => Ok(layouts.usize()),
 
                     _ => {
                         // at this point we throw away alias information

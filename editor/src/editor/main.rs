@@ -74,7 +74,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let surface = unsafe { instance.create_surface(&window) };
 
     // Initialize GPU
-    let (gpu_device, cmd_queue) = futures::executor::block_on(async {
+    let (gpu_device, cmd_queue, color_format) = futures::executor::block_on(async {
         create_device(
             &instance,
             &surface,
@@ -101,13 +101,11 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let mut local_pool = futures::executor::LocalPool::new();
     let local_spawner = local_pool.spawner();
 
-    // Prepare swap chain
-    let render_format = wgpu::TextureFormat::Bgra8Unorm;
     let mut size = window.inner_size();
 
     let surface_config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format: render_format,
+        format: color_format,
         width: size.width,
         height: size.height,
         present_mode: wgpu::PresentMode::Mailbox,
@@ -117,7 +115,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
     let rect_resources = pipelines::make_rect_pipeline(&gpu_device, &surface_config);
 
-    let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
+    let mut glyph_brush = build_glyph_brush(&gpu_device, color_format)?;
 
     let is_animating = true;
 
@@ -210,7 +208,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                     &gpu_device,
                     &wgpu::SurfaceConfiguration {
                         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                        format: render_format,
+                        format: color_format,
                         width: size.width,
                         height: size.height,
                         present_mode: wgpu::PresentMode::Mailbox,
@@ -236,6 +234,8 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                     print_err(&e)
                 } else if let Ok(InputOutcome::Ignored) = input_outcome_res {
                     println!("Input '{}' ignored!", ch);
+                } else {
+                    window.request_redraw()
                 }
             }
             //Keyboard Input
@@ -256,6 +256,8 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                             if let Err(e) = keydown_res {
                                 print_err(&e)
                             }
+
+                            window.request_redraw()
                         }
                     }
                 }
@@ -398,7 +400,7 @@ async fn create_device(
     surface: &wgpu::Surface,
     power_preference: wgpu::PowerPreference,
     force_fallback_adapter: bool,
-) -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
+) -> Result<(wgpu::Device, wgpu::Queue, wgpu::TextureFormat), wgpu::RequestDeviceError> {
     if force_fallback_adapter {
         log::error!("Falling back to software renderer. GPU acceleration has been disabled.");
     }
@@ -414,7 +416,13 @@ async fn create_device(
             If you're running this from inside nix, follow the instructions here to resolve this: https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#editor
             "#);
 
-    adapter
+    let color_format = surface.get_preferred_format(&adapter).unwrap();
+
+    if color_format != wgpu::TextureFormat::Bgra8UnormSrgb {
+        log::warn!("Your preferred TextureFormat {:?} is different than expected. Colors may look different, please report this issue on github and tag @Anton-4.", color_format);
+    }
+
+    let request_res = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
@@ -423,7 +431,12 @@ async fn create_device(
             },
             None,
         )
-        .await
+        .await;
+
+    match request_res {
+        Ok((device, queue)) => Ok((device, queue, color_format)),
+        Err(err) => Err(err),
+    }
 }
 
 fn draw_rects(

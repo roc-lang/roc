@@ -800,7 +800,7 @@ fn list_walk_until_sum() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn list_walk_imlements_position() {
+fn list_walk_implements_position() {
     assert_evals_to!(
         r#"
         Option a : [ Some a, None ]
@@ -1104,7 +1104,7 @@ fn list_map_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map4_group() {
     assert_evals_to!(
         indoc!(
@@ -1112,13 +1112,13 @@ fn list_map4_group() {
             List.map4 [1,2,3] [3,2,1] [2,1,3] [3,1,2] (\a, b, c, d -> Group a b c d)
             "#
         ),
-        RocList::from_slice(&[(1, 3, 2, 3), (2, 2, 1, 1), (3, 1, 3, 2)]),
-        RocList<(i64, i64, i64, i64)>
+        RocList::from_slice(&[[1, 3, 2, 3], [2, 2, 1, 1], [3, 1, 3, 2]]),
+        RocList<[i64; 4]>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map4_different_length() {
     assert_evals_to!(
         indoc!(
@@ -1137,7 +1137,7 @@ fn list_map4_different_length() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map3_group() {
     assert_evals_to!(
         indoc!(
@@ -1151,7 +1151,7 @@ fn list_map3_group() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map3_different_length() {
     assert_evals_to!(
         indoc!(
@@ -1169,7 +1169,7 @@ fn list_map3_different_length() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map2_pair() {
     assert_evals_to!(
         indoc!(
@@ -1184,13 +1184,13 @@ fn list_map2_pair() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map2_different_lengths() {
     assert_evals_to!(
         indoc!(
             r#"
             List.map2
-                ["a", "b", "lllllllllllllongnggg" ]
+                ["a", "b", "lllllllllllllooooooooongnggg" ]
                 ["b"]
                 (\a, b -> Str.concat a b)
             "#
@@ -2534,7 +2534,7 @@ fn list_keep_oks() {
         RocList<i64>
     );
     assert_evals_to!(
-        "List.keepOks [1,2] (\\x -> x % 2)",
+        "List.keepOks [1,2] (\\x -> Num.remChecked x 2)",
         RocList::from_slice(&[1, 0]),
         RocList<i64>
     );
@@ -2561,7 +2561,7 @@ fn list_keep_errs() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.keepErrs [0,1,2] (\x -> x % 0 |> Result.mapErr (\_ -> 32))
+            List.keepErrs [0,1,2] (\x -> Num.remChecked x 0 |> Result.mapErr (\_ -> 32))
             "#
         ),
         RocList::from_slice(&[32, 32, 32]),

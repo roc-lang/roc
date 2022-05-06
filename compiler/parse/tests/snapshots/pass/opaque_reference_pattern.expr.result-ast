@@ -8,7 +8,7 @@ When(
             patterns: [
                 @12-16 SpaceBefore(
                     OpaqueRef(
-                        "$Age",
+                        "@Age",
                     ),
                     [
                         Newline,

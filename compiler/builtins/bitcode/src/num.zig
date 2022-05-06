@@ -111,7 +111,7 @@ pub fn exportRoundF64(comptime T: type, comptime name: []const u8) void {
 pub fn exportDivCeil(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(a: T, b: T) callconv(.C) T {
-            return math.divCeil(T, a, b) catch unreachable;
+            return math.divCeil(T, a, b) catch @panic("TODO runtime exception for dividing by 0!");
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });

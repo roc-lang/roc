@@ -1,26 +1,26 @@
 procedure Test.0 ():
-    let Test.20 : TODO = Z ;
-    let Test.19 : TODO = S Test.20;
-    let Test.18 : TODO = S Test.19;
-    let Test.2 : TODO = S Test.18;
-    let Test.15 : Int1 = 0i64;
-    let Test.16 : Int1 = GetTagId Test.2;
-    let Test.17 : Int1 = lowlevel Eq Test.15 Test.16;
-    if Test.17 then
-        let Test.11 : TODO = UnionAtIndex (Id 0) (Index 0) Test.2;
-        inc Test.11;
-        dec Test.2;
-        let Test.12 : Int1 = 0i64;
-        let Test.13 : Int1 = GetTagId Test.11;
-        dec Test.11;
-        let Test.14 : Int1 = lowlevel Eq Test.12 Test.13;
-        if Test.14 then
-            let Test.7 : I64 = 1i64;
-            ret Test.7;
-        else
-            let Test.8 : I64 = 0i64;
+    let Test.21 : [<rnu><null>, C *self] = Z ;
+    let Test.20 : [<rnu><null>, C *self] = S Test.21;
+    let Test.19 : [<rnu><null>, C *self] = S Test.20;
+    let Test.3 : [<rnu><null>, C *self] = S Test.19;
+    let Test.16 : Int1 = 0i64;
+    let Test.17 : Int1 = GetTagId Test.3;
+    let Test.18 : Int1 = lowlevel Eq Test.16 Test.17;
+    if Test.18 then
+        let Test.12 : [<rnu><null>, C *self] = UnionAtIndex (Id 0) (Index 0) Test.3;
+        inc Test.12;
+        dec Test.3;
+        let Test.13 : Int1 = 0i64;
+        let Test.14 : Int1 = GetTagId Test.12;
+        dec Test.12;
+        let Test.15 : Int1 = lowlevel Eq Test.13 Test.14;
+        if Test.15 then
+            let Test.8 : I64 = 1i64;
             ret Test.8;
+        else
+            let Test.9 : I64 = 0i64;
+            ret Test.9;
     else
-        dec Test.2;
-        let Test.9 : I64 = 0i64;
-        ret Test.9;
+        dec Test.3;
+        let Test.10 : I64 = 0i64;
+        ret Test.10;

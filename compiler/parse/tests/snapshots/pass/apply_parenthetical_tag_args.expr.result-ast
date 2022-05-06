@@ -1,0 +1,18 @@
+Apply(
+    @0-4 Tag(
+        "Whee",
+    ),
+    [
+        @6-8 ParensAround(
+            Num(
+                "12",
+            ),
+        ),
+        @11-13 ParensAround(
+            Num(
+                "34",
+            ),
+        ),
+    ],
+    Space,
+)

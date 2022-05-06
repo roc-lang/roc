@@ -1,21 +1,21 @@
-procedure List.7 (#Attr.2):
-    let Test.10 : U64 = lowlevel ListLen #Attr.2;
-    ret Test.10;
+procedure List.6 (#Attr.2):
+    let List.139 : U64 = lowlevel ListLen #Attr.2;
+    ret List.139;
 
-procedure List.7 (#Attr.2):
-    let Test.8 : U64 = lowlevel ListLen #Attr.2;
-    ret Test.8;
+procedure List.6 (#Attr.2):
+    let List.140 : U64 = lowlevel ListLen #Attr.2;
+    ret List.140;
 
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Test.6 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Test.6;
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.273 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.273;
 
 procedure Test.0 ():
-    let Test.9 : List I64 = Array [1i64, 2i64, 3i64];
-    let Test.4 : U64 = CallByName List.7 Test.9;
-    dec Test.9;
-    let Test.7 : List Float64 = Array [1f64];
-    let Test.5 : U64 = CallByName List.7 Test.7;
+    let Test.7 : List I64 = Array [1i64, 2i64, 3i64];
+    let Test.4 : U64 = CallByName List.6 Test.7;
     dec Test.7;
-    let Test.3 : U64 = CallByName Num.22 Test.4 Test.5;
+    let Test.6 : List Float64 = Array [1f64];
+    let Test.5 : U64 = CallByName List.6 Test.6;
+    dec Test.6;
+    let Test.3 : U64 = CallByName Num.19 Test.4 Test.5;
     ret Test.3;

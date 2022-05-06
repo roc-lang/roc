@@ -120,13 +120,15 @@ impl RecordField<Type> {
         }
     }
 
-    pub fn instantiate_aliases(
+    pub fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         introduced: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         use RecordField::*;
 
         match self {
@@ -168,13 +170,15 @@ impl LambdaSet {
         &mut self.0
     }
 
-    fn instantiate_aliases(
+    fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         introduced: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         self.0
             .instantiate_aliases(region, aliases, var_store, introduced)
     }
@@ -183,7 +187,7 @@ impl LambdaSet {
 #[derive(PartialEq, Eq, Clone)]
 pub struct AliasCommon {
     pub symbol: Symbol,
-    pub type_arguments: Vec<(Lowercase, Type)>,
+    pub type_arguments: Vec<Type>,
     pub lambda_set_variables: Vec<LambdaSet>,
 }
 
@@ -204,14 +208,14 @@ pub enum Type {
     DelayedAlias(AliasCommon),
     Alias {
         symbol: Symbol,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Type>,
         lambda_set_variables: Vec<LambdaSet>,
         actual: Box<Type>,
         kind: AliasKind,
     },
     HostExposedAlias {
         name: Symbol,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Type>,
         lambda_set_variables: Vec<LambdaSet>,
         actual_var: Variable,
         actual: Box<Type>,
@@ -381,7 +385,7 @@ impl fmt::Debug for Type {
             }) => {
                 write!(f, "(DelayedAlias {:?}", symbol)?;
 
-                for (_, arg) in type_arguments {
+                for arg in type_arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -405,7 +409,7 @@ impl fmt::Debug for Type {
             } => {
                 write!(f, "(Alias {:?}", symbol)?;
 
-                for (_, arg) in type_arguments {
+                for arg in type_arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -429,7 +433,7 @@ impl fmt::Debug for Type {
             } => {
                 write!(f, "HostExposedAlias {:?}", name)?;
 
-                for (_, arg) in arguments {
+                for arg in arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -690,7 +694,7 @@ impl Type {
                     lambda_set_variables,
                     ..
                 }) => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -704,7 +708,7 @@ impl Type {
                     actual,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -720,7 +724,7 @@ impl Type {
                     actual: actual_type,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -799,7 +803,7 @@ impl Type {
                     lambda_set_variables,
                     ..
                 }) => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -813,7 +817,7 @@ impl Type {
                     actual,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
                     for lambda_set in lambda_set_variables.iter_mut() {
@@ -828,7 +832,7 @@ impl Type {
                     actual: actual_type,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -899,7 +903,7 @@ impl Type {
                 lambda_set_variables: _no_aliases_in_lambda_sets,
                 ..
             }) => {
-                for (_, ta) in type_arguments {
+                for ta in type_arguments {
                     ta.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
 
@@ -910,7 +914,7 @@ impl Type {
                 actual: alias_actual,
                 ..
             } => {
-                for (_, ta) in type_arguments {
+                for ta in type_arguments {
                     ta.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
                 alias_actual.substitute_alias(rep_symbol, rep_args, actual)
@@ -981,9 +985,7 @@ impl Type {
                 ..
             }) => {
                 symbol == &rep_symbol
-                    || type_arguments
-                        .iter()
-                        .any(|v| v.1.contains_symbol(rep_symbol))
+                    || type_arguments.iter().any(|v| v.contains_symbol(rep_symbol))
                     || lambda_set_variables
                         .iter()
                         .any(|v| v.0.contains_symbol(rep_symbol))
@@ -1064,13 +1066,28 @@ impl Type {
         result
     }
 
-    pub fn instantiate_aliases(
+    pub fn shallow_structural_dealias(&self) -> &Self {
+        let mut result = self;
+        while let Type::Alias {
+            actual,
+            kind: AliasKind::Structural,
+            ..
+        } = result
+        {
+            result = actual;
+        }
+        result
+    }
+
+    pub fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         new_lambda_set_variables: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         use Type::*;
 
         match self {
@@ -1122,8 +1139,7 @@ impl Type {
                 ..
             } => {
                 for arg in type_args {
-                    arg.1
-                        .instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
                 }
 
                 for arg in lambda_set_variables {
@@ -1138,16 +1154,14 @@ impl Type {
                 );
             }
             Apply(symbol, args, _) => {
-                if let Some(alias) = aliases.get(symbol) {
+                if let Some(alias) = aliases(*symbol) {
                     // TODO switch to this, but we still need to check for recursion with the
                     // `else` branch
                     if false {
                         let mut type_var_to_arg = Vec::new();
 
-                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
-                            let name = loc_var.value.0.clone();
-
-                            type_var_to_arg.push((name, arg_ann.clone()));
+                        for (_, arg_ann) in alias.type_variables.iter().zip(args) {
+                            type_var_to_arg.push(arg_ann.clone());
                         }
 
                         let mut lambda_set_variables =
@@ -1187,7 +1201,7 @@ impl Type {
                         // TODO substitute further in args
                         for (
                             Loc {
-                                value: (lowercase, placeholder),
+                                value: (_, placeholder),
                                 ..
                             },
                             filler,
@@ -1200,7 +1214,7 @@ impl Type {
                                 var_store,
                                 new_lambda_set_variables,
                             );
-                            named_args.push((lowercase.clone(), filler.clone()));
+                            named_args.push(filler.clone());
                             substitution.insert(*placeholder, filler);
                         }
 
@@ -1364,7 +1378,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 ..
             }) => {
                 output.push(*symbol);
-                stack.extend(type_arguments.iter().map(|v| &v.1));
+                stack.extend(type_arguments);
             }
             Alias {
                 symbol: alias_symbol,
@@ -1472,7 +1486,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             lambda_set_variables,
             ..
         }) => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help(arg, accum);
             }
 
@@ -1485,7 +1499,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             actual,
             ..
         } => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help(arg, accum);
             }
             variables_help(actual, accum);
@@ -1495,7 +1509,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             actual,
             ..
         } => {
-            for (_, arg) in arguments {
+            for arg in arguments {
                 variables_help(arg, accum);
             }
             variables_help(actual, accum);
@@ -1604,7 +1618,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             lambda_set_variables,
             ..
         }) => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help_detailed(arg, accum);
             }
 
@@ -1621,7 +1635,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             actual,
             ..
         } => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help_detailed(arg, accum);
             }
             variables_help_detailed(actual, accum);
@@ -1631,7 +1645,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             actual,
             ..
         } => {
-            for (_, arg) in arguments {
+            for arg in arguments {
                 variables_help_detailed(arg, accum);
             }
             variables_help_detailed(actual, accum);
@@ -1670,6 +1684,7 @@ pub enum PReason {
     },
     WhenMatch {
         index: HumanIndex,
+        sub_pattern: HumanIndex,
     },
     TagArg {
         tag_name: TagName,
@@ -1711,6 +1726,10 @@ pub enum Reason {
         name: Option<Symbol>,
         arg_index: HumanIndex,
     },
+    TypedArg {
+        name: Option<Symbol>,
+        arg_index: HumanIndex,
+    },
     FnCall {
         name: Option<Symbol>,
         arity: u8,
@@ -1727,6 +1746,7 @@ pub enum Reason {
     IntLiteral,
     NumLiteral,
     StrInterpolation,
+    WhenBranches,
     WhenBranch {
         index: HumanIndex,
     },
@@ -1744,6 +1764,15 @@ pub enum Reason {
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Region>),
     RecordDefaultField(Lowercase),
     NumericLiteralSuffix,
+    InvalidAbilityMemberSpecialization {
+        member_name: Symbol,
+        def_region: Region,
+        unimplemented_abilities: DoesNotImplementAbility,
+    },
+    GeneralizedAbilityMemberSpecialization {
+        member_name: Symbol,
+        def_region: Region,
+    },
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -1783,6 +1812,11 @@ pub enum Category {
     Accessor(Lowercase),
     Access(Lowercase),
     DefaultValue(Lowercase), // for setting optional fields
+
+    AbilityMemberSpecialization(Symbol),
+
+    Expect,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1856,6 +1890,7 @@ pub enum Problem {
     },
     InvalidModule,
     SolvedTypeError,
+    HasClauseIsNotAbility(Region),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -1866,7 +1901,10 @@ pub enum Mismatch {
     InconsistentWhenBranches,
     CanonicalizationProblem,
     TypeNotInRange,
+    DoesNotImplementAbiity(Variable, Symbol),
 }
+
+pub type DoesNotImplementAbility = Vec<(ErrorType, Symbol)>;
 
 #[derive(PartialEq, Eq, Clone, Hash)]
 pub enum ErrorType {
@@ -1874,6 +1912,8 @@ pub enum ErrorType {
     Type(Symbol, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
+    FlexAbleVar(Lowercase, Symbol),
+    RigidAbleVar(Lowercase, Symbol),
     Record(SendMap<Lowercase, RecordField<ErrorType>>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
@@ -1904,10 +1944,7 @@ impl ErrorType {
         match self {
             Infinite => {}
             Type(_, ts) => ts.iter().for_each(|t| t.add_names(taken)),
-            FlexVar(v) => {
-                taken.insert(v.clone());
-            }
-            RigidVar(v) => {
+            FlexVar(v) | RigidVar(v) | FlexAbleVar(v, _) | RigidAbleVar(v, _) => {
                 taken.insert(v.clone());
             }
             Record(fields, ext) => {
@@ -1976,7 +2013,7 @@ fn write_error_type_help(
             if write_parens {
                 buf.push('(');
             }
-            buf.push_str(symbol.ident_str(interns).as_str());
+            buf.push_str(symbol.as_str(interns));
 
             for arg in arguments {
                 buf.push(' ');
@@ -2086,8 +2123,18 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
     match error_type {
         Infinite => buf.push('∞'),
         Error => buf.push('?'),
-        FlexVar(name) => buf.push_str(name.as_str()),
-        RigidVar(name) => buf.push_str(name.as_str()),
+        FlexVar(name) | RigidVar(name) => buf.push_str(name.as_str()),
+        FlexAbleVar(name, symbol) | RigidAbleVar(name, symbol) => {
+            let write_parens = parens == Parens::InTypeParam;
+            if write_parens {
+                buf.push('(');
+            }
+            buf.push_str(name.as_str());
+            buf.push_str(&format!(" has {:?}", symbol));
+            if write_parens {
+                buf.push(')');
+            }
+        }
         Type(symbol, arguments) => {
             let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
 
@@ -2304,26 +2351,33 @@ fn write_type_ext(ext: TypeExt, buf: &mut String) {
 
 static THE_LETTER_A: u32 = 'a' as u32;
 
-pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lowercase, u32) {
+pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
+    letters_used: u32,
+    taken: &mut impl Iterator<Item = I>,
+    mut predicate: F,
+) -> (Lowercase, u32) {
     // TODO we should arena-allocate this String,
     // so all the strings in the entire pass only require ~1 allocation.
-    let generated_name = if letters_used < 26 {
-        // This should generate "a", then "b", etc.
-        std::char::from_u32(THE_LETTER_A + letters_used)
-            .unwrap_or_else(|| panic!("Tried to convert {} to a char", THE_LETTER_A + letters_used))
-            .to_string()
-            .into()
-    } else {
-        panic!("TODO generate aa, ab, ac, ...");
+    let mut buf = String::with_capacity((letters_used as usize) / 26 + 1);
+
+    let is_taken = {
+        let mut remaining = letters_used as i32;
+
+        while remaining >= 0 {
+            buf.push(std::char::from_u32(THE_LETTER_A + ((remaining as u32) % 26)).unwrap());
+            remaining -= 26;
+        }
+
+        let generated_name: &str = buf.as_str();
+
+        taken.any(|item| predicate(&item, generated_name))
     };
 
-    if taken.contains(&generated_name) {
+    if is_taken {
         // If the generated name is already taken, try again.
-        name_type_var(letters_used + 1, taken)
+        name_type_var(letters_used + 1, taken, predicate)
     } else {
-        taken.insert(generated_name.clone());
-
-        (generated_name, letters_used + 1)
+        (buf.into(), letters_used + 1)
     }
 }
 
@@ -2453,7 +2507,10 @@ pub fn gather_tags_unsorted_iter(
             // TODO investigate this likely can happen when there is a type error
             RigidVar(_) => break,
 
-            other => unreachable!("something weird ended up in a tag union type: {:?}", other),
+            other => unreachable!(
+                "something weird ended up in a tag union type: {:?} at {:?}",
+                other, var
+            ),
         }
     }
 

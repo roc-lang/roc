@@ -6,6 +6,7 @@ use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
 use crate::state::State;
 use crate::string_literal;
 use bumpalo::collections::Vec;
+use roc_module::symbol::Symbol;
 use roc_region::all::Loc;
 
 #[derive(Debug)]
@@ -16,6 +17,10 @@ pub enum HeaderFor<'a> {
     Hosted {
         generates: UppercaseIdent<'a>,
         generates_with: &'a [Loc<ExposedName<'a>>],
+    },
+    /// Only created during canonicalization, never actually parsed from source
+    Builtin {
+        generates_with: &'a [Symbol],
     },
     PkgConfig {
         /// usually `pf`
@@ -60,11 +65,11 @@ impl<'a> From<ModuleName<'a>> for &'a str {
 }
 
 impl<'a> ModuleName<'a> {
-    pub fn new(name: &'a str) -> Self {
+    pub const fn new(name: &'a str) -> Self {
         ModuleName(name)
     }
 
-    pub fn as_str(&'a self) -> &'a str {
+    pub const fn as_str(&'a self) -> &'a str {
         self.0
     }
 }
@@ -88,7 +93,7 @@ impl<'a> From<ExposedName<'a>> for &'a str {
 }
 
 impl<'a> ExposedName<'a> {
-    pub fn new(name: &'a str) -> Self {
+    pub const fn new(name: &'a str) -> Self {
         ExposedName(name)
     }
 

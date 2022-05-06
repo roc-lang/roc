@@ -10,14 +10,14 @@ use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
-use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
+use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{LambdaSet, Type};
+use roc_types::types::{LambdaSet, PatternCategory, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Pattern {
     Identifier(Symbol),
     AppliedTag {
@@ -47,7 +47,7 @@ pub enum Pattern {
         // for the expression from the opaque definition. `type_arguments` is something like
         // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
         specialized_def_type: Box<Type>,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Variable>,
         lambda_set_variables: Vec<LambdaSet>,
     },
     RecordDestructure {
@@ -62,6 +62,17 @@ pub enum Pattern {
     SingleQuote(char),
     Underscore,
 
+    /// An identifier that marks a specialization of an ability member.
+    /// For example, given an ability member definition `hash : a -> U64 | a has Hash`,
+    /// there may be the specialization `hash : Bool -> U64`. In this case we generate a
+    /// new symbol for the specialized "hash" identifier.
+    AbilityMemberSpecialization {
+        /// The symbol for this specialization.
+        ident: Symbol,
+        /// The ability name being specialized.
+        specializes: Symbol,
+    },
+
     // Runtime Exceptions
     Shadowed(Region, Loc<Ident>, Symbol),
     OpaqueNotInScope(Loc<Ident>),
@@ -71,7 +82,85 @@ pub enum Pattern {
     MalformedPattern(MalformedPatternProblem, Region),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl Pattern {
+    pub fn opt_var(&self) -> Option<Variable> {
+        use Pattern::*;
+        match self {
+            Identifier(_) => None,
+
+            AppliedTag { whole_var, .. } => Some(*whole_var),
+            UnwrappedOpaque { whole_var, .. } => Some(*whole_var),
+            RecordDestructure { whole_var, .. } => Some(*whole_var),
+            NumLiteral(var, ..) => Some(*var),
+            IntLiteral(var, ..) => Some(*var),
+            FloatLiteral(var, ..) => Some(*var),
+            StrLiteral(_) => None,
+            SingleQuote(_) => None,
+            Underscore => None,
+
+            AbilityMemberSpecialization { .. } => None,
+
+            Shadowed(..) | OpaqueNotInScope(..) | UnsupportedPattern(..) | MalformedPattern(..) => {
+                None
+            }
+        }
+    }
+
+    /// Is this pattern sure to cover all instances of a type T, assuming it typechecks against T?
+    pub fn surely_exhaustive(&self) -> bool {
+        use Pattern::*;
+        match self {
+            Identifier(..)
+            | Underscore
+            | Shadowed(..)
+            | OpaqueNotInScope(..)
+            | UnsupportedPattern(..)
+            | MalformedPattern(..)
+            | AbilityMemberSpecialization { .. } => true,
+            RecordDestructure { destructs, .. } => destructs.is_empty(),
+            AppliedTag { .. }
+            | NumLiteral(..)
+            | IntLiteral(..)
+            | FloatLiteral(..)
+            | StrLiteral(..)
+            | SingleQuote(..) => false,
+            UnwrappedOpaque { argument, .. } => {
+                // Opaques can only match against one constructor (the opaque symbol), so this is
+                // surely exhaustive against T if the inner pattern is surely exhaustive against
+                // its type U.
+                argument.1.value.surely_exhaustive()
+            }
+        }
+    }
+
+    pub fn category(&self) -> PatternCategory {
+        use Pattern::*;
+        use PatternCategory as C;
+
+        match self {
+            Identifier(_) => C::PatternDefault,
+
+            AppliedTag { tag_name, .. } => C::Ctor(tag_name.clone()),
+            UnwrappedOpaque { opaque, .. } => C::Opaque(*opaque),
+            RecordDestructure { destructs, .. } if destructs.is_empty() => C::EmptyRecord,
+            RecordDestructure { .. } => C::Record,
+            NumLiteral(..) => C::Num,
+            IntLiteral(..) => C::Int,
+            FloatLiteral(..) => C::Float,
+            StrLiteral(_) => C::Str,
+            SingleQuote(_) => C::Character,
+            Underscore => C::PatternDefault,
+
+            AbilityMemberSpecialization { .. } => C::PatternDefault,
+
+            Shadowed(..) | OpaqueNotInScope(..) | UnsupportedPattern(..) | MalformedPattern(..) => {
+                C::PatternDefault
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct RecordDestruct {
     pub var: Variable,
     pub label: Lowercase,
@@ -79,7 +168,7 @@ pub struct RecordDestruct {
     pub typ: DestructType,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum DestructType {
     Required,
     Optional(Variable, Loc<Expr>),
@@ -99,6 +188,11 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
     match pattern {
         Identifier(symbol) | Shadowed(_, _, symbol) => {
             symbols.push(*symbol);
+        }
+
+        AbilityMemberSpecialization { ident, specializes } => {
+            symbols.push(*ident);
+            symbols.push(*specializes);
         }
 
         AppliedTag { arguments, .. } => {
@@ -136,27 +230,67 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
     }
 }
 
+pub fn canonicalize_def_header_pattern<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    output: &mut Output,
+    pattern_type: PatternType,
+    pattern: &ast::Pattern<'a>,
+    region: Region,
+) -> Loc<Pattern> {
+    use roc_parse::ast::Pattern::*;
+
+    match pattern {
+        // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
+        Identifier(name) => {
+            match scope.introduce_or_shadow_ability_member((*name).into(), region) {
+                Ok((symbol, shadowing_ability_member)) => {
+                    output.references.insert_bound(symbol);
+                    let can_pattern = match shadowing_ability_member {
+                        // A fresh identifier.
+                        None => Pattern::Identifier(symbol),
+                        // Likely a specialization of an ability.
+                        Some(ability_member_name) => Pattern::AbilityMemberSpecialization {
+                            ident: symbol,
+                            specializes: ability_member_name,
+                        },
+                    };
+                    Loc::at(region, can_pattern)
+                }
+                Err((original_region, shadow, new_symbol)) => {
+                    env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                        original_region,
+                        shadow: shadow.clone(),
+                        kind: ShadowKind::Variable,
+                    }));
+                    output.references.insert_bound(new_symbol);
+
+                    let can_pattern = Pattern::Shadowed(original_region, shadow, new_symbol);
+                    Loc::at(region, can_pattern)
+                }
+            }
+        }
+        _ => canonicalize_pattern(env, var_store, scope, output, pattern_type, pattern, region),
+    }
+}
+
 pub fn canonicalize_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
+    output: &mut Output,
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
     region: Region,
-) -> (Output, Loc<Pattern>) {
+) -> Loc<Pattern> {
     use roc_parse::ast::Pattern::*;
     use PatternType::*;
 
-    let mut output = Output::default();
     let can_pattern = match pattern {
-        Identifier(name) => match scope.introduce(
-            (*name).into(),
-            &env.exposed_ident_ids,
-            &mut env.ident_ids,
-            region,
-        ) {
+        Identifier(name) => match scope.introduce_str(name, region) {
             Ok(symbol) => {
-                output.references.bound_symbols.insert(symbol);
+                output.references.insert_bound(symbol);
 
                 Pattern::Identifier(symbol)
             }
@@ -164,29 +298,19 @@ pub fn canonicalize_pattern<'a>(
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                     original_region,
                     shadow: shadow.clone(),
+                    kind: ShadowKind::Variable,
                 }));
-                output.references.bound_symbols.insert(new_symbol);
+                output.references.insert_bound(new_symbol);
 
                 Pattern::Shadowed(original_region, shadow, new_symbol)
             }
         },
-        GlobalTag(name) => {
+        Tag(name) => {
             // Canonicalize the tag's name.
             Pattern::AppliedTag {
                 whole_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
-                tag_name: TagName::Global((*name).into()),
-                arguments: vec![],
-            }
-        }
-        PrivateTag(name) => {
-            let ident_id = env.ident_ids.get_or_insert(&(*name).into());
-
-            // Canonicalize the tag's name.
-            Pattern::AppliedTag {
-                whole_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                tag_name: TagName::Private(Symbol::new(env.home, ident_id)),
+                tag_name: TagName::Tag((*name).into()),
                 arguments: vec![],
             }
         }
@@ -201,34 +325,22 @@ pub fn canonicalize_pattern<'a>(
         Apply(tag, patterns) => {
             let mut can_patterns = Vec::with_capacity(patterns.len());
             for loc_pattern in *patterns {
-                let (new_output, can_pattern) = canonicalize_pattern(
+                let can_pattern = canonicalize_pattern(
                     env,
                     var_store,
                     scope,
+                    output,
                     pattern_type,
                     &loc_pattern.value,
                     loc_pattern.region,
                 );
 
-                output.union(new_output);
-
                 can_patterns.push((var_store.fresh(), can_pattern));
             }
 
             match tag.value {
-                GlobalTag(name) => {
-                    let tag_name = TagName::Global(name.into());
-                    Pattern::AppliedTag {
-                        whole_var: var_store.fresh(),
-                        ext_var: var_store.fresh(),
-                        tag_name,
-                        arguments: can_patterns,
-                    }
-                }
-                PrivateTag(name) => {
-                    let ident_id = env.ident_ids.get_or_insert(&name.into());
-                    let tag_name = TagName::Private(Symbol::new(env.home, ident_id));
-
+                Tag(name) => {
+                    let tag_name = TagName::Tag(name.into());
                     Pattern::AppliedTag {
                         whole_var: var_store.fresh(),
                         ext_var: var_store.fresh(),
@@ -253,8 +365,7 @@ pub fn canonicalize_pattern<'a>(
                             let (type_arguments, lambda_set_variables, specialized_def_type) =
                                 freshen_opaque_def(var_store, opaque_def);
 
-                            output.references.referenced_type_defs.insert(opaque);
-                            output.references.type_lookups.insert(opaque);
+                            output.references.insert_type_lookup(opaque);
 
                             Pattern::UnwrappedOpaque {
                                 whole_var: var_store.fresh(),
@@ -378,7 +489,15 @@ pub fn canonicalize_pattern<'a>(
         }
 
         SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
-            return canonicalize_pattern(env, var_store, scope, pattern_type, sub_pattern, region)
+            return canonicalize_pattern(
+                env,
+                var_store,
+                scope,
+                output,
+                pattern_type,
+                sub_pattern,
+                region,
+            )
         }
         RecordDestructure(patterns) => {
             let ext_var = var_store.fresh();
@@ -389,14 +508,9 @@ pub fn canonicalize_pattern<'a>(
             for loc_pattern in patterns.iter() {
                 match loc_pattern.value {
                     Identifier(label) => {
-                        match scope.introduce(
-                            label.into(),
-                            &env.exposed_ident_ids,
-                            &mut env.ident_ids,
-                            region,
-                        ) {
+                        match scope.introduce(label.into(), region) {
                             Ok(symbol) => {
-                                output.references.bound_symbols.insert(symbol);
+                                output.references.insert_bound(symbol);
 
                                 destructs.push(Loc {
                                     region: loc_pattern.region,
@@ -412,6 +526,7 @@ pub fn canonicalize_pattern<'a>(
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
+                                    kind: ShadowKind::Variable,
                                 }));
 
                                 // No matter what the other patterns
@@ -426,17 +541,17 @@ pub fn canonicalize_pattern<'a>(
 
                     RequiredField(label, loc_guard) => {
                         // a guard does not introduce the label into scope!
-                        let symbol = scope.ignore(label.into(), &mut env.ident_ids);
-                        let (new_output, can_guard) = canonicalize_pattern(
+                        let symbol =
+                            scope.scopeless_symbol(&Ident::from(label), loc_pattern.region);
+                        let can_guard = canonicalize_pattern(
                             env,
                             var_store,
                             scope,
+                            output,
                             pattern_type,
                             &loc_guard.value,
                             loc_guard.region,
                         );
-
-                        output.union(new_output);
 
                         destructs.push(Loc {
                             region: loc_pattern.region,
@@ -450,12 +565,7 @@ pub fn canonicalize_pattern<'a>(
                     }
                     OptionalField(label, loc_default) => {
                         // an optional DOES introduce the label into scope!
-                        match scope.introduce(
-                            label.into(),
-                            &env.exposed_ident_ids,
-                            &mut env.ident_ids,
-                            region,
-                        ) {
+                        match scope.introduce(label.into(), region) {
                             Ok(symbol) => {
                                 let (can_default, expr_output) = canonicalize_expr(
                                     env,
@@ -466,7 +576,7 @@ pub fn canonicalize_pattern<'a>(
                                 );
 
                                 // an optional field binds the symbol!
-                                output.references.bound_symbols.insert(symbol);
+                                output.references.insert_bound(symbol);
 
                                 output.union(expr_output);
 
@@ -484,6 +594,7 @@ pub fn canonicalize_pattern<'a>(
                                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                                     original_region,
                                     shadow: shadow.clone(),
+                                    kind: ShadowKind::Variable,
                                 }));
 
                                 // No matter what the other patterns
@@ -531,13 +642,10 @@ pub fn canonicalize_pattern<'a>(
         }
     };
 
-    (
-        output,
-        Loc {
-            region,
-            value: can_pattern,
-        },
-    )
+    Loc {
+        region,
+        value: can_pattern,
+    }
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
@@ -572,64 +680,122 @@ fn malformed_pattern(env: &mut Env, problem: MalformedPatternProblem, region: Re
     Pattern::MalformedPattern(problem, region)
 }
 
-pub fn bindings_from_patterns<'a, I>(loc_patterns: I) -> Vec<(Symbol, Region)>
-where
-    I: Iterator<Item = &'a Loc<Pattern>>,
-{
-    let mut answer = Vec::new();
-
-    for loc_pattern in loc_patterns {
-        add_bindings_from_patterns(&loc_pattern.region, &loc_pattern.value, &mut answer);
-    }
-
-    answer
+/// An iterator over the bindings made by a pattern.
+///
+/// We attempt to make no allocations when we can.
+pub enum BindingsFromPattern<'a> {
+    Empty,
+    One(&'a Loc<Pattern>),
+    Many(Vec<BindingsFromPatternWork<'a>>),
 }
 
-/// helper function for idents_from_patterns
-fn add_bindings_from_patterns(
-    region: &Region,
-    pattern: &Pattern,
-    answer: &mut Vec<(Symbol, Region)>,
-) {
-    use Pattern::*;
+pub enum BindingsFromPatternWork<'a> {
+    Pattern(&'a Loc<Pattern>),
+    Destruct(&'a Loc<RecordDestruct>),
+}
 
-    match pattern {
-        Identifier(symbol) | Shadowed(_, _, symbol) => {
-            answer.push((*symbol, *region));
+impl<'a> BindingsFromPattern<'a> {
+    pub fn new(initial: &'a Loc<Pattern>) -> Self {
+        Self::One(initial)
+    }
+
+    pub fn new_many<I>(mut it: I) -> Self
+    where
+        I: Iterator<Item = &'a Loc<Pattern>>,
+    {
+        if let (1, Some(1)) = it.size_hint() {
+            Self::new(it.next().unwrap())
+        } else {
+            Self::Many(it.map(BindingsFromPatternWork::Pattern).collect())
         }
-        AppliedTag {
-            arguments: loc_args,
-            ..
-        } => {
-            for (_, loc_arg) in loc_args {
-                add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
+    }
+
+    fn next_many(stack: &mut Vec<BindingsFromPatternWork<'a>>) -> Option<(Symbol, Region)> {
+        use Pattern::*;
+
+        while let Some(work) = stack.pop() {
+            match work {
+                BindingsFromPatternWork::Pattern(loc_pattern) => {
+                    use BindingsFromPatternWork::*;
+
+                    match &loc_pattern.value {
+                        Identifier(symbol)
+                        | AbilityMemberSpecialization {
+                            ident: symbol,
+                            specializes: _,
+                        } => {
+                            return Some((*symbol, loc_pattern.region));
+                        }
+                        AppliedTag {
+                            arguments: loc_args,
+                            ..
+                        } => {
+                            let it = loc_args.iter().rev().map(|(_, p)| Pattern(p));
+                            stack.extend(it);
+                        }
+                        UnwrappedOpaque { argument, .. } => {
+                            let (_, loc_arg) = &**argument;
+                            stack.push(Pattern(loc_arg));
+                        }
+                        RecordDestructure { destructs, .. } => {
+                            let it = destructs.iter().rev().map(Destruct);
+                            stack.extend(it);
+                        }
+                        NumLiteral(..)
+                        | IntLiteral(..)
+                        | FloatLiteral(..)
+                        | StrLiteral(_)
+                        | SingleQuote(_)
+                        | Underscore
+                        | Shadowed(_, _, _)
+                        | MalformedPattern(_, _)
+                        | UnsupportedPattern(_)
+                        | OpaqueNotInScope(..) => (),
+                    }
+                }
+                BindingsFromPatternWork::Destruct(loc_destruct) => {
+                    match &loc_destruct.value.typ {
+                        DestructType::Required | DestructType::Optional(_, _) => {
+                            return Some((loc_destruct.value.symbol, loc_destruct.region));
+                        }
+                        DestructType::Guard(_, inner) => {
+                            // a guard does not introduce the symbol
+                            stack.push(BindingsFromPatternWork::Pattern(inner))
+                        }
+                    }
+                }
             }
         }
-        UnwrappedOpaque {
-            argument, opaque, ..
-        } => {
-            let (_, loc_arg) = &**argument;
-            add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
-            answer.push((*opaque, *region));
+
+        None
+    }
+}
+
+impl<'a> Iterator for BindingsFromPattern<'a> {
+    type Item = (Symbol, Region);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use Pattern::*;
+
+        match self {
+            BindingsFromPattern::Empty => None,
+            BindingsFromPattern::One(loc_pattern) => match &loc_pattern.value {
+                Identifier(symbol)
+                | AbilityMemberSpecialization {
+                    ident: symbol,
+                    specializes: _,
+                } => {
+                    let region = loc_pattern.region;
+                    *self = Self::Empty;
+                    Some((*symbol, region))
+                }
+                _ => {
+                    *self = Self::Many(vec![BindingsFromPatternWork::Pattern(loc_pattern)]);
+                    self.next()
+                }
+            },
+            BindingsFromPattern::Many(stack) => Self::next_many(stack),
         }
-        RecordDestructure { destructs, .. } => {
-            for Loc {
-                region,
-                value: RecordDestruct { symbol, .. },
-            } in destructs
-            {
-                answer.push((*symbol, *region));
-            }
-        }
-        NumLiteral(..)
-        | IntLiteral(..)
-        | FloatLiteral(..)
-        | StrLiteral(_)
-        | SingleQuote(_)
-        | Underscore
-        | MalformedPattern(_, _)
-        | UnsupportedPattern(_)
-        | OpaqueNotInScope(..) => (),
     }
 }
 

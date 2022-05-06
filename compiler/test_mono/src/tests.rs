@@ -6,9 +6,6 @@
 #![allow(clippy::float_cmp)]
 
 #[macro_use]
-extern crate pretty_assertions;
-
-#[macro_use]
 extern crate indoc;
 
 /// Used in the with_larger_debug_stack() function, for tests that otherwise
@@ -101,6 +98,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         src_dir,
         Default::default(),
         TARGET_INFO,
+        roc_reporting::report::RenderTarget::Generic,
     );
 
     let mut loaded = match loaded {
@@ -122,14 +120,12 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
     let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();
-    let mono_problems = loaded.mono_problems.remove(&home).unwrap_or_default();
 
     if !can_problems.is_empty() {
         println!("Ignoring {} canonicalization problems", can_problems.len());
     }
 
-    assert_eq!(type_problems, Vec::new());
-    assert_eq!(mono_problems, Vec::new());
+    assert!(type_problems.is_empty());
 
     debug_assert_eq!(exposed_to_host.values.len(), 1);
 
@@ -274,7 +270,7 @@ fn ir_round() {
 #[mono_test]
 fn ir_when_idiv() {
     r#"
-    when 1000 // 10 is
+    when Num.divTruncChecked 1000 10 is
         Ok val -> val
         Err _ -> -1
     "#
@@ -1232,6 +1228,7 @@ fn monomorphized_applied_tag() {
 }
 
 #[mono_test]
+#[ignore = "Cannot compile polymorphic closures yet"]
 fn aliased_polymorphic_closure() {
     indoc!(
         r#"
@@ -1278,6 +1275,70 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
     indoc!(
         r#"
         if True then List.first [] else Str.toI64 ""
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_2810() {
+    indoc!(
+        r#"
+        Command : [ Command Tool ]
+
+        Job : [ Job Command ]
+
+        Tool : [ SystemTool, FromJob Job ]
+
+        a : Job
+        a = Job (Command (FromJob (Job (Command SystemTool))))
+        a
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_2811() {
+    indoc!(
+        r#"
+        x = Command { tool: "bash" }
+        Command c = x
+        c.tool
+        "#
+    )
+}
+
+#[mono_test]
+fn specialize_ability_call() {
+    indoc!(
+        r#"
+        app "test" provides [ main ] to "./platform"
+
+        Hash has
+            hash : a -> U64 | a has Hash
+
+        Id := U64
+
+        hash : Id -> U64
+        hash = \@Id n -> n
+
+        main = hash (@Id 1234)
+        "#
+    )
+}
+
+#[mono_test]
+fn opaque_assign_to_symbol() {
+    indoc!(
+        r#"
+        app "test" provides [ out ] to "./platform"
+
+        Variable := U8
+
+        fromUtf8 : U8 -> Result Variable [ InvalidVariableUtf8 ]
+        fromUtf8 = \char ->
+            Ok (@Variable char)
+
+        out = fromUtf8 98
         "#
     )
 }

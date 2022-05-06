@@ -32,11 +32,13 @@ For NQueens, input 10 in the terminal and press enter.
 
 **Tip:** when programming in roc, we recommend to execute `./roc check myproject/Foo.roc` before `./roc myproject/Foo.roc` or `./roc build myproject/Foo.roc`. `./roc check` can produce clear error messages in cases where building/running may panic.
 
-## Sponsor
+## Sponsors
 
-We are very grateful for our sponsor [NoRedInk](https://www.noredink.com/).
+We are very grateful for our sponsors [NoRedInk](https://www.noredink.com/) and [rwx](https://www.rwx.com).
 
-<img src="https://www.noredink.com/assets/logo-red-black-f6989d7567cf90b349409137595e99c52d036d755b4403d25528e0fd83a3b084.svg" height="60" alt="NoRedInk logo"/>
+[<img src="https://www.noredink.com/assets/logo-red-black-f6989d7567cf90b349409137595e99c52d036d755b4403d25528e0fd83a3b084.svg" height="60" alt="NoRedInk logo"/>](https://www.noredink.com/)
+&nbsp;&nbsp;&nbsp;&nbsp;
+[<img src="https://www.rwx.com/build/_assets/rwx_banner_transparent_cropped-RYV7W2KL.svg" height="60" alt="rwx logo"/>](https://www.rwx.com)
 
 ## Applications and Platforms
 
@@ -79,7 +81,7 @@ The core Roc language and standard library include no I/O operations, which give
 
 ## Project Goals
 
-Roc is in relatively early stages of development. It's currently possible to build both platforms and applications (see the [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) folder for some examples that aren't particularly organized at the moment), although [documentation](https://github.com/rtfeldman/roc/tree/trunk/compiler/builtins/docs) is in even earlier stages than the compiler itself.
+Roc is in relatively early stages of development. It's currently possible to build both platforms and applications (see the [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) folder for some examples that aren't particularly organized at the moment), although [documentation](https://github.com/rtfeldman/roc/tree/trunk/compiler/builtins/roc) is in even earlier stages than the compiler itself.
 
 Besides the above language design, a separate goal is for Roc to ship with an ambitiously boundary-pushing graphical editor. Not like "an IDE," but rather something that makes people say "I have never seen anything remotely like this outside of Bret Victor demos."
 

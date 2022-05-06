@@ -37,57 +37,47 @@ Defs(
                 ],
             },
         ),
-    ],
-    @35-71 SpaceBefore(
-        Defs(
-            [
-                @35-68 Type(
-                    Ability {
-                        header: TypeHeader {
-                            name: @35-38 "Ab2",
-                            vars: [],
-                        },
-                        loc_has: @39-42 Has,
-                        members: [
-                            AbilityMember {
-                                name: @43-46 "ab2",
-                                typ: @54-68 Where(
-                                    @54-56 Function(
-                                        [
-                                            @49-50 BoundVariable(
-                                                "a",
-                                            ),
-                                        ],
-                                        @54-56 Record {
-                                            fields: [],
-                                            ext: None,
-                                        },
+        @35-68 Type(
+            Ability {
+                header: TypeHeader {
+                    name: @35-38 "Ab2",
+                    vars: [],
+                },
+                loc_has: @39-42 Has,
+                members: [
+                    AbilityMember {
+                        name: @43-46 "ab2",
+                        typ: @54-68 Where(
+                            @54-56 Function(
+                                [
+                                    @49-50 BoundVariable(
+                                        "a",
                                     ),
-                                    [
-                                        @59-68 HasClause {
-                                            var: @59-60 "a",
-                                            ability: @65-68 Apply(
-                                                "",
-                                                "Ab2",
-                                                [],
-                                            ),
-                                        },
-                                    ],
-                                ),
-                            },
-                        ],
+                                ],
+                                @54-56 Record {
+                                    fields: [],
+                                    ext: None,
+                                },
+                            ),
+                            [
+                                @59-68 HasClause {
+                                    var: @59-60 "a",
+                                    ability: @65-68 Apply(
+                                        "",
+                                        "Ab2",
+                                        [],
+                                    ),
+                                },
+                            ],
+                        ),
                     },
-                ),
-            ],
-            @70-71 SpaceBefore(
-                Num(
-                    "1",
-                ),
-                [
-                    Newline,
-                    Newline,
                 ],
-            ),
+            },
+        ),
+    ],
+    @70-71 SpaceBefore(
+        Num(
+            "1",
         ),
         [
             Newline,

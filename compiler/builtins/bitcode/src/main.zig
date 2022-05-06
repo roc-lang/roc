@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const math = std.math;
 const utils = @import("utils.zig");
 const expect = @import("expect.zig");
@@ -55,6 +56,7 @@ comptime {
     exportListFn(list.listAny, "any");
     exportListFn(list.listAll, "all");
     exportListFn(list.listFindUnsafe, "find_unsafe");
+    exportListFn(list.listIsUnique, "is_unique");
 }
 
 // Dict Module
@@ -163,6 +165,32 @@ comptime {
     exportExpectFn(expect.deinitFailuresC, "deinit_failures");
 
     @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
+
+    if (builtin.target.cpu.arch == .aarch64) {
+        @export(__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .Weak });
+        @export(__roc_force_longjmp, .{ .name = "__roc_force_longjmp", .linkage = .Weak });
+    }
+}
+
+// Utils continued - SJLJ
+// For tests (in particular test_gen), roc_panic is implemented in terms of
+// setjmp/longjmp. LLVM is unable to generate code for longjmp on AArch64 (https://github.com/rtfeldman/roc/issues/2965),
+// so instead we ask Zig to please provide implementations for us, which is does
+// (seemingly via musl).
+pub usingnamespace @import("std").c.builtins;
+pub extern fn setjmp([*c]c_int) c_int;
+pub extern fn longjmp([*c]c_int, c_int) noreturn;
+pub extern fn _setjmp([*c]c_int) c_int;
+pub extern fn _longjmp([*c]c_int, c_int) noreturn;
+pub extern fn sigsetjmp([*c]c_int, c_int) c_int;
+pub extern fn siglongjmp([*c]c_int, c_int) noreturn;
+pub extern fn longjmperror() void;
+// Zig won't expose the externs (and hence link correctly) unless we force them to be used.
+fn __roc_force_setjmp(it: [*c]c_int) callconv(.C) c_int {
+    return setjmp(it);
+}
+fn __roc_force_longjmp(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
+    longjmp(a0, a1);
 }
 
 // Export helpers - Must be run inside a comptime
@@ -195,7 +223,6 @@ fn exportExpectFn(comptime func: anytype, comptime func_name: []const u8) void {
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
-    const builtin = @import("builtin");
     if (builtin.is_test) {
         std.debug.print("{s}: {?}", .{ message, stacktrace });
     } else {

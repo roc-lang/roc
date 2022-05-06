@@ -1,4 +1,5 @@
 use crate::solve::{self, Aliases};
+use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::module::RigidVariables;
 use roc_collections::all::MutMap;
@@ -32,11 +33,19 @@ pub fn run_solve(
     rigid_variables: RigidVariables,
     mut subs: Subs,
     mut aliases: Aliases,
-) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
-    let env = solve::Env::default();
-
+    mut abilities_store: AbilitiesStore,
+) -> (
+    Solved<Subs>,
+    solve::Env,
+    Vec<solve::TypeError>,
+    AbilitiesStore,
+) {
     for (var, name) in rigid_variables.named {
         subs.rigid_var(var, name);
+    }
+
+    for (var, (name, ability)) in rigid_variables.able {
+        subs.rigid_able_var(var, name, ability);
     }
 
     for var in rigid_variables.wildcards {
@@ -50,14 +59,14 @@ pub fn run_solve(
     // Run the solver to populate Subs.
     let (solved_subs, solved_env) = solve::run(
         constraints,
-        &env,
         &mut problems,
         subs,
         &mut aliases,
         &constraint,
+        &mut abilities_store,
     );
 
-    (solved_subs, solved_env, problems)
+    (solved_subs, solved_env, problems, abilities_store)
 }
 
 pub fn exposed_types_storage_subs(

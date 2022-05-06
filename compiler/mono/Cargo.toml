@@ -19,6 +19,7 @@ roc_problem = { path = "../problem" }
 roc_builtins = { path = "../builtins" }
 roc_target = { path = "../roc_target" }
 roc_error_macros = {path="../../error_macros"}
+roc_debug_flags = {path="../debug_flags"}
 ven_pretty = { path = "../../vendor/pretty" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
 bumpalo = { version = "3.8.0", features = ["collections"] }

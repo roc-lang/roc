@@ -28,21 +28,29 @@ rm deploy.zip
 
 popd
 
-# pushd ..
-# echo 'Generating docs...'
-# cargo --version
-# rustc --version
-# # We run the CLI with --no-default-features because that way we don't have the
-# # "llvm" feature and therefore don't depend on LLVM being installed on the
-# # system. (Netlify's build servers have Rust installed, but not LLVM.)
-# #
-# # We set RUSTFLAGS to -Awarnings to ignore warnings during this build,
-# # because when building without "the" llvm feature (which is only ever done
-# # for this exact use case), the result is lots of "unused" warnings!
-# #
-# # We set ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
-# # "/builtins/" rather than "/" - which is what we want based on how the server
-# # is set up to serve them.
-# RUSTFLAGS=-Awarnings ROC_DOCS_URL_ROOT=builtins cargo run -p roc_cli --no-default-features docs compiler/builtins/docs/*.roc
-# mv generated-docs/ www/build/builtins
-# popd
+pushd ..
+echo 'Generating docs...'
+cargo --version
+rustc --version
+
+# We set RUSTFLAGS to -Awarnings to ignore warnings during this build,
+# because when building without "the" llvm feature (which is only ever done
+# for this exact use case), the result is lots of "unused" warnings!
+RUSTFLAGS=-Awarnings
+
+# We set ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
+# "/builtins/" rather than "/" - which is what we want based on how the server
+# is set up to serve them.
+export ROC_DOCS_URL_ROOT=/builtins
+
+# These just need to be defined so that some env! macros don't fail.
+BUILTINS_WASM32_O=""
+BUILTINS_HOST_O=""
+
+# We run the CLI with --no-default-features because that way we don't have the
+# "llvm" feature and therefore don't depend on LLVM being installed on the
+# system. (Netlify's build servers have Rust installed, but not LLVM.)
+cargo run -p roc_cli --no-default-features docs compiler/builtins/roc/*.roc
+mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
+mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
+popd

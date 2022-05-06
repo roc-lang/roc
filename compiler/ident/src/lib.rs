@@ -30,7 +30,8 @@ impl IdentStr {
     // Reserve 1 byte for the discriminant
     const SMALL_STR_BYTES: usize = std::mem::size_of::<Self>() - 1;
 
-    pub fn len(&self) -> usize {
+    #[inline(always)]
+    pub const fn len(&self) -> usize {
         let bytes = self.length.to_ne_bytes();
         let last_byte = bytes[mem::size_of::<usize>() - 1];
 
@@ -55,11 +56,11 @@ impl IdentStr {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.length == 0
     }
 
-    pub fn is_small_str(&self) -> bool {
+    pub const fn is_small_str(&self) -> bool {
         let bytes = self.length.to_ne_bytes();
         let last_byte = bytes[mem::size_of::<usize>() - 1];
 
@@ -144,6 +145,7 @@ impl IdentStr {
         }
     }
 
+    #[inline(always)]
     pub fn as_slice(&self) -> &[u8] {
         use core::slice::from_raw_parts;
 
@@ -156,6 +158,7 @@ impl IdentStr {
         }
     }
 
+    #[inline(always)]
     pub fn as_str(&self) -> &str {
         let slice = self.as_slice();
 
@@ -201,8 +204,19 @@ impl From<&str> for IdentStr {
 }
 
 impl From<String> for IdentStr {
-    fn from(str: String) -> Self {
-        Self::from_str(&str)
+    fn from(string: String) -> Self {
+        if string.len() <= Self::SMALL_STR_BYTES {
+            Self::from_str(string.as_str())
+        } else {
+            // Take over the string's heap allocation
+            let length = string.len();
+            let elements = string.as_ptr();
+
+            // Make sure the existing string doesn't get dropped.
+            std::mem::forget(string);
+
+            Self { elements, length }
+        }
     }
 }
 

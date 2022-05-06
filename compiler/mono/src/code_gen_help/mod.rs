@@ -1,6 +1,5 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_module::ident::Ident;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
@@ -25,7 +24,7 @@ const ARG_2: Symbol = Symbol::ARG_2;
 pub const REFCOUNT_MAX: usize = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HelperOp {
+pub enum HelperOp {
     Inc,
     Dec,
     DecRef(JoinPointId),
@@ -84,7 +83,7 @@ pub struct CodeGenHelp<'a> {
 
 impl<'a> CodeGenHelp<'a> {
     pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
-        let layout_isize = Layout::usize(target_info);
+        let layout_isize = Layout::isize(target_info);
 
         // Refcount is a boxed isize. TODO: use the new Box layout when dev backends support it
         let union_refcount = UnionLayout::NonNullableUnwrapped(arena.alloc([layout_isize]));
@@ -185,16 +184,16 @@ impl<'a> CodeGenHelp<'a> {
     /// Generate a refcount increment procedure, *without* a Call expression.
     /// *This method should be rarely used* - only when the proc is to be called from Zig.
     /// Otherwise you want to generate the Proc and the Call together, using another method.
-    /// This only supports the 'inc' operation, as it's the only real use case we have.
-    pub fn gen_refcount_inc_proc(
+    pub fn gen_refcount_proc(
         &mut self,
         ident_ids: &mut IdentIds,
         layout: Layout<'a>,
+        op: HelperOp,
     ) -> (Symbol, Vec<'a, (Symbol, ProcLayout<'a>)>) {
         let mut ctx = Context {
             new_linker_data: Vec::new_in(self.arena),
             recursive_union: None,
-            op: HelperOp::Inc,
+            op,
         };
 
         let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout);
@@ -396,7 +395,7 @@ impl<'a> CodeGenHelp<'a> {
     }
 
     fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
-        let ident_id = ident_ids.add(Ident::from(debug_name));
+        let ident_id = ident_ids.add_str(debug_name);
         Symbol::new(self.home, ident_id)
     }
 

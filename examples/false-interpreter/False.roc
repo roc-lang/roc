@@ -434,7 +434,7 @@ stepExecCtx = \ctx, char ->
                 (
                     (T popCtx1 numR) <- Result.after (popNumber ctx)
                     (T popCtx2 numL) <- Result.after (popNumber popCtx1)
-                    res <- Result.after (Num.divFloor numL numR)
+                    res <- Result.after (Num.divTruncChecked numL numR)
                     Ok (Context.pushStack popCtx2 (Number res))
                 )
 

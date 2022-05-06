@@ -1,12 +1,15 @@
 use roc_builtins::std::StdLib;
+use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
+use roc_can::expected::Expected;
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::Loc;
+use roc_region::all::{Loc, Region};
 use roc_types::solved_types::{FreeVars, SolvedType};
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::{Category, Type};
 
 /// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
@@ -64,17 +67,8 @@ impl ExposedForModule {
         let mut imported_values = Vec::new();
 
         for symbol in it {
-            // Today, builtins are not actually imported,
-            // but generated in each module that uses them
-            //
-            // This will change when we write builtins in roc
-            if symbol.is_builtin() {
-                continue;
-            }
-
-            if let Some(ExposedModuleTypes::Valid { .. }) =
-                exposed_by_module.exposed.get(&symbol.module_id())
-            {
+            let module = exposed_by_module.exposed.get(&symbol.module_id());
+            if let Some(ExposedModuleTypes::Valid { .. }) = module {
                 imported_values.push(*symbol);
             } else {
                 continue;
@@ -100,10 +94,58 @@ pub enum ExposedModuleTypes {
 
 pub fn constrain_module(
     constraints: &mut Constraints,
+    abilities_store: &AbilitiesStore,
     declarations: &[Declaration],
     home: ModuleId,
 ) -> Constraint {
-    crate::expr::constrain_decls(constraints, home, declarations)
+    let constraint = crate::expr::constrain_decls(constraints, home, declarations);
+
+    let constraint = frontload_ability_constraints(constraints, abilities_store, constraint);
+
+    // The module constraint should always save the environment at the end.
+    debug_assert!(constraints.contains_save_the_environment(&constraint));
+
+    constraint
+}
+
+pub fn frontload_ability_constraints(
+    constraints: &mut Constraints,
+    abilities_store: &AbilitiesStore,
+    mut constraint: Constraint,
+) -> Constraint {
+    for (member_name, member_data) in abilities_store.root_ability_members().iter() {
+        // 1. Attach the type of member signature to the reserved signature_var. This is
+        //    infallible.
+        let unify_with_signature_var = constraints.equal_types_var(
+            member_data.signature_var,
+            Expected::NoExpectation(member_data.signature.clone()),
+            Category::Storage(std::file!(), std::column!()),
+            Region::zero(),
+        );
+
+        // 2. Store the member signature on the member symbol. This makes sure we generalize it on
+        //    the toplevel, as appropriate.
+        let vars = &member_data.variables;
+        let rigids = (vars.rigid_vars.iter())
+            // For our purposes, in the let constraint, able vars are treated like rigids.
+            .chain(vars.able_vars.iter())
+            .copied();
+        let flex = vars.flex_vars.iter().copied();
+
+        let let_constr = constraints.let_constraint(
+            rigids,
+            flex,
+            [(
+                *member_name,
+                Loc::at_zero(Type::Variable(member_data.signature_var)),
+            )],
+            Constraint::True,
+            constraint,
+        );
+
+        constraint = constraints.and_constraint([unify_with_signature_var, let_constr]);
+    }
+    constraint
 }
 
 #[derive(Debug, Clone)]
@@ -147,17 +189,6 @@ pub fn constrain_builtin_imports(
                 }
             }
             None => {
-                let is_valid_alias = stdlib.applies.contains(&symbol)
-                        // This wasn't a builtin value or Apply; maybe it was a builtin alias.
-                        || roc_types::builtin_aliases::aliases().contains_key(&symbol);
-
-                if !is_valid_alias {
-                    panic!(
-                        "Could not find {:?} in builtin types {:?} or builtin aliases",
-                        symbol, stdlib.types,
-                    );
-                }
-
                 continue;
             }
         };

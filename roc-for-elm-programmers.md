@@ -674,20 +674,24 @@ includes in its union."
 
 ## Opaque Types
 
-The tags discussed in the previous section are globally available, which means
-they cannot be used to create opaque types.
+In Elm, you can choose to expose (or not) custom types' constructors in order to create [opaque types](http://sporto.github.io/elm-patterns/advanced/opaque-types.html).
+Since Roc's _tags_ can be constructed in any module without importing anything, Roc has a separate
+_opaque type_ language feature to enable information hiding.
 
-*Private tags* let you create opaque types. They work just like the *global tags*
-from the previous section, except:
+Opaque types in Roc have some similarities to type aliases, but also some important differences.
 
-* Private tags begin with an `@` (e.g. `@Foo` instead of `Foo`)
-* Private tags are scoped to the current module, rather than globally scoped
-* Private tags can only be instantiated in the current module
+* Opaque type are defined with `:=` (e.g. `Username := Str` instead of `Username : Str`)
+* You can get an _opaque wrapper_ by writing an `@` symbol before the name of an opaque type. For example, `@Username` would be an opaque wrapper for the opaque type `Username`.
+* Applying an _opaque wrapper_ to another value creates an _opaque value_, whose type is the one referred to by the opaque wrapper. So the expression `@Username "Sasha"` has the type `Username`.
+* Applying and destructuring opaque wrappers works like tags; you can write `@Username str = user` to unwrap an opaque wrapper's payload, just like you would with a tag payload.
+* Opaque types can only be wrapped and unwrapped in the same module where the opaque type itself is defined.
+* You can export opaque type names (e.g. `Username`) to other modules, allowing them to be used in type annotations, but there is no way to export the opaque wrappers themselves. This means that an opaque type can only be wrapped and unwrapped (using `@` syntax) in the same module where it was defined.
+* Opaque types are only equal if their names are the same _and_ they were defined in the same module.
 
-For example, suppose I define these inside the `Username` module:
+As an example, suppose I define these inside the `Username` module:
 
 ```elm
-Username : [ @Username Str ]
+Username := Str
 
 fromStr : Str -> Username
 fromStr = \str ->
@@ -697,16 +701,17 @@ toStr : Username -> Str
 toStr = \@Username str ->
     str
 ```
-I can now expose the `Username` type alias, which other modules can use as an opaque type.
 
-It's not even syntactically possible for me to expose the `@Username` tag,
-because `@` tags are not allowed in the exposing list. Only code written in this
-`Username` module can instantiate a `@Username` value.
+I can now expose the `Username` opaque type, which other modules can use in type annotations.
+However, it's not even syntactically possible for me to expose the `@Username` opaque wrapper,
+because `@` is not allowed in the `exposing` list. Only code written in this `Username` module
+can use the `@Username` wrapper.
 
-> If I were to write `@Username` inside another module (e.g. `Main`), it would compile,
-> but that `@Username` would be type-incompatible with the one created inside the `Username` module.
-> Even trying to use `==` on them would be a type mismatch, because I would be comparing
-> a `[ Username.@Username Str ]*` with a `[ Main.@Username Str ]*`, which are incompatible.
+> If I were to define `Username := Str` inside another module (e.g. `Main`) and use `@Username`,
+> it would compile, but that `Username` opaque type would not be considered equal to the one defined in
+> the `Username` module. Although both opaque types have the name `Username`, they were defined in
+> different modules. That means the two `Username` types would be type-incompatible with each other,
+> and even attempting to use `==` to compare them would be a type mismatch.
 
 ## Modules and Shadowing
 
@@ -744,9 +749,9 @@ these expose is very important.
 
 All imports and exports in Roc are enumerated explicitly; there is no `..` syntax.
 
-> Since neither global tags nor private tags have a notion of "importing variants"
-> (global tags are always available in all modules, and private tags are
-> never available in other modules), there's also no `exposing (Foo(..))` equivalent.
+> Since tags are available in all modules, Roc does not have a notion of
+> "importing variants", and there's also no `exposing (Foo(..))` equivalent.
+> (Later on, we'll talk about how opaque types work in Roc.)
 
 Like Elm, Roc does not allow shadowing.
 
@@ -1130,7 +1135,7 @@ so calculations involving them take longer.
 
 Roc does not let floating point calculations result in `Infinity`, `-Infinity`,
 or `NaN`.  Any operation which would result in one of these
-(such as `sqrt` or `/`) will return a `Result`.
+(such as `sqrt` or `/`) will panic.
 
 Similarly to how there are different sizes of floating point numbers,
 there are also different sizes of integer to choose from:
@@ -1274,7 +1279,7 @@ Roc's standard library has these modules:
 
 Some differences to note:
 
-* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `List`, `Result`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all global tags, so they do not need to be exposed; they are globally available regardless!)
+* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `List`, `Result`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all tags, so they do not need to be exposed; they are globally available regardless!)
 * In Roc it's called `Str` instead of `String`.
 * `List` refers to something more like Elm's `Array`, as noted earlier.
 * No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).
@@ -1294,10 +1299,9 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `a - b`           | `Num.sub a b`      |
 | `a * b`           | `Num.mul a b`      |
 | `a / b`           | `Num.div a b`    |
-| `a // b`          | `Num.divFloor a b`      |
+| `a // b`          | `Num.divTrunc a b`      |
 | `a ^ b`           | `Num.pow a b`      |
 | `a % b`           | `Num.rem a b`    |
-| `a %% b`          | `Num.mod a b`    |
 | `a >> b`          | `Num.shr a b`    |
 | `a << b`          | `Num.shl a b`    |
 | `-a`              | `Num.neg a`        |

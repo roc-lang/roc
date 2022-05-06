@@ -1,11 +1,12 @@
 use bumpalo::Bump;
 use roc_build::{
     link::{link, rebuild_host, LinkType},
-    program,
+    program::{self, Problems},
 };
 use roc_builtins::bitcode;
 use roc_load::LoadingProblem;
 use roc_mono::ir::OptLevel;
+use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -20,25 +21,9 @@ fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     ));
 }
 
-pub enum BuildOutcome {
-    NoProblems,
-    OnlyWarnings,
-    Errors,
-}
-
-impl BuildOutcome {
-    pub fn status_code(&self) -> i32 {
-        match self {
-            Self::NoProblems => 0,
-            Self::OnlyWarnings => 1,
-            Self::Errors => 2,
-        }
-    }
-}
-
 pub struct BuiltFile {
     pub binary_path: PathBuf,
-    pub outcome: BuildOutcome,
+    pub problems: Problems,
     pub total_time: Duration,
 }
 
@@ -68,6 +53,8 @@ pub fn build_file<'a>(
         src_dir.as_path(),
         subs_by_module,
         target_info,
+        // TODO: expose this from CLI?
+        RenderTarget::ColorTerminal,
     )?;
 
     use target_lexicon::Architecture;
@@ -181,7 +168,7 @@ pub fn build_file<'a>(
     // This only needs to be mutable for report_problems. This can't be done
     // inside a nested scope without causing a borrow error!
     let mut loaded = loaded;
-    program::report_problems_monomorphized(&mut loaded);
+    let problems = program::report_problems_monomorphized(&mut loaded);
     let loaded = loaded;
 
     let code_gen_timing = program::gen_from_mono_module(
@@ -240,12 +227,20 @@ pub fn build_file<'a>(
 
     // Step 2: link the precompiled host and compiled app
     let link_start = SystemTime::now();
-    let outcome = if surgically_link {
+    let problems = if surgically_link {
         roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path)
-            .map_err(|_| {
-                todo!("gracefully handle failing to surgically link");
+            .map_err(|err| {
+                todo!(
+                    "gracefully handle failing to surgically link with error: {:?}",
+                    err
+                );
             })?;
-        BuildOutcome::NoProblems
+        problems
+    } else if matches!(link_type, LinkType::None) {
+        // Just copy the object file to the output folder.
+        binary_path.set_extension(app_extension);
+        std::fs::copy(app_o_file, &binary_path).unwrap();
+        problems
     } else {
         let mut inputs = vec![
             host_input_path.as_path().to_str().unwrap(),
@@ -270,11 +265,15 @@ pub fn build_file<'a>(
             todo!("gracefully handle error after `ld` spawned");
         })?;
 
-        // TODO change this to report whether there were errors or warnings!
         if exit_status.success() {
-            BuildOutcome::NoProblems
+            problems
         } else {
-            BuildOutcome::Errors
+            let mut problems = problems;
+
+            // Add an error for `ld` failing
+            problems.errors += 1;
+
+            problems
         }
     };
     let linking_time = link_start.elapsed().unwrap();
@@ -287,7 +286,7 @@ pub fn build_file<'a>(
 
     Ok(BuiltFile {
         binary_path,
-        outcome,
+        problems,
         total_time,
     })
 }
@@ -307,7 +306,7 @@ fn spawn_rebuild_thread(
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
         if !precompiled {
-            print!("🔨 Rebuilding host... ");
+            println!("🔨 Rebuilding host...");
         }
 
         let rebuild_host_start = SystemTime::now();
@@ -339,10 +338,6 @@ fn spawn_rebuild_thread(
         }
         let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
 
-        if !precompiled {
-            println!("Done!");
-        }
-
         rebuild_host_end.as_millis()
     })
 }
@@ -353,7 +348,7 @@ pub fn check_file(
     src_dir: PathBuf,
     roc_file_path: PathBuf,
     emit_timings: bool,
-) -> Result<usize, LoadingProblem> {
+) -> Result<(program::Problems, Duration), LoadingProblem> {
     let compilation_start = SystemTime::now();
 
     // only used for generating errors. We don't do code generation, so hardcoding should be fine
@@ -369,6 +364,8 @@ pub fn check_file(
         src_dir.as_path(),
         subs_by_module,
         target_info,
+        // TODO: expose this from CLI?
+        RenderTarget::ColorTerminal,
     )?;
 
     let buf = &mut String::with_capacity(1024);
@@ -424,5 +421,8 @@ pub fn check_file(
         println!("Finished checking in {} ms\n", compilation_end.as_millis(),);
     }
 
-    Ok(program::report_problems_typechecked(&mut loaded))
+    Ok((
+        program::report_problems_typechecked(&mut loaded),
+        compilation_end,
+    ))
 }

@@ -54,6 +54,7 @@ pub fn helper(
         src_dir,
         Default::default(),
         roc_target::TargetInfo::default_x86_64(),
+        roc_reporting::report::RenderTarget::ColorTerminal,
     );
 
     let mut loaded = loaded.expect("failed to load module");
@@ -106,15 +107,12 @@ pub fn helper(
     let mut delayed_errors = Vec::new();
 
     for (home, (module_path, src)) in loaded.sources {
-        use roc_reporting::report::{
-            can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
-        };
+        use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
 
         let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
         let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();
-        let mono_problems = loaded.mono_problems.remove(&home).unwrap_or_default();
 
-        let error_count = can_problems.len() + type_problems.len() + mono_problems.len();
+        let error_count = can_problems.len() + type_problems.len();
 
         if error_count == 0 {
             continue;
@@ -154,15 +152,6 @@ pub fn helper(
 
                 lines.push(buf);
             }
-        }
-
-        for problem in mono_problems {
-            let report = mono_problem(&alloc, &line_info, module_path.clone(), problem);
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            lines.push(buf);
         }
     }
 

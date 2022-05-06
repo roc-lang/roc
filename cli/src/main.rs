@@ -1,12 +1,16 @@
+use roc_build::link::LinkType;
 use roc_cli::build::check_file;
 use roc_cli::{
-    build_app, docs, format, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
-    CMD_FORMAT, CMD_REPL, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_TIME, ROC_FILE,
+    build_app, docs, format, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DOCS,
+    CMD_EDIT, CMD_FORMAT, CMD_REPL, CMD_RUN, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB,
+    FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, ROC_FILE,
 };
+use roc_error_macros::user_error;
 use roc_load::LoadingProblem;
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
+use target_lexicon::Triple;
 
 #[macro_use]
 extern crate const_format;
@@ -27,7 +31,12 @@ fn main() -> io::Result<()> {
                 Some(arg_index) => {
                     let roc_file_arg_index = arg_index + 1; // Not sure why this +1 is necessary, but it is!
 
-                    build(&matches, BuildConfig::BuildAndRun { roc_file_arg_index })
+                    build(
+                        &matches,
+                        BuildConfig::BuildAndRunIfNoErrors { roc_file_arg_index },
+                        Triple::host(),
+                        LinkType::Executable,
+                    )
                 }
 
                 None => {
@@ -37,7 +46,46 @@ fn main() -> io::Result<()> {
                 }
             }
         }
-        Some((CMD_BUILD, matches)) => Ok(build(matches, BuildConfig::BuildOnly)?),
+        Some((CMD_RUN, matches)) => {
+            match matches.index_of(ROC_FILE) {
+                Some(arg_index) => {
+                    let roc_file_arg_index = arg_index + 1; // Not sure why this +1 is necessary, but it is!
+
+                    build(
+                        matches,
+                        BuildConfig::BuildAndRun { roc_file_arg_index },
+                        Triple::host(),
+                        LinkType::Executable,
+                    )
+                }
+
+                None => {
+                    eprintln!("What .roc file do you want to run? Specify it at the end of the `roc run` command.");
+
+                    Ok(1)
+                }
+            }
+        }
+        Some((CMD_BUILD, matches)) => {
+            let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
+
+            let link_type = match (
+                matches.is_present(FLAG_LIB),
+                matches.is_present(FLAG_NO_LINK),
+            ) {
+                (true, false) => LinkType::Dylib,
+                (true, true) => user_error!("build can only be one of `--lib` or `--no-link`"),
+                (false, true) => LinkType::None,
+                (false, false) => LinkType::Executable,
+            };
+
+            Ok(build(
+                matches,
+                BuildConfig::BuildOnly,
+                target.to_triple(),
+                link_type,
+            )?)
+        }
         Some((CMD_CHECK, matches)) => {
             let arena = bumpalo::Bump::new();
 
@@ -47,9 +95,35 @@ fn main() -> io::Result<()> {
             let src_dir = roc_file_path.parent().unwrap().to_owned();
 
             match check_file(&arena, src_dir, roc_file_path, emit_timings) {
-                Ok(number_of_errors) => {
-                    let exit_code = if number_of_errors != 0 { 1 } else { 0 };
-                    Ok(exit_code)
+                Ok((problems, total_time)) => {
+                    println!(
+                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",
+                        if problems.errors == 0 {
+                            32 // green
+                        } else {
+                            33 // yellow
+                        },
+                        problems.errors,
+                        if problems.errors == 1 {
+                            "error"
+                        } else {
+                            "errors"
+                        },
+                        if problems.warnings == 0 {
+                            32 // green
+                        } else {
+                            33 // yellow
+                        },
+                        problems.warnings,
+                        if problems.warnings == 1 {
+                            "warning"
+                        } else {
+                            "warnings"
+                        },
+                        total_time.as_millis(),
+                    );
+
+                    Ok(problems.exit_code())
                 }
 
                 Err(LoadingProblem::FormattedReport(report)) => {

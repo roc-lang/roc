@@ -1,10 +1,10 @@
-procedure List.5 (#Attr.2, #Attr.3):
-    let Test.7 : List I64 = lowlevel ListAppend #Attr.2 #Attr.3;
-    ret Test.7;
+procedure List.4 (#Attr.2, #Attr.3):
+    let List.139 : List I64 = lowlevel ListAppend #Attr.2 #Attr.3;
+    ret List.139;
 
 procedure Test.1 (Test.2):
     let Test.6 : I64 = 42i64;
-    let Test.5 : List I64 = CallByName List.5 Test.2 Test.6;
+    let Test.5 : List I64 = CallByName List.4 Test.2 Test.6;
     ret Test.5;
 
 procedure Test.0 ():

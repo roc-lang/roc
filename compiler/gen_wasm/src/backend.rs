@@ -4,10 +4,9 @@ use std::fmt::Write;
 use code_builder::Align;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_module::ident::Ident;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::code_gen_help::{CodeGenHelp, REFCOUNT_MAX};
+use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
 use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Param, Proc,
     ProcLayout, Stmt,
@@ -183,7 +182,7 @@ impl<'a> WasmBackend<'a> {
             .get_mut(&self.env.module_id)
             .unwrap();
 
-        let ident_id = ident_ids.add(Ident::from(debug_name));
+        let ident_id = ident_ids.add_str(debug_name);
         Symbol::new(self.env.module_id, ident_id)
     }
 
@@ -270,6 +269,13 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_size,
             self.storage.stack_frame_pointer,
         );
+
+        if DEBUG_LOG_SETTINGS.storage_map {
+            println!("\nStorage:");
+            for (sym, storage) in self.storage.symbol_storage_map.iter() {
+                println!("{:?} => {:?}", sym, storage);
+            }
+        }
     }
 
     fn append_proc_debug_name(&mut self, sym: Symbol) {
@@ -1609,8 +1615,9 @@ impl<'a> WasmBackend<'a> {
         );
     }
 
-    /// Generate a refcount increment procedure and return its Wasm function index
-    pub fn gen_refcount_inc_for_zig(&mut self, layout: Layout<'a>) -> u32 {
+    /// Generate a refcount helper procedure and return a pointer (table index) to it
+    /// This allows it to be indirectly called from Zig code
+    pub fn get_refcount_fn_ptr(&mut self, layout: Layout<'a>, op: HelperOp) -> i32 {
         let ident_ids = self
             .interns
             .all_ident_ids
@@ -1619,7 +1626,7 @@ impl<'a> WasmBackend<'a> {
 
         let (proc_symbol, new_specializations) = self
             .helper_proc_gen
-            .gen_refcount_inc_proc(ident_ids, layout);
+            .gen_refcount_proc(ident_ids, layout, op);
 
         // If any new specializations were created, register their symbol data
         for (spec_sym, spec_layout) in new_specializations.into_iter() {
@@ -1632,6 +1639,7 @@ impl<'a> WasmBackend<'a> {
             .position(|lookup| lookup.name == proc_symbol && lookup.layout.arguments[0] == layout)
             .unwrap();
 
-        self.fn_index_offset + proc_index as u32
+        let wasm_fn_index = self.fn_index_offset + proc_index as u32;
+        self.get_fn_table_index(wasm_fn_index)
     }
 }

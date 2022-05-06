@@ -1,2 +1,2 @@
 when n is
-  $Add n m -> n + m
+  @Add n m -> n + m

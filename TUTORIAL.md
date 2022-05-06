@@ -115,18 +115,19 @@ Create a new file called `Hello.roc` and put this inside it:
 
 ```coffee
 app "hello"
-    packages { pf: "examples/cli/platform" }
+    packages { pf: "examples/interactive/cli-platform" }
     imports [ pf.Stdout ]
     provides [ main ] to pf
 
 main = Stdout.line "I'm a Roc application!"
 ```
 
-> **NOTE:** This assumes you've put Hello.roc in the root directory of the
-> Roc source code. If you'd like to put it somewhere else, you'll need to replace
-> `"examples/cli/"` with the path to the `examples/cli/` folder in
-> that source code. In the future, Roc will have the tutorial built in, and this
-> aside will no longer be necessary!
+> **NOTE:** This assumes you've put Hello.roc in the root directory of the Roc
+> source code. If you'd like to put it somewhere else, you'll need to replace
+> `"examples/interactive/cli-platform"` with the path to the
+> `examples/interactive/cli-platform` folder in that source code. In the future,
+> Roc will have the tutorial built in, and this aside will no longer be
+> necessary!
 
 Try running this with:
 
@@ -1202,6 +1203,24 @@ and also `Num.cos 1` and have them all work as expected; the number literal `1` 
 `Num *`, which is compatible with the more constrained types `Int` and `Frac`. For the same reason,
 you can pass number literals to functions expecting even more constrained types, like `I32` or `F64`.
 
+### Typed Number Literals
+When writing a number literal in Roc you can specify the numeric type as a suffix of the literal.
+`1u8` specifies `1` as an unsigned 8-bit integer, `5i32` specifies `5` as a signed 32-bit integer, etc.
+The full list of possible suffixes includes:
+`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`, `i128`, `u128`, `nat`, `f32`, `f64`, `dec`
+
+### Hexadecimal Integer Literals
+Integer literals can be written in hexadecimal form by prefixing with `0x` followed by hexadecimal characters.
+`0xFE` evaluates to decimal `254`
+The integer type can be specified as a suffix to the hexadecimal literal,
+so `0xC8u8` evaluates to decimal `200` as an unsigned 8-bit integer.
+
+### Binary Integer Literals
+Integer literals can be written in binary form by prefixing with `0b` followed by the 1's and 0's representing
+each bit. `0b0000_1000` evaluates to decimal `8`
+The integer type can be specified as a suffix to the binary literal,
+so `0b0100u8` evaluates to decimal `4` as an unsigned 8-bit integer.
+
 ## Interface modules
 
 [ This part of the tutorial has not been written yet. Coming soon! ]
@@ -1236,7 +1255,7 @@ Let's take a closer look at the part of `Hello.roc` above `main`:
 
 ```coffee
 app "hello"
-    packages { pf: "examples/cli/platform" }
+    packages { pf: "examples/interactive/cli-platform" }
     imports [ pf.Stdout ]
     provides main to pf
 ```
@@ -1254,14 +1273,14 @@ without running it by running `roc build Hello.roc`.
 The remaining lines all involve the *platform* this application is built on:
 
 ```coffee
-packages { pf: "examples/cli/platform" }
+packages { pf: "examples/interactive/cli-platform" }
 imports [ pf.Stdout ]
 provides main to pf
 ```
 
-The `packages { pf: "examples/cli/platform" }` part says two things:
+The `packages { pf: "examples/interactive/cli-platform" }` part says two things:
 
-- We're going to be using a *package* (that is, a collection of modules) called `"examples/cli/platform"`
+- We're going to be using a *package* (that is, a collection of modules) called `"examples/interactive/cli-platform"`
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
 
 The `imports [ pf.Stdout ]` line says that we want to import the `Stdout` module
@@ -1281,17 +1300,18 @@ calling a function named `line` which is exposed by a module named
 When we write `imports [ pf.Stdout ]`, it specifies that the `Stdout`
 module comes from the `pf` package.
 
-Since `pf` was the name we chose for the `examples/cli/platform` package
-(when we wrote `packages { pf: "examples/cli/platform" }`), this `imports` line
-tells the Roc compiler that when we call `Stdout.line`, it should look for that
-`line` function in the `Stdout` module of the `examples/cli/platform` package.
+Since `pf` was the name we chose for the `examples/interactive/cli-platform`
+package (when we wrote `packages { pf: "examples/interactive/cli-platform" }`),
+this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
+should look for that `line` function in the `Stdout` module of the
+`examples/interactive/cli-platform` package.
 
 # Building a Command-Line Interface (CLI)
 
 ## Tasks
 
 Tasks are technically not part of the Roc language, but they're very common in
-platforms. Let's use the CLI platform in `examples/cli` as an example!
+platforms. Let's use the CLI platform in `examples/interactive/cli-platform` as an example!
 
 In the CLI platform, we have four operations we can do:
 
@@ -1306,7 +1326,7 @@ First, let's do a basic "Hello World" using the tutorial app.
 
 ```coffee
 app "cli-tutorial"
-    packages { pf: "examples/cli/platform" }
+    packages { pf: "examples/interactive/cli-platform" }
     imports [ pf.Stdout ]
     provides [ main ] to pf
 
@@ -1343,7 +1363,7 @@ Let's change `main` to read a line from `stdin`, and then print it back out agai
 
 ```swift
 app "cli-tutorial"
-    packages { pf: "examples/cli/platform" }
+    packages { pf: "examples/interactive/cli-platform" }
     imports [ pf.Stdout, pf.Stdin, pf.Task ]
     provides [ main ] to pf
 
@@ -1393,7 +1413,7 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```haskell
 app "cli-tutorial"
-    packages { pf: "examples/cli/platform" }
+    packages { pf: "examples/interactive/cli-platform" }
     imports [ pf.Stdout, pf.Stdin, pf.Task.{ await } ]
     provides [ main ] to pf
 
@@ -1941,10 +1961,9 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `a - b`           | `Num.sub a b`      |
 | `a * b`           | `Num.mul a b`      |
 | `a / b`           | `Num.div a b`    |
-| `a // b`          | `Num.divFloor a b`      |
+| `a // b`          | `Num.divTrunc a b`      |
 | `a ^ b`           | `Num.pow a b`      |
 | `a % b`           | `Num.rem a b`    |
-| `a %% b`          | `Num.mod a b`    |
 | `a >> b`          | `Num.shr a b`    |
 | `a << b`          | `Num.shl a b`    |
 | `-a`              | `Num.neg a`        |

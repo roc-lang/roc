@@ -617,8 +617,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
             Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
             Expr::Underscore(a) => Expr::Underscore(a),
-            Expr::GlobalTag(a) => Expr::GlobalTag(a),
-            Expr::PrivateTag(a) => Expr::PrivateTag(a),
+            Expr::Tag(a) => Expr::Tag(a),
             Expr::OpaqueRef(a) => Expr::OpaqueRef(a),
             Expr::Closure(a, b) => Expr::Closure(
                 arena.alloc(a.remove_spaces(arena)),
@@ -669,8 +668,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
             Pattern::Identifier(a) => Pattern::Identifier(a),
-            Pattern::GlobalTag(a) => Pattern::GlobalTag(a),
-            Pattern::PrivateTag(a) => Pattern::PrivateTag(a),
+            Pattern::Tag(a) => Pattern::Tag(a),
             Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
             Pattern::Apply(a, b) => Pattern::Apply(
                 arena.alloc(a.remove_spaces(arena)),
@@ -753,11 +751,7 @@ impl<'a> RemoveSpaces<'a> for HasClause<'a> {
 impl<'a> RemoveSpaces<'a> for Tag<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            Tag::Global { name, args } => Tag::Global {
-                name: name.remove_spaces(arena),
-                args: args.remove_spaces(arena),
-            },
-            Tag::Private { name, args } => Tag::Private {
+            Tag::Apply { name, args } => Tag::Apply {
                 name: name.remove_spaces(arena),
                 args: args.remove_spaces(arena),
             },

@@ -5,13 +5,13 @@ use roc_module::symbol::ModuleId;
 
 const MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::BOOL, "Bool.roc"),
-    //    (ModuleId::RESULT, "Result.roc"),
-    //    (ModuleId::LIST, "List.roc"),
-    //    (ModuleId::STR, "Str.roc"),
-    //    (ModuleId::DICT, "Dict.roc"),
-    //    (ModuleId::SET, "Set.roc"),
-    //    (ModuleId::BOX, "Box.roc"),
-    //    (ModuleId::NUM, "Num.roc"),
+    (ModuleId::RESULT, "Result.roc"),
+    (ModuleId::NUM, "Num.roc"),
+    (ModuleId::LIST, "List.roc"),
+    (ModuleId::STR, "Str.roc"),
+    (ModuleId::DICT, "Dict.roc"),
+    (ModuleId::SET, "Set.roc"),
+    (ModuleId::BOX, "Box.roc"),
 ];
 
 fn main() {
@@ -36,6 +36,7 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
         &src_dir,
         Default::default(),
         target_info,
+        roc_reporting::report::RenderTarget::ColorTerminal,
     );
 
     let module = res_module.unwrap();

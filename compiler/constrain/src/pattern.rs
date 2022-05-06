@@ -18,6 +18,7 @@ pub struct PatternState {
     pub headers: SendMap<Symbol, Loc<Type>>,
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
+    pub delayed_is_open_constraints: Vec<Constraint>,
 }
 
 /// If there is a type annotation, the pattern state headers can be optimized by putting the
@@ -50,7 +51,13 @@ fn headers_from_annotation_help(
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> bool {
     match pattern {
-        Identifier(symbol) | Shadowed(_, _, symbol) => {
+        Identifier(symbol)
+        | Shadowed(_, _, symbol)
+        // TODO(abilities): handle linking the member def to the specialization ident
+        | AbilityMemberSpecialization {
+            ident: symbol,
+            specializes: _,
+        } => {
             let typ = Loc::at(annotation.region, annotation.value.clone());
             headers.insert(*symbol, typ);
             true
@@ -174,7 +181,7 @@ pub fn constrain_pattern(
             // so, we know that "x" (in this case, a tag union) must be open.
             if could_be_a_tag_union(expected.get_type_ref()) {
                 state
-                    .constraints
+                    .delayed_is_open_constraints
                     .push(constraints.is_open_type(expected.get_type()));
             }
         }
@@ -183,6 +190,25 @@ pub fn constrain_pattern(
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
+            if could_be_a_tag_union(expected.get_type_ref()) {
+                state
+                    .delayed_is_open_constraints
+                    .push(constraints.is_open_type(expected.get_type_ref().clone()));
+            }
+
+            state.headers.insert(
+                *symbol,
+                Loc {
+                    region,
+                    value: expected.get_type(),
+                },
+            );
+        }
+
+        AbilityMemberSpecialization {
+            ident: symbol,
+            specializes: _,
+        } => {
             if could_be_a_tag_union(expected.get_type_ref()) {
                 state
                     .constraints
@@ -469,6 +495,9 @@ pub fn constrain_pattern(
             state.vars.push(*ext_var);
             state.constraints.push(whole_con);
             state.constraints.push(tag_con);
+            state
+                .constraints
+                .append(&mut state.delayed_is_open_constraints);
         }
 
         UnwrappedOpaque {
@@ -485,7 +514,7 @@ pub fn constrain_pattern(
 
             let opaque_type = Type::Alias {
                 symbol: *opaque,
-                type_arguments: type_arguments.clone(),
+                type_arguments: type_arguments.iter().copied().map(Type::Variable).collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: Box::new(arg_pattern_type.clone()),
                 kind: AliasKind::Opaque,
@@ -542,9 +571,7 @@ pub fn constrain_pattern(
                 .vars
                 .extend_from_slice(&[*arg_pattern_var, *whole_var]);
             // Also add the fresh variables we created for the type argument and lambda sets
-            state.vars.extend(type_arguments.iter().map(|(_, t)| {
-                t.expect_variable("all type arguments should be fresh variables here")
-            }));
+            state.vars.extend(type_arguments);
             state.vars.extend(lambda_set_variables.iter().map(|v| {
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));

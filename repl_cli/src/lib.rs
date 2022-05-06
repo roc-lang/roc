@@ -443,7 +443,7 @@ pub fn main() -> io::Result<()> {
                 break;
             }
             Err(err) => {
-                println!("Error: {:?}", err);
+                eprintln!("REPL error: {:?}", err);
                 break;
             }
         }

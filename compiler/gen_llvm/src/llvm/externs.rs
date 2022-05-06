@@ -1,8 +1,13 @@
-use crate::llvm::build::Env;
-use crate::llvm::build::{add_func, C_CALL_CONV};
+use crate::llvm::bitcode::call_void_bitcode_fn;
+use crate::llvm::build::{add_func, get_panic_msg_ptr, C_CALL_CONV};
+use crate::llvm::build::{CCReturn, Env, FunctionSpec};
 use inkwell::module::Linkage;
+use inkwell::types::BasicType;
 use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
+use roc_builtins::bitcode;
+
+use super::build::{get_sjlj_buffer, LLVM_LONGJMP};
 
 /// Define functions for roc_alloc, roc_realloc, and roc_dealloc
 /// which use libc implementations (malloc, realloc, and free)
@@ -82,21 +87,18 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     // roc_realloc
     {
         let libc_realloc_val = {
-            let fn_val = add_func(
-                module,
-                "realloc",
-                i8_ptr_type.fn_type(
-                    &[
-                        // ptr: *void
-                        i8_ptr_type.into(),
-                        // size: usize
-                        usize_type.into(),
-                    ],
-                    false,
-                ),
-                Linkage::External,
-                C_CALL_CONV,
+            let fn_spec = FunctionSpec::cconv(
+                env,
+                CCReturn::Return,
+                Some(i8_ptr_type.as_basic_type_enum()),
+                &[
+                    // ptr: *void
+                    i8_ptr_type.into(),
+                    // size: usize
+                    usize_type.into(),
+                ],
             );
+            let fn_val = add_func(env.context, module, "realloc", fn_spec, Linkage::External);
 
             let mut params = fn_val.get_param_iter();
             let ptr_arg = params.next().unwrap();
@@ -186,8 +188,6 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
     // roc_panic
     {
-        use crate::llvm::build::LLVM_LONGJMP;
-
         // The type of this function (but not the implementation) should have
         // already been defined by the builtins, which rely on it.
         let fn_val = module.get_function("roc_panic").unwrap();
@@ -209,37 +209,33 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
         builder.position_at_end(entry);
 
-        let buffer = crate::llvm::build::get_sjlj_buffer(env);
-
         // write our error message pointer
-        let index = env
-            .ptr_int()
-            .const_int(3 * env.target_info.ptr_width() as u64, false);
-        let message_buffer_raw =
-            unsafe { builder.build_gep(buffer, &[index], "raw_msg_buffer_ptr") };
-        let message_buffer = builder.build_bitcast(
-            message_buffer_raw,
-            env.context
-                .i8_type()
-                .ptr_type(AddressSpace::Generic)
-                .ptr_type(AddressSpace::Generic),
-            "to **u8",
-        );
+        env.builder.build_store(get_panic_msg_ptr(env), ptr_arg);
 
-        env.builder
-            .build_store(message_buffer.into_pointer_value(), ptr_arg);
-
-        let tag = env.context.i32_type().const_int(1, false);
-        if true {
-            let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[buffer.into()]);
-        } else {
-            let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[buffer.into(), tag.into()]);
-        }
+        build_longjmp_call(env);
 
         builder.build_unreachable();
 
         if cfg!(debug_assertions) {
             crate::llvm::build::verify_fn(fn_val);
         }
+    }
+}
+
+pub fn build_longjmp_call(env: &Env) {
+    let jmp_buf = get_sjlj_buffer(env);
+    if cfg!(target_arch = "aarch64") {
+        // Call the Zig-linked longjmp: `void longjmp(i32*, i32)`
+        let tag = env.context.i32_type().const_int(1, false);
+        let _call =
+            call_void_bitcode_fn(env, &[jmp_buf.into(), tag.into()], bitcode::UTILS_LONGJMP);
+    } else {
+        // Call the LLVM-intrinsic longjmp: `void @llvm.eh.sjlj.longjmp(i8* %setjmp_buf)`
+        let jmp_buf_i8p = env.builder.build_bitcast(
+            jmp_buf,
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            "jmp_buf i8*",
+        );
+        let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p]);
     }
 }
