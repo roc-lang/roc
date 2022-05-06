@@ -2201,6 +2201,7 @@ fn update<'a>(
                     arena,
                     module_id,
                     &mut ident_ids,
+                    &mut update_mode_ids,
                     &mut state.procedures,
                 );
 

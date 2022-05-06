@@ -393,11 +393,19 @@ impl<'a> Proc<'a> {
         arena: &'a Bump,
         home: ModuleId,
         ident_ids: &'i mut IdentIds,
+        update_mode_ids: &'i mut UpdateModeIds,
         procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     ) {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
 
-        crate::inc_dec::visit_procs(arena, home, ident_ids, borrow_params, procs);
+        crate::inc_dec::visit_procs(
+            arena,
+            home,
+            ident_ids,
+            update_mode_ids,
+            borrow_params,
+            procs,
+        );
     }
 
     pub fn insert_reset_reuse_operations<'i>(
