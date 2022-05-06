@@ -105,11 +105,19 @@ mod cli_run {
         file: &'a Path,
         args: I,
         stdin: &[&str],
+        input_file: Option<PathBuf>,
     ) -> Out {
-        let compile_out = run_roc(
-            args.into_iter().chain(iter::once(file.to_str().unwrap())),
-            stdin,
-        );
+        let compile_out = match input_file {
+            Some(input_file) => run_roc(
+                args.into_iter()
+                    .chain([file.to_str().unwrap(), input_file.to_str().unwrap()]),
+                stdin,
+            ),
+            None => run_roc(
+                args.into_iter().chain(iter::once(file.to_str().unwrap())),
+                stdin,
+            ),
+        };
 
         if !compile_out.stderr.is_empty() &&
             // If there is any stderr, it should be reporting the runtime and that's it!
@@ -149,7 +157,7 @@ mod cli_run {
 
             let out = match cli_mode {
                 CliMode::RocBuild => {
-                    run_roc_on(file, iter::once(CMD_BUILD).chain(flags.clone()), &[]);
+                    run_roc_on(file, iter::once(CMD_BUILD).chain(flags.clone()), &[], None);
 
                     if use_valgrind && ALLOW_VALGRIND {
                         let (valgrind_out, raw_xml) = if let Some(ref input_file) = input_file {
@@ -157,7 +165,7 @@ mod cli_run {
                                 stdin.clone().iter().copied(),
                                 &[
                                     file.with_file_name(executable_filename).to_str().unwrap(),
-                                    input_file.to_str().unwrap(),
+                                    input_file.clone().to_str().unwrap(),
                                 ],
                             )
                         } else {
@@ -216,10 +224,13 @@ mod cli_run {
                         )
                     }
                 }
-                CliMode::Roc => run_roc_on(file, flags.clone(), stdin),
-                CliMode::RocRun => {
-                    run_roc_on(file, iter::once(CMD_RUN).chain(flags.clone()), stdin)
-                }
+                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, input_file.clone()),
+                CliMode::RocRun => run_roc_on(
+                    file,
+                    iter::once(CMD_RUN).chain(flags.clone()),
+                    stdin,
+                    input_file.clone(),
+                ),
             };
 
             if !&out.stdout.ends_with(expected_ending) {
@@ -307,7 +318,7 @@ mod cli_run {
                         }
                         "hello-gui" | "breakout" => {
                             // Since these require opening a window, we do `roc build` on them but don't run them.
-                            run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[]);
+                            run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], None);
 
                             return;
                         }
