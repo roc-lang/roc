@@ -489,7 +489,7 @@ fn roc_run(
 ) -> io::Result<i32> {
     use std::os::unix::process::CommandExt;
 
-    let mut cmd = match triple.architecture {
+    match triple.architecture {
         Architecture::Wasm32 => {
             // If possible, report the generated executable name relative to the current dir.
             let generated_filename = binary_path
