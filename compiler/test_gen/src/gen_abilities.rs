@@ -222,7 +222,6 @@ fn ability_used_as_type_still_compiles() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
 fn encode() {
     assert_evals_to!(
         indoc!(
@@ -249,15 +248,20 @@ fn encode() {
             # impl Format for Linear
             u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
 
-            MyU8 := U8
+            Rgba := { r : U8, g : U8, b : U8, a : U8 }
 
-            # impl Encoding for MyU8
-            toEncoder = \@MyU8 n -> u8 n
+            # impl Encoding for Rgba
+            toEncoder = \@Rgba {r, g, b, a} ->
+                @Encoder \lst, fmt -> lst
+                    |> appendWith (u8 r) fmt
+                    |> appendWith (u8 g) fmt
+                    |> appendWith (u8 b) fmt
+                    |> appendWith (u8 a) fmt
 
-            myU8Bytes = toBytes (@MyU8 15) (@Linear {})
+            myU8Bytes = toBytes (@Rgba { r: 106, g: 90, b: 205, a: 255 }) (@Linear {})
             "#
         ),
-        RocList::from_slice(&[15]),
+        RocList::from_slice(&[106, 90, 205, 255]),
         RocList<u8>
     )
 }
