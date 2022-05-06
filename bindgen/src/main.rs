@@ -99,6 +99,11 @@ pub fn main() {
 
                 process::exit(1);
             });
+
+            println!(
+                "🎉 Generated type declarations in:\n\n\t{}",
+                output_path.display()
+            );
         }
         Err(err) => match err.kind() {
             ErrorKind::NotFound => {
