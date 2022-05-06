@@ -109,8 +109,11 @@ mod cli_run {
     ) -> Out {
         let compile_out = match input_file {
             Some(input_file) => run_roc(
-                args.into_iter()
-                    .chain([file.to_str().unwrap(), input_file.to_str().unwrap()]),
+                // converting these all to String avoids lifetime issues
+                args.into_iter().map(|arg| arg.to_string()).chain([
+                    file.to_str().unwrap().to_string(),
+                    input_file.to_str().unwrap().to_string(),
+                ]),
                 stdin,
             ),
             None => run_roc(
