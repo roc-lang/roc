@@ -3987,6 +3987,39 @@ mod test_fmt {
     }
 
     #[test]
+    fn format_tui_package_config() {
+        // At one point this failed to reformat.
+        module_formats_to(
+            indoc!(
+                r#"
+                    platform "tui"
+                        requires { Model } { main : { init : ({} -> Model), update : (Model, Str -> Model), view : (Model -> Str) } }
+                        exposes []
+                        packages {}
+                        imports []
+                        provides [ mainForHost ]
+
+                    mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
+                    mainForHost = main
+                "#
+            ),
+            indoc!(
+                r#"
+                    platform "tui"
+                        requires { Model } { main : { init : {} -> Model, update : Model, Str -> Model, view : Model -> Str } }
+                        exposes []
+                        packages {}
+                        imports []
+                        provides [ mainForHost ]
+
+                    mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
+                    mainForHost = main
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn single_line_hosted() {
         module_formats_same(indoc!(
             r#"
@@ -4193,17 +4226,6 @@ mod test_fmt {
             r#"
             f : { foo : Int * }
             f = { foo: 1000 }
-
-            a
-            "#
-        ));
-    }
-
-    #[test]
-    fn record_type_with_functions() {
-        expr_formats_same(indoc!(
-            r#"
-            a : { main : { init : ({} -> Model), update : (Model, Str -> Model), view : (Model -> Str) } }
 
             a
             "#
