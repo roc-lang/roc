@@ -1361,3 +1361,39 @@ fn opaque_assign_to_symbol() {
 //         "#
 //     )
 // }
+
+#[mono_test]
+fn list_map_closure_borrows() {
+    indoc!(
+        r#"
+        app "test" provides [ out ] to "./platform"
+
+        list = [ Str.concat "lllllllllllllllllllllooooooooooong" "g" ]
+
+        example1 = List.map list \string -> Str.repeat string 2
+
+        out =
+            when List.get example1 0 is
+                Ok s -> s
+                Err _ -> "Hello, World!\n"
+        "#
+    )
+}
+
+#[mono_test]
+fn list_map_closure_owns() {
+    indoc!(
+        r#"
+        app "test" provides [ out ] to "./platform"
+
+        list = [ Str.concat "lllllllllllllllllllllooooooooooong" "g" ]
+
+        example2 = List.map list \string -> Str.concat string "!"
+
+        out =
+            when List.get example2 0 is
+                Ok s -> s
+                Err _ -> "Hello, World!\n"
+        "#
+    )
+}
