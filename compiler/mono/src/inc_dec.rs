@@ -1,7 +1,7 @@
 use crate::borrow::{ParamMap, BORROWED, OWNED};
 use crate::ir::{
-    BranchInfo, CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc,
-    ProcLayout, Stmt, UpdateModeIds,
+    CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
+    UpdateModeIds,
 };
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
@@ -479,6 +479,7 @@ impl<'a> Context<'a> {
         b
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn visit_call<'i>(
         &self,
         codegen: &mut CodegenTools<'i>,
@@ -547,6 +548,7 @@ impl<'a> Context<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn visit_higher_order_lowlevel<'i>(
         &self,
         codegen: &mut CodegenTools<'i>,
@@ -738,61 +740,34 @@ impl<'a> Context<'a> {
 
                     match ownership {
                         DataOwnedFunctionOwns => {
-                            // elements have been consumed, must still consume the list itself
-                            let mut stmt = b;
+                            // if non-unique, elements have been consumed, must still consume the list itself
+                            let rc = Stmt::Refcounting(ModifyRc::DecRef(xs), b);
 
-                            let condition_symbol =
-                                Symbol::new(codegen.home, codegen.ident_ids.gen_unique());
-
-                            // unique branch
-                            // (u64, BranchInfo<'a>, Stmt<'a>)
-                            let unique_branch = (1u64, BranchInfo::None, stmt.clone());
-
-                            // non-unique branch
-                            let rc = Stmt::Refcounting(ModifyRc::DecRef(xs), stmt);
-                            let non_unique_branch = (BranchInfo::None, &*self.arena.alloc(rc));
-
-                            // branch on the condition
-
-                            let when_stmt = Stmt::Switch {
-                                cond_symbol: condition_symbol,
-                                cond_layout: Layout::bool(),
-                                branches: &*self.arena.alloc([unique_branch]),
-                                default_branch: non_unique_branch,
-                                ret_layout: l,
-                            };
-
-                            stmt = self.arena.alloc(when_stmt);
-
-                            // define the condition
-
-                            let condition_call_type = CallType::LowLevel {
-                                op: roc_module::low_level::LowLevel::ListIsUnique,
-                                update_mode: codegen.update_mode_ids.next_id(),
-                            };
-
-                            let condition_call = crate::ir::Call {
-                                call_type: condition_call_type,
-                                arguments: self.arena.alloc([xs]),
-                            };
-
-                            let condition_stmt = Stmt::Let(
-                                condition_symbol,
-                                Expr::Call(condition_call),
-                                Layout::bool(),
-                                stmt,
+                            let condition_stmt = branch_on_list_uniqueness(
+                                self.arena,
+                                codegen,
+                                xs,
+                                l,
+                                b.clone(),
+                                self.arena.alloc(rc),
                             );
 
-                            stmt = self.arena.alloc(condition_stmt);
-
-                            stmt
+                            &*self.arena.alloc(condition_stmt)
                         }
                         DataOwnedFunctionBorrows => {
                             // must consume list and elements
-                            let rest = self.arena.alloc(b);
-                            let rc = Stmt::Refcounting(ModifyRc::Dec(xs), rest);
+                            let rc = Stmt::Refcounting(ModifyRc::Dec(xs), b);
 
-                            &*self.arena.alloc(rc)
+                            let condition_stmt = branch_on_list_uniqueness(
+                                self.arena,
+                                codegen,
+                                xs,
+                                l,
+                                b.clone(),
+                                self.arena.alloc(rc),
+                            );
+
+                            &*self.arena.alloc(condition_stmt)
                         }
                         DataBorrowedFunctionOwns => {
                             // elements have been consumed, must still consume the list itself
@@ -812,10 +787,10 @@ impl<'a> Context<'a> {
 
                 handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
-            ListWalk { xs, state }
-            | ListWalkUntil { xs, state }
-            | ListWalkBackwards { xs, state }
-            | DictWalk { xs, state } => {
+            ListWalk { xs, state: _ }
+            | ListWalkUntil { xs, state: _ }
+            | ListWalkBackwards { xs, state: _ }
+            | DictWalk { xs, state: _ } => {
                 let ownerships = [
                     // borrow data structure based on second argument of the folded function
                     (xs, function_ps[1]),
@@ -1194,6 +1169,46 @@ impl<'a> Context<'a> {
             RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
+}
+
+fn branch_on_list_uniqueness<'a, 'i>(
+    arena: &'a Bump,
+    codegen: &mut CodegenTools<'i>,
+    list_symbol: Symbol,
+    return_layout: Layout<'a>,
+    then_branch_stmt: Stmt<'a>,
+    else_branch_stmt: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let condition_symbol = Symbol::new(codegen.home, codegen.ident_ids.add_str("listIsUnique"));
+
+    let when_stmt = Stmt::if_then_else(
+        arena,
+        condition_symbol,
+        return_layout,
+        then_branch_stmt,
+        else_branch_stmt,
+    );
+
+    let stmt = arena.alloc(when_stmt);
+
+    // define the condition
+
+    let condition_call_type = CallType::LowLevel {
+        op: roc_module::low_level::LowLevel::ListIsUnique,
+        update_mode: codegen.update_mode_ids.next_id(),
+    };
+
+    let condition_call = crate::ir::Call {
+        call_type: condition_call_type,
+        arguments: arena.alloc([list_symbol]),
+    };
+
+    Stmt::Let(
+        condition_symbol,
+        Expr::Call(condition_call),
+        Layout::bool(),
+        stmt,
+    )
 }
 
 fn create_holl_call<'a>(

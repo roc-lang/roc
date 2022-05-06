@@ -1919,6 +1919,36 @@ impl<'a> Stmt<'a> {
             _ => false,
         }
     }
+
+    pub fn if_then_else(
+        arena: &'a Bump,
+        condition_symbol: Symbol,
+        return_layout: Layout<'a>,
+        then_branch_stmt: Stmt<'a>,
+        else_branch_stmt: &'a Stmt<'a>,
+    ) -> Self {
+        let then_branch_info = BranchInfo::Constructor {
+            scrutinee: condition_symbol,
+            layout: Layout::bool(),
+            tag_id: 1,
+        };
+        let then_branch = (1u64, then_branch_info, then_branch_stmt);
+
+        let else_branch_info = BranchInfo::Constructor {
+            scrutinee: condition_symbol,
+            layout: Layout::bool(),
+            tag_id: 0,
+        };
+        let else_branch = (else_branch_info, else_branch_stmt);
+
+        Stmt::Switch {
+            cond_symbol: condition_symbol,
+            cond_layout: Layout::bool(),
+            branches: &*arena.alloc([then_branch]),
+            default_branch: else_branch,
+            ret_layout: return_layout,
+        }
+    }
 }
 
 /// turn record/tag patterns into a when expression, e.g.
