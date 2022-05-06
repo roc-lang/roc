@@ -97,11 +97,8 @@ mod cli_run {
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
         let out = run_roc(["format", file.to_str().unwrap(), CHECK_FLAG], &[]);
-        if expects_success_exit_code {
-            assert!(out.status.success());
-        } else {
-            assert!(!out.status.success());
-        }
+
+        assert_eq!(out.status.success(), expects_success_exit_code);
     }
 
     fn run_roc_on<'a, I: IntoIterator<Item = &'a str>>(
@@ -119,7 +116,10 @@ mod cli_run {
             !(compile_out.stderr.starts_with("runtime: ")
                 && compile_out.stderr.ends_with("ms\n"))
         {
-            panic!("roc build had unexpected stderr: {}", compile_out.stderr);
+            panic!(
+                "`roc` command had unexpected stderr: {}",
+                compile_out.stderr
+            );
         }
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);
