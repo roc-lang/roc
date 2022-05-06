@@ -258,7 +258,7 @@ pub fn constrain_expr(
             let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
-            let opt_symbol = if let Var(symbol) = loc_fn.value {
+            let opt_symbol = if let Var(symbol) | AbilityMember(symbol, _) = loc_fn.value {
                 Some(symbol)
             } else {
                 None
