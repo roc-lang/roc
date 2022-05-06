@@ -389,13 +389,15 @@ impl<'a> Proc<'a> {
         String::from_utf8(w).unwrap()
     }
 
-    pub fn insert_refcount_operations(
+    pub fn insert_refcount_operations<'i>(
         arena: &'a Bump,
+        home: ModuleId,
+        ident_ids: &'i mut IdentIds,
         procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     ) {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
 
-        crate::inc_dec::visit_procs(arena, borrow_params, procs);
+        crate::inc_dec::visit_procs(arena, home, ident_ids, borrow_params, procs);
     }
 
     pub fn insert_reset_reuse_operations<'i>(

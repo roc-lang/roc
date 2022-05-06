@@ -1,12 +1,13 @@
 use crate::borrow::{ParamMap, BORROWED, OWNED};
 use crate::ir::{
-    CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
+    BranchInfo, CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc,
+    ProcLayout, Stmt,
 };
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 /// Data and Function ownership relation
 ///
@@ -478,8 +479,10 @@ impl<'a> Context<'a> {
         b
     }
 
-    fn visit_call(
+    fn visit_call<'i>(
         &self,
+        home: ModuleId,
+        ident_ids: &'i mut IdentIds,
         z: Symbol,
         call_type: crate::ir::CallType<'a>,
         arguments: &'a [Symbol],
@@ -502,9 +505,16 @@ impl<'a> Context<'a> {
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            HigherOrder(lowlevel) => {
-                self.visit_higher_order_lowlevel(z, lowlevel, arguments, l, b, b_live_vars)
-            }
+            HigherOrder(lowlevel) => self.visit_higher_order_lowlevel(
+                home,
+                ident_ids,
+                z,
+                lowlevel,
+                arguments,
+                l,
+                b,
+                b_live_vars,
+            ),
 
             Foreign { .. } => {
                 let ps = crate::borrow::foreign_borrow_signature(self.arena, arguments.len());
@@ -545,8 +555,10 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn visit_higher_order_lowlevel(
+    fn visit_higher_order_lowlevel<'i>(
         &self,
+        home: ModuleId,
+        ident_ids: &'i mut IdentIds,
         z: Symbol,
         lowlevel: &'a crate::ir::HigherOrderLowLevel,
         arguments: &'a [Symbol],
@@ -729,7 +741,80 @@ impl<'a> Context<'a> {
 
                 let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
-                let b = handle_ownerships_post!(b, ownerships);
+                // list-sort will sort in-place; that really changes how RC should work
+                let b = {
+                    let ownership = DataFunction::new(&self.vars, xs, function_ps[0]);
+
+                    match ownership {
+                        DataOwnedFunctionOwns => {
+                            // elements have been consumed, must still consume the list itself
+                            let mut stmt = b;
+
+                            let condition_symbol = Symbol::new(home, ident_ids.gen_unique());
+
+                            // unique branch
+                            // (u64, BranchInfo<'a>, Stmt<'a>)
+                            let unique_branch = (1u64, BranchInfo::None, stmt.clone());
+
+                            // non-unique branch
+                            let rc = Stmt::Refcounting(ModifyRc::DecRef(xs), stmt);
+                            let non_unique_branch = (BranchInfo::None, &*self.arena.alloc(rc));
+
+                            // branch on the condition
+
+                            let when_stmt = Stmt::Switch {
+                                cond_symbol: condition_symbol,
+                                cond_layout: Layout::bool(),
+                                branches: &*self.arena.alloc([unique_branch]),
+                                default_branch: non_unique_branch,
+                                ret_layout: l,
+                            };
+
+                            stmt = self.arena.alloc(when_stmt);
+
+                            // define the condition
+
+                            let condition_call_type = CallType::LowLevel {
+                                op: roc_module::low_level::LowLevel::ListIsUnique,
+                                update_mode: crate::ir::UpdateModeId::BACKEND_DUMMY,
+                            };
+
+                            let condition_call = crate::ir::Call {
+                                call_type: condition_call_type,
+                                arguments: self.arena.alloc([xs]),
+                            };
+
+                            let condition_stmt = Stmt::Let(
+                                condition_symbol,
+                                Expr::Call(condition_call),
+                                Layout::bool(),
+                                stmt,
+                            );
+
+                            stmt = self.arena.alloc(condition_stmt);
+
+                            stmt
+                        }
+                        DataOwnedFunctionBorrows => {
+                            // must consume list and elements
+                            let rest = self.arena.alloc(b);
+                            let rc = Stmt::Refcounting(ModifyRc::Dec(xs), rest);
+
+                            &*self.arena.alloc(rc)
+                        }
+                        DataBorrowedFunctionOwns => {
+                            // elements have been consumed, must still consume the list itself
+                            let rest = self.arena.alloc(b);
+                            let rc = Stmt::Refcounting(ModifyRc::DecRef(xs), rest);
+
+                            &*self.arena.alloc(rc)
+                        }
+                        DataBorrowedFunctionBorrows => {
+                            // list borrows, function borrows, so there is nothing to do
+                            b
+                        }
+                    }
+                };
 
                 let v = create_call!(function_ps.get(2));
 
@@ -758,8 +843,10 @@ impl<'a> Context<'a> {
     }
 
     #[allow(clippy::many_single_char_names)]
-    fn visit_variable_declaration(
+    fn visit_variable_declaration<'i>(
         &self,
+        home: ModuleId,
+        ident_ids: &'i mut IdentIds,
         z: Symbol,
         v: Expr<'a>,
         l: Layout<'a>,
@@ -791,7 +878,7 @@ impl<'a> Context<'a> {
             Call(crate::ir::Call {
                 call_type,
                 arguments,
-            }) => self.visit_call(z, call_type, arguments, l, b, b_live_vars),
+            }) => self.visit_call(home, ident_ids, z, call_type, arguments, l, b, b_live_vars),
 
             StructAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
@@ -952,7 +1039,12 @@ impl<'a> Context<'a> {
         b
     }
 
-    fn visit_stmt(&self, stmt: &'a Stmt<'a>) -> (&'a Stmt<'a>, LiveVarSet) {
+    fn visit_stmt<'i>(
+        &self,
+        home: ModuleId,
+        ident_ids: &'i mut IdentIds,
+        stmt: &'a Stmt<'a>,
+    ) -> (&'a Stmt<'a>, LiveVarSet) {
         use Stmt::*;
 
         // let-chains can be very long, especially for large (list) literals
@@ -971,9 +1063,11 @@ impl<'a> Context<'a> {
                 for (symbol, expr, layout) in triples.iter() {
                     ctx = ctx.update_var_info(**symbol, layout, expr);
                 }
-                let (mut b, mut b_live_vars) = ctx.visit_stmt(cont);
+                let (mut b, mut b_live_vars) = ctx.visit_stmt(home, ident_ids, cont);
                 for (symbol, expr, layout) in triples.into_iter().rev() {
                     let pair = ctx.visit_variable_declaration(
+                        home,
+                        ident_ids,
                         *symbol,
                         (*expr).clone(),
                         *layout,
@@ -992,8 +1086,16 @@ impl<'a> Context<'a> {
         match stmt {
             Let(symbol, expr, layout, cont) => {
                 let ctx = self.update_var_info(*symbol, layout, expr);
-                let (b, b_live_vars) = ctx.visit_stmt(cont);
-                ctx.visit_variable_declaration(*symbol, expr.clone(), *layout, b, &b_live_vars)
+                let (b, b_live_vars) = ctx.visit_stmt(home, ident_ids, cont);
+                ctx.visit_variable_declaration(
+                    home,
+                    ident_ids,
+                    *symbol,
+                    expr.clone(),
+                    *layout,
+                    b,
+                    &b_live_vars,
+                )
             }
 
             Join {
@@ -1007,7 +1109,7 @@ impl<'a> Context<'a> {
 
                 let (v, v_live_vars) = {
                     let ctx = self.update_var_info_with_params(xs);
-                    ctx.visit_stmt(v)
+                    ctx.visit_stmt(home, ident_ids, v)
                 };
 
                 let mut ctx = self.clone();
@@ -1015,7 +1117,7 @@ impl<'a> Context<'a> {
 
                 update_jp_live_vars(*j, xs, v, &mut ctx.jp_live_vars);
 
-                let (b, b_live_vars) = ctx.visit_stmt(b);
+                let (b, b_live_vars) = ctx.visit_stmt(home, ident_ids, b);
 
                 (
                     ctx.arena.alloc(Join {
@@ -1070,7 +1172,7 @@ impl<'a> Context<'a> {
                     branches.iter().map(|(label, info, branch)| {
                         // TODO should we use ctor info like Lean?
                         let ctx = self.clone();
-                        let (b, alt_live_vars) = ctx.visit_stmt(branch);
+                        let (b, alt_live_vars) = ctx.visit_stmt(home, ident_ids, branch);
                         let b = ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b);
 
                         (*label, info.clone(), b.clone())
@@ -1082,7 +1184,7 @@ impl<'a> Context<'a> {
                 let default_branch = {
                     // TODO should we use ctor info like Lean?
                     let ctx = self.clone();
-                    let (b, alt_live_vars) = ctx.visit_stmt(default_branch.1);
+                    let (b, alt_live_vars) = ctx.visit_stmt(home, ident_ids, default_branch.1);
 
                     (
                         default_branch.0.clone(),
@@ -1224,20 +1326,24 @@ fn update_jp_live_vars(j: JoinPointId, ys: &[Param], v: &Stmt<'_>, m: &mut JPLiv
     m.insert(j, j_live_vars);
 }
 
-pub fn visit_procs<'a>(
+pub fn visit_procs<'a, 'i>(
     arena: &'a Bump,
+    home: ModuleId,
+    ident_ids: &'i mut IdentIds,
     param_map: &'a ParamMap<'a>,
     procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     let ctx = Context::new(arena, param_map);
 
     for (key, proc) in procs.iter_mut() {
-        visit_proc(arena, param_map, &ctx, proc, key.1);
+        visit_proc(arena, home, ident_ids, param_map, &ctx, proc, key.1);
     }
 }
 
-fn visit_proc<'a>(
+fn visit_proc<'a, 'i>(
     arena: &'a Bump,
+    home: ModuleId,
+    ident_ids: &'i mut IdentIds,
     param_map: &'a ParamMap<'a>,
     ctx: &Context<'a>,
     proc: &mut Proc<'a>,
@@ -1258,7 +1364,7 @@ fn visit_proc<'a>(
 
     let stmt = arena.alloc(proc.body.clone());
     let ctx = ctx.update_var_info_with_params(params);
-    let (b, b_live_vars) = ctx.visit_stmt(stmt);
+    let (b, b_live_vars) = ctx.visit_stmt(home, ident_ids, stmt);
     let b = ctx.add_dec_for_dead_params(params, b, &b_live_vars);
 
     proc.body = b.clone();
