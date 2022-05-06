@@ -6332,7 +6332,7 @@ mod solve_expr {
                     when decodeWith lst decoder fmt is
                         { result, rest } ->
                             when result is
-                                Ok val -> if List.isEmpty rest then val else Err (Leftover rest)
+                                Ok val -> if List.isEmpty rest then Ok val else Err (Leftover rest)
                                 Err e -> Err e
 
 
