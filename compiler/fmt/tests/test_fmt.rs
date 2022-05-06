@@ -680,7 +680,7 @@ mod test_fmt {
                     1,
                 ]
 
-                list 
+                list
                 "#
         ));
 
@@ -693,7 +693,7 @@ mod test_fmt {
                     1,
                 ]
 
-                list 
+                list
                 "#
         ));
 
@@ -706,7 +706,7 @@ mod test_fmt {
                     1,
                 ]
 
-                list 
+                list
                 "#
         ));
 
@@ -720,7 +720,7 @@ mod test_fmt {
                     1,
                 ]
 
-                list 
+                list
                 "#
         ));
 
@@ -737,7 +737,7 @@ mod test_fmt {
                     # comment 3
                 ]
 
-                list 
+                list
                 "#
         ));
 
@@ -753,7 +753,7 @@ mod test_fmt {
                     # comment 3
                 ]
 
-                list 
+                list
                 "#
         ));
         expr_formats_to(
@@ -767,7 +767,7 @@ mod test_fmt {
                     1,
                 ]
 
-                list 
+                list
                 "#
             ),
             indoc!(
@@ -779,35 +779,7 @@ mod test_fmt {
                     1,
                 ]
 
-                list 
-                "#
-            ),
-        );
-
-        expr_formats_to(
-            indoc!(
-                r#"
-                list = [
-                    0,
-                    1,
-
-                    # comment
-
-                ]
-
-                list 
-                "#
-            ),
-            indoc!(
-                r#"
-                list = [
-                    0,
-                    1,
-
-                    # comment
-                ]
-
-                list 
+                list
                 "#
             ),
         );
@@ -817,53 +789,25 @@ mod test_fmt {
                 r#"
                 list = [
                     0,
-
+                    1,
 
                     # comment
-                    1,
+
                 ]
 
-                list 
+                list
                 "#
             ),
             indoc!(
                 r#"
                 list = [
                     0,
+                    1,
 
                     # comment
-                    1,
                 ]
 
-                list 
-                "#
-            ),
-        );
-
-        expr_formats_to(
-            indoc!(
-                r#"
-                list = [
-                    0,
-                    # comment
-
-
-                    1,
-                ]
-
-                list 
-                "#
-            ),
-            indoc!(
-                r#"
-                list = [
-                    0,
-                    # comment
-
-                    1,
-                ]
-
-                list 
+                list
                 "#
             ),
         );
@@ -876,12 +820,68 @@ mod test_fmt {
 
 
                     # comment
+                    1,
+                ]
+
+                list
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    0,
+
+                    # comment
+                    1,
+                ]
+
+                list
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+                    0,
+                    # comment
 
 
                     1,
                 ]
 
-                list 
+                list
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    0,
+                    # comment
+
+                    1,
+                ]
+
+                list
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+                    0,
+
+
+                    # comment
+
+
+                    1,
+                ]
+
+                list
                 "#
             ),
             indoc!(
@@ -894,7 +894,7 @@ mod test_fmt {
                     1,
                 ]
 
-                list 
+                list
                 "#
             ),
         );
@@ -1444,7 +1444,7 @@ mod test_fmt {
                     3,
                 ]
 
-                toList 
+                toList
             "#
         ));
 
@@ -4146,6 +4146,17 @@ mod test_fmt {
             r#"
             f : { foo : Int * }
             f = { foo: 1000 }
+
+            a
+            "#
+        ));
+    }
+
+    #[test]
+    fn record_type_with_functions() {
+        expr_formats_same(indoc!(
+            r#"
+            a : { main : { init : ({} -> Model), update : (Model, Str -> Model), view : (Model -> Str) } }
 
             a
             "#
