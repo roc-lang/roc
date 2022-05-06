@@ -64,14 +64,6 @@ interface List
 ## >>> [ "a", "b", "c" ] # a list of strings
 ## >>> [ [ 1.1 ], [], [ 2.2, 3.3 ] ] # a list of lists of numbers
 ##
-## The list `[ 1, "a" ]` gives an error, because each element in a list must have
-## the same type. If you want to put a mix of [I64] and [Str] values into a list, try this:
-##
-## ```
-## mixedList : List [ IntElem I64, StrElem Str ]*
-## mixedList = [ IntElem 1, IntElem 2, StrElem "a", StrElem "b" ]
-## ```
-##
 ## The maximum size of a [List] is limited by the amount of heap memory available
 ## to the current process. If there is not enough memory available, attempting to
 ## create the list could crash. (On Linux, where [overcommit](https://www.etalabs.net/overcommit.html)
