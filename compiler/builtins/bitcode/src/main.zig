@@ -56,6 +56,7 @@ comptime {
     exportListFn(list.listAny, "any");
     exportListFn(list.listAll, "all");
     exportListFn(list.listFindUnsafe, "find_unsafe");
+    exportListFn(list.listIsUnique, "is_unique");
 }
 
 // Dict Module

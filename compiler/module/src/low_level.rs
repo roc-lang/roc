@@ -53,6 +53,7 @@ pub enum LowLevel {
     ListAny,
     ListAll,
     ListFindUnsafe,
+    ListIsUnique,
     DictSize,
     DictEmpty,
     DictInsert,

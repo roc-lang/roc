@@ -5667,6 +5667,15 @@ fn run_low_level<'a, 'ctx, 'env>(
                 update_mode,
             )
         }
+        ListIsUnique => {
+            // List.isUnique : List a -> Bool
+            debug_assert_eq!(args.len(), 1);
+
+            let list = load_symbol(scope, &args[0]);
+            let list = list_to_c_abi(env, list).into();
+
+            call_bitcode_fn(env, &[list], bitcode::LIST_IS_UNIQUE)
+        }
         NumToStr => {
             // Num.toStr : Num a -> Str
             debug_assert_eq!(args.len(), 1);

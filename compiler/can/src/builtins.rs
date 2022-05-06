@@ -150,6 +150,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_ANY => list_any,
         LIST_ALL => list_all,
         LIST_FIND => list_find,
+        LIST_IS_UNIQUE => list_is_unique,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
         DICT_SINGLE => dict_single,
@@ -3771,6 +3772,11 @@ fn list_find(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         t_ret,
     )
+}
+
+/// List.isUnique : List * -> Bool
+fn list_is_unique(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::ListIsUnique, var_store)
 }
 
 /// Dict.len : Dict * * -> Nat
