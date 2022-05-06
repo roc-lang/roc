@@ -569,54 +569,6 @@ impl<'a> Context<'a> {
             };
         }
 
-        macro_rules! handle_ownership_post {
-            ($ownership:expr, $argument:expr, $stmt:expr) => {
-                match $ownership {
-                    DataOwnedFunctionOwns | DataBorrowedFunctionOwns => {
-                        // elements have been consumed, must still consume the list itself
-                        let rest = self.arena.alloc($stmt);
-                        let rc = Stmt::Refcounting(ModifyRc::DecRef($argument), rest);
-
-                        &*self.arena.alloc(rc)
-                    }
-                    DataOwnedFunctionBorrows => {
-                        // must consume list and elements
-                        let rest = self.arena.alloc($stmt);
-                        let rc = Stmt::Refcounting(ModifyRc::Dec($argument), rest);
-
-                        &*self.arena.alloc(rc)
-                    }
-                    DataBorrowedFunctionBorrows => {
-                        // list borrows, function borrows, so there is nothing to do
-                        $stmt
-                    }
-                }
-            };
-        }
-
-        macro_rules! handle_ownership_pre {
-            ($ownership:expr, $argument:expr, $stmt:expr) => {
-                match $ownership {
-                    DataBorrowedFunctionOwns => {
-                        // the data is borrowed;
-                        // increment it to own the values so the function can use them
-                        let rest = self.arena.alloc($stmt);
-                        let rc = Stmt::Refcounting(ModifyRc::Inc($argument, 1), rest);
-
-                        self.arena.alloc(rc)
-                    }
-                    DataOwnedFunctionOwns | DataOwnedFunctionBorrows => {
-                        // we actually own the data; nothing to do
-                        $stmt
-                    }
-                    DataBorrowedFunctionBorrows => {
-                        // list borrows, function borrows, so there is nothing to do
-                        $stmt
-                    }
-                }
-            };
-        }
-
         const FUNCTION: bool = BORROWED;
         const CLOSURE_DATA: bool = BORROWED;
 
@@ -633,6 +585,66 @@ impl<'a> Context<'a> {
             None => unreachable!(),
         };
 
+        macro_rules! handle_ownerships_post {
+            ($stmt:expr, $args:expr) => {{
+                let mut stmt = $stmt;
+
+                for (argument, function_ps) in $args.iter().copied() {
+                    let ownership = DataFunction::new(&self.vars, argument, function_ps);
+
+                    match ownership {
+                        DataOwnedFunctionOwns | DataBorrowedFunctionOwns => {
+                            // elements have been consumed, must still consume the list itself
+                            let rest = self.arena.alloc($stmt);
+                            let rc = Stmt::Refcounting(ModifyRc::DecRef(argument), rest);
+
+                            stmt = self.arena.alloc(rc);
+                        }
+                        DataOwnedFunctionBorrows => {
+                            // must consume list and elements
+                            let rest = self.arena.alloc($stmt);
+                            let rc = Stmt::Refcounting(ModifyRc::Dec(argument), rest);
+
+                            stmt = self.arena.alloc(rc);
+                        }
+                        DataBorrowedFunctionBorrows => {
+                            // list borrows, function borrows, so there is nothing to do
+                        }
+                    }
+                }
+
+                stmt
+            }};
+        }
+
+        macro_rules! handle_ownerships_pre {
+            ($stmt:expr, $args:expr) => {{
+                let mut stmt = self.arena.alloc($stmt);
+
+                for (argument, function_ps) in $args.iter().copied() {
+                    let ownership = DataFunction::new(&self.vars, argument, function_ps);
+
+                    match ownership {
+                        DataBorrowedFunctionOwns => {
+                            // the data is borrowed;
+                            // increment it to own the values so the function can use them
+                            let rc = Stmt::Refcounting(ModifyRc::Inc(argument, 1), stmt);
+
+                            stmt = self.arena.alloc(rc);
+                        }
+                        DataOwnedFunctionOwns | DataOwnedFunctionBorrows => {
+                            // we actually own the data; nothing to do
+                        }
+                        DataBorrowedFunctionBorrows => {
+                            // list borrows, function borrows, so there is nothing to do
+                        }
+                    }
+                }
+
+                stmt
+            }};
+        }
+
         let borrows = [FUNCTION, CLOSURE_DATA];
         let after_arguments = &arguments[op.function_index()..];
 
@@ -644,86 +656,68 @@ impl<'a> Context<'a> {
             | ListAny { xs }
             | ListAll { xs }
             | ListFindUnsafe { xs } => {
-                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
+                let ownerships = [(xs, function_ps[0])];
 
                 let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
-                let b = handle_ownership_post!(ownership1, xs, b);
+                let b = handle_ownerships_post!(b, ownerships);
 
                 let v = create_call!(function_ps.get(1));
 
-                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
-
-                handle_ownership_pre!(ownership1, xs, b)
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
             ListMap2 { xs, ys } => {
-                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
-                let ownership2 = DataFunction::new(&self.vars, ys, function_ps[1]);
+                let ownerships = [(xs, function_ps[0]), (ys, function_ps[1])];
 
                 let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
-                let b = handle_ownership_post!(ownership1, xs, b);
-                let b = handle_ownership_post!(ownership2, ys, b);
+                let b = handle_ownerships_post!(b, ownerships);
 
                 let v = create_call!(function_ps.get(2));
 
-                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
-
-                let b = handle_ownership_pre!(ownership1, xs, b);
-                handle_ownership_pre!(ownership2, ys, b)
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
             ListMap3 { xs, ys, zs } => {
-                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
-                let ownership2 = DataFunction::new(&self.vars, ys, function_ps[1]);
-                let ownership3 = DataFunction::new(&self.vars, zs, function_ps[2]);
+                let ownerships = [
+                    (xs, function_ps[0]),
+                    (ys, function_ps[1]),
+                    (zs, function_ps[2]),
+                ];
 
                 let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
-                let b = handle_ownership_post!(ownership1, xs, b);
-                let b = handle_ownership_post!(ownership2, ys, b);
-                let b = handle_ownership_post!(ownership3, zs, b);
+                let b = handle_ownerships_post!(b, ownerships);
 
                 let v = create_call!(function_ps.get(3));
 
-                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
-
-                let b = handle_ownership_pre!(ownership1, xs, b);
-                let b = handle_ownership_pre!(ownership2, ys, b);
-                handle_ownership_pre!(ownership3, zs, b)
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
             ListMap4 { xs, ys, zs, ws } => {
-                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
-                let ownership2 = DataFunction::new(&self.vars, ys, function_ps[1]);
-                let ownership3 = DataFunction::new(&self.vars, zs, function_ps[2]);
-                let ownership4 = DataFunction::new(&self.vars, ws, function_ps[3]);
+                let ownerships = [
+                    (xs, function_ps[0]),
+                    (ys, function_ps[1]),
+                    (zs, function_ps[2]),
+                    (ws, function_ps[3]),
+                ];
 
                 let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
-                let b = handle_ownership_post!(ownership1, xs, b);
-                let b = handle_ownership_post!(ownership2, ys, b);
-                let b = handle_ownership_post!(ownership3, zs, b);
-                let b = handle_ownership_post!(ownership4, ws, b);
+                let b = handle_ownerships_post!(b, ownerships);
 
                 let v = create_call!(function_ps.get(3));
 
-                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
-
-                let b = handle_ownership_pre!(ownership1, xs, b);
-                let b = handle_ownership_pre!(ownership2, ys, b);
-                handle_ownership_pre!(ownership3, zs, b)
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
             ListMapWithIndex { xs } => {
-                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[1]);
+                let ownerships = [(xs, function_ps[0])];
 
                 let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
-                let b = handle_ownership_post!(ownership1, xs, b);
+                let b = handle_ownerships_post!(b, ownerships);
 
                 let v = create_call!(function_ps.get(2));
 
-                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
-
-                handle_ownership_pre!(ownership1, xs, b)
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
             ListSortWith { xs } => {
                 // NOTE: we may apply the function to the same argument multiple times.
@@ -731,40 +725,34 @@ impl<'a> Context<'a> {
                 // enforced at the moment
                 //
                 // we also don't check that both arguments have the same ownership characteristics
-                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
+                let ownerships = [(xs, function_ps[0])];
 
                 let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
-                let b = handle_ownership_post!(ownership1, xs, b);
+                let b = handle_ownerships_post!(b, ownerships);
 
                 let v = create_call!(function_ps.get(2));
 
-                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
-
-                handle_ownership_pre!(ownership1, xs, b)
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
             ListWalk { xs, state }
             | ListWalkUntil { xs, state }
             | ListWalkBackwards { xs, state }
             | DictWalk { xs, state } => {
-                // borrow data structure based on second argument of the folded function
-                let ownership1 = DataFunction::new(&self.vars, xs, function_ps[1]);
-
+                let ownerships = [
+                    // borrow data structure based on second argument of the folded function
+                    (xs, function_ps[1]),
+                ];
                 // borrow the default based on first argument of the folded function
-                // let ownership2 = DataFunction::new(&self.vars, state, function_ps[0]);
+                // (state, function_ps[0])
 
                 let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
-                let b = handle_ownership_post!(ownership1, xs, b);
-                // let b = handle_ownership_post!(ownership2, state, b);
+                let b = handle_ownerships_post!(b, ownerships);
 
                 let v = create_call!(function_ps.get(2));
 
-                let b = &*self.arena.alloc(Stmt::Let(z, v, l, b));
-
-                let b = handle_ownership_pre!(ownership1, xs, b);
-                // handle_ownership_pre!(ownership2, state, b)
-                b
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
         }
     }
