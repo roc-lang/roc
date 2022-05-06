@@ -1708,6 +1708,9 @@ pub enum AnnotationSource {
     TypedBody {
         region: Region,
     },
+    RequiredSymbol {
+        region: Region,
+    },
 }
 
 impl AnnotationSource {
@@ -1716,6 +1719,7 @@ impl AnnotationSource {
             &Self::TypedIfBranch { region, .. }
             | &Self::TypedWhenBranch { region, .. }
             | &Self::TypedBody { region, .. } => region,
+            &Self::RequiredSymbol { region, .. } => region,
         }
     }
 }

@@ -155,7 +155,7 @@ fn constrain_symbols_from_requires(
                     Expected::FromAnnotation(
                         loc_symbol.map(|&s| Pattern::Identifier(s)),
                         arity,
-                        AnnotationSource::TypedBody {
+                        AnnotationSource::RequiredSymbol {
                             region: loc_type.region,
                         },
                         loc_type.value,
