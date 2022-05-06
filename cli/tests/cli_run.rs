@@ -16,7 +16,7 @@ mod cli_run {
     };
     use const_format::concatcp;
     use indoc::indoc;
-    use roc_cli::{CMD_BUILD, CMD_RUN};
+    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN};
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
@@ -84,7 +84,7 @@ mod cli_run {
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-        let compile_out = run_roc(["check", file.to_str().unwrap()].iter().chain(flags), &[]);
+        let compile_out = run_roc([CMD_CHECK, file.to_str().unwrap()].iter().chain(flags), &[]);
         let err = compile_out.stdout.trim();
         let err = strip_colors(err);
 
@@ -96,7 +96,7 @@ mod cli_run {
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
-        let out = run_roc(["format", file.to_str().unwrap(), CHECK_FLAG], &[]);
+        let out = run_roc([CMD_FORMAT, file.to_str().unwrap(), CHECK_FLAG], &[]);
 
         assert_eq!(out.status.success(), expects_success_exit_code);
     }
