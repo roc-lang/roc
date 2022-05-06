@@ -265,3 +265,61 @@ fn encode() {
         RocList<u8>
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn decode() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ myU8 ] to "./platform"
+
+            DecodeError : [ TooShort, Leftover (List U8) ]
+
+            Decoder val fmt := List U8, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
+
+            Decoding has
+                decoder : Decoder val fmt | val has Decoding, fmt has DecoderFormatting
+
+            DecoderFormatting has
+                u8 : Decoder U8 fmt | fmt has DecoderFormatting
+
+            decodeWith : List U8, Decoder val fmt, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
+            decodeWith = \lst, (@Decoder doDecode), fmt -> doDecode lst fmt
+
+            fromBytes : List U8, fmt -> Result val DecodeError
+                        | fmt has DecoderFormatting, val has Decoding
+            fromBytes = \lst, fmt ->
+                when decodeWith lst decoder fmt is
+                    { result, rest } ->
+                        when result is
+                            Ok val -> if List.isEmpty rest then Ok val else Err (Leftover rest)
+                            Err e -> Err e
+
+
+            Linear := {}
+
+            # impl DecoderFormatting for Linear
+            u8 = @Decoder \lst, @Linear {} ->
+                    when List.first lst is
+                        Ok n -> { result: Ok n, rest: List.dropFirst lst }
+                        Err _ -> { result: Err TooShort, rest: [] }
+
+            MyU8 := U8
+
+            # impl Decoding for MyU8
+            decoder = @Decoder \lst, fmt ->
+                when decodeWith lst u8 fmt is
+                    { result, rest } ->
+                        { result: Result.map result (\n -> @MyU8 n), rest }
+
+            myU8 =
+                when fromBytes [ 15 ] (@Linear {}) is
+                    Ok (@MyU8 n) -> n
+                    _ -> 27u8
+            "#
+        ),
+        15,
+        u8
+    );
+}
