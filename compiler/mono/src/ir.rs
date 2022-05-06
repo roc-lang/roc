@@ -827,7 +827,7 @@ impl<'a> SymbolSpecializations<'a> {
             function_mark,
         };
 
-        let symbol_specializations = self.0.get_or_insert(symbol, || Default::default());
+        let symbol_specializations = self.0.get_or_insert(symbol, Default::default);
 
         // For the first specialization, always reuse the current symbol. The vast majority of defs
         // only have one instance type, so this preserves readability of the IR.
