@@ -3421,7 +3421,6 @@ fn polymorphic_def_used_in_closure() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore = "This still doesn't work... yet"]
 fn polymorphic_lambda_set_usage() {
     assert_evals_to!(
         indoc!(
@@ -3429,10 +3428,29 @@ fn polymorphic_lambda_set_usage() {
             id1 = \x -> x
             id2 = \y -> y
             id = if True then id1 else id2
+
             id 9u8
             "#
         ),
         9,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymorphic_lambda_set_multiple_specializations() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            id1 = \x -> x
+            id2 = \y -> y
+            id = if True then id1 else id2
+
+            (id 9u8) + Num.toU8 (id 16u16)
+            "#
+        ),
+        25,
         u8
     )
 }
