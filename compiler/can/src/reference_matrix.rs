@@ -131,6 +131,16 @@ impl ReferenceMatrix {
 
     /// Get the strongly-connected components of the set of input nodes.
     pub fn strongly_connected_components(&self, nodes: &[u32]) -> Sccs {
+        let mut bitvec = BitVec::repeat(false, self.length);
+
+        for value in nodes {
+            bitvec.set(*value as usize, true);
+        }
+
+        self.strongly_connected_components_help(&bitvec)
+    }
+
+    fn strongly_connected_components_help(&self, nodes: &BitSlice) -> Sccs {
         let mut params = Params::new(self.length, nodes);
 
         'outer: loop {
@@ -180,11 +190,11 @@ struct Params {
 }
 
 impl Params {
-    fn new(length: usize, group: &[u32]) -> Self {
+    fn new(length: usize, group: &BitSlice) -> Self {
         let mut preorders = vec![Preorder::Removed; length];
 
-        for value in group {
-            preorders[*value as usize] = Preorder::Empty;
+        for index in group.iter_ones() {
+            preorders[index] = Preorder::Empty;
         }
 
         Self {

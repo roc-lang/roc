@@ -1159,7 +1159,7 @@ pub fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     // When compiling to wasm, we cannot spawn extra threads
     // so we have a single-threaded implementation
-    if threading == Threading::Single || cfg!(target_family = "wasm") {
+    if true || threading == Threading::Single || cfg!(target_family = "wasm") {
         load_single_threaded(
             arena,
             load_start,
