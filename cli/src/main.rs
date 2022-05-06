@@ -26,37 +26,34 @@ fn main() -> io::Result<()> {
     let matches = build_app().get_matches();
 
     let exit_code = match matches.subcommand() {
-        None => match matches.index_of(ROC_FILE) {
-            Some(arg_index) => build(
-                &matches,
-                BuildConfig::BuildAndRunIfNoErrors {
-                    roc_file_arg_index: arg_index + 1,
-                },
-                Triple::host(),
-                LinkType::Executable,
-            ),
-
-            None => {
+        None => {
+            if matches.is_present(ROC_FILE) {
+                build(
+                    &matches,
+                    BuildConfig::BuildAndRunIfNoErrors,
+                    Triple::host(),
+                    LinkType::Executable,
+                )
+            } else {
                 launch_editor(None)?;
 
                 Ok(0)
             }
-        },
-        Some((CMD_RUN, matches)) => match matches.index_of(ROC_FILE) {
-            Some(arg_index) => build(
-                matches,
-                BuildConfig::BuildAndRun {
-                    roc_file_arg_index: arg_index + 1,
-                },
-                Triple::host(),
-                LinkType::Executable,
-            ),
-            None => {
+        }
+        Some((CMD_RUN, matches)) => {
+            if matches.is_present(ROC_FILE) {
+                build(
+                    matches,
+                    BuildConfig::BuildAndRun,
+                    Triple::host(),
+                    LinkType::Executable,
+                )
+            } else {
                 eprintln!("What .roc file do you want to run? Specify it at the end of the `roc run` command.");
 
                 Ok(1)
             }
-        },
+        }
         Some((CMD_BUILD, matches)) => {
             let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
 
