@@ -4353,25 +4353,39 @@ pub fn with_hole<'a>(
                                 }
                             }
                         }
-                        Value(function_symbol) => match full_layout {
-                            RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
-                                let closure_data_symbol = function_symbol;
+                        Value(function_symbol) => {
+                            let function_symbol = reuse_symbol_or_specialize(
+                                env,
+                                procs,
+                                layout_cache,
+                                function_symbol,
+                                fn_var,
+                            );
 
-                                result = match_on_lambda_set(
-                                    env,
-                                    lambda_set,
-                                    closure_data_symbol,
-                                    arg_symbols,
+                            match full_layout {
+                                RawFunctionLayout::Function(
                                     arg_layouts,
+                                    lambda_set,
                                     ret_layout,
-                                    assigned,
-                                    hole,
-                                );
+                                ) => {
+                                    let closure_data_symbol = function_symbol;
+
+                                    result = match_on_lambda_set(
+                                        env,
+                                        lambda_set,
+                                        closure_data_symbol,
+                                        arg_symbols,
+                                        arg_layouts,
+                                        ret_layout,
+                                        assigned,
+                                        hole,
+                                    );
+                                }
+                                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                                    unreachable!("calling a non-closure layout")
+                                }
                             }
-                            RawFunctionLayout::ZeroArgumentThunk(_) => {
-                                unreachable!("calling a non-closure layout")
-                            }
-                        },
+                        }
                         UnspecializedExpr(symbol) => {
                             match procs.ability_member_aliases.get(symbol).unwrap() {
                                 &AbilityMember(member) => {
@@ -5521,7 +5535,6 @@ pub fn from_can<'a>(
         }
         LetNonRec(def, cont, outer_annotation) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                // dbg!(symbol, &def.loc_expr.value);
                 match def.loc_expr.value {
                     roc_can::expr::Expr::Closure(closure_data) => {
                         register_capturing_closure(env, procs, layout_cache, *symbol, closure_data);
