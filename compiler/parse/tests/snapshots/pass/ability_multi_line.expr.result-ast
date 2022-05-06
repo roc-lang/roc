@@ -15,7 +15,7 @@ Defs(
                                 Newline,
                             ],
                         ),
-                        typ: @23-26 Function(
+                        typ: @18-26 Function(
                             [
                                 @18-19 BoundVariable(
                                     "a",
@@ -35,7 +35,7 @@ Defs(
                                 Newline,
                             ],
                         ),
-                        typ: @42-45 Function(
+                        typ: @37-45 Function(
                             [
                                 @37-38 BoundVariable(
                                     "a",

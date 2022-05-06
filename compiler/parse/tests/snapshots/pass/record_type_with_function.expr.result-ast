@@ -10,7 +10,7 @@ Defs(
                         @6-24 RequiredValue(
                             @6-10 "init",
                             [],
-                            @19-24 Function(
+                            @13-24 Function(
                                 [
                                     @13-15 Record {
                                         fields: [],
@@ -27,7 +27,7 @@ Defs(
                         @26-54 RequiredValue(
                             @26-32 "update",
                             [],
-                            @49-54 Function(
+                            @35-54 Function(
                                 [
                                     @35-40 Apply(
                                         "",
@@ -50,7 +50,7 @@ Defs(
                         @56-75 RequiredValue(
                             @56-60 "view",
                             [],
-                            @72-75 Function(
+                            @63-75 Function(
                                 [
                                     @63-68 Apply(
                                         "",
