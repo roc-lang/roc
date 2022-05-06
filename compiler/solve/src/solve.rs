@@ -5,6 +5,7 @@ use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Constraints, LetConstraint};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
+use roc_debug_flags::{dbg_do, ROC_VERIFY_RIGID_LET_GENERALIZED};
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
@@ -740,7 +741,7 @@ fn solve(
                 pools.get_mut(next_rank).clear();
 
                 // check that things went well
-                if cfg!(debug_assertions) && std::env::var("ROC_VERIFY_RIGID_RANKS").is_ok() {
+                dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
                     let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
 
                     // NOTE the `subs.redundant` check does not come from elm.
@@ -758,7 +759,7 @@ fn solve(
                         println!("Failing {:?}", failing);
                         debug_assert!(false);
                     }
-                }
+                });
 
                 let mut new_env = env.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {

@@ -966,17 +966,6 @@ fn single_can_def(
     }
 }
 
-fn add_annotation_aliases(
-    type_annotation: &crate::annotation::Annotation,
-    aliases: &mut VecMap<Symbol, Alias>,
-) {
-    for (name, alias) in type_annotation.aliases.iter() {
-        if !aliases.contains_key(name) {
-            aliases.insert(*name, alias.clone());
-        }
-    }
-}
-
 // Functions' references don't count in defs.
 // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
 // parent commit for the bug this fixed!
@@ -1029,16 +1018,11 @@ fn canonicalize_pending_value_def<'a>(
             );
 
             // Record all the annotation's references in output.references.lookups
-
-            for symbol in type_annotation.references.iter() {
-                output.references.insert_type_lookup(*symbol);
-            }
-
-            add_annotation_aliases(&type_annotation, aliases);
-
-            output
-                .introduced_variables
-                .union(&type_annotation.introduced_variables);
+            type_annotation.add_to(
+                aliases,
+                &mut output.references,
+                &mut output.introduced_variables,
+            );
 
             pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
 
@@ -1131,15 +1115,11 @@ fn canonicalize_pending_value_def<'a>(
             );
 
             // Record all the annotation's references in output.references.lookups
-            for symbol in type_annotation.references.iter() {
-                output.references.insert_type_lookup(*symbol);
-            }
-
-            add_annotation_aliases(&type_annotation, aliases);
-
-            output
-                .introduced_variables
-                .union(&type_annotation.introduced_variables);
+            type_annotation.add_to(
+                aliases,
+                &mut output.references,
+                &mut output.introduced_variables,
+            );
 
             canonicalize_pending_body(
                 env,

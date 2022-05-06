@@ -1,4 +1,5 @@
 use crate::env::Env;
+use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
@@ -18,6 +19,27 @@ pub struct Annotation {
     pub introduced_variables: IntroducedVariables,
     pub references: VecSet<Symbol>,
     pub aliases: SendMap<Symbol, Alias>,
+}
+
+impl Annotation {
+    pub fn add_to(
+        &self,
+        aliases: &mut VecMap<Symbol, Alias>,
+        references: &mut References,
+        introduced_variables: &mut IntroducedVariables,
+    ) {
+        for symbol in self.references.iter() {
+            references.insert_type_lookup(*symbol);
+        }
+
+        introduced_variables.union(&self.introduced_variables);
+
+        for (name, alias) in self.aliases.iter() {
+            if !aliases.contains_key(name) {
+                aliases.insert(*name, alias.clone());
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

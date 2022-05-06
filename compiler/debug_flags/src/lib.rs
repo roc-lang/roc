@@ -24,10 +24,14 @@
 //!      ROC_PRINT_IR_AFTER_RESET_REUSE=0 \
 //!         ROC_PRINT_IR_AFTER_REFCOUNT=0 \
 //!         ROC_PRETTY_PRINT_IR_SYMBOLS=0 \
+//!         # ...other flags
 //!   cargo"
 //! ```
 //!
 //! Now you can turn debug flags on and off as you like.
+//!
+//! These flags are also set in .cargo/config found at the repository root. You can modify them
+//! there to avoid maintaining a separate script.
 
 #[macro_export]
 macro_rules! dbg_do {
@@ -62,6 +66,22 @@ flags! {
 
     /// Prints all type mismatches hit during type unification.
     ROC_PRINT_MISMATCHES
+
+    /// Verifies that after let-generalization of a def, any rigid variables in the type annotation
+    /// of the def are indeed generalized.
+    ///
+    /// Note that rigids need not always be generalized in a def. For example, they may be
+    /// constrained by a type from a lower rank, as `b` is in the following def:
+    ///
+    ///   F a : { foo : a }
+    ///   foo = \arg ->
+    ///     x : F b
+    ///     x = arg
+    ///     x.foo
+    ///
+    /// Instead, this flag is useful for checking that in general, introduction is correct, when
+    /// chainging how defs are constrained.
+    ROC_VERIFY_RIGID_LET_GENERALIZED
 
     // ===Mono===
 
