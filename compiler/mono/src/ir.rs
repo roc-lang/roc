@@ -799,11 +799,6 @@ impl<'a> SymbolSpecializations<'a> {
         let arena = env.arena;
         let subs: &Subs = env.subs;
 
-        // let is_closure = matches!(
-        //     subs.get_content_without_compacting(specialization_var),
-        //     Content::Structure(FlatType::Func(..))
-        // );
-
         let layout = match layout_cache.from_var(arena, specialization_var, subs) {
             Ok(layout) => layout,
             // This can happen when the def symbol has a type error. In such cases just use the
@@ -811,21 +806,25 @@ impl<'a> SymbolSpecializations<'a> {
             Err(_) => return symbol,
         };
 
-        // let function_mark = if is_closure {
-        //     let fn_layout = match layout_cache.raw_from_var(arena, specialization_var, subs) {
-        //         Ok(layout) => layout,
-        //         // This can happen when the def symbol has a type error. In such cases just use the
-        //         // def symbol, which is erroring.
-        //         Err(_) => return symbol,
-        //     };
-        //     Some(fn_layout)
-        // } else {
-        //     None
-        // };
+        let is_closure = matches!(
+            subs.get_content_without_compacting(specialization_var),
+            Content::Structure(FlatType::Func(..))
+        );
+        let function_mark = if is_closure {
+            let fn_layout = match layout_cache.raw_from_var(arena, specialization_var, subs) {
+                Ok(layout) => layout,
+                // This can happen when the def symbol has a type error. In such cases just use the
+                // def symbol, which is erroring.
+                Err(_) => return symbol,
+            };
+            Some(fn_layout)
+        } else {
+            None
+        };
 
         let specialization_mark = SpecializationMark {
             layout,
-            function_mark: None,
+            function_mark,
         };
 
         let symbol_specializations = self.0.get_or_insert(symbol, || Default::default());
