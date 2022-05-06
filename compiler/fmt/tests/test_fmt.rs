@@ -18,13 +18,60 @@ mod test_fmt {
     // Not intended to be used directly in tests; please use expr_formats_to or expr_formats_same
     fn expect_format_expr_helper(input: &str, expected: &str) {
         let arena = Bump::new();
-        match roc_parse::test_helpers::parse_expr_with(&arena, input.trim()) {
+        let input = input.trim();
+
+        match roc_parse::test_helpers::parse_expr_with(&arena, input) {
             Ok(actual) => {
+                use roc_fmt::spaces::RemoveSpaces;
+
                 let mut buf = Buf::new_in(&arena);
 
                 actual.format_with_options(&mut buf, Parens::NotNeeded, Newlines::Yes, 0);
 
+                let output = buf.as_str();
+
                 assert_multiline_str_eq!(expected, buf.as_str());
+
+                let reparsed_ast = roc_parse::test_helpers::parse_expr_with(&arena, output).unwrap_or_else(|err| {
+                    panic!(
+                        "After formatting, the source code no longer parsed!\n\nParse error was: {:?}\n\nThe code that failed to parse:\n\n{}\n\n",
+                        err, output
+                    );
+                });
+
+                let ast_normalized = actual.remove_spaces(&arena);
+                let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+
+                // HACK!
+                // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
+                // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
+                // I don't have the patience to debug this right now, so let's leave it for another day...
+                // TODO: fix PartialEq impl on ast types
+                if format!("{:?}", ast_normalized) != format!("{:?}", reparsed_ast_normalized) {
+                    panic!(
+                        "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
+                        * * * Source code before formatting:\n{}\n\n\
+                        * * * Source code after formatting:\n{}\n\n",
+                        input,
+                        output
+                    );
+                }
+
+                // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
+                let mut reformatted_buf = Buf::new_in(&arena);
+                reparsed_ast.format_with_options(&mut reformatted_buf, Parens::NotNeeded, Newlines::Yes, 0);
+
+                if output != reformatted_buf.as_str() {
+                    panic!(
+                        "Formatting bug; formatting is not stable. Reformatting the formatted code changed it again.\n\n\
+                        Original input:\n{}\n\n\
+                        After first formatting:\n{}\n\n\
+                        After second formatting:\n{}\n\n",
+                        input,
+                        output,
+                        reformatted_buf.as_str()
+                    );
+                }
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", input, error)
         };
