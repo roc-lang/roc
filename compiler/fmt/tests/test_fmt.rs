@@ -20,6 +20,7 @@ mod test_fmt {
     fn expr_formats_to(input: &str, expected: &str) {
         let arena = Bump::new();
         let input = input.trim();
+        let expected = expected.trim();
 
         match roc_parse::test_helpers::parse_expr_with(&arena, input) {
             Ok(actual) => {
@@ -31,7 +32,7 @@ mod test_fmt {
 
                 let output = buf.as_str();
 
-                assert_multiline_str_eq!(expected, buf.as_str());
+                assert_multiline_str_eq!(expected, output);
 
                 let reparsed_ast = roc_parse::test_helpers::parse_expr_with(&arena, output).unwrap_or_else(|err| {
                     panic!(
@@ -63,15 +64,9 @@ mod test_fmt {
                 reparsed_ast.format_with_options(&mut reformatted_buf, Parens::NotNeeded, Newlines::Yes, 0);
 
                 if output != reformatted_buf.as_str() {
-                    panic!(
-                        "Formatting bug; formatting is not stable. Reformatting the formatted code changed it again.\n\n\
-                        Original input:\n{}\n\n\
-                        After first formatting:\n{}\n\n\
-                        After second formatting:\n{}\n\n",
-                        input,
-                        output,
-                        reformatted_buf.as_str()
-                    );
+                    eprintln!("Formatting bug; formatting is not stable. Reformatting the formatted code changed it again, as follows:\n\n");
+
+                    assert_multiline_str_eq!(output, reformatted_buf.as_str());
                 }
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", input, error)
@@ -104,6 +99,9 @@ mod test_fmt {
     // Not intended to be used directly in tests; please use module_formats_to or module_formats_same
     fn expect_format_module_helper(src: &str, expected: &str) {
         let arena = Bump::new();
+        let src = src.trim();
+        let expected = expected.trim();
+
         match module::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
                 use roc_fmt::spaces::RemoveSpaces;
@@ -112,9 +110,9 @@ mod test_fmt {
 
                 fmt_module_and_defs(&arena, src, &actual, state, &mut buf);
 
-                let output = buf.as_str();
+                let output = buf.as_str().trim();
 
-                assert_multiline_str_eq!(expected, buf.as_str());
+                assert_multiline_str_eq!(expected, output);
 
                 let (reparsed_ast, state) = module::parse_header(&arena, State::new(output.as_bytes())).unwrap_or_else(|err| {
                     panic!(
@@ -146,16 +144,12 @@ mod test_fmt {
 
                 fmt_module_and_defs(&arena, output, &reparsed_ast, state, &mut reformatted_buf);
 
-                if output != reformatted_buf.as_str() {
-                    panic!(
-                        "Formatting bug; formatting is not stable. Reformatting the formatted code changed it again.\n\n\
-                        Original input:\n{}\n\n\
-                        After first formatting:\n{}\n\n\
-                        After second formatting:\n{}\n\n",
-                        src,
-                        output,
-                        reformatted_buf.as_str()
-                    );
+                let reformatted = reformatted_buf.as_str().trim();
+
+                if output != reformatted {
+                    eprintln!("Formatting bug; formatting is not stable. Reformatting the formatted code changed it again, as follows:\n\n");
+
+                    assert_multiline_str_eq!(output, reformatted);
                 }
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
