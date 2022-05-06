@@ -47,7 +47,7 @@ pub enum Pattern {
         // for the expression from the opaque definition. `type_arguments` is something like
         // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
         specialized_def_type: Box<Type>,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Variable>,
         lambda_set_variables: Vec<LambdaSet>,
     },
     RecordDestructure {
@@ -288,7 +288,7 @@ pub fn canonicalize_pattern<'a>(
     use PatternType::*;
 
     let can_pattern = match pattern {
-        Identifier(name) => match scope.introduce((*name).into(), region) {
+        Identifier(name) => match scope.introduce_str(name, region) {
             Ok(symbol) => {
                 output.references.insert_bound(symbol);
 
@@ -541,7 +541,8 @@ pub fn canonicalize_pattern<'a>(
 
                     RequiredField(label, loc_guard) => {
                         // a guard does not introduce the label into scope!
-                        let symbol = scope.ignore(&Ident::from(label));
+                        let symbol =
+                            scope.scopeless_symbol(&Ident::from(label), loc_pattern.region);
                         let can_guard = canonicalize_pattern(
                             env,
                             var_store,

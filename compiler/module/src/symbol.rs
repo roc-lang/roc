@@ -5,11 +5,40 @@ use roc_ident::IdentStr;
 use roc_region::all::Region;
 use snafu::OptionExt;
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::{fmt, u32};
 
-// TODO: benchmark this as { ident_id: u32, module_id: u32 } and see if perf stays the same
+// the packed(4) is needed for faster equality comparisons. With it, the structure is
+// treated as a single u64, and comparison is one instruction
+//
+//  example::eq_sym64:
+//          cmp     rdi, rsi
+//          sete    al
+//          ret
+//
+// while without it we get 2 extra instructions
+//
+//  example::eq_sym64:
+//          xor     edi, edx
+//          xor     esi, ecx
+//          or      esi, edi
+//          sete    al
+//          ret
+//
+// #[repr(packed)] gives you #[repr(packed(1))], and then all your reads are unaligned
+// so we set the alignment to (the natural) 4
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Symbol(u64);
+#[repr(packed(4))]
+pub struct Symbol {
+    ident_id: u32,
+    module_id: NonZeroU32,
+}
+
+/// An Option<Symbol> will use the 0 that is not used by the NonZeroU32 module_id field to encode
+/// the Nothing case. An Option<Symbol> hence takes no more space than a Symbol.
+#[allow(dead_code)]
+const SYMBOL_HAS_NICHE: () =
+    assert!(std::mem::size_of::<Symbol>() == std::mem::size_of::<Option<Symbol>>());
 
 // When this is `true` (which it normally should be), Symbol's Debug::fmt implementation
 // attempts to pretty print debug symbols using interns recorded using
@@ -28,7 +57,7 @@ impl Symbol {
     // e.g. pub const NUM_NUM: Symbol = …
 
     pub const fn new(module_id: ModuleId, ident_id: IdentId) -> Symbol {
-        // The bit layout of the u64 inside a Symbol is:
+        // The bit layout of the inside of a Symbol is:
         //
         // |------ 32 bits -----|------ 32 bits -----|
         // |      ident_id      |      module_id     |
@@ -37,20 +66,22 @@ impl Symbol {
         // module_id comes second because we need to query it more often,
         // and this way we can get it by truncating the u64 to u32,
         // whereas accessing the first slot requires a bit shift first.
-        let bits = ((ident_id.0 as u64) << 32) | (module_id.0 as u64);
 
-        Symbol(bits)
+        Self {
+            module_id: module_id.0,
+            ident_id: ident_id.0,
+        }
     }
 
-    pub fn module_id(self) -> ModuleId {
-        ModuleId(self.0 as u32)
+    pub const fn module_id(self) -> ModuleId {
+        ModuleId(self.module_id)
     }
 
-    pub fn ident_id(self) -> IdentId {
-        IdentId((self.0 >> 32) as u32)
+    pub const fn ident_id(self) -> IdentId {
+        IdentId(self.ident_id)
     }
 
-    pub fn is_builtin(self) -> bool {
+    pub const fn is_builtin(self) -> bool {
         self.module_id().is_builtin()
     }
 
@@ -88,8 +119,8 @@ impl Symbol {
         })
     }
 
-    pub fn as_u64(self) -> u64 {
-        self.0
+    pub const fn as_u64(self) -> u64 {
+        u64::from_ne_bytes(self.to_ne_bytes())
     }
 
     pub fn fully_qualified(self, interns: &Interns, home: ModuleId) -> ModuleName {
@@ -109,7 +140,12 @@ impl Symbol {
     }
 
     pub const fn to_ne_bytes(self) -> [u8; 8] {
-        self.0.to_ne_bytes()
+        unsafe { std::mem::transmute(self) }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn contains(self, needle: &str) -> bool {
+        format!("{:?}", self).contains(needle)
     }
 }
 
@@ -128,7 +164,7 @@ impl fmt::Debug for Symbol {
             let ident_id = self.ident_id();
 
             match DEBUG_IDENT_IDS_BY_MODULE_ID.lock() {
-                Ok(names) => match &names.get(&module_id.0) {
+                Ok(names) => match &names.get(&(module_id.to_zero_indexed() as u32)) {
                     Some(ident_ids) => match ident_ids.get_name(ident_id) {
                         Some(ident_str) => write!(f, "`{:?}.{}`", module_id, ident_str),
                         None => fallback_debug_fmt(*self, f),
@@ -169,7 +205,7 @@ impl fmt::Display for Symbol {
 
 impl From<Symbol> for u64 {
     fn from(symbol: Symbol) -> Self {
-        symbol.0
+        symbol.as_u64()
     }
 }
 
@@ -287,18 +323,31 @@ lazy_static! {
 
 /// A globally unique ID that gets assigned to each module as it is loaded.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct ModuleId(u32);
+pub struct ModuleId(NonZeroU32);
 
 impl ModuleId {
     // NOTE: the define_builtins! macro adds a bunch of constants to this impl,
     //
     // e.g. pub const NUM: ModuleId = …
 
+    const fn from_zero_indexed(mut id: usize) -> Self {
+        id += 1;
+
+        // only happens on overflow
+        debug_assert!(id != 0);
+
+        ModuleId(unsafe { NonZeroU32::new_unchecked(id as u32) })
+    }
+
+    const fn to_zero_indexed(self) -> usize {
+        (self.0.get() - 1) as usize
+    }
+
     #[cfg(debug_assertions)]
     pub fn register_debug_idents(self, ident_ids: &IdentIds) {
         let mut all = DEBUG_IDENT_IDS_BY_MODULE_ID.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
-        all.insert(self.0, ident_ids.clone());
+        all.insert(self.to_zero_indexed() as u32, ident_ids.clone());
     }
 
     #[cfg(not(debug_assertions))]
@@ -331,7 +380,7 @@ impl fmt::Debug for ModuleId {
                 .expect("Failed to acquire lock for Debug reading from DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
         if PRETTY_PRINT_DEBUG_SYMBOLS {
-            match names.get(&self.0) {
+            match names.get(&(self.to_zero_indexed() as u32)) {
                 Some(str_ref) => write!(f, "{}", str_ref.clone()),
                 None => {
                     panic!(
@@ -389,7 +438,7 @@ impl<'a> PackageModuleIds<'a> {
             Some(id) => *id,
             None => {
                 let by_id = &mut self.by_id;
-                let module_id = ModuleId(by_id.len() as u32);
+                let module_id = ModuleId::from_zero_indexed(by_id.len());
 
                 by_id.push(module_name.clone());
 
@@ -425,7 +474,7 @@ impl<'a> PackageModuleIds<'a> {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
         names
-            .entry(module_id.0)
+            .entry(module_id.to_zero_indexed() as u32)
             .or_insert_with(|| match module_name {
                 PQModuleName::Unqualified(module) => module.as_str().into(),
                 PQModuleName::Qualified(package, module) => {
@@ -445,7 +494,7 @@ impl<'a> PackageModuleIds<'a> {
     }
 
     pub fn get_name(&self, id: ModuleId) -> Option<&PQModuleName> {
-        self.by_id.get(id.0 as usize)
+        self.by_id.get(id.to_zero_indexed())
     }
 
     pub fn available_modules(&self) -> impl Iterator<Item = &PQModuleName> {
@@ -470,7 +519,7 @@ impl ModuleIds {
             Some(id) => *id,
             None => {
                 let by_id = &mut self.by_id;
-                let module_id = ModuleId(by_id.len() as u32);
+                let module_id = ModuleId::from_zero_indexed(by_id.len());
 
                 by_id.push(module_name.clone());
 
@@ -491,7 +540,7 @@ impl ModuleIds {
 
         // TODO make sure modules are never added more than once!
         names
-            .entry(module_id.0)
+            .entry(module_id.to_zero_indexed() as u32)
             .or_insert_with(|| module_name.as_str().to_string().into());
     }
 
@@ -505,7 +554,7 @@ impl ModuleIds {
     }
 
     pub fn get_name(&self, id: ModuleId) -> Option<&ModuleName> {
-        self.by_id.get(id.0 as usize)
+        self.by_id.get(id.to_zero_indexed())
     }
 
     pub fn available_modules(&self) -> impl Iterator<Item = &ModuleName> {
@@ -531,7 +580,7 @@ impl IdentId {
 /// Stores a mapping between Ident and IdentId.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
-    interner: SmallStringInterner,
+    pub interner: SmallStringInterner,
 }
 
 impl IdentIds {
@@ -543,13 +592,21 @@ impl IdentIds {
     }
 
     pub fn add_ident(&mut self, ident_name: &Ident) -> IdentId {
-        IdentId(self.interner.insert(ident_name.as_str()) as u32)
+        self.add_str(ident_name.as_str())
+    }
+
+    pub fn add_str(&mut self, ident_name: &str) -> IdentId {
+        IdentId(self.interner.insert(ident_name) as u32)
+    }
+
+    pub fn duplicate_ident(&mut self, ident_id: IdentId) -> IdentId {
+        IdentId(self.interner.duplicate(ident_id.0 as usize) as u32)
     }
 
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
         match self.get_id(name) {
             Some(id) => id,
-            None => self.add_ident(name),
+            None => self.add_str(name.as_str()),
         }
     }
 
@@ -577,6 +634,13 @@ impl IdentIds {
     pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
         self.interner
             .find_index(ident_name.as_str())
+            .map(|i| IdentId(i as u32))
+    }
+
+    #[inline(always)]
+    pub fn get_id_many<'a>(&'a self, ident_name: &'a str) -> impl Iterator<Item = IdentId> + 'a {
+        self.interner
+            .find_indices(ident_name)
             .map(|i| IdentId(i as u32))
     }
 
@@ -716,7 +780,8 @@ macro_rules! define_builtins {
                 let mut exposed_idents_by_module = VecMap::with_capacity(extra_capacity + $total);
 
                 $(
-                    debug_assert!(!exposed_idents_by_module.contains_key(&ModuleId($module_id)), r"Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
+                    let module_id = ModuleId::$module_const;
+                    debug_assert!(!exposed_idents_by_module.contains_key(&module_id), r"Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
 
                     let ident_ids = {
                         const TOTAL : usize = [ $($ident_name),+ ].len();
@@ -748,18 +813,18 @@ macro_rules! define_builtins {
                             }
                         };
 
-                        let interner = SmallStringInterner::from_parts (
+                        // Safety: all lengths are non-negative and smaller than 2^15
+                        let interner = unsafe {
+                            SmallStringInterner::from_parts (
                             BUFFER.as_bytes().to_vec(),
                             LENGTHS.to_vec(),
                             OFFSETS.to_vec(),
-                        );
+                        )};
 
                         IdentIds{ interner }
                     };
 
                     if cfg!(debug_assertions) {
-                        let module_id = ModuleId($module_id);
-
                         let name = PQModuleName::Unqualified($module_name.into());
                         PackageModuleIds::insert_debug_name(module_id, &name);
                         module_id.register_debug_idents(&ident_ids);
@@ -767,7 +832,7 @@ macro_rules! define_builtins {
 
 
                     exposed_idents_by_module.insert(
-                        ModuleId($module_id),
+                        module_id,
                         ident_ids
                     );
                 )+
@@ -779,15 +844,15 @@ macro_rules! define_builtins {
         }
 
         impl ModuleId {
-            pub fn is_builtin(&self) -> bool {
+            pub const fn is_builtin(self) -> bool {
                 // This is a builtin ModuleId iff it's below the
                 // total number of builtin modules, since they
                 // take up the first $total ModuleId numbers.
-                self.0 < $total
+                self.to_zero_indexed() < $total
             }
 
             $(
-                pub const $module_const: ModuleId = ModuleId($module_id);
+                pub const $module_const: ModuleId = ModuleId::from_zero_indexed($module_id);
             )+
         }
 
@@ -811,7 +876,7 @@ macro_rules! define_builtins {
                 };
 
                 $(
-                    insert_both(ModuleId($module_id), $module_name);
+                    insert_both(ModuleId::$module_const, $module_name);
                 )+
 
                 ModuleIds { by_name, by_id }
@@ -839,7 +904,7 @@ macro_rules! define_builtins {
                 };
 
                 $(
-                    insert_both(ModuleId($module_id), $module_name);
+                    insert_both(ModuleId::$module_const, $module_name);
                 )+
 
                 PackageModuleIds { by_name, by_id }
@@ -849,7 +914,7 @@ macro_rules! define_builtins {
         impl Symbol {
             $(
                 $(
-                    pub const $ident_const: Symbol = Symbol::new(ModuleId($module_id), IdentId($ident_id));
+                    pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
                 )+
             )+
 
@@ -870,7 +935,7 @@ macro_rules! define_builtins {
                             let $imported = true;
 
                             if $imported {
-                                scope.insert($ident_name.into(), (Symbol::new(ModuleId($module_id), IdentId($ident_id)), Region::zero()));
+                                scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
                             }
                         )?
                     )+
@@ -1187,6 +1252,7 @@ define_builtins! {
         55 LIST_SORT_DESC: "sortDesc"
         56 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
         57 LIST_REPLACE: "replace"
+        58 LIST_IS_UNIQUE: "#isUnique"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias

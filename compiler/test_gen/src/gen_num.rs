@@ -1212,6 +1212,86 @@ fn bitwise_or() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn lt_u8() {
+    assert_evals_to!("1u8 < 2u8", true, bool);
+    assert_evals_to!("1u8 < 1u8", false, bool);
+    assert_evals_to!("2u8 < 1u8", false, bool);
+    assert_evals_to!("0u8 < 0u8", false, bool);
+    assert_evals_to!("128u8 < 0u8", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn lte_u8() {
+    assert_evals_to!("1u8 <= 1u8", true, bool);
+    assert_evals_to!("2u8 <= 1u8", false, bool);
+    assert_evals_to!("1u8 <= 2u8", true, bool);
+    assert_evals_to!("0u8 <= 0u8", true, bool);
+    assert_evals_to!("128u8 <= 0u8", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn gt_u8() {
+    assert_evals_to!("2u8 > 1u8", true, bool);
+    assert_evals_to!("2u8 > 2u8", false, bool);
+    assert_evals_to!("1u8 > 1u8", false, bool);
+    assert_evals_to!("0u8 > 0u8", false, bool);
+    assert_evals_to!("0u8 > 128u8", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn gte_u8() {
+    assert_evals_to!("1u8 >= 1u8", true, bool);
+    assert_evals_to!("1u8 >= 2u8", false, bool);
+    assert_evals_to!("2u8 >= 1u8", true, bool);
+    assert_evals_to!("0u8 >= 0u8", true, bool);
+    assert_evals_to!("0u8 >= 128u8", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn lt_u64() {
+    assert_evals_to!("1u64 < 2u64", true, bool);
+    assert_evals_to!("1u64 < 1u64", false, bool);
+    assert_evals_to!("2u64 < 1u64", false, bool);
+    assert_evals_to!("0u64 < 0u64", false, bool);
+    assert_evals_to!("9223372036854775808u64 < 0u64", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn lte_u64() {
+    assert_evals_to!("1u64 <= 1u64", true, bool);
+    assert_evals_to!("2u64 <= 1u64", false, bool);
+    assert_evals_to!("1u64 <= 2u64", true, bool);
+    assert_evals_to!("0u64 <= 0u64", true, bool);
+    assert_evals_to!("9223372036854775808u64 <= 0u64", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn gt_u64() {
+    assert_evals_to!("2u64 > 1u64", true, bool);
+    assert_evals_to!("2u64 > 2u64", false, bool);
+    assert_evals_to!("1u64 > 1u64", false, bool);
+    assert_evals_to!("0u64 > 0u64", false, bool);
+    assert_evals_to!("0u64 > 9223372036854775808u64", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn gte_u64() {
+    assert_evals_to!("1u64 >= 1u64", true, bool);
+    assert_evals_to!("1u64 >= 2u64", false, bool);
+    assert_evals_to!("2u64 >= 1u64", true, bool);
+    assert_evals_to!("0u64 >= 0u64", true, bool);
+    assert_evals_to!("0u64 >= 9223372036854775808u64", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lt_i64() {
     assert_evals_to!("1 < 2", true, bool);
     assert_evals_to!("1 < 1", false, bool);
@@ -3145,7 +3225,7 @@ fn upcast_of_int_checked_is_zext() {
             "#
         ),
         1,
-        u16
+        u8
     )
 }
 

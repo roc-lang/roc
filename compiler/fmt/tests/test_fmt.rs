@@ -193,6 +193,714 @@ mod test_fmt {
     }
 
     #[test]
+    fn type_annotation_allow_blank_line_before_and_after_comment() {
+        expr_formats_same(indoc!(
+            r#"
+                person :
+                    {
+                        firstName : Str,
+                        # comment
+                        lastName : Str,
+                    }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person :
+                    {
+                        firstName : Str,
+
+                        # comment
+                        lastName : Str,
+                    }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person :
+                    {
+                        firstName : Str,
+                        # comment
+
+                        lastName : Str,
+                    }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person :
+                    {
+                        firstName : Str,
+
+                        # comment
+
+                        lastName : Str,
+                    }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person :
+                    {
+                        firstName : Str,
+
+                        # comment 1
+
+                        lastName : Str,
+
+                        # comment 2
+                        # comment 3
+                    }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person :
+                    {
+                        firstName : Str,
+
+                        # comment 1
+
+                        lastName : Str,
+                        # comment 2
+                        # comment 3
+                    }
+
+                person
+                "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                person :
+                    {
+
+                        # comment
+
+                        firstName : Str,
+                        lastName : Str,
+                    }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person :
+                    {
+                        # comment
+
+                        firstName : Str,
+                        lastName : Str,
+                    }
+
+                person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                person :
+                    {
+                        firstName : Str,
+                        lastName : Str,
+
+                        # comment
+
+                    }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person :
+                    {
+                        firstName : Str,
+                        lastName : Str,
+
+                        # comment
+                    }
+
+                person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                person :
+                    {
+                        firstName : Str,
+
+
+                        # comment
+                        lastName : Str,
+                    }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person :
+                    {
+                        firstName : Str,
+
+                        # comment
+                        lastName : Str,
+                    }
+
+                person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                person :
+                    {
+                        firstName : Str,
+                        # comment
+
+
+                        lastName : Str,
+                    }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person :
+                    {
+                        firstName : Str,
+                        # comment
+
+                        lastName : Str,
+                    }
+
+                person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                person :
+                    {
+                        firstName : Str,
+
+
+                        # comment
+
+
+                        lastName : Str,
+                    }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person :
+                    {
+                        firstName : Str,
+
+                        # comment
+
+                        lastName : Str,
+                    }
+
+                person
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn record_allow_blank_line_before_and_after_comment() {
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+                    # comment 1
+                    lastName: "last",
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+                    # comment 1
+
+                    lastName: "last",
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+
+                    # comment 1
+                    lastName: "last",
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+
+                    # comment 1
+
+                    lastName: "last",
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+
+                    # comment 1
+
+                    lastName: "last",
+
+                    # comment 2
+                    # comment 3
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+
+                    # comment 1
+
+                    lastName: "last",
+                    # comment 2
+                    # comment 3
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    person = {
+
+                        # comment
+
+                        firstName: "first",
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+            indoc!(
+                r#"
+                    person = {
+                        # comment
+
+                        firstName: "first",
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+                        lastName: "last",
+
+                        # comment
+
+                    }
+
+                    person
+                "#
+            ),
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+                        lastName: "last",
+
+                        # comment
+                    }
+
+                    person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+
+
+                        # comment 1
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+
+                        # comment 1
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+                        # comment 1
+
+
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+                        # comment 1
+
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+
+
+                        # comment 1
+
+
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+
+                        # comment 1
+
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn list_allow_blank_line_before_and_after_comment() {
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+                    # comment
+                    1,
+                ]
+
+                list 
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+
+                    # comment
+                    1,
+                ]
+
+                list 
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+                    # comment
+
+                    1,
+                ]
+
+                list 
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+
+                    # comment
+
+                    1,
+                ]
+
+                list 
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+
+                    # comment 1
+
+                    1,
+
+                    # comment 2
+                    # comment 3
+                ]
+
+                list 
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+
+                    # comment 1
+
+                    1,
+                    # comment 2
+                    # comment 3
+                ]
+
+                list 
+                "#
+        ));
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+
+                    # comment
+
+                    0,
+                    1,
+                ]
+
+                list 
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    # comment
+
+                    0,
+                    1,
+                ]
+
+                list 
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+                    0,
+                    1,
+
+                    # comment
+
+                ]
+
+                list 
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    0,
+                    1,
+
+                    # comment
+                ]
+
+                list 
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+                    0,
+
+
+                    # comment
+                    1,
+                ]
+
+                list 
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    0,
+
+                    # comment
+                    1,
+                ]
+
+                list 
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+                    0,
+                    # comment
+
+
+                    1,
+                ]
+
+                list 
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    0,
+                    # comment
+
+                    1,
+                ]
+
+                list 
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+                    0,
+
+
+                    # comment
+
+
+                    1,
+                ]
+
+                list 
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    0,
+
+                    # comment
+
+                    1,
+                ]
+
+                list 
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn force_space_at_beginning_of_comment() {
         expr_formats_to(
             indoc!(
@@ -1648,6 +2356,7 @@ mod test_fmt {
                 r#"
                 [
                     # Thirty Seven
+
                     37,
                     # Thirty Eight
                     38,

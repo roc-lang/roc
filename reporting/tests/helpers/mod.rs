@@ -35,10 +35,8 @@ pub fn infer_expr(
     abilities_store: &mut AbilitiesStore,
     expr_var: Variable,
 ) -> (Content, Subs) {
-    let env = solve::Env::default();
     let (solved, _) = solve::run(
         constraints,
-        &env,
         problems,
         subs,
         aliases,
@@ -151,7 +149,12 @@ pub fn can_expr_with<'a>(
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
-    let mut scope = Scope::new_with_aliases(home, &mut var_store, IdentIds::default());
+    let mut scope = Scope::new(home, IdentIds::default());
+
+    // to skip loading other modules, we populate the scope with the builtin aliases
+    // that makes the reporting tests much faster
+    add_aliases(&mut scope, &mut var_store);
+
     let dep_idents = IdentIds::exposed_builtins(0);
     let mut env = Env::new(home, &dep_idents, &module_ids);
     let (loc_expr, output) = canonicalize_expr(
@@ -184,7 +187,7 @@ pub fn can_expr_with<'a>(
         introduce_builtin_imports(&mut constraints, imports, constraint, &mut var_store);
 
     let mut all_ident_ids = IdentIds::exposed_builtins(1);
-    all_ident_ids.insert(home, scope.ident_ids);
+    all_ident_ids.insert(home, scope.locals.ident_ids);
 
     let interns = Interns {
         module_ids: env.module_ids.clone(),
@@ -202,6 +205,34 @@ pub fn can_expr_with<'a>(
         constraint,
         constraints,
     })
+}
+
+fn add_aliases(scope: &mut Scope, var_store: &mut VarStore) {
+    use roc_types::solved_types::{BuiltinAlias, FreeVars};
+
+    let solved_aliases = roc_types::builtin_aliases::aliases();
+
+    for (symbol, builtin_alias) in solved_aliases {
+        let BuiltinAlias {
+            region,
+            vars,
+            typ,
+            kind,
+        } = builtin_alias;
+
+        let mut free_vars = FreeVars::default();
+        let typ = roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
+
+        let mut variables = Vec::new();
+        // make sure to sort these variables to make them line up with the type arguments
+        let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
+        type_variables.sort();
+        for (loc_name, (_, var)) in vars.iter().zip(type_variables) {
+            variables.push(Loc::at(loc_name.region, (loc_name.value.clone(), var)));
+        }
+
+        scope.add_alias(symbol, region, variables, typ, kind);
+    }
 }
 
 #[allow(dead_code)]

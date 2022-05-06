@@ -116,6 +116,13 @@ impl From<&StoredValue> for CodeGenNumType {
     }
 }
 
+fn integer_symbol_is_signed(backend: &WasmBackend<'_>, symbol: Symbol) -> bool {
+    return match backend.storage.symbol_layouts[&symbol] {
+        Layout::Builtin(Builtin::Int(int_width)) => int_width.is_signed(),
+        x => internal_error!("Expected integer, found {:?}", x),
+    };
+}
+
 pub struct LowLevelCall<'a> {
     pub lowlevel: LowLevel,
     pub arguments: &'a [Symbol],
@@ -270,6 +277,8 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
+            ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
+
             ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
             | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
             | ListAny | ListAll | ListFindUnsafe | DictWalk => {
@@ -377,8 +386,20 @@ impl<'a> LowLevelCall<'a> {
             NumGt => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_gt_s(),
-                    I64 => backend.code_builder.i64_gt_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_gt_s()
+                        } else {
+                            backend.code_builder.i32_gt_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_gt_s()
+                        } else {
+                            backend.code_builder.i64_gt_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_gt(),
                     F64 => backend.code_builder.f64_gt(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
@@ -387,8 +408,20 @@ impl<'a> LowLevelCall<'a> {
             NumGte => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_ge_s(),
-                    I64 => backend.code_builder.i64_ge_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_ge_s()
+                        } else {
+                            backend.code_builder.i32_ge_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_ge_s()
+                        } else {
+                            backend.code_builder.i64_ge_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_ge(),
                     F64 => backend.code_builder.f64_ge(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
@@ -397,8 +430,20 @@ impl<'a> LowLevelCall<'a> {
             NumLt => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_lt_s(),
-                    I64 => backend.code_builder.i64_lt_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_lt_s()
+                        } else {
+                            backend.code_builder.i32_lt_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_lt_s()
+                        } else {
+                            backend.code_builder.i64_lt_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_lt(),
                     F64 => backend.code_builder.f64_lt(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
@@ -407,8 +452,20 @@ impl<'a> LowLevelCall<'a> {
             NumLte => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_le_s(),
-                    I64 => backend.code_builder.i64_le_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_le_s()
+                        } else {
+                            backend.code_builder.i32_le_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_le_s()
+                        } else {
+                            backend.code_builder.i64_le_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_le(),
                     F64 => backend.code_builder.f64_le(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),

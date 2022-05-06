@@ -15,8 +15,12 @@ use roc_constrain::module::{
     constrain_builtin_imports, constrain_module, ExposedByModule, ExposedForModule,
     ExposedModuleTypes,
 };
+use roc_debug_flags::{
+    dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
+    ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_LOAD_LOG,
+};
 use roc_error_macros::internal_error;
-use roc_module::ident::{Ident, ModuleName, QualifiedModuleName, TagName};
+use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,
@@ -39,7 +43,7 @@ use roc_solve::solve;
 use roc_target::TargetInfo;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types::{Alias, AliasCommon, AliasKind, TypeExtension};
+use roc_types::types::{Alias, AliasKind};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::io;
@@ -70,13 +74,46 @@ const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
-const SHOW_MESSAGE_LOG: bool = false;
-
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+const PRELUDE_TYPES: [(&str, Symbol); 33] = [
+    ("Num", Symbol::NUM_NUM),
+    ("Int", Symbol::NUM_INT),
+    ("Float", Symbol::NUM_FLOAT),
+    ("Integer", Symbol::NUM_INTEGER),
+    ("FloatingPoint", Symbol::NUM_FLOATINGPOINT),
+    ("Binary32", Symbol::NUM_BINARY32),
+    ("Binary64", Symbol::NUM_BINARY64),
+    ("Signed128", Symbol::NUM_SIGNED128),
+    ("Signed64", Symbol::NUM_SIGNED64),
+    ("Signed32", Symbol::NUM_SIGNED32),
+    ("Signed16", Symbol::NUM_SIGNED16),
+    ("Signed8", Symbol::NUM_SIGNED8),
+    ("Unsigned128", Symbol::NUM_UNSIGNED128),
+    ("Unsigned64", Symbol::NUM_UNSIGNED64),
+    ("Unsigned32", Symbol::NUM_UNSIGNED32),
+    ("Unsigned16", Symbol::NUM_UNSIGNED16),
+    ("Unsigned8", Symbol::NUM_UNSIGNED8),
+    ("Natural", Symbol::NUM_NATURAL),
+    ("Decimal", Symbol::NUM_DECIMAL),
+    ("Nat", Symbol::NUM_NAT),
+    ("I8", Symbol::NUM_I8),
+    ("I16", Symbol::NUM_I16),
+    ("I32", Symbol::NUM_I32),
+    ("I64", Symbol::NUM_I64),
+    ("I128", Symbol::NUM_I128),
+    ("U8", Symbol::NUM_U8),
+    ("U16", Symbol::NUM_U16),
+    ("U32", Symbol::NUM_U32),
+    ("U64", Symbol::NUM_U64),
+    ("U128", Symbol::NUM_U128),
+    ("F32", Symbol::NUM_F32),
+    ("F64", Symbol::NUM_F64),
+    ("Dec", Symbol::NUM_DEC),
+];
+
 macro_rules! log {
-    () => (if SHOW_MESSAGE_LOG { println!()} else {});
-    ($($arg:tt)*) => (if SHOW_MESSAGE_LOG { println!($($arg)*); } else {})
+    ($($arg:tt)*) => (dbg_do!(ROC_PRINT_LOAD_LOG, println!($($arg)*)))
 }
 
 /// Struct storing various intermediate stages by their ModuleId
@@ -292,7 +329,11 @@ fn start_phase<'a>(
                     }
                 }
 
-                let skip_constraint_gen = state.cached_subs.lock().contains_key(&module_id);
+                let skip_constraint_gen = {
+                    // Give this its own scope to make sure that the Guard from the lock() is dropped
+                    // immediately after contains_key returns
+                    state.cached_subs.lock().contains_key(&module_id)
+                };
 
                 BuildTask::CanonicalizeAndConstrain {
                     parsed,
@@ -1627,21 +1668,20 @@ fn start_tasks<'a>(
     Ok(())
 }
 
-#[cfg(debug_assertions)]
-fn debug_print_ir(state: &State, flag: &str) {
-    if env::var(flag) != Ok("1".into()) {
-        return;
-    }
+macro_rules! debug_print_ir {
+    ($state:expr, $flag:path) => {
+        dbg_do!($flag, {
+            let procs_string = $state
+                .procedures
+                .values()
+                .map(|proc| proc.to_pretty(200))
+                .collect::<Vec<_>>();
 
-    let procs_string = state
-        .procedures
-        .values()
-        .map(|proc| proc.to_pretty(200))
-        .collect::<Vec<_>>();
+            let result = procs_string.join("\n");
 
-    let result = procs_string.join("\n");
-
-    println!("{}", result);
+            eprintln!("{}", result);
+        })
+    };
 }
 
 /// Report modules that are imported, but from which nothing is used
@@ -1796,46 +1836,10 @@ fn update<'a>(
                     .imported_modules
                     .insert(ModuleId::NUM, Region::zero());
 
-                let prelude_types = [
-                    (Ident::from("Num"), Symbol::NUM_NUM),
-                    (Ident::from("Int"), Symbol::NUM_INT),
-                    (Ident::from("Float"), Symbol::NUM_FLOAT),
-                    (Ident::from("Integer"), Symbol::NUM_INTEGER),
-                    (Ident::from("FloatingPoint"), Symbol::NUM_FLOATINGPOINT),
-                    (Ident::from("Binary32"), Symbol::NUM_BINARY32),
-                    (Ident::from("Binary64"), Symbol::NUM_BINARY64),
-                    (Ident::from("Signed128"), Symbol::NUM_SIGNED128),
-                    (Ident::from("Signed64"), Symbol::NUM_SIGNED64),
-                    (Ident::from("Signed32"), Symbol::NUM_SIGNED32),
-                    (Ident::from("Signed16"), Symbol::NUM_SIGNED16),
-                    (Ident::from("Signed8"), Symbol::NUM_SIGNED8),
-                    (Ident::from("Unsigned128"), Symbol::NUM_UNSIGNED128),
-                    (Ident::from("Unsigned64"), Symbol::NUM_UNSIGNED64),
-                    (Ident::from("Unsigned32"), Symbol::NUM_UNSIGNED32),
-                    (Ident::from("Unsigned16"), Symbol::NUM_UNSIGNED16),
-                    (Ident::from("Unsigned8"), Symbol::NUM_UNSIGNED8),
-                    (Ident::from("Natural"), Symbol::NUM_NATURAL),
-                    (Ident::from("Decimal"), Symbol::NUM_DECIMAL),
-                    (Ident::from("Nat"), Symbol::NUM_NAT),
-                    (Ident::from("I8"), Symbol::NUM_I8),
-                    (Ident::from("I16"), Symbol::NUM_I16),
-                    (Ident::from("I32"), Symbol::NUM_I32),
-                    (Ident::from("I64"), Symbol::NUM_I64),
-                    (Ident::from("I128"), Symbol::NUM_I128),
-                    (Ident::from("U8"), Symbol::NUM_U8),
-                    (Ident::from("U16"), Symbol::NUM_U16),
-                    (Ident::from("U32"), Symbol::NUM_U32),
-                    (Ident::from("U64"), Symbol::NUM_U64),
-                    (Ident::from("U128"), Symbol::NUM_U128),
-                    (Ident::from("F32"), Symbol::NUM_F32),
-                    (Ident::from("F64"), Symbol::NUM_F64),
-                    (Ident::from("Dec"), Symbol::NUM_DEC),
-                ];
-
-                for (ident, symbol) in prelude_types {
+                for (type_name, symbol) in PRELUDE_TYPES {
                     header
                         .exposed_imports
-                        .insert(ident, (symbol, Region::zero()));
+                        .insert(Ident::from(type_name), (symbol, Region::zero()));
                 }
             }
 
@@ -2181,8 +2185,7 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
-                #[cfg(debug_assertions)]
-                debug_print_ir(&state, "PRINT_IR_AFTER_SPECIALIZATION");
+                debug_print_ir!(state, ROC_PRINT_IR_AFTER_SPECIALIZATION);
 
                 Proc::insert_reset_reuse_operations(
                     arena,
@@ -2192,13 +2195,11 @@ fn update<'a>(
                     &mut state.procedures,
                 );
 
-                #[cfg(debug_assertions)]
-                debug_print_ir(&state, "PRINT_IR_AFTER_RESET_REUSE");
+                debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
-                #[cfg(debug_assertions)]
-                debug_print_ir(&state, "PRINT_IR_AFTER_REFCOUNT");
+                debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
 
                 // This is not safe with the new non-recursive RC updates that we do for tag unions
                 //
@@ -2493,7 +2494,7 @@ fn load_pkg_config<'a>(
                     let pkg_config_module_msg = fabricate_pkg_config_module(
                         arena,
                         shorthand,
-                        app_module_id,
+                        Some(app_module_id),
                         filename,
                         parser_state,
                         module_ids.clone(),
@@ -2941,11 +2942,18 @@ fn parse_header<'a>(
                 To::NewPackage(_package_name) => Ok((module_id, app_module_header_msg)),
             }
         }
-        Ok((ast::Module::Platform { header }, _parse_state)) => {
-            Err(LoadingProblem::UnexpectedHeader(format!(
-                "got an unexpected platform header\n{:?}",
-                header
-            )))
+        Ok((ast::Module::Platform { header }, parse_state)) => {
+            Ok(fabricate_pkg_config_module(
+                arena,
+                "", // Use a shorthand of "" - it will be fine for `roc check` and bindgen
+                None,
+                filename,
+                parse_state,
+                module_ids.clone(),
+                ident_ids_by_module,
+                &header,
+                module_timing,
+            ))
         }
 
         Err(fail) => Err(LoadingProblem::ParsingFailed(
@@ -3231,7 +3239,7 @@ struct PlatformHeaderInfo<'a> {
     filename: PathBuf,
     is_root_module: bool,
     shorthand: &'a str,
-    app_module_id: ModuleId,
+    opt_app_module_id: Option<ModuleId>,
     packages: &'a [Loc<PackageEntry<'a>>],
     provides: &'a [Loc<ExposedName<'a>>],
     requires: &'a [Loc<TypedIdent<'a>>],
@@ -3252,7 +3260,7 @@ fn send_header_two<'a>(
         filename,
         shorthand,
         is_root_module,
-        app_module_id,
+        opt_app_module_id,
         packages,
         provides,
         requires,
@@ -3270,12 +3278,16 @@ fn send_header_two<'a>(
     let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
         HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
 
-    // add standard imports
-    imported_modules.insert(app_module_id, Region::zero());
-    deps_by_name.insert(
-        PQModuleName::Unqualified(ModuleName::APP.into()),
-        app_module_id,
-    );
+    // Add standard imports, if there is an app module.
+    // (There might not be, e.g. when running `roc check Package-Config.roc` or
+    // when generating bindings.)
+    if let Some(app_module_id) = opt_app_module_id {
+        imported_modules.insert(app_module_id, Region::zero());
+        deps_by_name.insert(
+            PQModuleName::Unqualified(ModuleName::APP.into()),
+            app_module_id,
+        );
+    }
 
     let mut scope_size = 0;
 
@@ -3340,14 +3352,21 @@ fn send_header_two<'a>(
         }
 
         {
-            let ident_ids = ident_ids_by_module.get_or_insert(app_module_id);
+            // If we don't have an app module id (e.g. because we're doing
+            // `roc check Package-Config.roc` or because we're doing bindgen),
+            // insert the `requires` symbols into the platform module's IdentIds.
+            //
+            // Otherwise, get them from the app module's IdentIds, because it
+            // should already have a symbol for each `requires` entry, and we
+            // want to make sure we're referencing the same symbols!
+            let module_id = opt_app_module_id.unwrap_or(home);
+            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
             for entry in requires {
                 let entry = entry.value;
-
                 let ident: Ident = entry.ident.value.into();
                 let ident_id = ident_ids.get_or_insert(&ident);
-                let symbol = Symbol::new(app_module_id, ident_id);
+                let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
                 debug_assert!(!scope.contains_key(&ident.clone()));
@@ -3359,11 +3378,10 @@ fn send_header_two<'a>(
                 let string: &str = entry.value.into();
                 let ident: Ident = string.into();
                 let ident_id = ident_ids.get_or_insert(&ident);
-                let symbol = Symbol::new(app_module_id, ident_id);
+                let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
                 debug_assert!(!scope.contains_key(&ident.clone()));
-
                 scope.insert(ident, (symbol, entry.region));
             }
         }
@@ -3738,7 +3756,7 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
 fn fabricate_pkg_config_module<'a>(
     arena: &'a Bump,
     shorthand: &'a str,
-    app_module_id: ModuleId,
+    opt_app_module_id: Option<ModuleId>,
     filename: PathBuf,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
@@ -3746,11 +3764,15 @@ fn fabricate_pkg_config_module<'a>(
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
+    // If we have an app module, then it's the root module;
+    // otherwise, we must be the root.
+    let is_root_module = opt_app_module_id.is_none();
+
     let info = PlatformHeaderInfo {
         filename,
-        is_root_module: false,
+        is_root_module,
         shorthand,
-        app_module_id,
+        opt_app_module_id,
         packages: &[],
         provides: unspace(arena, header.provides.items),
         requires: &*arena.alloc([Loc::at(
@@ -3907,7 +3929,7 @@ fn canonicalize_and_constrain<'a>(
                 var_store,
                 constraints,
                 constraint,
-                ident_ids: module_output.scope.ident_ids,
+                ident_ids: module_output.scope.locals.ident_ids,
                 dep_idents,
                 module_timing,
             };
@@ -4689,156 +4711,13 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
 /// Builtin aliases that are not covered by type checker optimizations
 ///
 /// Types like `F64` and `I32` are hardcoded into Subs and therefore we don't define them here.
-/// All that remains are the generic number types (Num, Int, Float) and Result
+/// Generic number types (Num, Int, Float, etc.) are treated as `DelayedAlias`es resolved during
+/// type solving.
+/// All that remains are Signed8, Signed16, etc.
 fn default_aliases() -> roc_solve::solve::Aliases {
     use roc_types::types::Type;
 
     let mut solve_aliases = roc_solve::solve::Aliases::default();
-
-    let mut var_store = VarStore::default();
-
-    // Num range := range
-    {
-        let symbol = Symbol::NUM_NUM;
-        let tvar = var_store.fresh();
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ: Type::Variable(tvar),
-            kind: roc_types::types::AliasKind::Structural,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
-
-    // FloatingPoint range := []
-    {
-        let symbol = Symbol::NUM_FLOATINGPOINT;
-        let tvar = var_store.fresh();
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ: Type::Variable(tvar),
-            kind: roc_types::types::AliasKind::Opaque,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
-
-    // Int range : Num (Integer range)
-    {
-        let symbol = Symbol::NUM_INT;
-        let tvar = var_store.fresh();
-
-        let typ = Type::DelayedAlias(AliasCommon {
-            symbol: Symbol::NUM_NUM,
-            type_arguments: vec![(
-                "range".into(),
-                Type::Alias {
-                    symbol: Symbol::NUM_INTEGER,
-                    type_arguments: vec![("range".into(), Type::Variable(tvar))],
-                    lambda_set_variables: vec![],
-                    actual: Box::new(Type::Variable(tvar)),
-                    kind: AliasKind::Opaque,
-                },
-            )],
-            lambda_set_variables: vec![],
-        });
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ,
-            kind: roc_types::types::AliasKind::Structural,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
-
-    // Float range : Num (FloatingPoint range)
-    {
-        let symbol = Symbol::NUM_FLOAT;
-        let tvar = var_store.fresh();
-
-        let typ = Type::DelayedAlias(AliasCommon {
-            symbol: Symbol::NUM_NUM,
-            type_arguments: vec![(
-                "range".into(),
-                Type::Alias {
-                    symbol: Symbol::NUM_FLOATINGPOINT,
-                    type_arguments: vec![("range".into(), Type::Variable(tvar))],
-                    lambda_set_variables: vec![],
-                    actual: Box::new(Type::Variable(tvar)),
-                    kind: AliasKind::Opaque,
-                },
-            )],
-            lambda_set_variables: vec![],
-        });
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ,
-            kind: roc_types::types::AliasKind::Structural,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
-
-    // Integer range := range
-    {
-        let symbol = Symbol::NUM_INTEGER;
-        let tvar = var_store.fresh();
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![Loc::at_zero(("range".into(), tvar))],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ: Type::Variable(tvar),
-            kind: roc_types::types::AliasKind::Structural,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
-
-    {
-        let symbol = Symbol::RESULT_RESULT;
-        let tvar1 = var_store.fresh();
-        let tvar2 = var_store.fresh();
-
-        let typ = Type::TagUnion(
-            vec![
-                (TagName::Tag("Ok".into()), vec![Type::Variable(tvar1)]),
-                (TagName::Tag("Err".into()), vec![Type::Variable(tvar2)]),
-            ],
-            TypeExtension::Closed,
-        );
-
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![
-                Loc::at_zero(("ok".into(), tvar1)),
-                Loc::at_zero(("err".into(), tvar2)),
-            ],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ,
-            kind: roc_types::types::AliasKind::Structural,
-        };
-
-        solve_aliases.insert(symbol, alias);
-    }
 
     let mut zero_opaque = |alias_name: Symbol| {
         let alias = Alias {

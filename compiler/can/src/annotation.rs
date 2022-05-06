@@ -1,8 +1,9 @@
 use crate::env::Env;
+use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
@@ -18,6 +19,27 @@ pub struct Annotation {
     pub introduced_variables: IntroducedVariables,
     pub references: VecSet<Symbol>,
     pub aliases: SendMap<Symbol, Alias>,
+}
+
+impl Annotation {
+    pub fn add_to(
+        &self,
+        aliases: &mut VecMap<Symbol, Alias>,
+        references: &mut References,
+        introduced_variables: &mut IntroducedVariables,
+    ) {
+        for symbol in self.references.iter() {
+            references.insert_type_lookup(*symbol);
+        }
+
+        introduced_variables.union(&self.introduced_variables);
+
+        for (name, alias) in self.aliases.iter() {
+            if !aliases.contains_key(name) {
+                aliases.insert(*name, alias.clone());
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -298,8 +320,7 @@ fn make_apply_symbol(
 /// For example, in `[ A Age U8, B Str {} ]`, there are three type definition references - `Age`,
 /// `U8`, and `Str`.
 pub fn find_type_def_symbols(
-    module_id: ModuleId,
-    ident_ids: &mut IdentIds,
+    scope: &mut Scope,
     initial_annotation: &roc_parse::ast::TypeAnnotation,
 ) -> Vec<Symbol> {
     use roc_parse::ast::TypeAnnotation::*;
@@ -312,9 +333,8 @@ pub fn find_type_def_symbols(
         match annotation {
             Apply(_module_name, ident, arguments) => {
                 let ident: Ident = (*ident).into();
-                let ident_id = ident_ids.get_or_insert(&ident);
+                let symbol = scope.scopeless_symbol(&ident, Region::zero());
 
-                let symbol = Symbol::new(module_id, ident_id);
                 result.push(symbol);
 
                 for t in arguments.iter() {
@@ -508,51 +528,28 @@ fn can_annotation_help(
                         return error;
                     }
 
-                    let is_structural = alias.kind == AliasKind::Structural;
-                    if is_structural {
-                        let mut type_var_to_arg = Vec::new();
+                    let mut type_var_to_arg = Vec::new();
 
-                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
-                            let name = loc_var.value.0.clone();
-
-                            type_var_to_arg.push((name, arg_ann));
-                        }
-
-                        let mut lambda_set_variables =
-                            Vec::with_capacity(alias.lambda_set_variables.len());
-
-                        for _ in 0..alias.lambda_set_variables.len() {
-                            let lvar = var_store.fresh();
-
-                            introduced_variables.insert_lambda_set(lvar);
-
-                            lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
-                        }
-
-                        Type::DelayedAlias(AliasCommon {
-                            symbol,
-                            type_arguments: type_var_to_arg,
-                            lambda_set_variables,
-                        })
-                    } else {
-                        let (type_arguments, lambda_set_variables, actual) =
-                            instantiate_and_freshen_alias_type(
-                                var_store,
-                                introduced_variables,
-                                &alias.type_variables,
-                                args,
-                                &alias.lambda_set_variables,
-                                alias.typ.clone(),
-                            );
-
-                        Type::Alias {
-                            symbol,
-                            type_arguments,
-                            lambda_set_variables,
-                            actual: Box::new(actual),
-                            kind: alias.kind,
-                        }
+                    for (_, arg_ann) in alias.type_variables.iter().zip(args) {
+                        type_var_to_arg.push(arg_ann);
                     }
+
+                    let mut lambda_set_variables =
+                        Vec::with_capacity(alias.lambda_set_variables.len());
+
+                    for _ in 0..alias.lambda_set_variables.len() {
+                        let lvar = var_store.fresh();
+
+                        introduced_variables.insert_lambda_set(lvar);
+
+                        lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
+                    }
+
+                    Type::DelayedAlias(AliasCommon {
+                        symbol,
+                        type_arguments: type_var_to_arg,
+                        lambda_set_variables,
+                    })
                 }
                 None => Type::Apply(symbol, args, region),
             }
@@ -620,20 +617,20 @@ fn can_annotation_help(
                 let var_name = Lowercase::from(var);
 
                 if let Some(var) = introduced_variables.var_by_name(&var_name) {
-                    vars.push((var_name.clone(), Type::Variable(var)));
+                    vars.push(Type::Variable(var));
                     lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
                 } else {
                     let var = var_store.fresh();
 
                     introduced_variables
                         .insert_named(var_name.clone(), Loc::at(loc_var.region, var));
-                    vars.push((var_name.clone(), Type::Variable(var)));
+                    vars.push(Type::Variable(var));
 
                     lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
                 }
             }
 
-            let alias_args = vars.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>();
+            let alias_args = vars.clone();
 
             let alias_actual = if let Type::TagUnion(tags, ext) = inner_type {
                 let rec_var = var_store.fresh();
@@ -691,8 +688,6 @@ fn can_annotation_help(
 
             let alias = scope.lookup_alias(symbol).unwrap();
             local_aliases.insert(symbol, alias.clone());
-
-            // Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
 
             if vars.is_empty() && env.home == symbol.module_id() {
                 let actual_var = var_store.fresh();
@@ -1045,26 +1040,35 @@ pub fn instantiate_and_freshen_alias_type(
 pub fn freshen_opaque_def(
     var_store: &mut VarStore,
     opaque: &Alias,
-) -> (Vec<(Lowercase, Type)>, Vec<LambdaSet>, Type) {
+) -> (Vec<Variable>, Vec<LambdaSet>, Type) {
     debug_assert!(opaque.kind == AliasKind::Opaque);
 
-    let fresh_arguments = opaque
+    let fresh_variables: Vec<Variable> = opaque
         .type_variables
         .iter()
-        .map(|_| Type::Variable(var_store.fresh()))
+        .map(|_| var_store.fresh())
         .collect();
 
-    // TODO this gets ignored; is that a problem
+    let fresh_type_arguments = fresh_variables
+        .iter()
+        .copied()
+        .map(Type::Variable)
+        .collect();
+
+    // NB: We don't introduce the fresh variables here, we introduce them during constraint gen.
+    // NB: If there are bugs, check whether this is a problem!
     let mut introduced_variables = IntroducedVariables::default();
 
-    instantiate_and_freshen_alias_type(
+    let (_fresh_type_arguments, fresh_lambda_set, fresh_type) = instantiate_and_freshen_alias_type(
         var_store,
         &mut introduced_variables,
         &opaque.type_variables,
-        fresh_arguments,
+        fresh_type_arguments,
         &opaque.lambda_set_variables,
         opaque.typ.clone(),
-    )
+    );
+
+    (fresh_variables, fresh_lambda_set, fresh_type)
 }
 
 fn insertion_sort_by<T, F>(arr: &mut [T], mut compare: F)

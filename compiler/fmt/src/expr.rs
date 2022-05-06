@@ -2,7 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::collection::fmt_collection;
 use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
-use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
+use crate::spaces::{count_leading_newlines, fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
@@ -1105,14 +1105,36 @@ fn fmt_record<'a, 'buf>(
 
         if is_multiline {
             let field_indent = indent + INDENT;
-            for field in loc_fields.iter() {
+            for (index, field) in loc_fields.iter().enumerate() {
                 // comma addition is handled by the `format_field_multiline` function
                 // since we can have stuff like:
                 // { x # comment
                 // , y
                 // }
                 // In this case, we have to move the comma before the comment.
+
+                let is_first_item = index == 0;
+                if let AssignedField::SpaceBefore(_sub_field, spaces) = &field.value {
+                    let is_only_newlines = spaces.iter().all(|s| s.is_newline());
+                    if !is_first_item
+                        && !is_only_newlines
+                        && count_leading_newlines(spaces.iter()) > 1
+                    {
+                        buf.newline();
+                    }
+
+                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, field_indent);
+
+                    if !is_only_newlines && count_leading_newlines(spaces.iter().rev()) > 0 {
+                        buf.newline();
+                    }
+                }
+
                 format_field_multiline(buf, &field.value, field_indent, "");
+            }
+
+            if count_leading_newlines(final_comments.iter()) > 1 {
+                buf.newline();
             }
 
             fmt_comments_only(buf, final_comments.iter(), NewlineAt::Top, field_indent);
@@ -1189,7 +1211,7 @@ fn format_field_multiline<'a, 'buf, T>(
             buf.push_str(name.value);
             buf.push(',');
         }
-        AssignedField::SpaceBefore(sub_field, spaces) => {
+        AssignedField::SpaceBefore(sub_field, _spaces) => {
             // We have something like that:
             // ```
             // # comment
@@ -1197,7 +1219,6 @@ fn format_field_multiline<'a, 'buf, T>(
             // ```
             // we'd like to preserve this
 
-            fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
             format_field_multiline(buf, sub_field, indent, separator_prefix);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {

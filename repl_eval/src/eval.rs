@@ -5,7 +5,7 @@ use std::cmp::{max_by_key, min_by_key};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::called_via::CalledVia;
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
@@ -118,8 +118,7 @@ fn unroll_newtypes_and_aliases<'a>(
                 newtype_containers.push(NewtypeKind::RecordField(
                     env.arena.alloc_str(label.as_str()),
                 ));
-                let field_var = *field.as_inner();
-                content = env.subs.get_content_without_compacting(field_var);
+                content = env.subs.get_content_without_compacting(field.into_inner());
             }
             Content::Alias(_, _, real_var, _) => {
                 // We need to pass through aliases too, because their underlying types may have
@@ -902,34 +901,20 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
     let arena = env.arena;
     let subs = env.subs;
     let mut output = Vec::with_capacity_in(record_fields.len(), arena);
-
-    let sorted_fields: Vec<_> = Vec::from_iter_in(
-        record_fields.sorted_iterator(env.subs, Variable::EMPTY_RECORD),
-        arena,
-    );
-
     let mut layout_cache = LayoutCache::new(env.target_info);
-    // We recalculate the layouts here because we will have compiled the record so that its fields
-    // are sorted by descending alignment, and then alphabetic, but the type of the record is
-    // always only sorted alphabetically. We want to arrange the rendered record in the order of
-    // the type.
-    let field_to_layout: MutMap<Lowercase, Layout> = sorted_fields
-        .iter()
-        .map(|(label, field)| {
-            let layout = layout_cache
-                .from_var(arena, *field.as_inner(), env.subs)
-                .unwrap();
-            (label.clone(), layout)
-        })
-        .collect();
 
-    if sorted_fields.len() == 1 {
+    if record_fields.len() == 1 {
         // this is a 1-field wrapper record around another record or 1-tag tag union
-        let (label, field) = sorted_fields.into_iter().next().unwrap();
+        let (label, field) = record_fields
+            .sorted_iterator(subs, Variable::EMPTY_RECORD)
+            .next()
+            .unwrap();
 
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
-        debug_assert_eq!(field_to_layout.len(), 1);
-        let inner_layouts = arena.alloc([field_to_layout.into_values().next().unwrap()]);
+        let field_layout = layout_cache
+            .from_var(arena, field.into_inner(), env.subs)
+            .unwrap();
+        let inner_layouts = arena.alloc([field_layout]);
 
         let loc_expr = &*arena.alloc(Loc {
             value: addr_to_ast(
@@ -956,23 +941,25 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
 
         Expr::Record(Collection::with_items(output))
     } else {
-        debug_assert_eq!(sorted_fields.len(), field_to_layout.len());
-
         // We'll advance this as we iterate through the fields
         let mut field_addr = addr;
 
-        for (label, field) in sorted_fields.into_iter() {
-            let var = field.into_inner();
-
-            let content = subs.get_content_without_compacting(var);
-            let field_layout = field_to_layout.get(&label).unwrap();
+        // We recalculate the layouts here because we will have compiled the record so that its fields
+        // are sorted by descending alignment, and then alphabetic, but the type of the record is
+        // always only sorted alphabetically. We want to arrange the rendered record in the order of
+        // the type.
+        for (label, field) in record_fields.sorted_iterator(subs, Variable::EMPTY_RECORD) {
+            let content = subs.get_content_without_compacting(field.into_inner());
+            let field_layout = layout_cache
+                .from_var(arena, field.into_inner(), env.subs)
+                .unwrap();
 
             let loc_expr = &*arena.alloc(Loc {
                 value: addr_to_ast(
                     env,
                     mem,
                     field_addr,
-                    field_layout,
+                    &field_layout,
                     WhenRecursive::Unreachable,
                     content,
                 ),

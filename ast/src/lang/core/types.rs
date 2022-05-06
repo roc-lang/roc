@@ -19,12 +19,14 @@ use crate::mem_pool::shallow_clone::ShallowClone;
 
 pub type TypeId = NodeId<Type2>;
 
+const TYPE2_SIZE: () = assert!(std::mem::size_of::<Type2>() == 3 * 8 + 4);
+
 #[derive(Debug)]
 pub enum Type2 {
     Variable(Variable), // 4B
 
-    Alias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
-    Opaque(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
+    Alias(Symbol, PoolVec<TypeId>, TypeId), // 24B = 8B + 8B + 4B + pad
+    Opaque(Symbol, PoolVec<TypeId>, TypeId), // 24B = 8B + 8B + 4B + pad
     AsAlias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 8B + 4B + pad
 
     // 24B
@@ -45,11 +47,6 @@ pub enum Type2 {
     Apply(Symbol, PoolVec<Type2>),            // 16B = 8B + 8B
 
     Erroneous(Problem2), // 24B
-}
-
-#[test]
-fn type2_size() {
-    assert_eq!(std::mem::size_of::<Type2>(), 32); // 24B + pad
 }
 
 #[derive(Debug)]
@@ -736,7 +733,7 @@ fn can_tags<'a>(
 
 enum TypeApply {
     Apply(Symbol, PoolVec<Type2>),
-    Alias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId),
+    Alias(Symbol, PoolVec<TypeId>, TypeId),
     Erroneous(roc_types::types::Problem),
 }
 
@@ -838,7 +835,17 @@ fn to_type_apply<'a>(
             // instantiate variables
             Type2::substitute(env.pool, &substitutions, actual);
 
-            TypeApply::Alias(symbol, arguments, actual)
+            let type_arguments = PoolVec::with_capacity(arguments.len() as u32, env.pool);
+
+            for (node_id, type_id) in arguments
+                .iter_node_ids()
+                .zip(type_arguments.iter_node_ids())
+            {
+                let typ = env.pool[node_id].1;
+                env.pool[type_id] = typ;
+            }
+
+            TypeApply::Alias(symbol, type_arguments, actual)
         }
         None => TypeApply::Apply(symbol, argument_type_ids),
     }

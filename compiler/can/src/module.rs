@@ -404,8 +404,12 @@ pub fn canonicalize_module_defs<'a>(
                                 GeneratedInfo::Hosted { effect_symbol, .. } => {
                                     let symbol = def.pattern_vars.iter().next().unwrap().0;
                                     let ident_id = symbol.ident_id();
-                                    let ident =
-                                        scope.ident_ids.get_name(ident_id).unwrap().to_string();
+                                    let ident = scope
+                                        .locals
+                                        .ident_ids
+                                        .get_name(ident_id)
+                                        .unwrap()
+                                        .to_string();
                                     let def_annotation = def.annotation.clone().unwrap();
                                     let annotation = crate::annotation::Annotation {
                                         typ: def_annotation.signature,
@@ -561,7 +565,7 @@ fn fix_values_captured_in_closure_def(
 }
 
 fn fix_values_captured_in_closure_defs(
-    defs: &mut Vec<crate::def::Def>,
+    defs: &mut [crate::def::Def],
     no_capture_symbols: &mut VecSet<Symbol>,
 ) {
     // recursive defs cannot capture each other

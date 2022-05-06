@@ -190,7 +190,7 @@ pub enum Expr {
         // for the expression from the opaque definition. `type_arguments` is something like
         // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
         specialized_def_type: Box<Type>,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Variable>,
         lambda_set_variables: Vec<LambdaSet>,
     },
 
@@ -356,7 +356,7 @@ pub struct Field {
     pub loc_expr: Box<Loc<Expr>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Recursive {
     NotRecursive = 0,
     Recursive = 1,

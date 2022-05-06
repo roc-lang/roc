@@ -1,4 +1,3 @@
-use core::cell::Cell;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -37,12 +36,12 @@ fn promote_expr_to_module(src: &str) -> String {
 pub fn compile_and_load<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    _test_wrapper_type_info: PhantomData<T>,
+    test_wrapper_type_info: PhantomData<T>,
 ) -> wasmer::Instance {
     let platform_bytes = load_platform_and_builtins();
 
     let compiled_bytes =
-        compile_roc_to_wasm_bytes(arena, &platform_bytes, src, _test_wrapper_type_info);
+        compile_roc_to_wasm_bytes(arena, &platform_bytes, src, test_wrapper_type_info);
 
     if DEBUG_LOG_SETTINGS.keep_test_binary {
         let build_dir_hash = src_hash(src);
@@ -280,7 +279,7 @@ where
     // Read the actual refcount values
     let refcount_ptr_array: WasmPtr<WasmPtr<i32>, wasmer::Array> =
         WasmPtr::new(4 + refcount_vector_addr as u32);
-    let refcount_ptrs: &[Cell<WasmPtr<i32>>] = refcount_ptr_array
+    let refcount_ptrs = refcount_ptr_array
         .deref(memory, 0, num_refcounts as u32)
         .unwrap();
 

@@ -1,5 +1,6 @@
 use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
+use crate::annotation::find_type_def_symbols;
 use crate::annotation::IntroducedVariables;
 use crate::env::Env;
 use crate::expr::AnnotatedMark;
@@ -277,12 +278,7 @@ pub(crate) fn canonicalize_defs<'a>(
                 ann,
                 kind,
             } => {
-                let referenced_symbols = crate::annotation::find_type_def_symbols(
-                    env.home,
-                    // TODO IDENT_IDS
-                    &mut scope.ident_ids,
-                    &ann.value,
-                );
+                let referenced_symbols = find_type_def_symbols(scope, &ann.value);
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
 
@@ -295,12 +291,7 @@ pub(crate) fn canonicalize_defs<'a>(
                     // Add the referenced type symbols of each member function. We need to make
                     // sure those are processed first before we resolve the whole ability
                     // definition.
-                    referenced_symbols.extend(crate::annotation::find_type_def_symbols(
-                        env.home,
-                        // TODO IDENT_IDS
-                        &mut scope.ident_ids,
-                        &member.typ.value,
-                    ));
+                    referenced_symbols.extend(find_type_def_symbols(scope, &member.typ.value));
                 }
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
@@ -975,17 +966,6 @@ fn single_can_def(
     }
 }
 
-fn add_annotation_aliases(
-    type_annotation: &crate::annotation::Annotation,
-    aliases: &mut VecMap<Symbol, Alias>,
-) {
-    for (name, alias) in type_annotation.aliases.iter() {
-        if !aliases.contains_key(name) {
-            aliases.insert(*name, alias.clone());
-        }
-    }
-}
-
 // Functions' references don't count in defs.
 // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
 // parent commit for the bug this fixed!
@@ -1038,16 +1018,11 @@ fn canonicalize_pending_value_def<'a>(
             );
 
             // Record all the annotation's references in output.references.lookups
-
-            for symbol in type_annotation.references.iter() {
-                output.references.insert_type_lookup(*symbol);
-            }
-
-            add_annotation_aliases(&type_annotation, aliases);
-
-            output
-                .introduced_variables
-                .union(&type_annotation.introduced_variables);
+            type_annotation.add_to(
+                aliases,
+                &mut output.references,
+                &mut output.introduced_variables,
+            );
 
             pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
 
@@ -1140,15 +1115,11 @@ fn canonicalize_pending_value_def<'a>(
             );
 
             // Record all the annotation's references in output.references.lookups
-            for symbol in type_annotation.references.iter() {
-                output.references.insert_type_lookup(*symbol);
-            }
-
-            add_annotation_aliases(&type_annotation, aliases);
-
-            output
-                .introduced_variables
-                .union(&type_annotation.introduced_variables);
+            type_annotation.add_to(
+                aliases,
+                &mut output.references,
+                &mut output.introduced_variables,
+            );
 
             canonicalize_pending_body(
                 env,
@@ -1788,7 +1759,10 @@ fn make_tag_union_of_alias_recursive<'a>(
 
     let made_recursive = make_tag_union_recursive_help(
         env,
-        Loc::at(alias.header_region(), (alias_name, &alias_args)),
+        Loc::at(
+            alias.header_region(),
+            (alias_name, alias_args.iter().map(|ta| &ta.1)),
+        ),
         alias.region,
         others,
         &mut alias.typ,
@@ -1835,12 +1809,12 @@ enum MakeTagUnionRecursive {
 /// ```
 ///
 /// When `Err` is returned, a problem will be added to `env`.
-fn make_tag_union_recursive_help<'a>(
+fn make_tag_union_recursive_help<'a, 'b>(
     env: &mut Env<'a>,
-    recursive_alias: Loc<(Symbol, &[(Lowercase, Type)])>,
+    recursive_alias: Loc<(Symbol, impl Iterator<Item = &'b Type>)>,
     region: Region,
     others: Vec<Symbol>,
-    typ: &mut Type,
+    typ: &'b mut Type,
     var_store: &mut VarStore,
     can_report_cyclic_error: &mut bool,
 ) -> MakeTagUnionRecursive {
@@ -1852,7 +1826,7 @@ fn make_tag_union_recursive_help<'a>(
     match typ {
         Type::TagUnion(tags, ext) => {
             let recursion_variable = var_store.fresh();
-            let type_arguments = args.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
+            let type_arguments: Vec<_> = args.into_iter().cloned().collect();
 
             let mut pending_typ =
                 Type::RecursiveTagUnion(recursion_variable, tags.to_vec(), ext.clone());
@@ -1890,7 +1864,7 @@ fn make_tag_union_recursive_help<'a>(
             // try to make `actual` recursive
             make_tag_union_recursive_help(
                 env,
-                Loc::at_zero((symbol, type_arguments)),
+                Loc::at_zero((symbol, type_arguments.iter())),
                 region,
                 others,
                 actual,

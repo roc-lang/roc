@@ -2,8 +2,13 @@
 
 let
   sources = import nix/sources.nix { };
-  pkgs = import sources.nixpkgs { };
-  unstable-pkgs = import sources.nixpkgs-unstable { };
+  rust_overlay = import (builtins.fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz");
+  pkgs = import sources.nixpkgs {
+    overlays = [ rust_overlay ];
+  };
+  rust_toolchain = (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml);
+  
+  #unstable-pkgs = import sources.nixpkgs-unstable { };
 
   darwinInputs = with pkgs;
     lib.optionals stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks; [
@@ -65,9 +70,9 @@ let
 
     # tools for development environment
     less
-  ]) ++ (with unstable-pkgs; [
-    rustup
-  ]);
+  ]) ++ [
+    rust_toolchain
+  ];
 
 in pkgs.mkShell {
   buildInputs = inputs ++ darwinInputs ++ linuxInputs;

@@ -63,7 +63,7 @@ pub enum TagName {
 }
 
 roc_error_macros::assert_sizeof_aarch64!(TagName, 24);
-roc_error_macros::assert_sizeof_wasm!(TagName, 16);
+roc_error_macros::assert_sizeof_wasm!(TagName, 12);
 roc_error_macros::assert_sizeof_default!(TagName, 24);
 
 impl TagName {

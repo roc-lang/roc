@@ -165,23 +165,19 @@ The compiler is invoked from the CLI via `build_file` in cli/src/build.rs
 
 For a more detailed understanding of the compilation phases, see the `Phase`, `BuildTask`, and `Msg` enums in `load/src/file.rs`.
 
-## Debugging intermediate representations
+## Debugging the compiler
 
-### Debugging the typechecker
+Please see the [debug flags](./debug_flags/src/lib.rs) for information on how to
+ask the compiler to emit debug information during various stages of compilation.
 
-Setting the following environment variables:
+There are some goals for more sophisticated debugging tools:
 
-- `ROC_PRINT_UNIFICATIONS` prints all type unifications that are done,
-    before and after the unification.
-- `ROC_PRINT_MISMATCHES` prints all type mismatches hit during unification.
-- `ROC_PRETTY_PRINT_ALIAS_CONTENTS` expands the contents of aliases during
-    pretty-printing of types.
+- A nicer unification debugger, see https://github.com/rtfeldman/roc/issues/2486.
+  Any interest in helping out here is greatly appreciated.
 
-Note that this is only relevant during debug builds. Eventually we should have
-some better debugging tools here, see https://github.com/rtfeldman/roc/issues/2486
-for one.
+### General Tips
 
-### The mono IR
+#### Miscompilations
 
 If you observe a miscomplication, you may first want to check the generated mono
 IR for your code - maybe there was a problem during specialization or layout
@@ -189,13 +185,16 @@ generation. One way to do this is to add a test to `test_mono/src/tests.rs`
 and run the tests with `cargo test -p test_mono`; this will write the mono
 IR to a file.
 
-You may also want to set some or all of the following environment variables:
+#### Typechecking errors
 
-- `PRINT_IR_AFTER_SPECIALIZATION=1` prints the mono IR after function
-    specialization to stdout
-- `PRINT_IR_AFTER_RESET_REUSE=1` prints the mono IR after insertion of
-    reset/reuse isntructions to stdout
-- `PRINT_IR_AFTER_REFCOUNT=1` prints the mono IR after insertion of reference
-    counting instructions to stdout
-- `PRETTY_PRINT_IR_SYMBOLS=1` instructs the pretty printer to dump all the
-    information it knows about the mono IR whenever it is printed
+First, try to minimize your reproduction into a test that fits in
+[`solve_expr`](./solve/tests/solve_expr.rs).
+
+Once you've done this, check out the `ROC_PRINT_UNIFICATIONS` debug flag. It
+will show you where type unification went right and wrong. This is usually
+enough to figure out a fix for the bug.
+
+If that doesn't work and you know your error has something to do with ranks,
+you may want to instrument `deep_copy_var_help` in [solve](./solve/src/solve.rs).
+
+If that doesn't work, chatting on Zulip is always a good strategy.

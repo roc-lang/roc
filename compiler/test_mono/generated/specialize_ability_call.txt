@@ -1,7 +1,7 @@
-procedure Test.5 (Test.7):
-    ret Test.7;
+procedure Test.7 (Test.9):
+    ret Test.9;
 
 procedure Test.0 ():
-    let Test.9 : U64 = 1234i64;
-    let Test.8 : U64 = CallByName Test.5 Test.9;
-    ret Test.8;
+    let Test.11 : U64 = 1234i64;
+    let Test.10 : U64 = CallByName Test.7 Test.11;
+    ret Test.10;

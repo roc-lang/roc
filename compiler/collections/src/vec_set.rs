@@ -40,6 +40,17 @@ impl<T: PartialEq> VecSet<T> {
         }
     }
 
+    /// Returns true iff any of the given elements previoously existed in the set.
+    pub fn insert_all<I: Iterator<Item = T>>(&mut self, values: I) -> bool {
+        let mut any_existed = false;
+
+        for value in values {
+            any_existed = any_existed || self.insert(value);
+        }
+
+        any_existed
+    }
+
     pub fn contains(&self, value: &T) -> bool {
         self.elements.contains(value)
     }
@@ -57,6 +68,10 @@ impl<T: PartialEq> VecSet<T> {
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.elements.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.elements.iter_mut()
     }
 }
 
