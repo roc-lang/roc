@@ -153,6 +153,12 @@ pub fn build_app<'a>() -> Command<'a> {
                     .help("The .roc file of an app to run")
                     .required(true),
             )
+            .arg(
+                Arg::new(ARGS_FOR_APP)
+                    .help("Arguments to pass into the app being run")
+                    .requires(ROC_FILE)
+                    .multiple_values(true),
+            )
         )
         .subcommand(Command::new(CMD_FORMAT)
             .about("Format a .roc file using standard Roc formatting")
