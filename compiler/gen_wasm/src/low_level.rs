@@ -277,6 +277,8 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
+            ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
+
             ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
             | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
             | ListAny | ListAll | ListFindUnsafe | DictWalk => {
