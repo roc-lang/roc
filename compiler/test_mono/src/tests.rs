@@ -1397,3 +1397,14 @@ fn list_map_closure_owns() {
         "#
     )
 }
+
+#[mono_test]
+fn list_sort_asc() {
+    indoc!(
+        r#"
+        app "test" provides [ out ] to "./platform"
+
+        out = List.sortAsc [ 4,3,2,1 ]
+        "#
+    )
+}
