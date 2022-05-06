@@ -10,7 +10,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
-use roc_collections::VecMap;
+use roc_collections::{MutSet, VecMap};
 use roc_debug_flags::{
     dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
     ROC_PRINT_IR_AFTER_SPECIALIZATION,
@@ -2494,6 +2494,7 @@ fn resolve_abilities_in_specialized_body<'a>(
         subs: &'a mut Subs,
         procs: &'a Procs<'a>,
         abilities_store: &'a AbilitiesStore,
+        seen_defs: MutSet<Symbol>,
     }
     impl PatternVisitor for Specializer<'_> {}
     impl Visitor for Specializer<'_> {
@@ -2539,14 +2540,25 @@ fn resolve_abilities_in_specialized_body<'a>(
                     let specialization_var = specialization_def.annotation;
 
                     let unified = unify(self.subs, var, specialization_var, Mode::EQ);
-                    unified.expect_success("Specialization does not unify");
+                    unified.expect_success(
+                        "Specialization does not unify - this is a typechecker bug!",
+                    );
+
+                    // Now walk the specialization def to pick up any more needed types. Of course,
+                    // we only want to pass through it once to avoid unbounded recursion.
+                    if !self.seen_defs.contains(&specialization) {
+                        self.visit_expr(
+                            &specialization_def.body,
+                            Region::zero(),
+                            specialization_def.body_var,
+                        );
+                        self.seen_defs.insert(specialization);
+                    }
 
                     *specialization_cell = Some(specialization);
                 }
                 _ => walk_expr(self, expr),
             }
-            // TODO: I think we actually want bottom-up visiting, or bidirectional visiting. This
-            // is pre-order (top-down).
         }
     }
 
@@ -2554,6 +2566,7 @@ fn resolve_abilities_in_specialized_body<'a>(
         subs: env.subs,
         procs,
         abilities_store: env.abilities_store,
+        seen_defs: MutSet::default(),
     };
     specializer.visit_expr(specialized_body, Region::zero(), body_var);
 }
