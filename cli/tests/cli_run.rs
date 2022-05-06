@@ -84,7 +84,7 @@ mod cli_run {
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
-        let compile_out = run_roc(["check", file.to_str().unwrap()].iter().chain(flags));
+        let compile_out = run_roc(["check", file.to_str().unwrap()].iter().chain(flags), &[]);
         let err = compile_out.stdout.trim();
         let err = strip_colors(err);
 
@@ -96,7 +96,7 @@ mod cli_run {
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
-        let out = run_roc(["format", file.to_str().unwrap(), CHECK_FLAG]);
+        let out = run_roc(["format", file.to_str().unwrap(), CHECK_FLAG], &[]);
         if expects_success_exit_code {
             assert!(out.status.success());
         } else {
@@ -104,10 +104,22 @@ mod cli_run {
         }
     }
 
-    fn run_roc_on<'a, I: IntoIterator<Item = &'a str>>(file: &'a Path, args: I) -> Out {
-        let compile_out = run_roc(args.into_iter().chain(iter::once(file.to_str().unwrap())));
-        if !compile_out.stderr.is_empty() {
-            panic!("roc build had stderr: {}", compile_out.stderr);
+    fn run_roc_on<'a, I: IntoIterator<Item = &'a str>>(
+        file: &'a Path,
+        args: I,
+        stdin: &[&str],
+    ) -> Out {
+        let compile_out = run_roc(
+            args.into_iter().chain(iter::once(file.to_str().unwrap())),
+            stdin,
+        );
+
+        if !compile_out.stderr.is_empty() &&
+            // If there is any stderr, it should be reporting the runtime and that's it!
+            !(compile_out.stderr.starts_with("runtime: ")
+                && compile_out.stderr.ends_with("ms\n"))
+        {
+            panic!("roc build had unexpected stderr: {}", compile_out.stderr);
         }
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);
@@ -137,7 +149,7 @@ mod cli_run {
 
             let out = match cli_mode {
                 CliMode::RocBuild => {
-                    run_roc_on(file, iter::once(CMD_BUILD).chain(flags.clone()));
+                    run_roc_on(file, iter::once(CMD_BUILD).chain(flags.clone()), &[]);
 
                     if use_valgrind && ALLOW_VALGRIND {
                         let (valgrind_out, raw_xml) = if let Some(ref input_file) = input_file {
@@ -157,8 +169,8 @@ mod cli_run {
 
                         if valgrind_out.status.success() {
                             let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
-                    panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nvalgrind xml was: \"{}\"\n\nvalgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
-                });
+                                panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nvalgrind xml was: \"{}\"\n\nvalgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
+                            });
 
                             if !memory_errors.is_empty() {
                                 for error in memory_errors {
@@ -204,8 +216,10 @@ mod cli_run {
                         )
                     }
                 }
-                CliMode::Roc => run_roc_on(file, flags.clone()),
-                CliMode::RocRun => run_roc_on(file, iter::once(CMD_RUN).chain(flags.clone())),
+                CliMode::Roc => run_roc_on(file, flags.clone(), stdin),
+                CliMode::RocRun => {
+                    run_roc_on(file, iter::once(CMD_RUN).chain(flags.clone()), stdin)
+                }
             };
 
             if !&out.stdout.ends_with(expected_ending) {
@@ -293,7 +307,7 @@ mod cli_run {
                         }
                         "hello-gui" | "breakout" => {
                             // Since these require opening a window, we do `roc build` on them but don't run them.
-                            run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG]);
+                            run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[]);
 
                             return;
                         }
@@ -318,7 +332,7 @@ mod cli_run {
                         &file_name,
                         example.stdin,
                         example.executable_filename,
-                        [OPTIMIZE_FLAG],
+                        &[OPTIMIZE_FLAG],
                         example.input_file.and_then(|file| Some(example_file(dir_name, file))),
                         example.expected_ending,
                         example.use_valgrind,
@@ -590,7 +604,7 @@ mod cli_run {
                         &file_name,
                         benchmark.stdin,
                         benchmark.executable_filename,
-                        [OPTIMIZE_FLAG],
+                        &[OPTIMIZE_FLAG],
                         benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                     );

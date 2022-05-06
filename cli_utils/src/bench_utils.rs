@@ -1,8 +1,12 @@
 use crate::helpers::{example_file, run_cmd, run_roc};
+use const_format::concatcp;
 use criterion::{black_box, measurement::Measurement, BenchmarkGroup};
+use roc_cli::CMD_BUILD;
 use std::{path::Path, thread};
 
 const CFOLD_STACK_SIZE: usize = 8192 * 100000;
+
+const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
 
 fn exec_bench_w_input<T: Measurement>(
     file: &Path,
@@ -11,7 +15,10 @@ fn exec_bench_w_input<T: Measurement>(
     expected_ending: &str,
     bench_group_opt: Option<&mut BenchmarkGroup<T>>,
 ) {
-    let compile_out = run_roc(["build", "--optimize", file.to_str().unwrap()]);
+    let compile_out = run_roc(
+        [CMD_BUILD, OPTIMIZE_FLAG, file.to_str().unwrap()],
+        &[stdin_str],
+    );
 
     if !compile_out.stderr.is_empty() {
         panic!("{}", compile_out.stderr);

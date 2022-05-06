@@ -45,16 +45,33 @@ pub fn path_to_roc_binary() -> PathBuf {
     path
 }
 
-pub fn run_roc<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I) -> Out {
+pub fn run_roc<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I, stdin_vals: &[&str]) -> Out {
     let mut cmd = Command::new(path_to_roc_binary());
 
     for arg in args {
         cmd.arg(arg);
     }
 
-    let output = cmd
-        .output()
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .expect("failed to execute compiled `roc` binary in CLI test");
+
+    {
+        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+
+        for stdin_str in stdin_vals.iter() {
+            stdin
+                .write_all(stdin_str.as_bytes())
+                .expect("Failed to write to stdin");
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to get output for compiled `roc` binary in CLI test");
 
     Out {
         stdout: String::from_utf8(output.stdout).unwrap(),
