@@ -112,8 +112,6 @@ mod test_fmt {
 
                 let output = buf.as_str().trim();
 
-                assert_multiline_str_eq!(expected, output);
-
                 let (reparsed_ast, state) = module::parse_header(&arena, State::new(output.as_bytes())).unwrap_or_else(|err| {
                     panic!(
                         "After formatting, the source code no longer parsed!\n\nParse error was: {:?}\n\nThe code that failed to parse:\n\n{}\n\n",
@@ -151,6 +149,14 @@ mod test_fmt {
 
                     assert_multiline_str_eq!(output, reformatted);
                 }
+
+                // If everything was idempotent re-parsing worked, finally assert
+                // that the formatted code was what we expected it to be.
+                //
+                // Do this last because if there were any serious problems with the
+                // formatter (e.g. it wasn't idempotent), we want to know about
+                // those more than we want to know that the expectation failed!
+                assert_multiline_str_eq!(expected, output);
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
         };
