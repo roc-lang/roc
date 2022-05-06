@@ -1813,11 +1813,12 @@ fn unify_flex(
     other: &Content,
 ) -> Outcome {
     match other {
-        FlexVar(None) => {
-            // If both are flex, and only left has a name, keep the name around.
+        FlexVar(other_opt_name) => {
+            // Prefer using right's name.
+            let opt_name = opt_name.or(*other_opt_name);
             match opt_able_bound {
-                Some(ability) => merge(subs, ctx, FlexAbleVar(*opt_name, ability)),
-                None => merge(subs, ctx, FlexVar(*opt_name)),
+                Some(ability) => merge(subs, ctx, FlexAbleVar(opt_name, ability)),
+                None => merge(subs, ctx, FlexVar(opt_name)),
             }
         }
 
@@ -1849,8 +1850,7 @@ fn unify_flex(
             }
         }
 
-        FlexVar(Some(_))
-        | RigidVar(_)
+        RigidVar(_)
         | RigidAbleVar(_, _)
         | RecursionVar { .. }
         | Structure(_)
@@ -1858,7 +1858,6 @@ fn unify_flex(
         | RangedNumber(..) => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
-            // (This includes using right's name if both are flex and named.)
             merge(subs, ctx, *other)
         }
 
