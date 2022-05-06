@@ -2504,6 +2504,12 @@ fn resolve_abilities_in_specialized_body<'a>(
                     // are themselves specialized, so we'll handle ability resolution in them at
                     // that time too.
                 }
+                Expr::LetRec(..) | Expr::LetNonRec(..) => {
+                    // Also don't walk down let-bindings. These may be generalized and we won't
+                    // know their specializations until we collect them while building up the def.
+                    // So, we'll resolve any nested abilities when we know their specialized type
+                    // during def construction.
+                }
                 Expr::AbilityMember(member_sym, specialization_cell) => {
                     let mut specialization_cell = specialization_cell
                         .write()
