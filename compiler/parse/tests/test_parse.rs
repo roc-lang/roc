@@ -299,7 +299,12 @@ mod test_parse {
         let input_path = parent.join(&format!("{}.{}.roc", name, ty));
         let result_path = parent.join(&format!("{}.{}.result-ast", name, ty));
 
-        let input = std::fs::read_to_string(&input_path).unwrap();
+        let input = std::fs::read_to_string(&input_path).unwrap_or_else(|err| {
+            panic!(
+                "Could not find a snapshot test result at {:?} - {:?}",
+                input_path, err
+            )
+        });
 
         let result = func(&input);
 
