@@ -184,7 +184,7 @@ struct Params {
     preorders: Vec<Preorder>,
     c: usize,
     p: BitVec,
-    s: Vec<u32>,
+    s: BitVec,
     scc: Sccs,
     scca: BitVec,
 }
@@ -200,7 +200,7 @@ impl Params {
         Self {
             preorders,
             c: 0,
-            s: Vec::new(),
+            s: BitVec::repeat(false, length),
             p: BitVec::repeat(false, length),
             scc: Sccs {
                 matrix: ReferenceMatrix::new(length),
@@ -216,7 +216,7 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
 
     params.c += 1;
 
-    params.s.push(v as u32);
+    params.s.set(v, true);
     params.p.set(v, true);
 
     for w in bitvec[v * length..][..length].iter_ones() {
@@ -246,14 +246,16 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
     if params.p.last_one() == Some(v) {
         params.p.set(v, false);
 
-        while let Some(node) = params.s.pop() {
+        while let Some(node) = params.s.last_one() {
+            params.s.set(node, false);
+
             params
                 .scc
                 .matrix
-                .set_row_col(params.scc.components, node as usize, true);
-            params.scca.set(node as usize, true);
-            params.preorders[node as usize] = Preorder::Removed;
-            if node as usize == v {
+                .set_row_col(params.scc.components, node, true);
+            params.scca.set(node, true);
+            params.preorders[node] = Preorder::Removed;
+            if node == v {
                 break;
             }
         }
