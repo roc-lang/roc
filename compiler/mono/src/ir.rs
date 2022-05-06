@@ -5762,7 +5762,8 @@ pub fn from_can<'a>(
 
                         return from_can(env, variable, cont.value, procs, layout_cache);
                     }
-                    roc_can::expr::Expr::Var(original) => {
+                    roc_can::expr::Expr::Var(original)
+                    | roc_can::expr::Expr::AbilityMember(original, _) => {
                         // a variable is aliased, e.g.
                         //
                         //  foo = bar
@@ -7046,20 +7047,23 @@ fn handle_variable_aliasing<'a, BuildRest>(
 where
     BuildRest: FnOnce(&mut Env<'a, '_>, &mut Procs<'a>, &mut LayoutCache<'a>) -> Stmt<'a>,
 {
-    if env.abilities_store.is_ability_member_name(right) {
-        procs
-            .ability_member_aliases
-            .insert(left, AbilityMember(right));
-        return build_rest(env, procs, layout_cache);
+    // 1. Handle references to ability members - we could be aliasing an ability member, or another
+    //    alias to an ability member.
+    {
+        if env.abilities_store.is_ability_member_name(right) {
+            procs
+                .ability_member_aliases
+                .insert(left, AbilityMember(right));
+            return build_rest(env, procs, layout_cache);
+        }
+        if let Some(&ability_member) = procs.ability_member_aliases.get(right) {
+            procs.ability_member_aliases.insert(left, ability_member);
+            return build_rest(env, procs, layout_cache);
+        }
     }
 
-    if let Some(&ability_member) = procs.ability_member_aliases.get(right) {
-        // If `right` links to a partial expression, make sure we link `left` to it as well, so
-        // that usages of it will be specialized when building the rest of the program.
-        procs.ability_member_aliases.insert(left, ability_member);
-        return build_rest(env, procs, layout_cache);
-    }
-
+    // 2. Handle references to a known proc - again, we may be either aliasing the proc, or another
+    //    alias to a proc.
     if procs.partial_procs.contains_key(right) {
         // This is an alias to a function defined in this module.
         // Attach the alias, then build the rest of the module, so that we reference and specialize
@@ -7096,6 +7100,8 @@ where
         // then we must construct its closure; since imported symbols have no closure, we use the empty struct
         let_empty_struct(left, env.arena.alloc(result))
     } else {
+        // Otherwise, we are referencing a non-proc value.
+
         // We need to lift all specializations of "left" to be specializations of "right".
         let mut scratchpad_update_specializations = std::vec::Vec::new();
 
