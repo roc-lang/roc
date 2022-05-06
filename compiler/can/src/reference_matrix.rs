@@ -129,18 +129,14 @@ impl ReferenceMatrix {
         TopologicalSort::Groups { groups }
     }
 
-    /// Get the strongly-connected components of the set of input nodes.
-    pub fn strongly_connected_components(&self, nodes: &[u32]) -> Sccs {
-        let mut bitvec = BitVec::repeat(false, self.length);
-
-        for value in nodes {
-            bitvec.set(*value as usize, true);
-        }
-
-        self.strongly_connected_components_help(&bitvec)
+    /// Get the strongly-connected components all nodes in the matrix
+    pub fn strongly_connected_components_all(&self) -> Sccs {
+        let bitvec = BitVec::repeat(true, self.length);
+        self.strongly_connected_components_subset(&bitvec)
     }
 
-    fn strongly_connected_components_help(&self, nodes: &BitSlice) -> Sccs {
+    /// Get the strongly-connected components of a set of input nodes.
+    pub fn strongly_connected_components_subset(&self, nodes: &BitSlice) -> Sccs {
         let mut params = Params::new(self.length, nodes);
 
         'outer: loop {
