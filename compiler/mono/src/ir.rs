@@ -22,6 +22,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
+use roc_solve::ability::resolve_ability_specialization;
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
@@ -2479,6 +2480,78 @@ fn generate_runtime_error_function<'a>(
     }
 }
 
+fn resolve_abilities_in_specialized_body<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &Procs<'a>,
+    specialized_body: &roc_can::expr::Expr,
+    body_var: Variable,
+) {
+    use roc_can::expr::Expr;
+    use roc_can::traverse::{walk_expr, PatternVisitor, Visitor};
+    use roc_unify::unify::unify;
+
+    struct Specializer<'a> {
+        subs: &'a mut Subs,
+        procs: &'a Procs<'a>,
+        abilities_store: &'a AbilitiesStore,
+    }
+    impl PatternVisitor for Specializer<'_> {}
+    impl Visitor for Specializer<'_> {
+        fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
+            match expr {
+                Expr::Closure(..) => {
+                    // Don't walk down closure bodies. They will have their types refined when they
+                    // are themselves specialized, so we'll handle ability resolution in them at
+                    // that time too.
+                }
+                Expr::AbilityMember(member_sym, specialization_cell) => {
+                    let mut specialization_cell = specialization_cell
+                        .write()
+                        .expect("Can't lock specialization cell");
+                    if specialization_cell.is_some() {
+                        // We already know the specialization; we are good to go.
+                        return;
+                    }
+
+                    let specialization = resolve_ability_specialization(
+                        self.subs,
+                        self.abilities_store,
+                        *member_sym,
+                        var,
+                    )
+                    .expect("Ability specialization is unknown - code generation cannot proceed!");
+
+                    // We must now refine the current type state to account for this specialization,
+                    // since `var` may only have partial specialization information - enough to
+                    // figure out what specialization we need, but not the types of all arguments
+                    // and return types. So, unify with the variable with the specialization's type.
+                    let specialization_def = self
+                        .procs
+                        .partial_procs
+                        .get_symbol(specialization)
+                        .expect("Specialization found, but it's not in procs");
+                    let specialization_var = specialization_def.annotation;
+
+                    let unified = unify(self.subs, var, specialization_var, Mode::EQ);
+                    unified.expect_success("Specialization does not unify");
+
+                    *specialization_cell = Some(specialization);
+                }
+                _ => walk_expr(self, expr),
+            }
+            // TODO: I think we actually want bottom-up visiting, or bidirectional visiting. This
+            // is pre-order (top-down).
+        }
+    }
+
+    let mut specializer = Specializer {
+        subs: env.subs,
+        procs,
+        abilities_store: env.abilities_store,
+    };
+    specializer.visit_expr(specialized_body, Region::zero(), body_var);
+}
+
 fn specialize_external<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -2614,6 +2687,7 @@ fn specialize_external<'a>(
     };
 
     let body = partial_proc.body.clone();
+    resolve_abilities_in_specialized_body(env, procs, &body, partial_proc.body_var);
     let mut specialized_body = from_can(env, partial_proc.body_var, body, procs, layout_cache);
 
     match specialized {
@@ -4407,15 +4481,28 @@ pub fn with_hole<'a>(
                 // a proc in this module, or an imported symbol
                 procs.partial_procs.contains_key(key)
                     || (env.is_imported_symbol(key) && !procs.is_imported_module_thunk(key))
-                    || env.abilities_store.is_ability_member_name(key)
             };
 
             match loc_expr.value {
                 roc_can::expr::Expr::Var(proc_name) if is_known(proc_name) => {
-                    // This might be an ability member - if so, use the appropriate specialization.
-                    let proc_name = get_specialization(env, fn_var, proc_name).unwrap_or(proc_name);
-
                     // a call by a known name
+                    call_by_name(
+                        env,
+                        procs,
+                        fn_var,
+                        proc_name,
+                        loc_args,
+                        layout_cache,
+                        assigned,
+                        hole,
+                    )
+                }
+                roc_can::expr::Expr::AbilityMember(_, specialization) => {
+                    let specialization_cell = specialization.read().unwrap();
+                    let proc_name = specialization_cell.expect(
+                        "Ability specialization is unknown - code generation cannot proceed!",
+                    );
+
                     call_by_name(
                         env,
                         procs,
@@ -4544,8 +4631,8 @@ pub fn with_hole<'a>(
                         }
                         UnspecializedExpr(symbol) => {
                             match procs.ability_member_aliases.get(symbol).unwrap() {
-                                &AbilityMember(member) => {
-                                    let proc_name = get_specialization(env, fn_var, member).expect("Recorded as an ability member, but it doesn't have a specialization");
+                                &self::AbilityMember(member) => {
+                                    let proc_name = resolve_ability_specialization(env.subs, env.abilities_store, member, fn_var).expect("Recorded as an ability member, but it doesn't have a specialization");
 
                                     // a call by a known name
                                     return call_by_name(
@@ -4902,47 +4989,6 @@ pub fn with_hole<'a>(
             }
         }
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
-    }
-}
-
-#[inline(always)]
-fn get_specialization<'a>(
-    env: &mut Env<'a, '_>,
-    symbol_var: Variable,
-    symbol: Symbol,
-) -> Option<Symbol> {
-    use roc_solve::ability::type_implementing_member;
-    use roc_solve::solve::instantiate_rigids;
-    use roc_unify::unify::unify;
-
-    match env.abilities_store.member_def(symbol) {
-        None => {
-            // This is not an ability member, it doesn't need specialization.
-            None
-        }
-        Some(member) => {
-            let snapshot = env.subs.snapshot();
-            instantiate_rigids(env.subs, member.signature_var);
-
-            let (_, must_implement_ability) = unify(
-                env.subs,
-                symbol_var,
-                member.signature_var,
-                roc_unify::unify::Mode::EQ,
-            )
-            .expect_success("This typechecked previously");
-            env.subs.rollback_to(snapshot);
-
-            let specializing_type =
-                type_implementing_member(&must_implement_ability, member.parent_ability);
-
-            let specialization = env
-                .abilities_store
-                .get_specialization(symbol, specializing_type)
-                .expect("No specialization is recorded - I thought there would only be a type error here.");
-
-            Some(specialization.symbol)
-        }
     }
 }
 

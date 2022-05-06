@@ -21,7 +21,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::{char, u32};
 
 #[derive(Clone, Default, Debug)]
@@ -88,7 +88,7 @@ pub enum Expr {
         /// Actual member name
         Symbol,
         /// Specialization to use
-        Arc<Mutex<Option<Symbol>>>,
+        Arc<RwLock<Option<Symbol>>>,
     ),
 
     // Branching
@@ -1328,7 +1328,11 @@ fn canonicalize_var_lookup(
             Ok(symbol) => {
                 output.references.insert_value_lookup(symbol);
 
-                Var(symbol)
+                if scope.abilities_store.is_ability_member_name(symbol) {
+                    AbilityMember(symbol, Arc::new(RwLock::new(None)))
+                } else {
+                    Var(symbol)
+                }
             }
             Err(problem) => {
                 env.problem(Problem::RuntimeError(problem.clone()));
@@ -1343,7 +1347,11 @@ fn canonicalize_var_lookup(
             Ok(symbol) => {
                 output.references.insert_value_lookup(symbol);
 
-                Var(symbol)
+                if scope.abilities_store.is_ability_member_name(symbol) {
+                    AbilityMember(symbol, Arc::new(RwLock::new(None)))
+                } else {
+                    Var(symbol)
+                }
             }
             Err(problem) => {
                 // Either the module wasn't imported, or

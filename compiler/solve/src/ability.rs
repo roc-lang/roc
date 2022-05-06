@@ -7,6 +7,7 @@ use roc_types::types::{Category, PatternCategory};
 use roc_unify::unify::MustImplementAbility;
 use roc_unify::unify::MustImplementConstraints;
 
+use crate::solve::instantiate_rigids;
 use crate::solve::{IncompleteAbilityImplementation, TypeError};
 
 #[derive(Debug, Clone)]
@@ -187,4 +188,33 @@ pub fn type_implementing_member(
         .next()
         .unwrap()
         .typ
+}
+
+pub fn resolve_ability_specialization(
+    subs: &mut Subs,
+    abilities_store: &AbilitiesStore,
+    ability_member: Symbol,
+    specialization_var: Variable,
+) -> Option<Symbol> {
+    use roc_unify::unify::{unify, Mode};
+
+    let member_def = abilities_store
+        .member_def(ability_member)
+        .expect("Not an ability member symbol");
+
+    let snapshot = subs.snapshot();
+    instantiate_rigids(subs, member_def.signature_var);
+    let (_, must_implement_ability) =
+        unify(subs, specialization_var, member_def.signature_var, Mode::EQ).expect_success(
+            "If resolving a specialization, the specialization must be known to typecheck.",
+        );
+
+    subs.rollback_to(snapshot);
+
+    let specializing_type =
+        type_implementing_member(&must_implement_ability, member_def.parent_ability);
+
+    let specialization = abilities_store.get_specialization(ability_member, specializing_type)?;
+
+    Some(specialization.symbol)
 }
