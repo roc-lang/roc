@@ -16,8 +16,6 @@ use roc_types::solved_types::{FreeVars, SolvedType};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{AnnotationSource, Category, Type};
 
-use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
-
 /// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
 pub struct ExposedByModule {
@@ -109,7 +107,7 @@ pub fn constrain_module(
     let constraint = crate::expr::constrain_decls(constraints, home, declarations);
     let constraint =
         constrain_symbols_from_requires(constraints, symbols_from_requires, home, constraint);
-    let constraint = frontload_ability_constraints(constraints, abilities_store, constraint);
+    let constraint = frontload_ability_constraints(constraints, abilities_store, home, constraint);
 
     // The module constraint should always save the environment at the end.
     debug_assert!(constraints.contains_save_the_environment(&constraint));
@@ -174,8 +172,8 @@ fn constrain_symbols_from_requires(
 pub fn frontload_ability_constraints(
     constraints: &mut Constraints,
     abilities_store: &AbilitiesStore,
-    mut constraint: Constraint,
     home: ModuleId,
+    mut constraint: Constraint,
 ) -> Constraint {
     for (member_name, member_data) in abilities_store.root_ability_members().iter() {
         let rigids = Default::default();
