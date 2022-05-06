@@ -6243,6 +6243,24 @@ mod solve_expr {
     }
 
     #[test]
+    fn alias_in_opaque() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ foo ] to "./platform"
+
+                MyError : [ Error ]
+
+                MyResult := Result U8 MyError
+
+                foo = @MyResult (Err Error)
+                "#
+            ),
+            "MyResult",
+        )
+    }
+
+    #[test]
     fn encoder() {
         infer_queries(
             indoc!(
@@ -6289,20 +6307,63 @@ mod solve_expr {
     }
 
     #[test]
-    fn alias_in_opaque() {
-        infer_eq_without_problem(
+    fn decoder() {
+        infer_queries(
             indoc!(
                 r#"
-                app "test" provides [ foo ] to "./platform"
+                app "test" provides [ myU8 ] to "./platform"
 
-                MyError : [ Error ]
+                DecodeError : [ TooShort, Leftover (List U8) ]
 
-                MyResult := Result U8 MyError
+                Decoder val fmt := List U8, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
 
-                foo = @MyResult (Err Error)
+                Decoding has
+                    decoder : Decoder val fmt | val has Decoding, fmt has DecoderFormatting
+
+                DecoderFormatting has
+                    u8 : Decoder U8 fmt | fmt has DecoderFormatting
+
+                decodeWith : List U8, Decoder val fmt, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
+                decodeWith = \lst, (@Decoder doDecode), fmt -> doDecode lst fmt
+
+                fromBytes : List U8, fmt -> Result val DecodeError
+                            | fmt has DecoderFormatting, val has Decoding
+                fromBytes = \lst, fmt ->
+                    when decodeWith lst decoder fmt is
+                        { result, rest } ->
+                            when result is
+                                Ok val -> if List.isEmpty rest then val else Err (Leftover rest)
+                                Err e -> Err e
+
+
+                Linear := {}
+
+                # impl DecoderFormatting for Linear
+                u8 = @Decoder \lst, @Linear {} ->
+                #^^{-1}
+                        when List.first lst is
+                            Ok n -> { result: Ok n, rest: List.dropFirst lst }
+                            Err _ -> { result: Err TooShort, rest: [] }
+
+                MyU8 := U8
+
+                # impl Decoding for MyU8
+                decoder = @Decoder \lst, fmt ->
+                #^^^^^^^{-1}
+                    when decodeWith lst u8 fmt is
+                        { result, rest } ->
+                            { result: Result.map result (\n -> @MyU8 n), rest }
+
+                myU8 : Result MyU8 _
+                myU8 = fromBytes [ 15 ] (@Linear {})
+                #^^^^{-1}
                 "#
             ),
-            "MyResult",
+            &[
+                "u8 : Decoder U8 Linear",
+                "decoder : Decoder MyU8 fmt | fmt has DecoderFormatting",
+                "myU8 : Result MyU8 DecodeError",
+            ],
         )
     }
 }
