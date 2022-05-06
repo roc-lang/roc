@@ -57,10 +57,14 @@ pub fn main() {
 
     match load_types(input_path.clone(), &cwd) {
         Ok(types) => {
-            let mut buf = String::new();
+            let mut buf;
 
             let result = match output_type {
-                OutputType::Rust => bindgen_rs::write_types(&types, &mut buf),
+                OutputType::Rust => {
+                    buf = std::str::from_utf8(bindgen_rs::HEADER).unwrap().to_string();
+
+                    bindgen_rs::write_types(&types, &mut buf)
+                }
                 OutputType::C => todo!("TODO: Generate bindings for C"),
                 OutputType::Zig => todo!("TODO: Generate bindings for Zig"),
                 OutputType::Json => todo!("TODO: Generate bindings for JSON"),
