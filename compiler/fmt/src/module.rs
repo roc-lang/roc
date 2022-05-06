@@ -11,7 +11,7 @@ use roc_parse::header::{
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
-pub fn fmt_module<'a, 'buf>(buf: &mut Buf<'buf>, module: &'a Module<'a>) {
+pub fn fmt_module<'a>(buf: &mut Buf<'_>, module: &'a Module<'a>) {
     match module {
         Module::Interface { header } => {
             fmt_interface_header(buf, header);

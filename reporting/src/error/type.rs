@@ -540,12 +540,18 @@ fn to_expr_report<'b>(
                     the_name_text,
                     alloc.text(" definition:"),
                 ]),
+                RequiredSymbol { .. } => alloc.concat([
+                    alloc.text("type annotation of "),
+                    the_name_text,
+                    alloc.text(" required symbol:"),
+                ]),
             };
 
             let it_is = match annotation_source {
                 TypedIfBranch { index, .. } => format!("The {} branch is", index.ordinal()),
                 TypedWhenBranch { index, .. } => format!("The {} branch is", index.ordinal()),
                 TypedBody { .. } => "The body is".into(),
+                RequiredSymbol { .. } => "The provided type is".into(),
             };
 
             let expectation_context = ExpectationContext::Annotation {

@@ -6,7 +6,7 @@ app "deriv"
 # based on: https://github.com/koka-lang/koka/blob/master/test/bench/haskell/deriv.hs
 IO a : Task.Task a []
 
-main : IO {}
+main : Task.Task {} []
 main =
     Task.after
         Task.getInt

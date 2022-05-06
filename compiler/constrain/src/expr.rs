@@ -1300,7 +1300,7 @@ pub fn constrain_decls(
     constraint
 }
 
-fn constrain_def_pattern(
+pub fn constrain_def_pattern(
     constraints: &mut Constraints,
     env: &Env,
     loc_pattern: &Loc<Pattern>,
@@ -1706,7 +1706,7 @@ fn constrain_def(
     }
 }
 
-fn constrain_def_make_constraint(
+pub fn constrain_def_make_constraint(
     constraints: &mut Constraints,
     new_rigid_variables: Vec<Variable>,
     new_infer_variables: Vec<Variable>,
