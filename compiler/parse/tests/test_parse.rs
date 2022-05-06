@@ -161,6 +161,7 @@ mod test_parse {
         pass/equals_with_spaces.expr,
         pass/equals.expr,
         pass/expect.expr,
+        pass/record_type_with_function.expr,
         pass/float_with_underscores.expr,
         pass/full_app_header_trailing_commas.header,
         pass/full_app_header.header,
