@@ -633,6 +633,9 @@ impl<'a> Context<'a> {
             None => unreachable!(),
         };
 
+        let borrows = [FUNCTION, CLOSURE_DATA];
+        let after_arguments = &arguments[op.function_index()..];
+
         match *op {
             ListMap { xs }
             | ListKeepIf { xs }
@@ -643,8 +646,7 @@ impl<'a> Context<'a> {
             | ListFindUnsafe { xs } => {
                 let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
 
-                let borrows = [FUNCTION, CLOSURE_DATA];
-                let b = self.add_dec_after_lowlevel(&arguments[1..], &borrows, b, b_live_vars);
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
                 let b = handle_ownership_post!(ownership1, xs, b);
 
@@ -658,9 +660,7 @@ impl<'a> Context<'a> {
                 let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
                 let ownership2 = DataFunction::new(&self.vars, ys, function_ps[1]);
 
-                let borrows = [FUNCTION, CLOSURE_DATA];
-
-                let b = self.add_dec_after_lowlevel(&arguments[2..], &borrows, b, b_live_vars);
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
                 let b = handle_ownership_post!(ownership1, xs, b);
                 let b = handle_ownership_post!(ownership2, ys, b);
@@ -677,8 +677,7 @@ impl<'a> Context<'a> {
                 let ownership2 = DataFunction::new(&self.vars, ys, function_ps[1]);
                 let ownership3 = DataFunction::new(&self.vars, zs, function_ps[2]);
 
-                let borrows = [FUNCTION, CLOSURE_DATA];
-                let b = self.add_dec_after_lowlevel(&arguments[3..], &borrows, b, b_live_vars);
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
                 let b = handle_ownership_post!(ownership1, xs, b);
                 let b = handle_ownership_post!(ownership2, ys, b);
@@ -698,9 +697,7 @@ impl<'a> Context<'a> {
                 let ownership3 = DataFunction::new(&self.vars, zs, function_ps[2]);
                 let ownership4 = DataFunction::new(&self.vars, ws, function_ps[3]);
 
-                let borrows = [FUNCTION, CLOSURE_DATA];
-
-                let b = self.add_dec_after_lowlevel(&arguments[4..], &borrows, b, b_live_vars);
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
                 let b = handle_ownership_post!(ownership1, xs, b);
                 let b = handle_ownership_post!(ownership2, ys, b);
@@ -718,8 +715,7 @@ impl<'a> Context<'a> {
             ListMapWithIndex { xs } => {
                 let ownership1 = DataFunction::new(&self.vars, xs, function_ps[1]);
 
-                let borrows = [FUNCTION, CLOSURE_DATA];
-                let b = self.add_dec_after_lowlevel(&arguments[1..], &borrows, b, b_live_vars);
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
                 let b = handle_ownership_post!(ownership1, xs, b);
 
@@ -737,8 +733,7 @@ impl<'a> Context<'a> {
                 // we also don't check that both arguments have the same ownership characteristics
                 let ownership1 = DataFunction::new(&self.vars, xs, function_ps[0]);
 
-                let borrows = [FUNCTION, CLOSURE_DATA];
-                let b = self.add_dec_after_lowlevel(&arguments[1..], &borrows, b, b_live_vars);
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
                 let b = handle_ownership_post!(ownership1, xs, b);
 
@@ -758,8 +753,7 @@ impl<'a> Context<'a> {
                 // borrow the default based on first argument of the folded function
                 // let ownership2 = DataFunction::new(&self.vars, state, function_ps[0]);
 
-                let borrows = [FUNCTION, CLOSURE_DATA];
-                let b = self.add_dec_after_lowlevel(&arguments[2..], &borrows, b, b_live_vars);
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
 
                 let b = handle_ownership_post!(ownership1, xs, b);
                 // let b = handle_ownership_post!(ownership2, state, b);
