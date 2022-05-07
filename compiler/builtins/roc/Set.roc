@@ -16,10 +16,17 @@ interface Set
         ]
     imports [ List, Bool.{ Bool }, Dict.{ values } ]
 
+## An empty set.
 empty : Set k
 single : k -> Set k
+
+## Make sure never to insert a *NaN* to a [Set]! Because *NaN* is defined to be
+## unequal to *NaN*, adding a *NaN* results in an entry that can never be
+## retrieved or removed from the [Set].
 insert : Set k, k -> Set k
 len : Set k -> Nat
+
+## Drops the given element from the set.
 remove : Set k, k -> Set k
 contains : Set k, k -> Bool
 

@@ -10,7 +10,7 @@ use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::DocEntry::DocDef;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
-use roc_load::{LoadedModule, LoadingProblem};
+use roc_load::{LoadedModule, LoadingProblem, Threading};
 use roc_module::symbol::{IdentIdsByModule, Interns, ModuleId};
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::state::State;
@@ -435,6 +435,7 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
             Default::default(),
             roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
             roc_reporting::report::RenderTarget::ColorTerminal,
+            Threading::Multi,
         ) {
             Ok(loaded) => modules.push(loaded),
             Err(LoadingProblem::FormattedReport(report)) => {

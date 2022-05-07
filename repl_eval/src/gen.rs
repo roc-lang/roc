@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use roc_load::Threading;
 use roc_reporting::report::Palette;
 use std::path::{Path, PathBuf};
 
@@ -61,6 +62,7 @@ pub fn compile_to_mono<'a>(
         exposed_types,
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
+        Threading::Single,
     );
 
     let mut loaded = match loaded {

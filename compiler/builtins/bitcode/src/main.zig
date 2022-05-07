@@ -106,6 +106,9 @@ comptime {
             num.exportToIntCheckingMax(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max.");
             num.exportToIntCheckingMaxAndMin(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max_and_min.");
         }
+
+        num.exportRoundF32(FROM, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
+        num.exportRoundF64(FROM, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
     }
 
     inline for (FLOATS) |T| {
@@ -114,7 +117,6 @@ comptime {
         num.exportAtan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".atan.");
 
         num.exportIsFinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_finite.");
-        num.exportRound(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round.");
     }
 }
 

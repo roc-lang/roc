@@ -1,15 +1,15 @@
+use super::RefCount;
+use crate::helpers::from_wasmer_memory::FromWasmerMemory;
+use roc_collections::all::MutSet;
+use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
+use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
+use roc_load::Threading;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use wasmer::{Memory, WasmPtr};
-
-use super::RefCount;
-use crate::helpers::from_wasmer_memory::FromWasmerMemory;
-use roc_collections::all::MutSet;
-use roc_gen_wasm::wasm32_result::Wasm32Result;
-use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
 
 // Should manually match build.rs
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
@@ -91,6 +91,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         Default::default(),
         roc_target::TargetInfo::default_wasm32(),
         roc_reporting::report::RenderTarget::ColorTerminal,
+        Threading::Single,
     );
 
     let loaded = loaded.expect("failed to load module");

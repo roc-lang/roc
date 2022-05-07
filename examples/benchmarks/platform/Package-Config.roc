@@ -1,5 +1,5 @@
 platform "benchmarks"
-    requires {} { main : Effect {} }
+    requires {} { main : Task {} [] }
     exposes []
     packages {}
     imports [ Task.{ Task } ]

@@ -1,3 +1,5 @@
+pub use roc_load_internal::file::Threading;
+
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_constrain::module::ExposedByModule;
@@ -12,6 +14,7 @@ pub use roc_load_internal::file::{
     LoadResult, LoadStart, LoadedModule, LoadingProblem, MonomorphizedModule, Phase,
 };
 
+#[allow(clippy::too_many_arguments)]
 fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
@@ -20,6 +23,7 @@ fn load<'a>(
     goal_phase: Phase,
     target_info: TargetInfo,
     render: RenderTarget,
+    threading: Threading,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let cached_subs = read_cached_subs();
 
@@ -32,6 +36,7 @@ fn load<'a>(
         target_info,
         cached_subs,
         render,
+        threading,
     )
 }
 
@@ -59,6 +64,7 @@ pub fn load_single_threaded<'a>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn load_and_monomorphize_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -67,6 +73,7 @@ pub fn load_and_monomorphize_from_str<'a>(
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
+    threading: Threading,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
@@ -80,6 +87,7 @@ pub fn load_and_monomorphize_from_str<'a>(
         Phase::MakeSpecializations,
         target_info,
         render,
+        threading,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -93,6 +101,7 @@ pub fn load_and_monomorphize<'a>(
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
+    threading: Threading,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
@@ -106,6 +115,7 @@ pub fn load_and_monomorphize<'a>(
         Phase::MakeSpecializations,
         target_info,
         render,
+        threading,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -119,6 +129,7 @@ pub fn load_and_typecheck<'a>(
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
+    threading: Threading,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
@@ -132,6 +143,7 @@ pub fn load_and_typecheck<'a>(
         Phase::SolveTypes,
         target_info,
         render,
+        threading,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),

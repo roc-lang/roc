@@ -602,6 +602,7 @@ static LLVM_SIN: IntrinsicName = float_intrinsic!("llvm.sin");
 static LLVM_COS: IntrinsicName = float_intrinsic!("llvm.cos");
 static LLVM_CEILING: IntrinsicName = float_intrinsic!("llvm.ceil");
 static LLVM_FLOOR: IntrinsicName = float_intrinsic!("llvm.floor");
+static LLVM_ROUND: IntrinsicName = float_intrinsic!("llvm.round");
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
@@ -7403,20 +7404,67 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
                 }
             }
         }
-        NumCeiling => env.builder.build_cast(
-            InstructionOpcode::FPToSI,
-            env.call_intrinsic(&LLVM_CEILING[float_width], &[arg.into()]),
-            env.context.i64_type(),
-            "num_ceiling",
-        ),
-        NumFloor => env.builder.build_cast(
-            InstructionOpcode::FPToSI,
-            env.call_intrinsic(&LLVM_FLOOR[float_width], &[arg.into()]),
-            env.context.i64_type(),
-            "num_floor",
-        ),
+        NumCeiling => {
+            let (return_signed, return_type) = match layout {
+                Layout::Builtin(Builtin::Int(int_width)) => (
+                    int_width.is_signed(),
+                    convert::int_type_from_int_width(env, *int_width),
+                ),
+                _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
+            };
+            let opcode = if return_signed {
+                InstructionOpcode::FPToSI
+            } else {
+                InstructionOpcode::FPToUI
+            };
+            env.builder.build_cast(
+                opcode,
+                env.call_intrinsic(&LLVM_CEILING[float_width], &[arg.into()]),
+                return_type,
+                "num_ceiling",
+            )
+        }
+        NumFloor => {
+            let (return_signed, return_type) = match layout {
+                Layout::Builtin(Builtin::Int(int_width)) => (
+                    int_width.is_signed(),
+                    convert::int_type_from_int_width(env, *int_width),
+                ),
+                _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
+            };
+            let opcode = if return_signed {
+                InstructionOpcode::FPToSI
+            } else {
+                InstructionOpcode::FPToUI
+            };
+            env.builder.build_cast(
+                opcode,
+                env.call_intrinsic(&LLVM_FLOOR[float_width], &[arg.into()]),
+                return_type,
+                "num_floor",
+            )
+        }
+        NumRound => {
+            let (return_signed, return_type) = match layout {
+                Layout::Builtin(Builtin::Int(int_width)) => (
+                    int_width.is_signed(),
+                    convert::int_type_from_int_width(env, *int_width),
+                ),
+                _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
+            };
+            let opcode = if return_signed {
+                InstructionOpcode::FPToSI
+            } else {
+                InstructionOpcode::FPToUI
+            };
+            env.builder.build_cast(
+                opcode,
+                env.call_intrinsic(&LLVM_ROUND[float_width], &[arg.into()]),
+                return_type,
+                "num_round",
+            )
+        }
         NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_FINITE[float_width]),
-        NumRound => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND[float_width]),
 
         // trigonometry
         NumSin => env.call_intrinsic(&LLVM_SIN[float_width], &[arg.into()]),

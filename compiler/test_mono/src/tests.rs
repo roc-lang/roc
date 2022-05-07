@@ -16,9 +16,9 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 use test_mono_macros::*;
 
 use roc_collections::all::MutMap;
+use roc_load::Threading;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
-
 use roc_mono::ir::ProcLayout;
 
 const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
@@ -99,6 +99,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         Default::default(),
         TARGET_INFO,
         roc_reporting::report::RenderTarget::Generic,
+        Threading::Single,
     );
 
     let mut loaded = match loaded {

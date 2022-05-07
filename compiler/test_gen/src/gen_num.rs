@@ -3270,3 +3270,51 @@ fn dec_float_suffix() {
         i128
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn ceiling_to_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            n : U32
+            n = Num.ceiling 124.5
+            n
+            "#
+        ),
+        125,
+        u32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn floor_to_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            n : U32
+            n = Num.floor 124.5
+            n
+            "#
+        ),
+        124,
+        u32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn round_to_u32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            n : U32
+            n = Num.round 124.49
+            n
+            "#
+        ),
+        124,
+        u32
+    );
+}

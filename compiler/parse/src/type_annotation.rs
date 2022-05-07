@@ -475,6 +475,8 @@ fn expression<'a>(
                     space0_before_e(term(min_indent), min_indent, EType::TIndentStart)
                         .parse(arena, state)?;
 
+                let region = Region::span_across(&first.region, &return_type.region);
+
                 // prepare arguments
                 let mut arguments = Vec::with_capacity_in(rest.len() + 1, arena);
                 arguments.push(first);
@@ -482,7 +484,7 @@ fn expression<'a>(
                 let output = arena.alloc(arguments);
 
                 let result = Loc {
-                    region: return_type.region,
+                    region,
                     value: TypeAnnotation::Function(output, arena.alloc(return_type)),
                 };
                 let progress = p1.or(p2).or(p3);

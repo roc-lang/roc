@@ -129,8 +129,14 @@ impl ReferenceMatrix {
         TopologicalSort::Groups { groups }
     }
 
-    /// Get the strongly-connected components of the set of input nodes.
-    pub fn strongly_connected_components(&self, nodes: &[u32]) -> Sccs {
+    /// Get the strongly-connected components all nodes in the matrix
+    pub fn strongly_connected_components_all(&self) -> Sccs {
+        let bitvec = BitVec::repeat(true, self.length);
+        self.strongly_connected_components_subset(&bitvec)
+    }
+
+    /// Get the strongly-connected components of a set of input nodes.
+    pub fn strongly_connected_components_subset(&self, nodes: &BitSlice) -> Sccs {
         let mut params = Params::new(self.length, nodes);
 
         'outer: loop {
@@ -176,15 +182,15 @@ struct Params {
     p: Vec<u32>,
     s: Vec<u32>,
     scc: Sccs,
-    scca: Vec<u32>,
+    scca: BitVec,
 }
 
 impl Params {
-    fn new(length: usize, group: &[u32]) -> Self {
+    fn new(length: usize, group: &BitSlice) -> Self {
         let mut preorders = vec![Preorder::Removed; length];
 
-        for value in group {
-            preorders[*value as usize] = Preorder::Empty;
+        for index in group.iter_ones() {
+            preorders[index] = Preorder::Empty;
         }
 
         Self {
@@ -196,7 +202,7 @@ impl Params {
                 matrix: ReferenceMatrix::new(length),
                 components: 0,
             },
-            scca: Vec::new(),
+            scca: BitVec::repeat(false, length),
         }
     }
 }
@@ -210,7 +216,7 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
     params.p.push(v as u32);
 
     for w in bitvec[v * length..][..length].iter_ones() {
-        if !params.scca.contains(&(w as u32)) {
+        if !params.scca[w] {
             match params.preorders[w] {
                 Preorder::Filled(pw) => loop {
                     let index = *params.p.last().unwrap();
@@ -241,7 +247,7 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
                 .scc
                 .matrix
                 .set_row_col(params.scc.components, node as usize, true);
-            params.scca.push(node);
+            params.scca.set(node as usize, true);
             params.preorders[node as usize] = Preorder::Removed;
             if node as usize == v {
                 break;

@@ -5,6 +5,7 @@ use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
+use roc_load::Threading;
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
@@ -59,6 +60,7 @@ fn create_llvm_module<'a>(
         Default::default(),
         target_info,
         RenderTarget::ColorTerminal,
+        Threading::Multi,
     );
 
     let mut loaded = match loaded {

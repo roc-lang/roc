@@ -54,7 +54,7 @@ pub struct Annotation {
 pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
     def_ordering: DefOrdering,
-
+    pub(crate) abilities_in_scope: Vec<Symbol>,
     aliases: VecMap<Symbol, Alias>,
 }
 
@@ -192,17 +192,12 @@ fn sort_type_defs_before_introduction(
     }
 
     // find the strongly connected components and their relations
-    let nodes: Vec<_> = (0..capacity as u32).collect();
-
-    let mut output = Vec::with_capacity(capacity);
-
-    for group in matrix.strongly_connected_components(&nodes).groups() {
-        for index in group.iter_ones() {
-            output.push(symbols[index])
-        }
-    }
-
-    output
+    matrix
+        .strongly_connected_components_all()
+        .groups()
+        .flat_map(|group| group.iter_ones())
+        .map(|index| symbols[index])
+        .collect()
 }
 
 #[inline(always)]
@@ -523,6 +518,7 @@ pub(crate) fn canonicalize_defs<'a>(
         CanDefs {
             defs,
             def_ordering,
+            abilities_in_scope,
             // The result needs a thread-safe `SendMap`
             aliases,
         },
@@ -766,7 +762,10 @@ pub(crate) fn sort_can_defs(
         mut defs,
         def_ordering,
         aliases,
+        abilities_in_scope,
     } = defs;
+
+    output.abilities_in_scope = abilities_in_scope;
 
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
@@ -786,14 +785,10 @@ pub(crate) fn sort_can_defs(
         };
     }
 
-    let nodes: Vec<_> = (0..defs.len() as u32).collect();
-
     // We first perform SCC based on any reference, both variable usage and calls
     // considering both value definitions and function bodies. This will spot any
     // recursive relations between any 2 definitions.
-    let sccs = def_ordering
-        .references
-        .strongly_connected_components(&nodes);
+    let sccs = def_ordering.references.strongly_connected_components_all();
 
     let mut declarations = Vec::new();
 
@@ -834,10 +829,9 @@ pub(crate) fn sort_can_defs(
             // boom = \{} -> boom {}
             //
             // In general we cannot spot faulty recursion (halting problem) so this is our best attempt
-            let nodes: Vec<_> = group.iter_ones().map(|v| v as u32).collect();
             let direct_sccs = def_ordering
                 .direct_references
-                .strongly_connected_components(&nodes);
+                .strongly_connected_components_subset(group);
 
             let declaration = if direct_sccs.groups().count() == 1 {
                 // all defs are part of the same direct cycle, that is invalid!
@@ -1567,8 +1561,7 @@ fn correct_mutual_recursive_type_alias<'a>(
 
     let mut solved_aliases = bitvec::vec::BitVec::<usize>::repeat(false, capacity);
 
-    let group: Vec<_> = (0u32..capacity as u32).collect();
-    let sccs = matrix.strongly_connected_components(&group);
+    let sccs = matrix.strongly_connected_components_all();
 
     // scratchpad to store aliases that are modified in the current iteration.
     // Only used when there is are more than one alias in a group. See below why
