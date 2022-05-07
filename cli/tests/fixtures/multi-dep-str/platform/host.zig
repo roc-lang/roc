@@ -23,7 +23,7 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed() RocStr;
+extern fn roc__mainForHost_1_exposed_generic(*RocStr) void;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -76,7 +76,8 @@ pub export fn main() i32 {
     std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
 
     // actually call roc to populate the callresult
-    const callresult = roc__mainForHost_1_exposed();
+    var callresult = RocStr.empty();
+    roc__mainForHost_1_exposed_generic(&callresult);
 
     // end time
     var ts2: std.os.timespec = undefined;

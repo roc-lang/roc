@@ -188,10 +188,22 @@ version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5237f00a8c86130a0cc317830e558b966dd7850d48a953d998c813f01a41b527"
 dependencies = [
- "funty",
- "radium",
+ "funty 1.2.0",
+ "radium 0.6.2",
  "tap",
- "wyz",
+ "wyz 0.4.0",
+]
+
+[[package]]
+name = "bitvec"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1489fcb93a5bb47da0462ca93ad252ad6af2145cce58d10d46a83931ba9f016b"
+dependencies = [
+ "funty 2.0.0",
+ "radium 0.7.0",
+ "tap",
+ "wyz 0.5.0",
 ]
 
 [[package]]
@@ -346,17 +358,26 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.0.0-beta.5"
+version = "3.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "feff3878564edb93745d58cf63e17b63f24142506e7a20c87a5521ed7bfb1d63"
+checksum = "47582c09be7c8b32c0ab3a6181825ababb713fde6fff20fc573a3870dd45c6a0"
 dependencies = [
  "atty",
  "bitflags",
+ "clap_lex",
  "indexmap",
- "os_str_bytes",
  "strsim 0.10.0",
  "termcolor",
- "textwrap 0.14.2",
+ "textwrap 0.15.0",
+]
+
+[[package]]
+name = "clap_lex"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a37c35f1112dad5e6e0b1adaff798507497a18fceeb30cceb3bae7d1427b9213"
+dependencies = [
+ "os_str_bytes",
 ]
 
 [[package]]
@@ -1014,6 +1035,12 @@ name = "funty"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1847abb9cb65d566acd5942e94aea9c8f547ad02c98e1649326fc0e8910b8b1e"
+
+[[package]]
+name = "funty"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 
 [[package]]
 name = "futures"
@@ -1950,12 +1977,9 @@ dependencies = [
 
 [[package]]
 name = "os_str_bytes"
-version = "4.2.0"
+version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "addaa943333a514159c80c97ff4a93306530d965d27e139188283cd13e06a799"
-dependencies = [
- "memchr",
-]
+checksum = "8e22443d1643a904602595ba1cd8f7d896afe56d26712531c5ff73a15b2fbf64"
 
 [[package]]
 name = "owned_ttf_parser"
@@ -1981,7 +2005,7 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c48e482b9a59ad6c2cdb06f7725e7bd33fe3525baaf4699fde7bfea6a5b77b1"
 dependencies = [
- "bitvec",
+ "bitvec 0.22.3",
  "packed_struct_codegen",
  "serde",
 ]
@@ -2332,6 +2356,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "643f8f41a8ebc4c5dc4515c82bb8abd397b527fc20fd681b7c011c2aee5d44fb"
 
 [[package]]
+name = "radium"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
+
+[[package]]
 name = "radix_trie"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2508,6 +2538,7 @@ version = "0.1.0"
 dependencies = [
  "morphic_lib",
  "roc_collections",
+ "roc_debug_flags",
  "roc_module",
  "roc_mono",
 ]
@@ -2529,6 +2560,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_target",
  "roc_types",
  "roc_unify",
@@ -2548,6 +2580,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_error_macros",
  "roc_gen_dev",
  "roc_gen_llvm",
  "roc_gen_wasm",
@@ -2566,6 +2599,7 @@ dependencies = [
  "serde_json",
  "target-lexicon",
  "tempfile",
+ "wasi_libc_sys",
 ]
 
 [[package]]
@@ -2585,17 +2619,17 @@ dependencies = [
 name = "roc_can"
 version = "0.1.0"
 dependencies = [
+ "bitvec 1.0.0",
  "bumpalo",
- "roc_builtins",
  "roc_collections",
  "roc_error_macros",
+ "roc_exhaustive",
  "roc_module",
  "roc_parse",
  "roc_problem",
  "roc_region",
  "roc_types",
  "static_assertions 1.1.0",
- "ven_graph",
 ]
 
 [[package]]
@@ -2603,7 +2637,7 @@ name = "roc_cli"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "clap 3.0.0-beta.5",
+ "clap 3.1.17",
  "const_format",
  "mimalloc",
  "roc_build",
@@ -2668,6 +2702,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_debug_flags"
+version = "0.1.0"
+
+[[package]]
 name = "roc_docs"
 version = "0.1.0"
 dependencies = [
@@ -2684,6 +2722,7 @@ dependencies = [
  "roc_module",
  "roc_parse",
  "roc_region",
+ "roc_reporting",
  "roc_target",
  "roc_types",
  "snafu",
@@ -2790,6 +2829,7 @@ dependencies = [
  "roc_alias_analysis",
  "roc_builtins",
  "roc_collections",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
  "roc_mono",
@@ -2823,9 +2863,6 @@ dependencies = [
 [[package]]
 name = "roc_ident"
 version = "0.1.0"
-dependencies = [
- "arrayvec 0.7.2",
-]
 
 [[package]]
 name = "roc_linker"
@@ -2833,7 +2870,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "bumpalo",
- "clap 3.0.0-beta.5",
+ "clap 3.1.17",
  "iced-x86",
  "memmap2 0.5.3",
  "object 0.26.2",
@@ -2855,6 +2892,7 @@ dependencies = [
  "roc_constrain",
  "roc_load_internal",
  "roc_module",
+ "roc_reporting",
  "roc_target",
  "roc_types",
 ]
@@ -2865,13 +2903,13 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "crossbeam",
- "morphic_lib",
  "num_cpus",
  "parking_lot 0.12.0",
  "roc_builtins",
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
  "roc_mono",
@@ -2890,7 +2928,6 @@ dependencies = [
 name = "roc_module"
 version = "0.1.0"
 dependencies = [
- "arrayvec 0.7.2",
  "bumpalo",
  "lazy_static",
  "roc_collections",
@@ -2907,10 +2944,10 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "hashbrown 0.11.2",
- "morphic_lib",
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_exhaustive",
  "roc_module",
@@ -3010,7 +3047,6 @@ dependencies = [
  "roc_collections",
  "roc_exhaustive",
  "roc_module",
- "roc_mono",
  "roc_parse",
  "roc_problem",
  "roc_region",
@@ -3027,6 +3063,9 @@ dependencies = [
  "bumpalo",
  "roc_can",
  "roc_collections",
+ "roc_debug_flags",
+ "roc_error_macros",
+ "roc_exhaustive",
  "roc_module",
  "roc_region",
  "roc_types",
@@ -3053,6 +3092,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "roc_collections",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
  "roc_region",
@@ -3066,6 +3106,8 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "roc_collections",
+ "roc_debug_flags",
+ "roc_error_macros",
  "roc_module",
  "roc_types",
 ]
@@ -3455,9 +3497,9 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "target-lexicon"
-version = "0.12.2"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9bffcddbc2458fa3e6058414599e3c838a022abae82e5c67b4f7f80298d5bff"
+checksum = "d7fa7e55043acb85fca6b3c01485a2eeb6b69c5d21002e273c79e465f43b7ac1"
 
 [[package]]
 name = "tempfile"
@@ -3493,9 +3535,9 @@ dependencies = [
 
 [[package]]
 name = "textwrap"
-version = "0.14.2"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0066c8d12af8b5acd21e00547c3797fde4e8677254a7ee429176ccebbe93dd80"
+checksum = "b1141d4d61095b28419e22cb0bbf02755f5e54e0526f97f1e3d1d160e60885fb"
 
 [[package]]
 name = "thiserror"
@@ -3684,6 +3726,10 @@ name = "wasi"
 version = "0.10.2+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd6fbd9a79829dd1ad0cc20627bf1ed606756a7f77edff7b66b7064f9cb327c6"
+
+[[package]]
+name = "wasi_libc_sys"
+version = "0.1.0"
 
 [[package]]
 name = "wasm-bindgen"
@@ -4171,6 +4217,15 @@ name = "wyz"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "129e027ad65ce1453680623c3fb5163cbf7107bfe1aa32257e7d0e63f9ced188"
+dependencies = [
+ "tap",
+]
+
+[[package]]
+name = "wyz"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30b31594f29d27036c383b53b59ed3476874d518f0efb151b27a4c275141390e"
 dependencies = [
  "tap",
 ]
