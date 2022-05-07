@@ -2490,14 +2490,14 @@ fn resolve_abilities_in_specialized_body<'a>(
     use roc_can::traverse::{walk_expr, PatternVisitor, Visitor};
     use roc_unify::unify::unify;
 
-    struct Specializer<'a> {
+    struct Resolver<'a> {
         subs: &'a mut Subs,
         procs: &'a Procs<'a>,
         abilities_store: &'a AbilitiesStore,
         seen_defs: MutSet<Symbol>,
     }
-    impl PatternVisitor for Specializer<'_> {}
-    impl Visitor for Specializer<'_> {
+    impl PatternVisitor for Resolver<'_> {}
+    impl Visitor for Resolver<'_> {
         fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
             match expr {
                 Expr::Closure(..) => {
@@ -2562,7 +2562,7 @@ fn resolve_abilities_in_specialized_body<'a>(
         }
     }
 
-    let mut specializer = Specializer {
+    let mut specializer = Resolver {
         subs: env.subs,
         procs,
         abilities_store: env.abilities_store,
