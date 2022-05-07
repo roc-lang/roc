@@ -7,7 +7,7 @@ use roc_types::{subs::Variable, types::Type};
 pub struct MemberVariables {
     pub able_vars: Vec<Variable>,
     /// This includes - named rigid vars, lambda sets, wildcards. See
-    /// [`crate::annotation::IntroducedVariables::collect_rigid`].
+    /// [`IntroducedVariables::collect_rigid`](crate::annotation::IntroducedVariables::collect_rigid).
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
 }
@@ -34,7 +34,7 @@ pub struct MemberSpecialization {
 /// Stores information about what abilities exist in a scope, what it means to implement an
 /// ability, and what types implement them.
 // TODO(abilities): this should probably go on the Scope, I don't put it there for now because we
-// are only dealing with inter-module abilities for now.
+// are only dealing with intra-module abilities for now.
 #[derive(Default, Debug, Clone)]
 pub struct AbilitiesStore {
     /// Maps an ability to the members defining it.
