@@ -22,7 +22,14 @@ pub struct CodeGenTiming {
 // TODO: If modules besides this one start needing to know which version of
 // llvm we're using, consider moving me somewhere else.
 #[cfg(feature = "llvm")]
-const LLVM_VERSION: &str = "12";
+const LLVM_VERSION: &str = "13";
+
+fn zig_executable() -> String {
+    match std::env::var("ROC_ZIG") {
+        Ok(path) => path,
+        Err(_) => "zig".into(),
+    }
+}
 
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Problems {
     report_problems_help(
@@ -357,50 +364,28 @@ pub fn gen_from_mono_module_llvm(
 
         use target_lexicon::Architecture;
         match target.architecture {
-            Architecture::X86_64 | Architecture::X86_32(_) | Architecture::Aarch64(_) => {
-                // assemble the .ll into a .bc
-                let _ = Command::new("llvm-as")
-                    .args(&[
-                        app_ll_dbg_file.to_str().unwrap(),
-                        "-o",
-                        app_bc_file.to_str().unwrap(),
-                    ])
-                    .output()
-                    .unwrap();
-
-                let llc_args = &[
-                    "-relocation-model=pic",
-                    "-filetype=obj",
-                    app_bc_file.to_str().unwrap(),
-                    "-o",
-                    app_o_file.to_str().unwrap(),
-                ];
-
+            Architecture::X86_64
+            | Architecture::X86_32(_)
+            | Architecture::Aarch64(_)
+            | Architecture::Wasm32 => {
                 // write the .o file. Note that this builds the .o for the local machine,
                 // and ignores the `target_machine` entirely.
-                //
-                // different systems name this executable differently, so we shotgun for
-                // the most common ones and then give up.
-                let _: Result<std::process::Output, std::io::Error> =
-                    Command::new(format!("llc-{}", LLVM_VERSION))
-                        .args(llc_args)
-                        .output()
-                        .or_else(|_| Command::new("llc").args(llc_args).output())
-                        .map_err(|_| {
-                            panic!("We couldn't find llc-{} on your machine!", LLVM_VERSION);
-                        });
-            }
+                let zig = zig_executable();
 
-            Architecture::Wasm32 => {
-                // assemble the .ll into a .bc
-                let _ = Command::new("llvm-as")
-                    .args(&[
-                        app_ll_dbg_file.to_str().unwrap(),
-                        "-o",
-                        app_o_file.to_str().unwrap(),
-                    ])
-                    .output()
-                    .unwrap();
+                // TODO update debugir to LLVM 13
+                eprintln!("debugir is not updated to LLVM 13 yet, skipping debug info for now");
+                let input = app_ll_file.to_str().unwrap();
+                // let input =  app_ll_dbg_file.to_str().unwrap();
+
+                let mut ll_to_bc = Command::new(zig);
+
+                ll_to_bc.args(&[
+                    "build-lib",
+                    input,
+                    &format!("-femit-bin={}", app_o_file.to_str().unwrap(),),
+                ]);
+
+                let _ = ll_to_bc.output().unwrap();
             }
             _ => unreachable!(),
         }
