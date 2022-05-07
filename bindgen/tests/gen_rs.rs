@@ -6,6 +6,7 @@ extern crate indoc;
 
 use roc_bindgen::bindgen_rs;
 use roc_bindgen::load::load_types;
+use roc_load::Threading;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -36,7 +37,7 @@ fn generate_bindings(decl_src: &str) -> String {
         let mut file = File::create(file_path).unwrap();
         writeln!(file, "{}", &src).unwrap();
 
-        let result = load_types(full_file_path, dir.path());
+        let result = load_types(full_file_path, dir.path(), Threading::Single);
 
         dir.close().expect("Unable to close tempdir");
 

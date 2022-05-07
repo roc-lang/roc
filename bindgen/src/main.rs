@@ -1,6 +1,7 @@
 use clap::Parser;
 use roc_bindgen::bindgen_rs;
 use roc_bindgen::load::load_types;
+use roc_load::Threading;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{ErrorKind, Write};
@@ -55,7 +56,7 @@ pub fn main() {
         }
     };
 
-    match load_types(input_path.clone(), &cwd) {
+    match load_types(input_path.clone(), &cwd, Threading::Multi) {
         Ok(types) => {
             let mut buf;
 

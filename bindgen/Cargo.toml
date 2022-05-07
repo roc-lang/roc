@@ -18,7 +18,6 @@ roc_std = { path = "../roc_std" }
 roc_can = { path = "../compiler/can" }
 roc_mono = { path = "../compiler/mono" }
 roc_load = { path = "../compiler/load" }
-roc_load_internal = { path = "../compiler/load_internal" }
 roc_reporting = { path = "../reporting" }
 roc_types = { path = "../compiler/types" }
 roc_builtins = { path = "../compiler/builtins" }

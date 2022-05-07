@@ -5,15 +5,18 @@ use roc_can::{
     def::{Declaration, Def},
     pattern::Pattern,
 };
-use roc_load::LoadedModule;
-use roc_load_internal::file::Threading;
+use roc_load::{LoadedModule, Threading};
 use roc_mono::layout::LayoutCache;
 use roc_reporting::report::RenderTarget;
 use std::io;
 use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
 
-pub fn load_types(full_file_path: PathBuf, dir: &Path) -> Result<Types, io::Error> {
+pub fn load_types(
+    full_file_path: PathBuf,
+    dir: &Path,
+    threading: Threading,
+) -> Result<Types, io::Error> {
     // TODO: generate both 32-bit and 64-bit #[cfg] macros if structs are different
     // depending on 32-bit vs 64-bit targets.
     let target_info = (&Triple::host()).into();
@@ -35,7 +38,7 @@ pub fn load_types(full_file_path: PathBuf, dir: &Path) -> Result<Types, io::Erro
         subs_by_module,
         target_info,
         RenderTarget::Generic,
-        Threading::Single,
+        threading,
     )
     .expect("Problem loading platform module");
 
