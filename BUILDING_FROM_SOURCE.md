@@ -126,7 +126,7 @@ sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
 ### Zig
-**version: 0.8.0**
+**version: 0.9.1**
 
 For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
 
@@ -138,14 +138,14 @@ If you prefer a package manager, you can try the following:
 If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
 
 ### LLVM
-**version: 12.0.x**
+**version: 13.0.x**
 
-For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
-`$(brew --prefix llvm@12)/bin` to your `PATH`. You can confirm this worked by
-running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
+For macOS, you can install LLVM 13 using `brew install llvm@13` and then adding
+`$(brew --prefix llvm@13)/bin` to your `PATH`. You can confirm this worked by
+running `llc --version` - it should mention "LLVM version 13.0.0" at the top.
 You may also need to manually specify a prefix env var like so:
 ```
-export LLVM_SYS_120_PREFIX=/usr/local/opt/llvm@12
+export LLVM_SYS_130_PREFIX=/usr/local/opt/llvm@13
 ```
 
 For Ubuntu and Debian:
@@ -153,18 +153,18 @@ For Ubuntu and Debian:
 sudo apt -y install lsb-release software-properties-common gnupg
 wget https://apt.llvm.org/llvm.sh
 chmod +x llvm.sh
-./llvm.sh 12
+./llvm.sh 13
 ```
 
 If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
-By default, the script installs them as `clang-12` and `llvm-as-12`,
+By default, the script installs them as `clang-13` and `llvm-as-13`,
 respectively. You can address this with symlinks like so:
 
 ```
-sudo ln -s /usr/bin/clang-12 /usr/bin/clang
+sudo ln -s /usr/bin/clang-13 /usr/bin/clang
 ```
 ```
-sudo ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
+sudo ln -s /usr/bin/llvm-as-13 /usr/bin/llvm-as
 ````
 
 There are also alternative installation options at http://releases.llvm.org/download.html
