@@ -15,6 +15,7 @@ use roc_debug_flags::{
     dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
     ROC_PRINT_IR_AFTER_SPECIALIZATION,
 };
+use roc_error_macros::internal_error;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -5867,68 +5868,49 @@ pub fn from_can<'a>(
                 };
 
             if let Pattern::Identifier(symbol) = mono_pattern {
-                let mut hole =
-                    env.arena
-                        .alloc(from_can(env, variable, cont.value, procs, layout_cache));
+                internal_error!("Identifier patterns should be handled in a higher code pass!")
+            }
 
-                for (symbol, variable, expr) in assignments {
-                    let stmt = with_hole(env, expr, variable, procs, layout_cache, symbol, hole);
+            // convert the continuation
+            let mut stmt = from_can(env, variable, cont.value, procs, layout_cache);
 
-                    hole = env.arena.alloc(stmt);
-                }
+            // layer on any default record fields
+            for (symbol, variable, expr) in assignments {
+                let specialization_symbol = procs
+                    .symbol_specializations
+                    .remove_single(symbol)
+                    // Can happen when the symbol was never used under this body, and hence has no
+                    // requested specialization.
+                    .unwrap_or(symbol);
 
+                let hole = env.arena.alloc(stmt);
+                stmt = with_hole(
+                    env,
+                    expr,
+                    variable,
+                    procs,
+                    layout_cache,
+                    specialization_symbol,
+                    hole,
+                );
+            }
+
+            if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
+                store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+            } else {
+                let outer_symbol = env.unique_symbol();
+                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
+
+                // convert the def body, store in outer_symbol
                 with_hole(
                     env,
                     def.loc_expr.value,
                     def.expr_var,
                     procs,
                     layout_cache,
-                    symbol,
-                    hole,
+                    outer_symbol,
+                    env.arena.alloc(stmt),
                 )
-            } else {
-                // convert the continuation
-                let mut stmt = from_can(env, variable, cont.value, procs, layout_cache);
-
-                // layer on any default record fields
-                for (symbol, variable, expr) in assignments {
-                    let specialization_symbol = procs
-                        .symbol_specializations
-                        .remove_single(symbol)
-                        // Can happen when the symbol was never used under this body, and hence has no
-                        // requested specialization.
-                        .unwrap_or(symbol);
-
-                    let hole = env.arena.alloc(stmt);
-                    stmt = with_hole(
-                        env,
-                        expr,
-                        variable,
-                        procs,
-                        layout_cache,
-                        specialization_symbol,
-                        hole,
-                    );
-                }
-
-                if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
-                    store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-                } else {
-                    let outer_symbol = env.unique_symbol();
-                    stmt =
-                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
-
-                    // convert the def body, store in outer_symbol
-                    with_hole(
-                        env,
-                        def.loc_expr.value,
-                        def.expr_var,
-                        procs,
-                        layout_cache,
-                        outer_symbol,
-                        env.arena.alloc(stmt),
-                    )
-                }
             }
         }
 
