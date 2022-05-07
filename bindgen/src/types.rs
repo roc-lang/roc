@@ -1,6 +1,8 @@
 use core::mem::align_of;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::VecMap;
 use roc_std::RocDec;
+use roc_target::TargetInfo;
 use ven_graph::topological_sort;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -226,13 +228,13 @@ impl RocType {
         }
     }
 
-    pub fn alignment(&self, types: &Types, ptr_alignment: usize) -> usize {
+    pub fn alignment(&self, types: &Types, target_info: TargetInfo) -> usize {
         match self {
             RocType::RocStr
             | RocType::RocList(_)
             | RocType::RocDict(_, _)
             | RocType::RocSet(_)
-            | RocType::RocBox(_) => ptr_alignment,
+            | RocType::RocBox(_) => target_info.ptr_alignment_bytes(),
             RocType::RocDec => align_of::<RocDec>(),
             RocType::Bool => align_of::<bool>(),
             RocType::TagUnion { tags, .. } => {
@@ -242,7 +244,7 @@ impl RocType {
 
                 for (_, payloads) in tags {
                     for id in payloads {
-                        align = align.max(types.get(*id).alignment(types, ptr_alignment));
+                        align = align.max(types.get(*id).alignment(types, target_info));
                     }
                 }
 
@@ -253,32 +255,33 @@ impl RocType {
                 // 0 tags is an empty union (so, alignment 0), 1-255 tags has a u8 tag (so, alignment 1), etc.
                 //
                 // Unlike a regular tag union, a recursive one also includes a pointer.
-                let mut align = ptr_alignment.max(align_for_tag_count(tags.len()));
+                let ptr_align = target_info.ptr_alignment_bytes();
+                let mut align = ptr_align.max(align_for_tag_count(tags.len()));
 
                 for (_, payloads) in tags {
                     for id in payloads {
-                        align = align.max(types.get(*id).alignment(types, ptr_alignment));
+                        align = align.max(types.get(*id).alignment(types, target_info));
                     }
                 }
 
                 align
             }
             RocType::Struct { fields, .. } => fields.iter().fold(0, |align, (_, id)| {
-                align.max(types.get(*id).alignment(types, ptr_alignment))
+                align.max(types.get(*id).alignment(types, target_info))
             }),
-            RocType::I8 => align_of::<i8>(),
-            RocType::U8 => align_of::<u8>(),
-            RocType::I16 => align_of::<i16>(),
-            RocType::U16 => align_of::<u16>(),
-            RocType::I32 => align_of::<i32>(),
-            RocType::U32 => align_of::<u32>(),
-            RocType::I64 => align_of::<i64>(),
-            RocType::U64 => align_of::<u64>(),
-            RocType::I128 => align_of::<i128>(),
-            RocType::U128 => align_of::<u128>(),
-            RocType::F32 => align_of::<f32>(),
-            RocType::F64 => align_of::<f64>(),
-            RocType::F128 => align_of::<u128>(),
+            RocType::I8 => IntWidth::I8.alignment_bytes(target_info) as usize,
+            RocType::U8 => IntWidth::U8.alignment_bytes(target_info) as usize,
+            RocType::I16 => IntWidth::I16.alignment_bytes(target_info) as usize,
+            RocType::U16 => IntWidth::U16.alignment_bytes(target_info) as usize,
+            RocType::I32 => IntWidth::I32.alignment_bytes(target_info) as usize,
+            RocType::U32 => IntWidth::U32.alignment_bytes(target_info) as usize,
+            RocType::I64 => IntWidth::I64.alignment_bytes(target_info) as usize,
+            RocType::U64 => IntWidth::U64.alignment_bytes(target_info) as usize,
+            RocType::I128 => IntWidth::I128.alignment_bytes(target_info) as usize,
+            RocType::U128 => IntWidth::U128.alignment_bytes(target_info) as usize,
+            RocType::F32 => FloatWidth::F32.alignment_bytes(target_info) as usize,
+            RocType::F64 => FloatWidth::F64.alignment_bytes(target_info) as usize,
+            RocType::F128 => FloatWidth::F128.alignment_bytes(target_info) as usize,
         }
     }
 }
