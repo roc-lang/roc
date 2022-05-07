@@ -17,8 +17,8 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, LambdaSet,
-    PatternCategory, Reason, TypeExtension,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, PatternCategory,
+    Reason, TypeExtension,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
 
@@ -215,30 +215,24 @@ impl Aliases {
         register(subs, rank, pools, content)
     }
 
-    fn instantiate_builtin_aliases(
+    fn instantiate_builtin_aliases_real_var(
         &mut self,
         subs: &mut Subs,
         rank: Rank,
         pools: &mut Pools,
         symbol: Symbol,
         alias_variables: AliasVariables,
-    ) -> Option<Variable> {
+    ) -> Option<(Variable, AliasKind)> {
         match symbol {
             Symbol::RESULT_RESULT => {
                 let var = Self::instantiate_result_result(subs, rank, pools, alias_variables);
 
-                Some(var)
+                Some((var, AliasKind::Structural))
             }
             Symbol::NUM_NUM | Symbol::NUM_INTEGER | Symbol::NUM_FLOATINGPOINT => {
                 // Num range := range | Integer range := range | FloatingPoint range := range
-                Self::build_num_opaque(
-                    subs,
-                    rank,
-                    pools,
-                    symbol,
-                    subs.variables[alias_variables.variables_start as usize],
-                )
-                .into()
+                let range_var = subs.variables[alias_variables.variables_start as usize];
+                Some((range_var, AliasKind::Opaque))
             }
             Symbol::NUM_INT => {
                 // Int range : Num (Integer range)
@@ -256,7 +250,7 @@ impl Aliases {
                 let num_content_var =
                     Self::build_num_opaque(subs, rank, pools, Symbol::NUM_NUM, integer_content_var);
 
-                Some(num_content_var)
+                Some((num_content_var, AliasKind::Structural))
             }
             Symbol::NUM_FLOAT => {
                 // Float range : Num (FloatingPoint range)
@@ -274,13 +268,13 @@ impl Aliases {
                 let num_content_var =
                     Self::build_num_opaque(subs, rank, pools, Symbol::NUM_NUM, fpoint_content_var);
 
-                Some(num_content_var)
+                Some((num_content_var, AliasKind::Structural))
             }
             _ => None,
         }
     }
 
-    fn instantiate(
+    fn instantiate_real_var(
         &mut self,
         subs: &mut Subs,
         rank: Rank,
@@ -288,15 +282,20 @@ impl Aliases {
         arena: &bumpalo::Bump,
         symbol: Symbol,
         alias_variables: AliasVariables,
-    ) -> Result<Variable, ()> {
+    ) -> Result<(Variable, AliasKind), ()> {
         // hardcoded instantiations for builtin aliases
-        if let Some(var) =
-            Self::instantiate_builtin_aliases(self, subs, rank, pools, symbol, alias_variables)
-        {
-            return Ok(var);
+        if let Some((var, kind)) = Self::instantiate_builtin_aliases_real_var(
+            self,
+            subs,
+            rank,
+            pools,
+            symbol,
+            alias_variables,
+        ) {
+            return Ok((var, kind));
         }
 
-        let (typ, delayed_variables, kind) =
+        let (typ, delayed_variables, &mut kind) =
             match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
                 None => return Err(()),
                 Some((_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),
@@ -344,60 +343,26 @@ impl Aliases {
             typ.substitute_variables(&substitutions);
         }
 
-        let alias_variable = match kind {
-            AliasKind::Structural => {
-                // We can replace structural aliases wholly with the type on the
-                // RHS of their definition.
-                let mut t = Type::EmptyRec;
+        let mut t = Type::EmptyRec;
 
-                std::mem::swap(typ, &mut t);
+        std::mem::swap(typ, &mut t);
 
-                // assumption: an alias does not (transitively) syntactically contain itself
-                // (if it did it would have to be a recursive tag union, which we should have fixed up
-                // during canonicalization)
-                let alias_variable = type_to_variable(subs, rank, pools, arena, self, &t);
+        // assumption: an alias does not (transitively) syntactically contain itself
+        // (if it did it would have to be a recursive tag union, which we should have fixed up
+        // during canonicalization)
+        let alias_variable = type_to_variable(subs, rank, pools, arena, self, &t);
 
-                {
-                    match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
-                        None => unreachable!(),
-                        Some((_, typ, _, _)) => {
-                            // swap typ back
-                            std::mem::swap(typ, &mut t);
-                        }
-                    }
+        {
+            match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
+                None => unreachable!(),
+                Some((_, typ, _, _)) => {
+                    // swap typ back
+                    std::mem::swap(typ, &mut t);
                 }
-
-                alias_variable
             }
+        }
 
-            AliasKind::Opaque => {
-                // For opaques, the instantiation must be to an opaque type rather than just what's
-                // on the RHS.
-                let lambda_set_variables = new_lambda_set_variables
-                    .iter()
-                    .copied()
-                    .map(Type::Variable)
-                    .map(LambdaSet)
-                    .collect();
-                let type_arguments = new_type_variables
-                    .iter()
-                    .copied()
-                    .map(Type::Variable)
-                    .collect();
-
-                let opaq = Type::Alias {
-                    symbol,
-                    kind: *kind,
-                    lambda_set_variables,
-                    type_arguments,
-                    actual: Box::new(typ.clone()),
-                };
-
-                type_to_variable(subs, rank, pools, arena, self, &opaq)
-            }
-        };
-
-        Ok(alias_variable)
+        Ok((alias_variable, kind))
     }
 }
 
@@ -1919,8 +1884,6 @@ fn type_to_variable<'a>(
                 type_arguments,
                 lambda_set_variables,
             }) => {
-                let kind = AliasKind::Structural;
-
                 let alias_variables = {
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
@@ -1944,13 +1907,17 @@ fn type_to_variable<'a>(
                     }
                 };
 
-                let instantiated =
-                    aliases.instantiate(subs, rank, pools, arena, *symbol, alias_variables);
+                let instantiated = aliases.instantiate_real_var(
+                    subs,
+                    rank,
+                    pools,
+                    arena,
+                    *symbol,
+                    alias_variables,
+                );
 
-                let alias_variable = match instantiated {
-                    Err(_) => unreachable!("Alias {:?} is not available", symbol),
-                    Ok(alias_variable) => alias_variable,
-                };
+                let (alias_variable, kind) = instantiated
+                    .unwrap_or_else(|_| unreachable!("Alias {:?} is not available", symbol));
 
                 let content = Content::Alias(*symbol, alias_variables, alias_variable, kind);
 
