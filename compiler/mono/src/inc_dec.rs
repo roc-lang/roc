@@ -602,9 +602,6 @@ impl<'a> Context<'a> {
             };
         }
 
-        const FUNCTION: bool = BORROWED;
-        const CLOSURE_DATA: bool = BORROWED;
-
         let function_layout = ProcLayout {
             arguments: passed_function.argument_layouts,
             result: passed_function.return_layout,
@@ -677,6 +674,11 @@ impl<'a> Context<'a> {
                 stmt
             }};
         }
+
+        // incrementing/consuming the closure (if needed) is done by the zig implementation.
+        // We don't want to touch the RC on the roc side, so treat these as borrowed.
+        const FUNCTION: bool = BORROWED;
+        const CLOSURE_DATA: bool = BORROWED;
 
         let borrows = [FUNCTION, CLOSURE_DATA];
         let after_arguments = &arguments[op.function_index()..];
