@@ -9,7 +9,7 @@ use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
-/// Data and Function ownership relation
+/// Data and Function ownership relation for higher-order lowlevels
 ///
 /// Normally, the borrowing algorithm figures out how to own/borrow data so that
 /// the borrows match up. But that fails for our higher-order lowlevels, because
@@ -18,13 +18,41 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 ///
 /// So, we must fix this up ourselves. This code is deliberately verbose to make
 /// it easier to understand without full context.
+///
+/// If we take `List.map list f` as an example, then there are two orders of freedom:
+///
+/// - `list` can be either owned or borrowed by `List.map`
+/// - `f` can require either owned or borrowed elements from `list`
+///
+/// Hence we get the four options below: the data (`list` in the example) is owned or borrowed by
+/// the higher-order function, and the function argument (`f`) either owns or borrows the elements.
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 enum DataFunction {
+    /// `list` is owned, and `f` expects owned values. That means that when we run the map, all
+    /// list elements will be consumed (because they are passed to `f`, which takes owned values)
+    /// Because we own the whole list, and must consume it, we need to `decref` the list.
+    /// `decref` just decrements the container, and will never recursively decrement elements
     DataOwnedFunctionOwns,
+    /// `list` is owned, and `f` expects borrowed values. After running `f` for each element, the
+    /// elements are not consumed, and neither is the list. We must consume it though, because we
+    /// own the `list`. Therefore we need to perform a `dec`
     DataOwnedFunctionBorrows,
+    /// `list` is borrowed, `f` borrows, so the trivial implementation is correct: just map `f`
+    /// over elements of `list`, and don't do anything else.
     DataBorrowedFunctionBorrows,
+    /// The trickiest case: we only borrow the `list`, but the mapped function `f` needs owned
+    /// values. There are two options
+    ///
+    /// - define some `fBorrow` that takes a borrowed value, `inc`'s it (similar to `.clone()` on
+    ///     an `Rc<T>` in rust) and then passes the (now owned) value to `f`, then rewrite the call
+    ///     to `List.map list fBorrow`
+    /// - `inc` the list (which recursively increments the elements), map `f` over the list,
+    ///     consuming one RC token on the elements, finally `decref` the list.
+    ///
+    /// For simplicity, we use the second option right now, but the first option is probably
+    /// preferable long-term.
     DataBorrowedFunctionOwns,
 }
 
