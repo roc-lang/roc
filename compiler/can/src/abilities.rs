@@ -1,4 +1,3 @@
-use crate::annotation::IntroducedVariables;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
@@ -7,6 +6,8 @@ use roc_types::{subs::Variable, types::Type};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberVariables {
     pub able_vars: Vec<Variable>,
+    /// This includes - named rigid vars, lambda sets, wildcards. See
+    /// [`crate::annotation::IntroducedVariables::collect_rigid`].
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
 }
@@ -20,7 +21,6 @@ pub struct AbilityMemberData {
     pub signature_var: Variable,
     pub signature: Type,
     pub variables: MemberVariables,
-    pub introduced_variables: IntroducedVariables,
     pub region: Region,
 }
 
@@ -63,19 +63,10 @@ impl AbilitiesStore {
     pub fn register_ability(
         &mut self,
         ability: Symbol,
-        members: Vec<(
-            Symbol,
-            Region,
-            Variable,
-            Type,
-            MemberVariables,
-            IntroducedVariables,
-        )>,
+        members: Vec<(Symbol, Region, Variable, Type, MemberVariables)>,
     ) {
         let mut members_vec = Vec::with_capacity(members.len());
-        for (member, region, signature_var, signature, variables, introduced_variables) in
-            members.into_iter()
-        {
+        for (member, region, signature_var, signature, variables) in members.into_iter() {
             members_vec.push(member);
             let old_member = self.ability_members.insert(
                 member,
@@ -85,7 +76,6 @@ impl AbilitiesStore {
                     signature,
                     region,
                     variables,
-                    introduced_variables,
                 },
             );
             debug_assert!(old_member.is_none(), "Replacing existing member definition");

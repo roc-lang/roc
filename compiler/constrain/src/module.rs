@@ -1,7 +1,4 @@
-use crate::expr::{
-    constrain_def_make_constraint, constrain_def_pattern, instantiate_rigids, Env,
-    InstantiateRigids,
-};
+use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 use roc_builtins::std::StdLib;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
@@ -189,25 +186,21 @@ pub fn frontload_ability_constraints(
 
         def_pattern_state.vars.push(member_data.signature_var);
 
-        let mut ftv = env.rigids;
+        let vars = &member_data.variables;
+        let new_rigid_variables = vars
+            .rigid_vars
+            .iter()
+            .chain(vars.able_vars.iter())
+            .copied()
+            .collect();
 
-        let InstantiateRigids {
-            signature,
-            new_rigid_variables,
-            new_infer_variables,
-        } = instantiate_rigids(
-            &member_data.signature,
-            &member_data.introduced_variables,
-            &pattern,
-            &mut ftv,
-            &mut def_pattern_state.headers,
-        );
+        let new_infer_variables = vars.flex_vars.clone();
 
         def_pattern_state
             .constraints
             .push(constraints.equal_types_var(
                 member_data.signature_var,
-                Expected::NoExpectation(signature.clone()),
+                Expected::NoExpectation(member_data.signature.clone()),
                 Category::Storage(file!(), line!()),
                 Region::zero(),
             ));

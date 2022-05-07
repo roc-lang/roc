@@ -646,7 +646,6 @@ fn resolve_abilities<'a>(
                 var_store.fresh(),
                 member_annot.typ,
                 variables,
-                iv,
             ));
         }
 
