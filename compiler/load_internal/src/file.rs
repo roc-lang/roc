@@ -1099,7 +1099,8 @@ pub enum LoadResult<'a> {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Threading {
     Single,
-    Multi,
+    AllAvailable,
+    AtMost(usize),
 }
 
 /// The loading process works like this, starting from the given filename (e.g. "main.roc"):
@@ -1180,6 +1181,7 @@ pub fn load<'a>(
             target_info,
             cached_subs,
             render,
+            threading,
         )
     }
 }
@@ -1390,6 +1392,7 @@ fn load_multi_threaded<'a>(
     target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     render: RenderTarget,
+    threading: Threading,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,

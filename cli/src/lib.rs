@@ -284,6 +284,16 @@ pub fn build(
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
 
+    let threading = match matches
+        .value_of(FLAG_MAX_THREADS)
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        None => Threading::AllAvailable,
+        Some(0) => user_error!("cannot build with at most 0 threads"),
+        Some(1) => Threading::Single,
+        Some(n) => Threading::AtMost(n),
+    };
+
     // Use surgical linking when supported, or when explicitly requested with --linker surgical
     let surgically_link = if matches.is_present(FLAG_LINKER) {
         matches.value_of(FLAG_LINKER) == Some("surgical")
@@ -333,7 +343,7 @@ pub fn build(
         surgically_link,
         precompiled,
         target_valgrind,
-        Threading::Multi,
+        threading,
     );
 
     match res_binary_path {

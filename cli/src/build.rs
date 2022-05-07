@@ -368,7 +368,7 @@ pub fn check_file(
         target_info,
         // TODO: expose this from CLI?
         RenderTarget::ColorTerminal,
-        Threading::Multi,
+        Threading::AllAvailable,
     )?;
 
     let buf = &mut String::with_capacity(1024);

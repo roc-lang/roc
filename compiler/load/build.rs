@@ -38,7 +38,7 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
         Default::default(),
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
-        Threading::Multi,
+        Threading::AllAvailable,
     );
 
     let module = res_module.unwrap();
