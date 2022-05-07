@@ -1261,6 +1261,7 @@ fn create_holl_call<'a>(
 
             CallType::HigherOrder(arena.alloc(higher_order))
         } else {
+            debug_assert!(!holl.passed_function.owns_captured_environment);
             CallType::HigherOrder(holl)
         },
         arguments,
