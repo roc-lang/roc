@@ -476,10 +476,13 @@ impl Pools {
         self.0.iter()
     }
 
-    pub fn split_last(&self) -> (&Vec<Variable>, &[Vec<Variable>]) {
-        self.0
-            .split_last()
-            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"))
+    pub fn split_last(mut self) -> (Vec<Variable>, Vec<Vec<Variable>>) {
+        let last = self
+            .0
+            .pop()
+            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"));
+
+        (last, self.0)
     }
 
     pub fn extend_to(&mut self, n: usize) {
@@ -737,8 +740,7 @@ fn solve(
 
                 // pop pool
                 generalize(subs, young_mark, visit_mark, next_rank, pools);
-
-                pools.get_mut(next_rank).clear();
+                debug_assert!(pools.get(next_rank).is_empty());
 
                 // check that things went well
                 dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
@@ -2437,12 +2439,12 @@ fn generalize(
         }
     }
 
-    let (last_pool, all_but_last_pool) = rank_table.split_last();
+    let (mut last_pool, all_but_last_pool) = rank_table.split_last();
 
     // For variables that have rank lowerer than young_rank, register them in
     // the appropriate old pool if they are not redundant.
     for vars in all_but_last_pool {
-        for &var in vars {
+        for var in vars {
             if !subs.redundant(var) {
                 let rank = subs.get_rank(var);
 
@@ -2453,7 +2455,7 @@ fn generalize(
 
     // For variables with rank young_rank, if rank < young_rank: register in old pool,
     // otherwise generalize
-    for &var in last_pool {
+    for var in last_pool.drain(..) {
         if !subs.redundant(var) {
             let desc_rank = subs.get_rank(var);
 
