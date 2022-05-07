@@ -19,6 +19,5 @@ roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
 roc_reporting = { path = "../../reporting" }
 test_mono_macros = { path = "../test_mono_macros" }
-pretty_assertions = "1.0.0"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 indoc = "1.0.3"

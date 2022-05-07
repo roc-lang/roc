@@ -1,8 +1,12 @@
 use crate::helpers::{example_file, run_cmd, run_roc};
+use const_format::concatcp;
 use criterion::{black_box, measurement::Measurement, BenchmarkGroup};
+use roc_cli::CMD_BUILD;
 use std::{path::Path, thread};
 
 const CFOLD_STACK_SIZE: usize = 8192 * 100000;
+
+const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
 
 fn exec_bench_w_input<T: Measurement>(
     file: &Path,
@@ -11,9 +15,10 @@ fn exec_bench_w_input<T: Measurement>(
     expected_ending: &str,
     bench_group_opt: Option<&mut BenchmarkGroup<T>>,
 ) {
-    let flags: &[&str] = &["--optimize"];
-
-    let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
+    let compile_out = run_roc(
+        [CMD_BUILD, OPTIMIZE_FLAG, file.to_str().unwrap()],
+        &[stdin_str],
+    );
 
     if !compile_out.stderr.is_empty() {
         panic!("{}", compile_out.stderr);
@@ -45,12 +50,12 @@ fn check_cmd_output(
     let out = if cmd_str.contains("cfold") {
         let child = thread::Builder::new()
             .stack_size(CFOLD_STACK_SIZE)
-            .spawn(move || run_cmd(&cmd_str, &[stdin_str], &[]))
+            .spawn(move || run_cmd(&cmd_str, [stdin_str], &[]))
             .unwrap();
 
         child.join().unwrap()
     } else {
-        run_cmd(&cmd_str, &[stdin_str], &[])
+        run_cmd(&cmd_str, [stdin_str], &[])
     };
 
     if !&out.stdout.ends_with(expected_ending) {
@@ -93,12 +98,12 @@ fn bench_cmd<T: Measurement>(
 
     if let Some(bench_group) = bench_group_opt {
         bench_group.bench_function(&format!("Benchmarking {:?}", executable_filename), |b| {
-            b.iter(|| run_cmd(black_box(&cmd_str), black_box(&[stdin_str]), &[]))
+            b.iter(|| run_cmd(black_box(&cmd_str), black_box([stdin_str]), &[]))
         });
     } else {
         run_cmd(
             black_box(file.with_file_name(executable_filename).to_str().unwrap()),
-            black_box(&[stdin_str]),
+            black_box([stdin_str]),
             &[],
         );
     }
