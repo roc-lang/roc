@@ -5867,7 +5867,7 @@ pub fn from_can<'a>(
                     Err(_) => todo!(),
                 };
 
-            if let Pattern::Identifier(symbol) = mono_pattern {
+            if let Pattern::Identifier(_symbol) = mono_pattern {
                 internal_error!("Identifier patterns should be handled in a higher code pass!")
             }
 
