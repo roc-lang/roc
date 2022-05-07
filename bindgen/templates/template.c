@@ -7,8 +7,7 @@
 
 void* roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
 
-void* roc_realloc(void* ptr, size_t new_size, size_t old_size,
-                  unsigned int alignment) {
+void* roc_realloc(void* ptr, size_t new_size, size_t old_size, unsigned int alignment) {
   return realloc(ptr, new_size);
 }
 
@@ -30,8 +29,6 @@ void* roc_memset(void* str, int c, size_t n) { return memset(str, c, n); }
 ///////////////////////////////////////////////////////////////////////////
 //
 // roc_std
-//
-// TODO: separate this out from the template into its own library!
 //
 ///////////////////////////////////////////////////////////////////////////
 
