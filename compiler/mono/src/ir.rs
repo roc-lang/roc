@@ -5928,6 +5928,13 @@ pub fn from_can<'a>(
                             let _res =
                                 roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
 
+                            resolve_abilities_in_specialized_body(
+                                env,
+                                procs,
+                                &def.loc_expr.value,
+                                def.expr_var,
+                            );
+
                             return with_hole(
                                 env,
                                 def.loc_expr.value,
@@ -5957,6 +5964,13 @@ pub fn from_can<'a>(
                                     var,
                                     new_def_expr_var,
                                     Mode::EQ,
+                                );
+
+                                resolve_abilities_in_specialized_body(
+                                    env,
+                                    procs,
+                                    &def.loc_expr.value,
+                                    def.expr_var,
                                 );
 
                                 stmt = with_hole(
@@ -6016,6 +6030,13 @@ pub fn from_can<'a>(
             } else {
                 let outer_symbol = env.unique_symbol();
                 stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
+
+                resolve_abilities_in_specialized_body(
+                    env,
+                    procs,
+                    &def.loc_expr.value,
+                    def.expr_var,
+                );
 
                 // convert the def body, store in outer_symbol
                 with_hole(

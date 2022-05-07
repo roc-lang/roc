@@ -292,9 +292,10 @@ fn decode() {
             fromBytes = \lst, fmt ->
                 when decodeWith lst decoder fmt is
                     { result, rest } ->
-                        when result is
-                            Ok val -> if List.isEmpty rest then Ok val else Err (Leftover rest)
-                            Err e -> Err e
+                        Result.after result \val ->
+                            if List.isEmpty rest
+                            then Ok val
+                            else Err (Leftover rest)
 
 
             Linear := {}
@@ -309,9 +310,8 @@ fn decode() {
 
             # impl Decoding for MyU8
             decoder = @Decoder \lst, fmt ->
-                when decodeWith lst u8 fmt is
-                    { result, rest } ->
-                        { result: Result.map result (\n -> @MyU8 n), rest }
+                { result, rest } = decodeWith lst u8 fmt
+                { result: Result.map result (\n -> @MyU8 n), rest }
 
             myU8 =
                 when fromBytes [ 15 ] (@Linear {}) is
