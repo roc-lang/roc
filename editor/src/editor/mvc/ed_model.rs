@@ -330,7 +330,7 @@ pub mod test_ed_model {
         writeln!(file, "{}", clean_code_str)
             .unwrap_or_else(|_| panic!("Failed to write {:?} to file: {:?}", clean_code_str, file));
 
-        let loaded_module = load_module(&temp_file_full_path, Threading::Multi);
+        let loaded_module = load_module(&temp_file_full_path, Threading::AllAvailable);
 
         let mut ed_model = init_dummy_model(
             clean_code_str,

@@ -747,6 +747,7 @@ impl<'a> State<'a> {
         ident_ids_by_module: SharedIdentIdsByModule,
         cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
         render: RenderTarget,
+        number_of_workers: usize,
     ) -> Self {
         let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
@@ -770,7 +771,7 @@ impl<'a> State<'a> {
             declarations_by_id: MutMap::default(),
             exposed_symbols_by_module: MutMap::default(),
             timings: MutMap::default(),
-            layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
+            layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
             render,
         }
@@ -1099,7 +1100,8 @@ pub enum LoadResult<'a> {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Threading {
     Single,
-    Multi,
+    AllAvailable,
+    AtMost(usize),
 }
 
 /// The loading process works like this, starting from the given filename (e.g. "main.roc"):
@@ -1157,10 +1159,32 @@ pub fn load<'a>(
     render: RenderTarget,
     threading: Threading,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
-    // When compiling to wasm, we cannot spawn extra threads
-    // so we have a single-threaded implementation
-    if threading == Threading::Single || cfg!(target_family = "wasm") {
-        load_single_threaded(
+    enum Threads {
+        Single,
+        Many(usize),
+    }
+
+    let threads = {
+        if cfg!(target_family = "wasm") {
+            // When compiling to wasm, we cannot spawn extra threads
+            // so we have a single-threaded implementation
+            Threads::Single
+        } else {
+            match std::thread::available_parallelism().map(|v| v.get()) {
+                Err(_) => Threads::Single,
+                Ok(0) => unreachable!("NonZeroUsize"),
+                Ok(1) => Threads::Single,
+                Ok(reported) => match threading {
+                    Threading::Single => Threads::Single,
+                    Threading::AllAvailable => Threads::Many(reported),
+                    Threading::AtMost(at_most) => Threads::Many(Ord::min(reported, at_most)),
+                },
+            }
+        }
+    };
+
+    match threads {
+        Threads::Single => load_single_threaded(
             arena,
             load_start,
             src_dir,
@@ -1169,9 +1193,8 @@ pub fn load<'a>(
             target_info,
             cached_subs,
             render,
-        )
-    } else {
-        load_multi_threaded(
+        ),
+        Threads::Many(threads) => load_multi_threaded(
             arena,
             load_start,
             src_dir,
@@ -1180,7 +1203,8 @@ pub fn load<'a>(
             target_info,
             cached_subs,
             render,
-        )
+            threads,
+        ),
     }
 }
 
@@ -1210,6 +1234,7 @@ pub fn load_single_threaded<'a>(
         .send(root_msg)
         .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
+    let number_of_workers = 1;
     let mut state = State::new(
         root_id,
         target_info,
@@ -1219,6 +1244,7 @@ pub fn load_single_threaded<'a>(
         ident_ids_by_module,
         cached_subs,
         render,
+        number_of_workers,
     );
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
@@ -1390,6 +1416,7 @@ fn load_multi_threaded<'a>(
     target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     render: RenderTarget,
+    available_threads: usize,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1398,6 +1425,28 @@ fn load_multi_threaded<'a>(
         root_msg,
         ..
     } = load_start;
+
+    let (msg_tx, msg_rx) = bounded(1024);
+    msg_tx
+        .send(root_msg)
+        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+
+    // Reserve one CPU for the main thread, and let all the others be eligible
+    // to spawn workers.
+    let available_workers = available_threads - 1;
+
+    let num_workers = match env::var("ROC_NUM_WORKERS") {
+        Ok(env_str) => env_str
+            .parse::<usize>()
+            .unwrap_or(available_workers)
+            .min(available_workers),
+        Err(_) => available_workers,
+    };
+
+    assert!(
+        num_workers >= 1,
+        "`load_multi_threaded` needs at least one worker"
+    );
 
     let mut state = State::new(
         root_id,
@@ -1408,27 +1457,8 @@ fn load_multi_threaded<'a>(
         ident_ids_by_module,
         cached_subs,
         render,
+        num_workers,
     );
-
-    let (msg_tx, msg_rx) = bounded(1024);
-    msg_tx
-        .send(root_msg)
-        .map_err(|_| LoadingProblem::MsgChannelDied)?;
-
-    // Reserve one CPU for the main thread, and let all the others be eligible
-    // to spawn workers. We use .max(2) to enforce that we always
-    // end up with at least 1 worker - since (.max(2) - 1) will
-    // always return a number that's at least 1. Using
-    // .max(2) on the initial number of CPUs instead of
-    // doing .max(1) on the entire expression guards against
-    // num_cpus returning 0, while also avoiding wrapping
-    // unsigned subtraction overflow.
-    let default_num_workers = num_cpus::get().max(2) - 1;
-
-    let num_workers = match env::var("ROC_NUM_WORKERS") {
-        Ok(env_str) => env_str.parse::<usize>().unwrap_or(default_num_workers),
-        Err(_) => default_num_workers,
-    };
 
     // an arena for every worker, stored in an arena-allocated bumpalo vec to make the lifetimes work
     let arenas = std::iter::repeat_with(Bump::new).take(num_workers);

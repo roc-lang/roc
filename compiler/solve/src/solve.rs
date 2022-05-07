@@ -476,10 +476,13 @@ impl Pools {
         self.0.iter()
     }
 
-    pub fn split_last(&self) -> (&Vec<Variable>, &[Vec<Variable>]) {
-        self.0
-            .split_last()
-            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"))
+    pub fn split_last(mut self) -> (Vec<Variable>, Vec<Vec<Variable>>) {
+        let last = self
+            .0
+            .pop()
+            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"));
+
+        (last, self.0)
     }
 
     pub fn extend_to(&mut self, n: usize) {
@@ -737,8 +740,7 @@ fn solve(
 
                 // pop pool
                 generalize(subs, young_mark, visit_mark, next_rank, pools);
-
-                pools.get_mut(next_rank).clear();
+                debug_assert!(pools.get(next_rank).is_empty());
 
                 // check that things went well
                 dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
@@ -2426,7 +2428,7 @@ fn generalize(
     young_rank: Rank,
     pools: &mut Pools,
 ) {
-    let young_vars = pools.get(young_rank);
+    let young_vars = std::mem::take(pools.get_mut(young_rank));
     let rank_table = pool_to_rank_table(subs, young_mark, young_rank, young_vars);
 
     // Get the ranks right for each entry.
@@ -2437,12 +2439,12 @@ fn generalize(
         }
     }
 
-    let (last_pool, all_but_last_pool) = rank_table.split_last();
+    let (mut last_pool, all_but_last_pool) = rank_table.split_last();
 
     // For variables that have rank lowerer than young_rank, register them in
     // the appropriate old pool if they are not redundant.
     for vars in all_but_last_pool {
-        for &var in vars {
+        for var in vars {
             if !subs.redundant(var) {
                 let rank = subs.get_rank(var);
 
@@ -2453,7 +2455,7 @@ fn generalize(
 
     // For variables with rank young_rank, if rank < young_rank: register in old pool,
     // otherwise generalize
-    for &var in last_pool {
+    for var in last_pool.drain(..) {
         if !subs.redundant(var) {
             let desc_rank = subs.get_rank(var);
 
@@ -2464,32 +2466,38 @@ fn generalize(
             }
         }
     }
+
+    // re-use the last_vector (which likely has a good capacity for future runs
+    *pools.get_mut(young_rank) = last_pool;
 }
 
 /// Sort the variables into buckets by rank.
+#[inline]
 fn pool_to_rank_table(
     subs: &mut Subs,
     young_mark: Mark,
     young_rank: Rank,
-    young_vars: &[Variable],
+    mut young_vars: Vec<Variable>,
 ) -> Pools {
     let mut pools = Pools::new(young_rank.into_usize() + 1);
 
     // the vast majority of young variables have young_rank
-    // using `retain` here prevents many `pools.get_mut(young_rank)` lookups
-    let mut young_vars = young_vars.to_vec();
-    young_vars.retain(|var| {
-        let rank = subs.get_rank_set_mark(*var, young_mark);
+    let mut i = 0;
+    while i < young_vars.len() {
+        let var = young_vars[i];
+        let rank = subs.get_rank_set_mark(var, young_mark);
 
         if rank != young_rank {
             debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
 
-            pools.get_mut(rank).push(*var);
-            false
+            pools.get_mut(rank).push(var);
+
+            // swap an element in; don't increment i
+            young_vars.swap_remove(i);
         } else {
-            true
+            i += 1;
         }
-    });
+    }
 
     std::mem::swap(pools.get_mut(young_rank), &mut young_vars);
 
