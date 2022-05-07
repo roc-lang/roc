@@ -334,7 +334,7 @@ pub fn gen_from_mono_module_llvm(
         module.print_to_file(&app_ll_file).unwrap();
 
         // run the debugir https://github.com/vaivaswatha/debugir tool
-        match Command::new("/home/folkertdev/roc/debugir/build/debugir")
+        match Command::new("debugir")
             .args(&["-instnamer", app_ll_file.to_str().unwrap()])
             .output()
         {

@@ -162,7 +162,7 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
 
     let start = env
         .builder
-        .build_extract_value(count_and_start, 1, "get_count")
+        .build_extract_value(count_and_start, 1, "get_start")
         .unwrap();
 
     call_void_bitcode_fn(
