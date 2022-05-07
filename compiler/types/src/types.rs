@@ -187,7 +187,7 @@ impl LambdaSet {
 #[derive(PartialEq, Eq, Clone)]
 pub struct AliasCommon {
     pub symbol: Symbol,
-    pub type_arguments: Vec<(Lowercase, Type)>,
+    pub type_arguments: Vec<Type>,
     pub lambda_set_variables: Vec<LambdaSet>,
 }
 
@@ -208,14 +208,14 @@ pub enum Type {
     DelayedAlias(AliasCommon),
     Alias {
         symbol: Symbol,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Type>,
         lambda_set_variables: Vec<LambdaSet>,
         actual: Box<Type>,
         kind: AliasKind,
     },
     HostExposedAlias {
         name: Symbol,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Type>,
         lambda_set_variables: Vec<LambdaSet>,
         actual_var: Variable,
         actual: Box<Type>,
@@ -385,7 +385,7 @@ impl fmt::Debug for Type {
             }) => {
                 write!(f, "(DelayedAlias {:?}", symbol)?;
 
-                for (_, arg) in type_arguments {
+                for arg in type_arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -409,7 +409,7 @@ impl fmt::Debug for Type {
             } => {
                 write!(f, "(Alias {:?}", symbol)?;
 
-                for (_, arg) in type_arguments {
+                for arg in type_arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -433,7 +433,7 @@ impl fmt::Debug for Type {
             } => {
                 write!(f, "HostExposedAlias {:?}", name)?;
 
-                for (_, arg) in arguments {
+                for arg in arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -694,7 +694,7 @@ impl Type {
                     lambda_set_variables,
                     ..
                 }) => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -708,7 +708,7 @@ impl Type {
                     actual,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -724,7 +724,7 @@ impl Type {
                     actual: actual_type,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -803,7 +803,7 @@ impl Type {
                     lambda_set_variables,
                     ..
                 }) => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -817,7 +817,7 @@ impl Type {
                     actual,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
                     for lambda_set in lambda_set_variables.iter_mut() {
@@ -832,7 +832,7 @@ impl Type {
                     actual: actual_type,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -903,7 +903,7 @@ impl Type {
                 lambda_set_variables: _no_aliases_in_lambda_sets,
                 ..
             }) => {
-                for (_, ta) in type_arguments {
+                for ta in type_arguments {
                     ta.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
 
@@ -914,7 +914,7 @@ impl Type {
                 actual: alias_actual,
                 ..
             } => {
-                for (_, ta) in type_arguments {
+                for ta in type_arguments {
                     ta.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
                 alias_actual.substitute_alias(rep_symbol, rep_args, actual)
@@ -985,9 +985,7 @@ impl Type {
                 ..
             }) => {
                 symbol == &rep_symbol
-                    || type_arguments
-                        .iter()
-                        .any(|v| v.1.contains_symbol(rep_symbol))
+                    || type_arguments.iter().any(|v| v.contains_symbol(rep_symbol))
                     || lambda_set_variables
                         .iter()
                         .any(|v| v.0.contains_symbol(rep_symbol))
@@ -1125,8 +1123,17 @@ impl Type {
                     ext.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
                 }
             }
-            DelayedAlias(AliasCommon { .. }) => {
-                // do nothing, yay
+            DelayedAlias(AliasCommon {
+                type_arguments,
+                lambda_set_variables,
+                symbol: _,
+            }) => {
+                debug_assert!(lambda_set_variables
+                    .iter()
+                    .all(|lambda_set| matches!(lambda_set.0, Type::Variable(..))));
+                type_arguments.iter_mut().for_each(|t| {
+                    t.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables)
+                });
             }
             HostExposedAlias {
                 type_arguments: type_args,
@@ -1141,8 +1148,7 @@ impl Type {
                 ..
             } => {
                 for arg in type_args {
-                    arg.1
-                        .instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
                 }
 
                 for arg in lambda_set_variables {
@@ -1163,10 +1169,8 @@ impl Type {
                     if false {
                         let mut type_var_to_arg = Vec::new();
 
-                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
-                            let name = loc_var.value.0.clone();
-
-                            type_var_to_arg.push((name, arg_ann.clone()));
+                        for (_, arg_ann) in alias.type_variables.iter().zip(args) {
+                            type_var_to_arg.push(arg_ann.clone());
                         }
 
                         let mut lambda_set_variables =
@@ -1206,7 +1210,7 @@ impl Type {
                         // TODO substitute further in args
                         for (
                             Loc {
-                                value: (lowercase, placeholder),
+                                value: (_, placeholder),
                                 ..
                             },
                             filler,
@@ -1219,7 +1223,7 @@ impl Type {
                                 var_store,
                                 new_lambda_set_variables,
                             );
-                            named_args.push((lowercase.clone(), filler.clone()));
+                            named_args.push(filler.clone());
                             substitution.insert(*placeholder, filler);
                         }
 
@@ -1383,7 +1387,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 ..
             }) => {
                 output.push(*symbol);
-                stack.extend(type_arguments.iter().map(|v| &v.1));
+                stack.extend(type_arguments);
             }
             Alias {
                 symbol: alias_symbol,
@@ -1491,7 +1495,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             lambda_set_variables,
             ..
         }) => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help(arg, accum);
             }
 
@@ -1504,7 +1508,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             actual,
             ..
         } => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help(arg, accum);
             }
             variables_help(actual, accum);
@@ -1514,7 +1518,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             actual,
             ..
         } => {
-            for (_, arg) in arguments {
+            for arg in arguments {
                 variables_help(arg, accum);
             }
             variables_help(actual, accum);
@@ -1623,7 +1627,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             lambda_set_variables,
             ..
         }) => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help_detailed(arg, accum);
             }
 
@@ -1640,7 +1644,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             actual,
             ..
         } => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help_detailed(arg, accum);
             }
             variables_help_detailed(actual, accum);
@@ -1650,7 +1654,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             actual,
             ..
         } => {
-            for (_, arg) in arguments {
+            for arg in arguments {
                 variables_help_detailed(arg, accum);
             }
             variables_help_detailed(actual, accum);
@@ -1713,6 +1717,9 @@ pub enum AnnotationSource {
     TypedBody {
         region: Region,
     },
+    RequiredSymbol {
+        region: Region,
+    },
 }
 
 impl AnnotationSource {
@@ -1721,6 +1728,7 @@ impl AnnotationSource {
             &Self::TypedIfBranch { region, .. }
             | &Self::TypedWhenBranch { region, .. }
             | &Self::TypedBody { region, .. } => region,
+            &Self::RequiredSymbol { region, .. } => region,
         }
     }
 }

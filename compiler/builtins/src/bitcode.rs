@@ -269,7 +269,9 @@ pub const NUM_ATAN: IntrinsicName = float_intrinsic!("roc_builtins.num.atan");
 pub const NUM_IS_FINITE: IntrinsicName = float_intrinsic!("roc_builtins.num.is_finite");
 pub const NUM_POW_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.pow_int");
 pub const NUM_DIV_CEIL: IntrinsicName = int_intrinsic!("roc_builtins.num.div_ceil");
-pub const NUM_ROUND: IntrinsicName = float_intrinsic!("roc_builtins.num.round");
+
+pub const NUM_ROUND_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f32");
+pub const NUM_ROUND_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f64");
 
 pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
 pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
@@ -345,6 +347,7 @@ pub const LIST_REPLACE_IN_PLACE: &str = "roc_builtins.list.replace_in_place";
 pub const LIST_ANY: &str = "roc_builtins.list.any";
 pub const LIST_ALL: &str = "roc_builtins.list.all";
 pub const LIST_FIND_UNSAFE: &str = "roc_builtins.list.find_unsafe";
+pub const LIST_IS_UNIQUE: &str = "roc_builtins.list.is_unique";
 
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";

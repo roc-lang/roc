@@ -27,7 +27,7 @@ use crate::{
         },
         env::Env,
     },
-    mem_pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone},
+    mem_pool::{pool::Pool, pool_vec::PoolVec, shallow_clone::ShallowClone},
 };
 
 /// A presence constraint is an additive constraint that defines the lower bound
@@ -1846,7 +1846,7 @@ fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
 
     Type2::Alias(
         Symbol::NUM_FLOAT,
-        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        PoolVec::new(vec![range].into_iter(), pool),
         num_num_id,
     )
 }
@@ -1859,7 +1859,7 @@ fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
 
     Type2::Opaque(
         Symbol::NUM_FLOATINGPOINT,
-        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        PoolVec::new(vec![range].into_iter(), pool),
         pool.add(alias_content),
     )
 }
@@ -1874,7 +1874,7 @@ fn num_int(pool: &mut Pool, range: TypeId) -> Type2 {
 
     Type2::Alias(
         Symbol::NUM_INT,
-        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        PoolVec::new(vec![range].into_iter(), pool),
         num_num_id,
     )
 }
@@ -1907,7 +1907,7 @@ fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
 
     Type2::Opaque(
         Symbol::NUM_INTEGER,
-        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        PoolVec::new(vec![range].into_iter(), pool),
         pool.add(alias_content),
     )
 }
@@ -1920,10 +1920,7 @@ fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
 
     Type2::Opaque(
         Symbol::NUM_NUM,
-        PoolVec::new(
-            vec![(PoolStr::new("range", pool), type_id)].into_iter(),
-            pool,
-        ),
+        PoolVec::new(vec![type_id].into_iter(), pool),
         pool.add(alias_content),
     )
 }

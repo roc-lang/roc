@@ -55,7 +55,7 @@ pub enum SolvedType {
 
     Alias(
         Symbol,
-        Vec<(Lowercase, SolvedType)>,
+        Vec<SolvedType>,
         Vec<SolvedLambdaSet>,
         Box<SolvedType>,
         AliasKind,
@@ -63,7 +63,7 @@ pub enum SolvedType {
 
     HostExposedAlias {
         name: Symbol,
-        arguments: Vec<(Lowercase, SolvedType)>,
+        arguments: Vec<SolvedType>,
         lambda_set_variables: Vec<SolvedLambdaSet>,
         actual_var: VarId,
         actual: Box<SolvedType>,
@@ -212,8 +212,8 @@ pub fn to_type(
         Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual, kind) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
 
-            for (lowercase, solved_arg) in solved_type_variables {
-                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
+            for solved_arg in solved_type_variables {
+                type_variables.push(to_type(solved_arg, free_vars, var_store));
             }
 
             let mut lambda_set_variables = Vec::with_capacity(solved_lambda_sets.len());
@@ -244,8 +244,8 @@ pub fn to_type(
         } => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
 
-            for (lowercase, solved_arg) in solved_type_variables {
-                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
+            for solved_arg in solved_type_variables {
+                type_variables.push(to_type(solved_arg, free_vars, var_store));
             }
 
             let mut lambda_set_variables = Vec::with_capacity(solved_lambda_sets.len());

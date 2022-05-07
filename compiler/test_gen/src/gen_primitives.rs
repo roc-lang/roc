@@ -3344,3 +3344,112 @@ fn box_and_unbox_tag_union() {
         (u8, u8)
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn closure_called_in_its_defining_scope() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main : Str
+            main =
+                g : Str
+                g = "hello world"
+
+                getG : {} -> Str
+                getG = \{} -> g
+
+                getG {}
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
+    )
+}
+
+#[test]
+#[ignore]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2894() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main : U32
+            main =
+                g : { x : U32 }
+                g = { x: 1u32 }
+
+                getG : {} -> { x : U32 }
+                getG = \{} -> g
+
+                h : {} -> U32
+                h = \{} -> (getG {}).x
+
+                h {}
+            "#
+        ),
+        1u32,
+        u32
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymorphic_def_used_in_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            a : I64 -> _
+            a = \g ->
+                f = { r: g, h: 32 }
+            
+                h1 : U64
+                h1 = (\{} -> f.h) {}
+                h1
+            a 1
+            "#
+        ),
+        32,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymorphic_lambda_set_usage() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            id1 = \x -> x
+            id2 = \y -> y
+            id = if True then id1 else id2
+
+            id 9u8
+            "#
+        ),
+        9,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymorphic_lambda_set_multiple_specializations() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            id1 = \x -> x
+            id2 = \y -> y
+            id = if True then id1 else id2
+
+            (id 9u8) + Num.toU8 (id 16u16)
+            "#
+        ),
+        25,
+        u8
+    )
+}

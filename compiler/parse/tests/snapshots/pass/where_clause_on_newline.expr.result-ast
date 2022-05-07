@@ -5,8 +5,8 @@ Defs(
                 @0-1 Identifier(
                     "f",
                 ),
-                @9-29 Where(
-                    @9-12 SpaceBefore(
+                @4-29 Where(
+                    @4-12 SpaceBefore(
                         Function(
                             [
                                 @4-5 BoundVariable(

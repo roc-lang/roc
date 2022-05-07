@@ -2,6 +2,7 @@ use libloading::Library;
 use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_collections::all::MutMap;
+use roc_load::Threading;
 use roc_region::all::LineInfo;
 use tempfile::tempdir;
 
@@ -55,6 +56,7 @@ pub fn helper(
         Default::default(),
         roc_target::TargetInfo::default_x86_64(),
         roc_reporting::report::RenderTarget::ColorTerminal,
+        Threading::Single,
     );
 
     let mut loaded = loaded.expect("failed to load module");

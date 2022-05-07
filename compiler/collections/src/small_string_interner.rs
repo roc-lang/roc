@@ -1,3 +1,5 @@
+use std::{fmt::Debug, mem::ManuallyDrop};
+
 /// Collection of small (length < u16::MAX) strings, stored compactly.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct SmallStringInterner {
@@ -5,8 +7,52 @@ pub struct SmallStringInterner {
 
     // lengths could be Vec<u8>, but the mono refcount generation
     // stringifies Layout's and that creates > 256 character strings
-    lengths: Vec<u16>,
+    lengths: Vec<Length>,
     offsets: Vec<u32>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+#[repr(transparent)]
+struct Length(i16);
+
+impl std::fmt::Debug for Length {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.kind().fmt(f)
+    }
+}
+
+impl Length {
+    #[inline(always)]
+    const fn kind(self) -> Kind {
+        if self.0 == 0 {
+            Kind::Empty
+        } else if self.0 > 0 {
+            Kind::Interned(self.0 as usize)
+        } else {
+            Kind::Generated(self.0.abs() as usize)
+        }
+    }
+
+    #[inline(always)]
+    const fn from_usize(len: usize) -> Self {
+        Self(len as i16)
+    }
+}
+
+enum Kind {
+    Generated(usize),
+    Empty,
+    Interned(usize),
+}
+
+impl Debug for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Generated(arg0) => write!(f, "Generated({})", arg0),
+            Self::Empty => write!(f, "Empty"),
+            Self::Interned(arg0) => write!(f, "Interned({})", arg0),
+        }
+    }
 }
 
 impl std::fmt::Debug for SmallStringInterner {
@@ -33,7 +79,19 @@ impl SmallStringInterner {
         }
     }
 
-    pub const fn from_parts(buffer: Vec<u8>, lengths: Vec<u16>, offsets: Vec<u32>) -> Self {
+    /// # Safety
+    ///
+    /// lengths must be non-negative integers less than 2^15
+    pub unsafe fn from_parts(buffer: Vec<u8>, lengths: Vec<u16>, offsets: Vec<u32>) -> Self {
+        // the recommended way of transmuting a vector
+        let mut lengths = ManuallyDrop::new(lengths);
+
+        let lengths = Vec::from_raw_parts(
+            lengths.as_mut_ptr().cast(),
+            lengths.len(),
+            lengths.capacity(),
+        );
+
         Self {
             buffer,
             lengths,
@@ -45,13 +103,14 @@ impl SmallStringInterner {
         (0..self.offsets.len()).map(move |index| self.get(index))
     }
 
+    /// Insert without deduplicating
     pub fn insert(&mut self, string: &str) -> usize {
         let bytes = string.as_bytes();
 
-        assert!(bytes.len() < u16::MAX as usize);
+        assert!(bytes.len() < (1 << 15));
 
         let offset = self.buffer.len() as u32;
-        let length = bytes.len() as u16;
+        let length = Length::from_usize(bytes.len());
 
         let index = self.lengths.len();
 
@@ -59,6 +118,19 @@ impl SmallStringInterner {
         self.offsets.push(offset);
 
         self.buffer.extend(bytes);
+
+        index
+    }
+
+    /// Create a new entry that uses the same string bytes as an existing entry
+    pub fn duplicate(&mut self, existing: usize) -> usize {
+        let offset = self.offsets[existing];
+        let length = self.lengths[existing];
+
+        let index = self.lengths.len();
+
+        self.lengths.push(length);
+        self.offsets.push(offset);
 
         index
     }
@@ -76,9 +148,11 @@ impl SmallStringInterner {
 
         let offset = self.buffer.len();
         write!(self.buffer, "{}", index).unwrap();
-        let length = self.buffer.len() - offset;
 
-        self.lengths.push(length as u16);
+        // this is a generated name, so store it as a negative length
+        let length = Length(-((self.buffer.len() - offset) as i16));
+
+        self.lengths.push(length);
         self.offsets.push(offset as u32);
 
         index
@@ -86,31 +160,53 @@ impl SmallStringInterner {
 
     #[inline(always)]
     pub fn find_index(&self, string: &str) -> Option<usize> {
-        let target_length = string.len() as u16;
+        self.find_indices(string).next()
+    }
+
+    #[inline(always)]
+    pub fn find_indices<'a>(&'a self, string: &'a str) -> impl Iterator<Item = usize> + 'a {
+        let target_length = string.len();
 
         // there can be gaps in the parts of the string that we use (because of updates)
         // hence we can't just sum the lengths we've seen so far to get the next offset
-        for (index, length) in self.lengths.iter().enumerate() {
-            if *length == target_length {
-                let offset = self.offsets[index];
-                let slice = &self.buffer[offset as usize..][..*length as usize];
-
-                if string.as_bytes() == slice {
-                    return Some(index);
+        self.lengths
+            .iter()
+            .enumerate()
+            .filter_map(move |(index, length)| match length.kind() {
+                Kind::Generated(_) => None,
+                Kind::Empty => {
+                    if target_length == 0 {
+                        Some(index)
+                    } else {
+                        None
+                    }
                 }
-            }
-        }
+                Kind::Interned(length) => {
+                    if target_length == length {
+                        let offset = self.offsets[index];
+                        let slice = &self.buffer[offset as usize..][..length];
 
-        None
+                        if string.as_bytes() == slice {
+                            return Some(index);
+                        }
+                    }
+
+                    None
+                }
+            })
     }
 
     fn get(&self, index: usize) -> &str {
-        let length = self.lengths[index] as usize;
-        let offset = self.offsets[index] as usize;
+        match self.lengths[index].kind() {
+            Kind::Empty => "",
+            Kind::Generated(length) | Kind::Interned(length) => {
+                let offset = self.offsets[index] as usize;
 
-        let bytes = &self.buffer[offset..][..length];
+                let bytes = &self.buffer[offset..][..length];
 
-        unsafe { std::str::from_utf8_unchecked(bytes) }
+                unsafe { std::str::from_utf8_unchecked(bytes) }
+            }
+        }
     }
 
     pub fn try_get(&self, index: usize) -> Option<&str> {
@@ -129,7 +225,7 @@ impl SmallStringInterner {
         // `buffer`, we can update them in-place
         self.buffer.extend(new_string.bytes());
 
-        self.lengths[index] = length as u16;
+        self.lengths[index] = Length::from_usize(length);
         self.offsets[index] = offset as u32;
     }
 

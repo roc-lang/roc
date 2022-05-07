@@ -1,4 +1,4 @@
-FROM rust:1.58.0-slim-bullseye # make sure to update rust-toolchain.toml and nixpkgs-unstable in sources.json too so that it uses the same rust version > search for cargo on unstable here: https://search.nixos.org/packages
+FROM rust:1.60.0-slim-bullseye # make sure to update rust-toolchain.toml too so that everything uses the same rust version
 WORKDIR /earthbuild
 
 prep-debian:
@@ -10,6 +10,7 @@ install-other-libs:
     RUN apt -y install libxcb-shape0-dev libxcb-xfixes0-dev # for editor clipboard
     RUN apt -y install libasound2-dev # for editor sounds
     RUN apt -y install libunwind-dev pkg-config libx11-dev zlib1g-dev
+    RUN apt -y install unzip # for www/build.sh
 
 install-zig-llvm-valgrind-clippy-rustfmt:
     FROM +install-other-libs
@@ -18,7 +19,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # zig
     RUN wget -c https://ziglang.org/download/0.9.1/zig-linux-x86_64-0.9.1.tar.xz --no-check-certificate
     RUN tar -xf zig-linux-x86_64-0.9.1.tar.xz
-    RUN ln -s /earthbuild/zig-linux-x86_64-0.9.1/zig /usr/bin/zig
+    RUN ln -s /earthbuild/zig-linux-x86_64-0.9.1/zig /bin/zig
     # zig builtins wasm tests
     RUN apt -y install build-essential
     RUN cargo install wasmer-cli --features "singlepass"
@@ -53,21 +54,26 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros highlight utils test_utils reporting repl_cli repl_eval repl_test repl_wasm roc_std vendor examples linker Cargo.toml Cargo.lock version.txt ./
+    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros highlight utils test_utils reporting repl_cli repl_eval repl_test repl_wasm repl_www roc_std vendor examples linker Cargo.toml Cargo.lock version.txt www wasi-libc-sys ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     COPY --dir compiler/builtins/bitcode ./
     RUN cd bitcode && ./run-tests.sh && ./run-wasm-tests.sh
 
-check-clippy:
+build-rust-test:
     FROM +copy-dirs
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo test --locked --release --features with_sound --workspace --no-run && sccache --show-stats
+
+check-clippy:
+    FROM +build-rust-test
     RUN cargo clippy -V
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo clippy -- -D warnings
 
 check-rustfmt:
-    FROM +copy-dirs
+    FROM +build-rust-test
     RUN cargo fmt --version
     RUN cargo fmt --all -- --check
 
@@ -77,7 +83,7 @@ check-typos:
     RUN typos
 
 test-rust:
-    FROM +copy-dirs
+    FROM +build-rust-test
     ENV RUST_BACKTRACE=1
     # for race condition problem with cli test
     ENV ROC_NUM_WORKERS=1
@@ -100,6 +106,9 @@ test-rust:
     # RUN echo "4" | cargo run --locked --release --features="target-x86" -- --target=x86_32 examples/benchmarks/NQueens.roc
     # RUN --mount=type=cache,target=$SCCACHE_DIR \
     #    cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
+    # make sure doc generation works (that is, make sure build.sh returns status code 0)
+    RUN bash www/build.sh
+
 
 verify-no-git-changes:
     FROM +test-rust

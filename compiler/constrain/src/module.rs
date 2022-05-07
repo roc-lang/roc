@@ -3,13 +3,16 @@ use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
 use roc_can::expected::Expected;
+use roc_can::pattern::Pattern;
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::{FreeVars, SolvedType};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Category, Type};
+use roc_types::types::{AnnotationSource, Category, Type};
+
+use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 
 /// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
@@ -94,18 +97,74 @@ pub enum ExposedModuleTypes {
 
 pub fn constrain_module(
     constraints: &mut Constraints,
+    symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     abilities_store: &AbilitiesStore,
     declarations: &[Declaration],
     home: ModuleId,
 ) -> Constraint {
     let constraint = crate::expr::constrain_decls(constraints, home, declarations);
-
+    let constraint =
+        constrain_symbols_from_requires(constraints, symbols_from_requires, home, constraint);
     let constraint = frontload_ability_constraints(constraints, abilities_store, constraint);
 
     // The module constraint should always save the environment at the end.
     debug_assert!(constraints.contains_save_the_environment(&constraint));
 
     constraint
+}
+
+fn constrain_symbols_from_requires(
+    constraints: &mut Constraints,
+    symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
+    home: ModuleId,
+    constraint: Constraint,
+) -> Constraint {
+    symbols_from_requires
+        .into_iter()
+        .fold(constraint, |constraint, (loc_symbol, loc_type)| {
+            if loc_symbol.value.module_id() == home {
+                // 1. Required symbols can only be specified in package modules
+                // 2. Required symbols come from app modules
+                // But, if we are running e.g. `roc check` on a package module, there is no app
+                // module, and we will have instead put the required symbols in the package module
+                // namespace. If this is the case, we want to introduce the symbols as if they had
+                // the types they are annotated with.
+                let rigids = Default::default();
+                let env = Env { home, rigids };
+                let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(loc_symbol.value));
+
+                let def_pattern_state =
+                    constrain_def_pattern(constraints, &env, &pattern, loc_type.value);
+
+                constrain_def_make_constraint(
+                    constraints,
+                    // No new rigids or flex vars because they are represented in the type
+                    // annotation.
+                    vec![],
+                    vec![],
+                    Constraint::True,
+                    constraint,
+                    def_pattern_state,
+                )
+            } else {
+                // Otherwise, this symbol comes from an app module - we want to check that the type
+                // provided by the app is in fact what the package module requires.
+                let arity = loc_type.value.arity();
+                let provided_eq_requires_constr = constraints.lookup(
+                    loc_symbol.value,
+                    Expected::FromAnnotation(
+                        loc_symbol.map(|&s| Pattern::Identifier(s)),
+                        arity,
+                        AnnotationSource::RequiredSymbol {
+                            region: loc_type.region,
+                        },
+                        loc_type.value,
+                    ),
+                    loc_type.region,
+                );
+                constraints.and_constraint([provided_eq_requires_constr, constraint])
+            }
+        })
 }
 
 pub fn frontload_ability_constraints(

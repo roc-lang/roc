@@ -2,7 +2,6 @@ use arrayvec::ArrayVec;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::Expected::{self, *};
 use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumericBound, SignDemand};
-use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::subs::Variable;
@@ -161,7 +160,7 @@ pub fn str_type() -> Type {
 #[inline(always)]
 fn builtin_alias(
     symbol: Symbol,
-    type_arguments: Vec<(Lowercase, Type)>,
+    type_arguments: Vec<Type>,
     actual: Box<Type>,
     kind: AliasKind,
 ) -> Type {
@@ -178,7 +177,7 @@ fn builtin_alias(
 pub fn num_float(range: Type) -> Type {
     builtin_alias(
         Symbol::NUM_FLOAT,
-        vec![("range".into(), range.clone())],
+        vec![range.clone()],
         Box::new(num_num(num_floatingpoint(range))),
         AliasKind::Structural,
     )
@@ -188,7 +187,7 @@ pub fn num_float(range: Type) -> Type {
 pub fn num_floatingpoint(range: Type) -> Type {
     builtin_alias(
         Symbol::NUM_FLOATINGPOINT,
-        vec![("range".into(), range.clone())],
+        vec![range.clone()],
         Box::new(range),
         AliasKind::Opaque,
     )
@@ -228,7 +227,7 @@ pub fn num_binary64() -> Type {
 pub fn num_int(range: Type) -> Type {
     builtin_alias(
         Symbol::NUM_INT,
-        vec![("range".into(), range.clone())],
+        vec![range.clone()],
         Box::new(num_num(num_integer(range))),
         AliasKind::Structural,
     )
@@ -248,7 +247,7 @@ pub fn num_signed64() -> Type {
 pub fn num_integer(range: Type) -> Type {
     builtin_alias(
         Symbol::NUM_INTEGER,
-        vec![("range".into(), range.clone())],
+        vec![range.clone()],
         Box::new(range),
         AliasKind::Opaque,
     )
@@ -258,7 +257,7 @@ pub fn num_integer(range: Type) -> Type {
 pub fn num_num(typ: Type) -> Type {
     builtin_alias(
         Symbol::NUM_NUM,
-        vec![("range".into(), typ.clone())],
+        vec![typ.clone()],
         Box::new(typ),
         AliasKind::Opaque,
     )

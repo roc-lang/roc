@@ -5,6 +5,7 @@ use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
+use roc_load::Threading;
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
@@ -59,6 +60,7 @@ fn create_llvm_module<'a>(
         Default::default(),
         target_info,
         RenderTarget::ColorTerminal,
+        Threading::Multi,
     );
 
     let mut loaded = match loaded {
@@ -414,13 +416,14 @@ fn wasm_roc_panic(address: u32, tag_id: u32) {
             MEMORY.with(|f| {
                 let memory = f.borrow().unwrap();
 
-                let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(address);
-                let width = 100;
-                let c_ptr = (ptr.deref(memory, 0, width)).unwrap();
+                let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
+                let index = address as usize;
+                let slice = &memory_bytes[index..];
+                let c_ptr: *const u8 = slice.as_ptr();
 
                 use std::ffi::CStr;
                 use std::os::raw::c_char;
-                let slice = unsafe { CStr::from_ptr(c_ptr as *const _ as *const c_char) };
+                let slice = unsafe { CStr::from_ptr(c_ptr as *const c_char) };
                 string = slice.to_str().unwrap();
             });
 

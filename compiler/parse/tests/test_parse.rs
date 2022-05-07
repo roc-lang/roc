@@ -161,6 +161,7 @@ mod test_parse {
         pass/equals_with_spaces.expr,
         pass/equals.expr,
         pass/expect.expr,
+        pass/record_type_with_function.expr,
         pass/float_with_underscores.expr,
         pass/full_app_header_trailing_commas.header,
         pass/full_app_header.header,
@@ -299,7 +300,12 @@ mod test_parse {
         let input_path = parent.join(&format!("{}.{}.roc", name, ty));
         let result_path = parent.join(&format!("{}.{}.result-ast", name, ty));
 
-        let input = std::fs::read_to_string(&input_path).unwrap();
+        let input = std::fs::read_to_string(&input_path).unwrap_or_else(|err| {
+            panic!(
+                "Could not find a snapshot test result at {:?} - {:?}",
+                input_path, err
+            )
+        });
 
         let result = func(&input);
 

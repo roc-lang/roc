@@ -1354,3 +1354,9 @@ pub fn listFindUnsafe(
         return .{ .value = null, .found = false };
     }
 }
+
+pub fn listIsUnique(
+    list: RocList,
+) callconv(.C) bool {
+    return list.isEmpty() or list.isUnique();
+}

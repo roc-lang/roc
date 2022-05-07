@@ -77,7 +77,7 @@ impl<'a> Env<'a> {
                 // You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
                 if module_id == self.home {
-                    match scope.ident_ids.get_id(&ident) {
+                    match scope.locals.ident_ids.get_id(&ident) {
                         Some(ident_id) => {
                             let symbol = Symbol::new(module_id, ident_id);
 
@@ -96,6 +96,7 @@ impl<'a> Env<'a> {
                                     region,
                                 },
                                 scope
+                                    .locals
                                     .ident_ids
                                     .ident_strs()
                                     .map(|(_, string)| string.into())

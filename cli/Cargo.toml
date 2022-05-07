@@ -61,24 +61,24 @@ roc_error_macros = { path = "../error_macros" }
 roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
 roc_repl_cli = { path = "../repl_cli", optional = true }
-clap = { version = "3.0.0-beta.5", default-features = false, features = ["std", "color", "suggestions"] }
+clap = { version = "3.1.15", default-features = false, features = ["std", "color", "suggestions"] }
 const_format = "0.2.22"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 mimalloc = { version = "0.1.26", default-features = false }
 
 target-lexicon = "0.12.3"
 tempfile = "3.2.0"
-wasmer-wasi = { version = "2.0.0", optional = true }
+wasmer-wasi = { version = "2.2.1", optional = true }
 
 # Wasmer singlepass compiler only works on x86_64.
 [target.'cfg(target_arch = "x86_64")'.dependencies]
-wasmer = { version = "2.0.0", optional = true, default-features = false, features = ["default-singlepass", "default-universal"] }
+wasmer = { version = "2.2.1", optional = true, default-features = false, features = ["singlepass", "universal"] }
 
 [target.'cfg(not(target_arch = "x86_64"))'.dependencies]
-wasmer = { version = "2.0.0", optional = true, default-features = false, features = ["default-cranelift", "default-universal"] }
+wasmer = { version = "2.2.1", optional = true, default-features = false, features = ["cranelift", "universal"] }
 
 [dev-dependencies]
-wasmer-wasi = "2.0.0"
+wasmer-wasi = "2.2.1"
 pretty_assertions = "1.0.0"
 roc_test_utils = { path = "../test_utils" }
 indoc = "1.0.3"
@@ -88,10 +88,10 @@ cli_utils = { path = "../cli_utils" }
 
 # Wasmer singlepass compiler only works on x86_64.
 [target.'cfg(target_arch = "x86_64")'.dev-dependencies]
-wasmer = { version = "2.0.0", default-features = false, features = ["default-singlepass", "default-universal"] }
+wasmer = { version = "2.2.1", default-features = false, features = ["singlepass", "universal"] }
 
 [target.'cfg(not(target_arch = "x86_64"))'.dev-dependencies]
-wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
+wasmer = { version = "2.2.1", default-features = false, features = ["cranelift", "universal"] }
 
 [[bench]]
 name = "time_bench"

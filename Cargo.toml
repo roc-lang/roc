@@ -26,6 +26,7 @@ members = [
     "compiler/arena_pool",
     "compiler/test_gen",
     "compiler/roc_target",
+    "compiler/debug_flags",
     "vendor/ena",
     "vendor/inkwell",
     "vendor/pathfinding",
@@ -45,6 +46,7 @@ members = [
     "utils",
     "docs",
     "linker",
+    "wasi-libc-sys",
 ]
 exclude = [
     "ci/bench-runner",

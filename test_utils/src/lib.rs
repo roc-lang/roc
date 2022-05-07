@@ -43,6 +43,7 @@ impl TmpDir {
 
 impl Drop for TmpDir {
     fn drop(&mut self) {
-        remove_dir_all::remove_dir_all(&self.path).unwrap();
+        // we "discard" the Result because there is no problem when a dir was already removed before we call remove_dir_all
+        let _ = remove_dir_all::remove_dir_all(&self.path);
     }
 }

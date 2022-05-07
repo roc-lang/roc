@@ -514,7 +514,7 @@ pub fn constrain_pattern(
 
             let opaque_type = Type::Alias {
                 symbol: *opaque,
-                type_arguments: type_arguments.clone(),
+                type_arguments: type_arguments.iter().copied().map(Type::Variable).collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: Box::new(arg_pattern_type.clone()),
                 kind: AliasKind::Opaque,
@@ -571,9 +571,7 @@ pub fn constrain_pattern(
                 .vars
                 .extend_from_slice(&[*arg_pattern_var, *whole_var]);
             // Also add the fresh variables we created for the type argument and lambda sets
-            state.vars.extend(type_arguments.iter().map(|(_, t)| {
-                t.expect_variable("all type arguments should be fresh variables here")
-            }));
+            state.vars.extend(type_arguments);
             state.vars.extend(lambda_set_variables.iter().map(|v| {
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));

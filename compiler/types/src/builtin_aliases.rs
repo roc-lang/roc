@@ -381,7 +381,7 @@ pub fn flex(tvar: VarId) -> SolvedType {
 pub fn num_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_NUM,
-        vec![("range".into(), range.clone())],
+        vec![(range.clone())],
         vec![],
         Box::new(num_alias_content(range)),
         AliasKind::Opaque,
@@ -399,7 +399,7 @@ fn num_alias_content(range: SolvedType) -> SolvedType {
 pub fn floatingpoint_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_FLOATINGPOINT,
-        vec![("range".into(), range.clone())],
+        vec![(range.clone())],
         vec![],
         Box::new(floatingpoint_alias_content(range)),
         AliasKind::Opaque,
@@ -417,7 +417,7 @@ fn floatingpoint_alias_content(range: SolvedType) -> SolvedType {
 pub fn float_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_FLOAT,
-        vec![("range".into(), range.clone())],
+        vec![(range.clone())],
         vec![],
         Box::new(float_alias_content(range)),
         AliasKind::Structural,
@@ -669,7 +669,7 @@ fn i8_alias_content() -> SolvedType {
 pub fn int_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_INT,
-        vec![("range".into(), range.clone())],
+        vec![(range.clone())],
         vec![],
         Box::new(int_alias_content(range)),
         AliasKind::Structural,
@@ -687,7 +687,7 @@ fn int_alias_content(range: SolvedType) -> SolvedType {
 pub fn integer_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_INTEGER,
-        vec![("range".into(), range.clone())],
+        vec![(range.clone())],
         vec![],
         Box::new(integer_alias_content(range)),
         AliasKind::Opaque,
@@ -979,7 +979,7 @@ pub fn ordering_type() -> SolvedType {
 pub fn result_type(a: SolvedType, e: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::RESULT_RESULT,
-        vec![("ok".into(), a.clone()), ("err".into(), e.clone())],
+        vec![a.clone(), e.clone()],
         vec![],
         Box::new(result_alias_content(a, e)),
         AliasKind::Structural,

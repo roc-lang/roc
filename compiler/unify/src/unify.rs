@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use roc_debug_flags::{dbg_do, ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -11,14 +12,14 @@ use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, 
 
 macro_rules! mismatch {
     () => {{
-        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
-            println!(
+        dbg_do!(ROC_PRINT_MISMATCHES, {
+            eprintln!(
                 "Mismatch in {} Line {} Column {}",
                 file!(),
                 line!(),
                 column!()
             );
-        }
+        })
 
         Outcome {
             mismatches: vec![Mismatch::TypeMismatch],
@@ -26,17 +27,16 @@ macro_rules! mismatch {
         }
     }};
     ($msg:expr) => {{
-        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
-            println!(
+        dbg_do!(ROC_PRINT_MISMATCHES, {
+            eprintln!(
                 "Mismatch in {} Line {} Column {}",
                 file!(),
                 line!(),
                 column!()
             );
-            println!($msg);
-            println!("");
-        }
-
+            eprintln!($msg);
+            eprintln!("");
+        });
 
         Outcome {
             mismatches: vec![Mismatch::TypeMismatch],
@@ -47,16 +47,16 @@ macro_rules! mismatch {
         mismatch!($msg)
     }};
     ($msg:expr, $($arg:tt)*) => {{
-        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
-            println!(
+        dbg_do!(ROC_PRINT_MISMATCHES, {
+            eprintln!(
                 "Mismatch in {} Line {} Column {}",
                 file!(),
                 line!(),
                 column!()
             );
-            println!($msg, $($arg)*);
-            println!("");
-        }
+            eprintln!($msg, $($arg)*);
+            eprintln!("");
+        });
 
         Outcome {
             mismatches: vec![Mismatch::TypeMismatch],
@@ -64,16 +64,16 @@ macro_rules! mismatch {
         }
     }};
     (%not_able, $var:expr, $ability:expr, $msg:expr, $($arg:tt)*) => {{
-        if cfg!(debug_assertions) && std::env::var("ROC_PRINT_MISMATCHES").is_ok() {
-            println!(
+        dbg_do!(ROC_PRINT_MISMATCHES, {
+            eprintln!(
                 "Mismatch in {} Line {} Column {}",
                 file!(),
                 line!(),
                 column!()
             );
-            println!($msg, $($arg)*);
-            println!("");
-        }
+            eprintln!($msg, $($arg)*);
+            eprintln!("");
+        });
 
         Outcome {
             mismatches: vec![Mismatch::TypeMismatch, Mismatch::DoesNotImplementAbiity($var, $ability)],
@@ -298,7 +298,7 @@ fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option
 
     static mut UNIFICATION_DEPTH: usize = 0;
 
-    if std::env::var("ROC_PRINT_UNIFICATIONS").is_ok() {
+    dbg_do!(ROC_PRINT_UNIFICATIONS, {
         let prefix = match opt_outcome {
             None => "❔",
             Some(outcome) if outcome.mismatches.is_empty() => "✅",
@@ -340,7 +340,7 @@ fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option
         );
 
         unsafe { UNIFICATION_DEPTH = new_depth };
-    }
+    })
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {

@@ -56,6 +56,7 @@ use morphic_lib::{
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth, IntrinsicName};
 use roc_builtins::{float_intrinsic, llvm_int_intrinsic};
 use roc_collections::all::{ImMap, MutMap, MutSet};
+use roc_debug_flags::{dbg_do, ROC_PRINT_LLVM_FN_VERIFICATION};
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -69,13 +70,13 @@ use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 use super::convert::zig_with_overflow_roc_dec;
 
-/// This is for Inkwell's FunctionValue::verify - we want to know the verification
-/// output in debug builds, but we don't want it to print to stdout in release builds!
-#[cfg(debug_assertions)]
-const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
-
-#[cfg(not(debug_assertions))]
-const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
+#[inline(always)]
+fn print_fn_verification_output() -> bool {
+    dbg_do!(ROC_PRINT_LLVM_FN_VERIFICATION, {
+        return true;
+    });
+    false
+}
 
 #[macro_export]
 macro_rules! debug_info_init {
@@ -603,6 +604,7 @@ static LLVM_SIN: IntrinsicName = float_intrinsic!("llvm.sin");
 static LLVM_COS: IntrinsicName = float_intrinsic!("llvm.cos");
 static LLVM_CEILING: IntrinsicName = float_intrinsic!("llvm.ceil");
 static LLVM_FLOOR: IntrinsicName = float_intrinsic!("llvm.floor");
+static LLVM_ROUND: IntrinsicName = float_intrinsic!("llvm.round");
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
@@ -807,20 +809,24 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
-            let global = if str_literal.len() < env.small_str_bytes() as usize {
+            if str_literal.len() < env.small_str_bytes() as usize {
                 match env.small_str_bytes() {
-                    24 => small_str_ptr_width_8(env, parent, str_literal),
-                    12 => small_str_ptr_width_4(env, parent, str_literal),
+                    24 => small_str_ptr_width_8(env, parent, str_literal).into(),
+                    12 => small_str_ptr_width_4(env, parent, str_literal).into(),
                     _ => unreachable!("incorrect small_str_bytes"),
                 }
             } else {
                 let ptr = define_global_str_literal_ptr(env, *str_literal);
                 let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
 
-                const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements)
-            };
+                let alloca =
+                    const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements);
 
-            global.into()
+                match env.target_info.ptr_width() {
+                    PtrWidth::Bytes4 => env.builder.build_load(alloca, "load_const_str"),
+                    PtrWidth::Bytes8 => alloca.into(),
+                }
+            }
         }
     }
 }
@@ -4515,7 +4521,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
 }
 
 pub fn verify_fn(fn_val: FunctionValue<'_>) {
-    if !fn_val.verify(PRINT_FN_VERIFICATION_OUTPUT) {
+    if !fn_val.verify(print_fn_verification_output()) {
         unsafe {
             fn_val.delete();
         }
@@ -5675,6 +5681,15 @@ fn run_low_level<'a, 'ctx, 'env>(
                 update_mode,
             )
         }
+        ListIsUnique => {
+            // List.isUnique : List a -> Bool
+            debug_assert_eq!(args.len(), 1);
+
+            let list = load_symbol(scope, &args[0]);
+            let list = list_to_c_abi(env, list).into();
+
+            call_bitcode_fn(env, &[list], bitcode::LIST_IS_UNIQUE)
+        }
         NumToStr => {
             // Num.toStr : Num a -> Str
             debug_assert_eq!(args.len(), 1);
@@ -6679,10 +6694,34 @@ fn build_int_binop<'a, 'ctx, 'env>(
             &LLVM_MUL_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
         ),
-        NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
-        NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
-        NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
-        NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
+        NumGt => {
+            if int_width.is_signed() {
+                bd.build_int_compare(SGT, lhs, rhs, "gt_int").into()
+            } else {
+                bd.build_int_compare(UGT, lhs, rhs, "gt_uint").into()
+            }
+        }
+        NumGte => {
+            if int_width.is_signed() {
+                bd.build_int_compare(SGE, lhs, rhs, "gte_int").into()
+            } else {
+                bd.build_int_compare(UGE, lhs, rhs, "gte_uint").into()
+            }
+        }
+        NumLt => {
+            if int_width.is_signed() {
+                bd.build_int_compare(SLT, lhs, rhs, "lt_int").into()
+            } else {
+                bd.build_int_compare(ULT, lhs, rhs, "lt_uint").into()
+            }
+        }
+        NumLte => {
+            if int_width.is_signed() {
+                bd.build_int_compare(SLE, lhs, rhs, "lte_int").into()
+            } else {
+                bd.build_int_compare(ULE, lhs, rhs, "lte_uint").into()
+            }
+        }
         NumRemUnchecked => {
             if int_width.is_signed() {
                 bd.build_int_signed_rem(lhs, rhs, "rem_int").into()
@@ -7448,20 +7487,67 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
                 }
             }
         }
-        NumCeiling => env.builder.build_cast(
-            InstructionOpcode::FPToSI,
-            env.call_intrinsic(&LLVM_CEILING[float_width], &[arg.into()]),
-            env.context.i64_type(),
-            "num_ceiling",
-        ),
-        NumFloor => env.builder.build_cast(
-            InstructionOpcode::FPToSI,
-            env.call_intrinsic(&LLVM_FLOOR[float_width], &[arg.into()]),
-            env.context.i64_type(),
-            "num_floor",
-        ),
+        NumCeiling => {
+            let (return_signed, return_type) = match layout {
+                Layout::Builtin(Builtin::Int(int_width)) => (
+                    int_width.is_signed(),
+                    convert::int_type_from_int_width(env, *int_width),
+                ),
+                _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
+            };
+            let opcode = if return_signed {
+                InstructionOpcode::FPToSI
+            } else {
+                InstructionOpcode::FPToUI
+            };
+            env.builder.build_cast(
+                opcode,
+                env.call_intrinsic(&LLVM_CEILING[float_width], &[arg.into()]),
+                return_type,
+                "num_ceiling",
+            )
+        }
+        NumFloor => {
+            let (return_signed, return_type) = match layout {
+                Layout::Builtin(Builtin::Int(int_width)) => (
+                    int_width.is_signed(),
+                    convert::int_type_from_int_width(env, *int_width),
+                ),
+                _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
+            };
+            let opcode = if return_signed {
+                InstructionOpcode::FPToSI
+            } else {
+                InstructionOpcode::FPToUI
+            };
+            env.builder.build_cast(
+                opcode,
+                env.call_intrinsic(&LLVM_FLOOR[float_width], &[arg.into()]),
+                return_type,
+                "num_floor",
+            )
+        }
+        NumRound => {
+            let (return_signed, return_type) = match layout {
+                Layout::Builtin(Builtin::Int(int_width)) => (
+                    int_width.is_signed(),
+                    convert::int_type_from_int_width(env, *int_width),
+                ),
+                _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
+            };
+            let opcode = if return_signed {
+                InstructionOpcode::FPToSI
+            } else {
+                InstructionOpcode::FPToUI
+            };
+            env.builder.build_cast(
+                opcode,
+                env.call_intrinsic(&LLVM_ROUND[float_width], &[arg.into()]),
+                return_type,
+                "num_round",
+            )
+        }
         NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_FINITE[float_width]),
-        NumRound => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND[float_width]),
 
         // trigonometry
         NumSin => env.call_intrinsic(&LLVM_SIN[float_width], &[arg.into()]),

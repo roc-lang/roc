@@ -13,8 +13,8 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-roc_error_macros::assert_sizeof_all!(Descriptor, 6 * 8);
-roc_error_macros::assert_sizeof_all!(Content, 4 * 8);
+roc_error_macros::assert_sizeof_all!(Descriptor, 5 * 8);
+roc_error_macros::assert_sizeof_all!(Content, 3 * 8 + 4);
 roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
 roc_error_macros::assert_sizeof_all!(UnionTags, 12);
 roc_error_macros::assert_sizeof_all!(RecordFields, 2 * 8);
@@ -2026,8 +2026,8 @@ impl From<Content> for Descriptor {
     }
 }
 
-roc_error_macros::assert_sizeof_all!(Content, 4 * 8);
-roc_error_macros::assert_sizeof_all!((Symbol, AliasVariables, Variable), 3 * 8);
+roc_error_macros::assert_sizeof_all!(Content, 3 * 8 + 4);
+roc_error_macros::assert_sizeof_all!((Symbol, AliasVariables, Variable), 2 * 8 + 4);
 roc_error_macros::assert_sizeof_all!(AliasVariables, 8);
 roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
 

@@ -19,6 +19,7 @@ mod test_load {
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
     use roc_constrain::module::ExposedByModule;
+    use roc_load_internal::file::Threading;
     use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem, Phase};
     use roc_module::ident::ModuleName;
     use roc_module::symbol::{Interns, ModuleId};
@@ -53,6 +54,7 @@ mod test_load {
             target_info,
             Default::default(), // these tests will re-compile the builtins
             RenderTarget::Generic,
+            Threading::Single,
         )? {
             Monomorphized(_) => unreachable!(""),
             TypeChecked(module) => Ok(module),

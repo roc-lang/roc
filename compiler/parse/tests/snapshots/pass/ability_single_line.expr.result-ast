@@ -10,8 +10,8 @@ Defs(
                 members: [
                     AbilityMember {
                         name: @9-13 "hash",
-                        typ: @21-37 Where(
-                            @21-24 Function(
+                        typ: @16-37 Where(
+                            @16-24 Function(
                                 [
                                     @16-17 BoundVariable(
                                         "a",

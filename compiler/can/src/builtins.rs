@@ -150,6 +150,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_ANY => list_any,
         LIST_ALL => list_all,
         LIST_FIND => list_find,
+        LIST_IS_UNIQUE => list_is_unique,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
         DICT_SINGLE => dict_single,
@@ -2506,7 +2507,10 @@ fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let get_sub = RunLowLevel {
         op: LowLevel::NumSubWrap,
-        args: vec![(len_var, get_list_len), (len_var, Var(Symbol::ARG_2))],
+        args: vec![
+            (len_var, get_list_len.clone()),
+            (len_var, Var(Symbol::ARG_2)),
+        ],
         ret_var: len_var,
     };
 
@@ -2516,7 +2520,7 @@ fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
         branches: vec![(
             no_region(RunLowLevel {
                 op: LowLevel::NumGt,
-                args: vec![(len_var, get_sub.clone()), (len_var, zero.clone())],
+                args: vec![(len_var, get_list_len), (len_var, Var(Symbol::ARG_2))],
                 ret_var: bool_var,
             }),
             no_region(get_sub),
@@ -3768,6 +3772,11 @@ fn list_find(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         t_ret,
     )
+}
+
+/// List.isUnique : List * -> Bool
+fn list_is_unique(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::ListIsUnique, var_store)
 }
 
 /// Dict.len : Dict * * -> Nat
