@@ -19,18 +19,6 @@ pub struct CodeGenTiming {
     pub emit_o_file: Duration,
 }
 
-// TODO: If modules besides this one start needing to know which version of
-// llvm we're using, consider moving me somewhere else.
-#[cfg(feature = "llvm")]
-const LLVM_VERSION: &str = "13";
-
-fn zig_executable() -> String {
-    match std::env::var("ROC_ZIG") {
-        Ok(path) => path,
-        Err(_) => "zig".into(),
-    }
-}
-
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Problems {
     report_problems_help(
         loaded.total_problems(),
@@ -346,7 +334,7 @@ pub fn gen_from_mono_module_llvm(
         module.print_to_file(&app_ll_file).unwrap();
 
         // run the debugir https://github.com/vaivaswatha/debugir tool
-        match Command::new("debugir")
+        match Command::new("/home/folkertdev/roc/debugir/build/debugir")
             .args(&["-instnamer", app_ll_file.to_str().unwrap()])
             .output()
         {
@@ -368,24 +356,33 @@ pub fn gen_from_mono_module_llvm(
             | Architecture::X86_32(_)
             | Architecture::Aarch64(_)
             | Architecture::Wasm32 => {
+                let ll_to_bc = Command::new("llvm-as")
+                    .args(&[
+                        app_ll_dbg_file.to_str().unwrap(),
+                        "-o",
+                        app_bc_file.to_str().unwrap(),
+                    ])
+                    .output()
+                    .unwrap();
+
+                assert!(ll_to_bc.stderr.is_empty(), "{:#?}", ll_to_bc);
+
+                let llc_args = &[
+                    "-relocation-model=pic",
+                    "-filetype=obj",
+                    app_bc_file.to_str().unwrap(),
+                    "-o",
+                    app_o_file.to_str().unwrap(),
+                ];
+
                 // write the .o file. Note that this builds the .o for the local machine,
                 // and ignores the `target_machine` entirely.
-                let zig = zig_executable();
+                //
+                // different systems name this executable differently, so we shotgun for
+                // the most common ones and then give up.
+                let bc_to_object = Command::new("llc").args(llc_args).output().unwrap();
 
-                // TODO update debugir to LLVM 13
-                eprintln!("debugir is not updated to LLVM 13 yet, skipping debug info for now");
-                let input = app_ll_file.to_str().unwrap();
-                // let input =  app_ll_dbg_file.to_str().unwrap();
-
-                let mut ll_to_bc = Command::new(zig);
-
-                ll_to_bc.args(&[
-                    "build-lib",
-                    input,
-                    &format!("-femit-bin={}", app_o_file.to_str().unwrap(),),
-                ]);
-
-                let _ = ll_to_bc.output().unwrap();
+                assert!(bc_to_object.stderr.is_empty(), "{:#?}", bc_to_object);
             }
             _ => unreachable!(),
         }
