@@ -4,6 +4,3 @@ version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2018"
-
-[dependencies]
-arrayvec = "0.7.2"
