@@ -6261,6 +6261,24 @@ mod solve_expr {
     }
 
     #[test]
+    fn alias_propogates_able_var() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ zeroEncoder ] to "./platform"
+
+                Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+
+                Format has it : fmt -> {} | fmt has Format
+
+                zeroEncoder = @Encoder \lst, _ -> lst
+                "#
+            ),
+            "Encoder a | a has Format",
+        )
+    }
+
+    #[test]
     fn encoder() {
         infer_queries(
             indoc!(

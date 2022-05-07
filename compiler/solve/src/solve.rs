@@ -1958,6 +1958,8 @@ fn type_to_variable<'a>(
                         let copy_var = match opt_ability {
                             None => helper!(typ),
                             Some(ability) => {
+                                // If this type argument is marked as being bound to an ability, we must
+                                // now correctly instantiate it as so.
                                 match RegisterVariable::from_type(subs, rank, pools, arena, typ) {
                                     RegisterVariable::Direct(var) => {
                                         use Content::*;
@@ -1968,13 +1970,6 @@ fn type_to_variable<'a>(
                                                 var,
                                                 FlexAbleVar(Some(name), *ability),
                                             ),
-                                            RigidAbleVar(name, existing_ability) => {
-                                                debug_assert_eq!(existing_ability, *ability);
-                                                subs.set_content(
-                                                    var,
-                                                    FlexAbleVar(Some(name), existing_ability),
-                                                );
-                                            }
                                             _ => {
                                                 // TODO associate the type to the bound ability, and check
                                                 // that it correctly implements the ability.
