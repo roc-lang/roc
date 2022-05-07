@@ -132,11 +132,11 @@ impl IntWidth {
                 | Architecture::Wasm32 => 8,
                 Architecture::X86_32 => 4,
             },
-            U128 | I128 => match target_info.architecture {
-                Architecture::Aarch64 => 16,
-                Architecture::X86_64 | Architecture::Arm | Architecture::Wasm32 => 8,
-                Architecture::X86_32 => 4,
-            },
+            U128 | I128 => {
+                // the C ABI defines 128-bit integers to always be 16B aligned,
+                // according to https://reviews.llvm.org/D28990#655487
+                16
+            }
         }
     }
 
