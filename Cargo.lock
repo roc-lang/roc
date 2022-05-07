@@ -3356,6 +3356,8 @@ dependencies = [
  "roc_repl_cli",
  "roc_test_utils",
  "strip-ansi-escapes",
+ "wasmer",
+ "wasmer-wasi",
 ]
 
 [[package]]
