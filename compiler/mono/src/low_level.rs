@@ -83,6 +83,35 @@ impl HigherOrder {
             HigherOrder::ListAll { .. } => 1,
         }
     }
+
+    /// Index in the array of arguments of the symbol that is the closure data
+    /// (captured environment for this function)
+    pub const fn closure_data_index(&self) -> usize {
+        use HigherOrder::*;
+
+        match self {
+            ListMap { .. }
+            | ListMapWithIndex { .. }
+            | ListSortWith { .. }
+            | ListKeepIf { .. }
+            | ListKeepOks { .. }
+            | ListKeepErrs { .. }
+            | ListAny { .. }
+            | ListAll { .. }
+            | ListFindUnsafe { .. } => 2,
+            ListMap2 { .. } => 3,
+            ListMap3 { .. } => 4,
+            ListMap4 { .. } => 5,
+            ListWalk { .. } | ListWalkUntil { .. } | ListWalkBackwards { .. } | DictWalk { .. } => {
+                3
+            }
+        }
+    }
+
+    /// Index of the function symbol in the argument list
+    pub const fn function_index(&self) -> usize {
+        self.closure_data_index() - 1
+    }
 }
 
 #[allow(dead_code)]

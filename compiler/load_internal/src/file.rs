@@ -2239,7 +2239,13 @@ fn update<'a>(
 
                 debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
+                Proc::insert_refcount_operations(
+                    arena,
+                    module_id,
+                    &mut ident_ids,
+                    &mut update_mode_ids,
+                    &mut state.procedures,
+                );
 
                 debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
 
