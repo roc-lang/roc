@@ -3356,8 +3356,6 @@ dependencies = [
  "roc_repl_cli",
  "roc_test_utils",
  "strip-ansi-escapes",
- "wasmer",
- "wasmer-wasi",
 ]
 
 [[package]]
@@ -3486,7 +3484,6 @@ dependencies = [
  "bumpalo",
  "indoc",
  "pretty_assertions",
- "roc_builtins",
  "roc_collections",
  "roc_error_macros",
  "roc_exhaustive",
@@ -3496,7 +3493,6 @@ dependencies = [
  "roc_region",
  "roc_types",
  "static_assertions 1.1.0",
- "ven_graph",
 ]
 
 [[package]]
@@ -3585,7 +3581,6 @@ name = "roc_docs"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "indoc",
  "peg",
  "pretty_assertions",
  "pulldown-cmark",
@@ -3603,8 +3598,6 @@ dependencies = [
  "roc_target",
  "roc_types",
  "snafu",
- "tempfile",
- "uuid",
 ]
 
 [[package]]
@@ -3753,9 +3746,6 @@ dependencies = [
 [[package]]
 name = "roc_ident"
 version = "0.1.0"
-dependencies = [
- "arrayvec 0.7.2",
-]
 
 [[package]]
 name = "roc_linker"
@@ -3798,7 +3788,6 @@ dependencies = [
  "crossbeam",
  "indoc",
  "maplit",
- "morphic_lib",
  "num_cpus",
  "parking_lot 0.12.0",
  "pretty_assertions",
@@ -3819,7 +3808,6 @@ dependencies = [
  "roc_test_utils",
  "roc_types",
  "roc_unify",
- "tempfile",
  "ven_pretty",
 ]
 
@@ -3827,7 +3815,6 @@ dependencies = [
 name = "roc_module"
 version = "0.1.0"
 dependencies = [
- "arrayvec 0.7.2",
  "bumpalo",
  "lazy_static",
  "roc_collections",
@@ -3844,7 +3831,6 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "hashbrown 0.11.2",
- "morphic_lib",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -3987,7 +3973,6 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "roc_types",
- "tempfile",
  "ven_pretty",
 ]
 
@@ -4704,7 +4689,6 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc",
- "pretty_assertions",
  "roc_builtins",
  "roc_can",
  "roc_collections",
