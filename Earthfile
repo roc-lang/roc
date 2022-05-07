@@ -29,7 +29,6 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN chmod +x llvm.sh
     RUN ./llvm.sh 13
     RUN ln -s /usr/bin/clang-13 /usr/bin/clang
-    RUN ln -s /usr/bin/llvm-as-13 /usr/bin/llvm-as
     # use lld as linker
     RUN ln -s /usr/bin/lld-13 /usr/bin/ld.lld
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"

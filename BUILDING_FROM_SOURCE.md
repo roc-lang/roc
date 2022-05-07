@@ -156,16 +156,12 @@ chmod +x llvm.sh
 ./llvm.sh 13
 ```
 
-If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
-By default, the script installs them as `clang-13` and `llvm-as-13`,
-respectively. You can address this with symlinks like so:
+If you use this script, you'll need to add `clang` to your `PATH`.
+By default, the script installs it as `clang-13`. You can address this with symlinks like so:
 
 ```
 sudo ln -s /usr/bin/clang-13 /usr/bin/clang
 ```
-```
-sudo ln -s /usr/bin/llvm-as-13 /usr/bin/llvm-as
-````
 
 There are also alternative installation options at http://releases.llvm.org/download.html
 
