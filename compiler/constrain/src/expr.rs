@@ -1482,8 +1482,8 @@ fn constrain_typed_def(
 
             constrain_def_make_constraint(
                 constraints,
-                new_rigid_variables,
-                new_infer_variables,
+                new_rigid_variables.into_iter(),
+                new_infer_variables.into_iter(),
                 expr_con,
                 body_con,
                 def_pattern_state,
@@ -1517,8 +1517,8 @@ fn constrain_typed_def(
 
             constrain_def_make_constraint(
                 constraints,
-                new_rigid_variables,
-                new_infer_variables,
+                new_rigid_variables.into_iter(),
+                new_infer_variables.into_iter(),
                 expr_con,
                 body_con,
                 def_pattern_state,
@@ -1683,8 +1683,8 @@ fn constrain_def(
 
             constrain_def_make_constraint(
                 constraints,
-                vec![],
-                vec![],
+                std::iter::empty(),
+                std::iter::empty(),
                 expr_con,
                 body_con,
                 def_pattern_state,
@@ -1695,8 +1695,8 @@ fn constrain_def(
 
 pub fn constrain_def_make_constraint(
     constraints: &mut Constraints,
-    new_rigid_variables: Vec<Variable>,
-    new_infer_variables: Vec<Variable>,
+    new_rigid_variables: impl Iterator<Item = Variable>,
+    new_infer_variables: impl Iterator<Item = Variable>,
     expr_con: Constraint,
     body_con: Constraint,
     def_pattern_state: PatternState,

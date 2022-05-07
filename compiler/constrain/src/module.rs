@@ -139,8 +139,8 @@ fn constrain_symbols_from_requires(
                     constraints,
                     // No new rigids or flex vars because they are represented in the type
                     // annotation.
-                    vec![],
-                    vec![],
+                    std::iter::empty(),
+                    std::iter::empty(),
                     Constraint::True,
                     constraint,
                     def_pattern_state,
@@ -187,14 +187,8 @@ pub fn frontload_ability_constraints(
         def_pattern_state.vars.push(member_data.signature_var);
 
         let vars = &member_data.variables;
-        let new_rigid_variables = vars
-            .rigid_vars
-            .iter()
-            .chain(vars.able_vars.iter())
-            .copied()
-            .collect();
-
-        let new_infer_variables = vars.flex_vars.clone();
+        let rigid_variables = vars.rigid_vars.iter().chain(vars.able_vars.iter()).copied();
+        let infer_variables = vars.flex_vars.iter().copied();
 
         def_pattern_state
             .constraints
@@ -207,8 +201,8 @@ pub fn frontload_ability_constraints(
 
         constraint = constrain_def_make_constraint(
             constraints,
-            new_rigid_variables,
-            new_infer_variables,
+            rigid_variables,
+            infer_variables,
             Constraint::True,
             constraint,
             def_pattern_state,
