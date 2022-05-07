@@ -6261,7 +6261,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn alias_propogates_able_var() {
+    fn alias_propagates_able_var() {
         infer_eq_without_problem(
             indoc!(
                 r#"
