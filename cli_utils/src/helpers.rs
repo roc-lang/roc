@@ -163,7 +163,7 @@ pub fn run_with_valgrind(stdin_vals: &[&str], args: &[&str]) -> (Out, String) {
 
     (
         Out {
-            stdout: String::from_utf8(output.stdout[..4].to_vec()).unwrap(),
+            stdout: String::from_utf8(output.stdout).unwrap(),
             stderr: String::from_utf8(output.stderr).unwrap(),
             status: output.status,
         },
