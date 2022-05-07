@@ -747,6 +747,7 @@ impl<'a> State<'a> {
         ident_ids_by_module: SharedIdentIdsByModule,
         cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
         render: RenderTarget,
+        number_of_workers: usize,
     ) -> Self {
         let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
@@ -770,7 +771,7 @@ impl<'a> State<'a> {
             declarations_by_id: MutMap::default(),
             exposed_symbols_by_module: MutMap::default(),
             timings: MutMap::default(),
-            layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
+            layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
             render,
         }
@@ -1233,6 +1234,7 @@ pub fn load_single_threaded<'a>(
         .send(root_msg)
         .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
+    let number_of_workers = 1;
     let mut state = State::new(
         root_id,
         target_info,
@@ -1242,6 +1244,7 @@ pub fn load_single_threaded<'a>(
         ident_ids_by_module,
         cached_subs,
         render,
+        number_of_workers,
     );
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
@@ -1423,31 +1426,13 @@ fn load_multi_threaded<'a>(
         ..
     } = load_start;
 
-    let mut state = State::new(
-        root_id,
-        target_info,
-        goal_phase,
-        exposed_types,
-        arc_modules,
-        ident_ids_by_module,
-        cached_subs,
-        render,
-    );
-
     let (msg_tx, msg_rx) = bounded(1024);
     msg_tx
         .send(root_msg)
         .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
     // Reserve one CPU for the main thread, and let all the others be eligible
-    // to spawn workers. We use .max(2) to enforce that we always
-    // end up with at least 1 worker - since (.max(2) - 1) will
-    // always return a number that's at least 1. Using
-    // .max(2) on the initial number of CPUs instead of
-    // doing .max(1) on the entire expression guards against
-    // num_cpus returning 0, while also avoiding wrapping
-    // unsigned subtraction overflow.
-    // let default_num_workers = num_cpus::get().max(2) - 1;
+    // to spawn workers.
     let available_workers = available_threads - 1;
 
     let num_workers = match env::var("ROC_NUM_WORKERS") {
@@ -1461,6 +1446,18 @@ fn load_multi_threaded<'a>(
     assert!(
         num_workers >= 1,
         "`load_multi_threaded` needs at least one worker"
+    );
+
+    let mut state = State::new(
+        root_id,
+        target_info,
+        goal_phase,
+        exposed_types,
+        arc_modules,
+        ident_ids_by_module,
+        cached_subs,
+        render,
+        num_workers,
     );
 
     // an arena for every worker, stored in an arena-allocated bumpalo vec to make the lifetimes work

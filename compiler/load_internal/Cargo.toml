@@ -27,7 +27,6 @@ ven_pretty = { path = "../../vendor/pretty" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 parking_lot = "0.12"
 crossbeam = "0.8.1"
-num_cpus = "1.13.0"
 
 [dev-dependencies]
 tempfile = "3.2.0"

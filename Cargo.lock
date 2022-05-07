@@ -3799,7 +3799,6 @@ dependencies = [
  "indoc",
  "maplit",
  "morphic_lib",
- "num_cpus",
  "parking_lot 0.12.0",
  "pretty_assertions",
  "roc_builtins",
