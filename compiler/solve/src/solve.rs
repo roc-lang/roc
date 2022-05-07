@@ -2426,7 +2426,7 @@ fn generalize(
     young_rank: Rank,
     pools: &mut Pools,
 ) {
-    let young_vars = pools.get(young_rank);
+    let young_vars = std::mem::take(pools.get_mut(young_rank));
     let rank_table = pool_to_rank_table(subs, young_mark, young_rank, young_vars);
 
     // Get the ranks right for each entry.
@@ -2464,32 +2464,38 @@ fn generalize(
             }
         }
     }
+
+    // re-use the last_vector (which likely has a good capacity for future runs
+    *pools.get_mut(young_rank) = last_pool;
 }
 
 /// Sort the variables into buckets by rank.
+#[inline]
 fn pool_to_rank_table(
     subs: &mut Subs,
     young_mark: Mark,
     young_rank: Rank,
-    young_vars: &[Variable],
+    mut young_vars: Vec<Variable>,
 ) -> Pools {
     let mut pools = Pools::new(young_rank.into_usize() + 1);
 
     // the vast majority of young variables have young_rank
-    // using `retain` here prevents many `pools.get_mut(young_rank)` lookups
-    let mut young_vars = young_vars.to_vec();
-    young_vars.retain(|var| {
-        let rank = subs.get_rank_set_mark(*var, young_mark);
+    let mut i = 0;
+    while i < young_vars.len() {
+        let var = young_vars[i];
+        let rank = subs.get_rank_set_mark(var, young_mark);
 
         if rank != young_rank {
             debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
 
-            pools.get_mut(rank).push(*var);
-            false
+            pools.get_mut(rank).push(var);
+
+            // swap an element in; don't increment i
+            young_vars.swap_remove(i);
         } else {
-            true
+            i += 1;
         }
-    });
+    }
 
     std::mem::swap(pools.get_mut(young_rank), &mut young_vars);
 
