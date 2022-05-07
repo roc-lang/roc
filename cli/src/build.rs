@@ -350,6 +350,7 @@ pub fn check_file(
     src_dir: PathBuf,
     roc_file_path: PathBuf,
     emit_timings: bool,
+    threading: Threading,
 ) -> Result<(program::Problems, Duration), LoadingProblem> {
     let compilation_start = SystemTime::now();
 
@@ -368,7 +369,7 @@ pub fn check_file(
         target_info,
         // TODO: expose this from CLI?
         RenderTarget::ColorTerminal,
-        Threading::Multi,
+        threading,
     )?;
 
     let buf = &mut String::with_capacity(1024);

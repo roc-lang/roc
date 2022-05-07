@@ -1210,15 +1210,8 @@ pub fn optimize_when<'a>(
         // bind the fields referenced in the pattern. For guards this happens separately, so
         // the pattern variables are defined when evaluating the guard.
         if !has_guard {
-            branch = crate::ir::store_pattern(
-                env,
-                procs,
-                layout_cache,
-                &pattern,
-                cond_layout,
-                cond_symbol,
-                branch,
-            );
+            branch =
+                crate::ir::store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch);
         }
 
         let ((branch_index, choice), opt_jump) = create_choices(&target_counts, index, branch);
@@ -1730,15 +1723,7 @@ fn decide_to_branching<'a>(
                 body: arena.alloc(decide),
             };
 
-            crate::ir::store_pattern(
-                env,
-                procs,
-                layout_cache,
-                &pattern,
-                cond_layout,
-                cond_symbol,
-                join,
-            )
+            crate::ir::store_pattern(env, procs, layout_cache, &pattern, cond_symbol, join)
         }
         Chain {
             test_chain,

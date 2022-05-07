@@ -6234,4 +6234,22 @@ mod solve_expr {
             "F b -> b",
         )
     }
+
+    #[test]
+    fn alias_in_opaque() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ foo ] to "./platform"
+
+                MyError : [ Error ]
+
+                MyResult := Result U8 MyError
+
+                foo = @MyResult (Err Error)
+                "#
+            ),
+            "MyResult",
+        )
+    }
 }

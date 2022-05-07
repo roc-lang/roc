@@ -6,7 +6,7 @@ use roc_cli::{
     FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, ROC_FILE,
 };
 use roc_error_macros::user_error;
-use roc_load::LoadingProblem;
+use roc_load::{LoadingProblem, Threading};
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -27,43 +27,31 @@ fn main() -> io::Result<()> {
 
     let exit_code = match matches.subcommand() {
         None => {
-            match matches.index_of(ROC_FILE) {
-                Some(arg_index) => {
-                    let roc_file_arg_index = arg_index + 1; // Not sure why this +1 is necessary, but it is!
+            if matches.is_present(ROC_FILE) {
+                build(
+                    &matches,
+                    BuildConfig::BuildAndRunIfNoErrors,
+                    Triple::host(),
+                    LinkType::Executable,
+                )
+            } else {
+                launch_editor(None)?;
 
-                    build(
-                        &matches,
-                        BuildConfig::BuildAndRunIfNoErrors { roc_file_arg_index },
-                        Triple::host(),
-                        LinkType::Executable,
-                    )
-                }
-
-                None => {
-                    launch_editor(None)?;
-
-                    Ok(0)
-                }
+                Ok(0)
             }
         }
         Some((CMD_RUN, matches)) => {
-            match matches.index_of(ROC_FILE) {
-                Some(arg_index) => {
-                    let roc_file_arg_index = arg_index + 1; // Not sure why this +1 is necessary, but it is!
+            if matches.is_present(ROC_FILE) {
+                build(
+                    matches,
+                    BuildConfig::BuildAndRun,
+                    Triple::host(),
+                    LinkType::Executable,
+                )
+            } else {
+                eprintln!("What .roc file do you want to run? Specify it at the end of the `roc run` command.");
 
-                    build(
-                        matches,
-                        BuildConfig::BuildAndRun { roc_file_arg_index },
-                        Triple::host(),
-                        LinkType::Executable,
-                    )
-                }
-
-                None => {
-                    eprintln!("What .roc file do you want to run? Specify it at the end of the `roc run` command.");
-
-                    Ok(1)
-                }
+                Ok(1)
             }
         }
         Some((CMD_BUILD, matches)) => {
@@ -90,11 +78,21 @@ fn main() -> io::Result<()> {
             let arena = bumpalo::Bump::new();
 
             let emit_timings = matches.is_present(FLAG_TIME);
-            let filename = matches.value_of(ROC_FILE).unwrap();
+            let filename = matches.value_of_os(ROC_FILE).unwrap();
             let roc_file_path = PathBuf::from(filename);
             let src_dir = roc_file_path.parent().unwrap().to_owned();
 
-            match check_file(&arena, src_dir, roc_file_path, emit_timings) {
+            let threading = match matches
+                .value_of(roc_cli::FLAG_MAX_THREADS)
+                .and_then(|s| s.parse::<usize>().ok())
+            {
+                None => Threading::AllAvailable,
+                Some(0) => user_error!("cannot build with at most 0 threads"),
+                Some(1) => Threading::Single,
+                Some(n) => Threading::AtMost(n),
+            };
+
+            match check_file(&arena, src_dir, roc_file_path, emit_timings, threading) {
                 Ok((problems, total_time)) => {
                     println!(
                         "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",

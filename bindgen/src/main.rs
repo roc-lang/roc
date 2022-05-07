@@ -56,7 +56,7 @@ pub fn main() {
         }
     };
 
-    match load_types(input_path.clone(), &cwd, Threading::Multi) {
+    match load_types(input_path.clone(), &cwd, Threading::AllAvailable) {
         Ok(types) => {
             let mut buf;
 

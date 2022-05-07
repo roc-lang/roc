@@ -3,16 +3,15 @@ extern crate const_format;
 
 use build::BuiltFile;
 use bumpalo::Bump;
-use clap::Command;
-use clap::{Arg, ArgMatches};
+use clap::{Arg, ArgMatches, Command};
 use roc_build::link::LinkType;
 use roc_error_macros::user_error;
 use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use std::env;
+use std::ffi::OsStr;
 use std::io;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
@@ -35,6 +34,7 @@ pub const CMD_FORMAT: &str = "format";
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
+pub const FLAG_MAX_THREADS: &str = "max-threads";
 pub const FLAG_OPT_SIZE: &str = "opt-size";
 pub const FLAG_LIB: &str = "lib";
 pub const FLAG_NO_LINK: &str = "no-link";
@@ -56,6 +56,14 @@ pub fn build_app<'a>() -> Command<'a> {
         .long(FLAG_OPTIMIZE)
         .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
         .requires(ROC_FILE)
+        .required(false);
+
+    let flag_max_threads = Arg::new(FLAG_MAX_THREADS)
+        .long(FLAG_MAX_THREADS)
+        .help("Limit the number of threads (and hence cores) used during compilation.")
+        .requires(ROC_FILE)
+        .takes_value(true)
+        .validator(|s| s.parse::<usize>())
         .required(false);
 
     let flag_opt_size = Arg::new(FLAG_OPT_SIZE)
@@ -96,12 +104,23 @@ pub fn build_app<'a>() -> Command<'a> {
         .possible_values(["true", "false"])
         .required(false);
 
+    let roc_file_to_run = Arg::new(ROC_FILE)
+        .help("The .roc file of an app to run")
+        .allow_invalid_utf8(true);
+
+    let args_for_app = Arg::new(ARGS_FOR_APP)
+        .help("Arguments to pass into the app being run")
+        .requires(ROC_FILE)
+        .allow_invalid_utf8(true)
+        .multiple_values(true);
+
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
         .about("Runs the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(flag_optimize.clone())
+            .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
             .arg(flag_dev.clone())
             .arg(flag_debug.clone())
@@ -132,6 +151,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file to build")
+                    .allow_invalid_utf8(true)
                     .required(true),
             )
         )
@@ -141,6 +161,7 @@ pub fn build_app<'a>() -> Command<'a> {
         .subcommand(Command::new(CMD_RUN)
             .about("Run a .roc file even if it has build errors")
             .arg(flag_optimize.clone())
+            .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
             .arg(flag_dev.clone())
             .arg(flag_debug.clone())
@@ -148,11 +169,8 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_linker.clone())
             .arg(flag_precompiled.clone())
             .arg(flag_valgrind.clone())
-            .arg(
-                Arg::new(ROC_FILE)
-                    .help("The .roc file of an app to run")
-                    .required(true),
-            )
+            .arg(roc_file_to_run.clone().required(true))
+            .arg(args_for_app.clone())
         )
         .subcommand(Command::new(CMD_FORMAT)
             .about("Format a .roc file using standard Roc formatting")
@@ -174,9 +192,11 @@ pub fn build_app<'a>() -> Command<'a> {
         .subcommand(Command::new(CMD_CHECK)
             .about("Check the code for problems, but doesn’t build or run it")
             .arg(flag_time.clone())
+            .arg(flag_max_threads.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file of an app to check")
+                    .allow_invalid_utf8(true)
                     .required(true),
             )
             )
@@ -193,6 +213,7 @@ pub fn build_app<'a>() -> Command<'a> {
         )
         .trailing_var_arg(true)
         .arg(flag_optimize)
+            .arg(flag_max_threads.clone())
         .arg(flag_opt_size)
         .arg(flag_dev)
         .arg(flag_debug)
@@ -200,17 +221,8 @@ pub fn build_app<'a>() -> Command<'a> {
         .arg(flag_linker)
         .arg(flag_precompiled)
         .arg(flag_valgrind)
-        .arg(
-            Arg::new(ROC_FILE)
-                .help("The .roc file of an app to build and run")
-                .required(false),
-        )
-        .arg(
-            Arg::new(ARGS_FOR_APP)
-                .help("Arguments to pass into the app being run")
-                .requires(ROC_FILE)
-                .multiple_values(true),
-        );
+        .arg(roc_file_to_run.required(false))
+        .arg(args_for_app);
 
     if cfg!(feature = "editor") {
         app.subcommand(
@@ -236,8 +248,8 @@ pub fn docs(files: Vec<PathBuf>) {
 #[derive(Debug, PartialEq, Eq)]
 pub enum BuildConfig {
     BuildOnly,
-    BuildAndRun { roc_file_arg_index: usize },
-    BuildAndRunIfNoErrors { roc_file_arg_index: usize },
+    BuildAndRun,
+    BuildAndRunIfNoErrors,
 }
 
 pub enum FormatMode {
@@ -255,7 +267,7 @@ pub fn build(
     use BuildConfig::*;
 
     let arena = Bump::new();
-    let filename = matches.value_of(ROC_FILE).unwrap();
+    let filename = matches.value_of_os(ROC_FILE).unwrap();
 
     let original_cwd = std::env::current_dir()?;
     let opt_level = match (
@@ -271,6 +283,16 @@ pub fn build(
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
+
+    let threading = match matches
+        .value_of(FLAG_MAX_THREADS)
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        None => Threading::AllAvailable,
+        Some(0) => user_error!("cannot build with at most 0 threads"),
+        Some(1) => Threading::Single,
+        Some(n) => Threading::AtMost(n),
+    };
 
     // Use surgical linking when supported, or when explicitly requested with --linker surgical
     let surgically_link = if matches.is_present(FLAG_LINKER) {
@@ -321,7 +343,7 @@ pub fn build(
         surgically_link,
         precompiled,
         target_valgrind,
-        Threading::Multi,
+        threading,
     );
 
     match res_binary_path {
@@ -372,7 +394,7 @@ pub fn build(
                     // Return a nonzero exit code if there were problems
                     Ok(problems.exit_code())
                 }
-                BuildAndRun { roc_file_arg_index } => {
+                BuildAndRun => {
                     if problems.errors > 0 || problems.warnings > 0 {
                         println!(
                             "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
@@ -403,15 +425,11 @@ pub fn build(
                         );
                     }
 
-                    roc_run(
-                        arena,
-                        &original_cwd,
-                        triple,
-                        roc_file_arg_index,
-                        &binary_path,
-                    )
+                    let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
+
+                    roc_run(arena, &original_cwd, triple, args, &binary_path)
                 }
-                BuildAndRunIfNoErrors { roc_file_arg_index } => {
+                BuildAndRunIfNoErrors => {
                     if problems.errors == 0 {
                         if problems.warnings > 0 {
                             println!(
@@ -427,13 +445,9 @@ pub fn build(
                             );
                         }
 
-                        roc_run(
-                            arena,
-                            &original_cwd,
-                            triple,
-                            roc_file_arg_index,
-                            &binary_path,
-                        )
+                        let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
+
+                        roc_run(arena, &original_cwd, triple, args, &binary_path)
                     } else {
                         println!(
                             "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with: \x1B[32mroc run {}\x1B[39m",
@@ -460,7 +474,7 @@ pub fn build(
                                 "warnings"
                             },
                             total_time.as_millis(),
-                            filename
+                            filename.to_string_lossy()
                         );
 
                         Ok(problems.exit_code())
@@ -479,17 +493,14 @@ pub fn build(
     }
 }
 
-#[cfg(target_family = "unix")]
-fn roc_run(
+fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     cwd: &Path,
     triple: Triple,
-    roc_file_arg_index: usize,
+    args: I,
     binary_path: &Path,
 ) -> io::Result<i32> {
-    use std::os::unix::process::CommandExt;
-
-    let mut cmd = match triple.architecture {
+    match triple.architecture {
         Architecture::Wasm32 => {
             // If possible, report the generated executable name relative to the current dir.
             let generated_filename = binary_path
@@ -500,19 +511,44 @@ fn roc_run(
             // since the process is about to exit anyway.
             std::mem::forget(arena);
 
-            let args = std::env::args()
-                .skip(roc_file_arg_index)
-                .collect::<Vec<_>>();
+            if cfg!(target_family = "unix") {
+                use std::os::unix::ffi::OsStrExt;
 
-            run_with_wasmer(generated_filename, &args);
-            return Ok(0);
+                run_with_wasmer(
+                    generated_filename,
+                    args.into_iter().map(|os_str| os_str.as_bytes()),
+                );
+            } else {
+                run_with_wasmer(
+                    generated_filename,
+                    args.into_iter().map(|os_str| {
+                        os_str.to_str().expect(
+                            "Roc does not currently support passing non-UTF8 arguments to Wasmer.",
+                        )
+                    }),
+                );
+            }
+
+            Ok(0)
         }
-        _ => std::process::Command::new(&binary_path),
-    };
-
-    if let Architecture::Wasm32 = triple.architecture {
-        cmd.arg(binary_path);
+        _ => {
+            if cfg!(target_family = "unix") {
+                roc_run_unix(cwd, args, binary_path)
+            } else {
+                roc_run_non_unix(arena, cwd, args, binary_path)
+            }
+        }
     }
+}
+
+fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+    cwd: &Path,
+    args: I,
+    binary_path: &Path,
+) -> io::Result<i32> {
+    use std::os::unix::process::CommandExt;
+
+    let mut cmd = std::process::Command::new(&binary_path);
 
     // Forward all the arguments after the .roc file argument
     // to the new process. This way, you can do things like:
@@ -521,10 +557,8 @@ fn roc_run(
     //
     // ...and have it so that app.roc will receive only `foo`,
     // `bar`, and `baz` as its arguments.
-    for (index, arg) in std::env::args().enumerate() {
-        if index > roc_file_arg_index {
-            cmd.arg(arg);
-        }
+    for arg in args {
+        cmd.arg(arg);
     }
 
     // This is much faster than spawning a subprocess if we're on a UNIX system!
@@ -536,29 +570,36 @@ fn roc_run(
     Err(err)
 }
 
-#[cfg(not(target_family = "unix"))]
-fn roc_run(cmd: &mut Command) -> io::Result<i32> {
-    // Run the compiled app
-    let exit_status = cmd
-                        .spawn()
-                        .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
-                        .wait()
-                        .expect("TODO gracefully handle block_on failing when `roc` spawns a subprocess for the compiled app");
+fn roc_run_non_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+    _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    _cwd: &Path,
+    _args: I,
+    _binary_path: &Path,
+) -> io::Result<i32> {
+    todo!("TODO support running roc programs on non-UNIX targets");
+    // let mut cmd = std::process::Command::new(&binary_path);
 
-    // `roc [FILE]` exits with the same status code as the app it ran.
-    //
-    // If you want to know whether there were compilation problems
-    // via status code, use either `roc build` or `roc check` instead!
-    match exit_status.code() {
-        Some(code) => Ok(code),
-        None => {
-            todo!("TODO gracefully handle the `roc [FILE]` subprocess terminating with a signal.");
-        }
-    }
+    // // Run the compiled app
+    // let exit_status = cmd
+    //     .spawn()
+    //     .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
+    //     .wait()
+    //     .expect("TODO gracefully handle block_on failing when `roc` spawns a subprocess for the compiled app");
+
+    // // `roc [FILE]` exits with the same status code as the app it ran.
+    // //
+    // // If you want to know whether there were compilation problems
+    // // via status code, use either `roc build` or `roc check` instead!
+    // match exit_status.code() {
+    //     Some(code) => Ok(code),
+    //     None => {
+    //         todo!("TODO gracefully handle the `roc [FILE]` subprocess terminating with a signal.");
+    //     }
+    // }
 }
 
 #[cfg(feature = "run-wasm32")]
-fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
+fn run_with_wasmer<I: Iterator<Item = S>, S: AsRef<[u8]>>(wasm_path: &std::path::Path, args: I) {
     use wasmer::{Instance, Module, Store};
 
     let store = Store::default();
@@ -589,8 +630,8 @@ fn run_with_wasmer(wasm_path: &std::path::Path, args: &[String]) {
 }
 
 #[cfg(not(feature = "run-wasm32"))]
-fn run_with_wasmer(_wasm_path: &std::path::Path, _args: &[String]) {
-    println!("Running wasm files not support");
+fn run_with_wasmer<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path::Path, _args: I) {
+    println!("Running wasm files is not supported on this target.");
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

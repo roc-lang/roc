@@ -13,17 +13,19 @@ impl<K, V> Default for VecMap<K, V> {
     }
 }
 
+impl<K, V> VecMap<K, V> {
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(self.keys.len(), self.values.len());
+        self.keys.len()
+    }
+}
+
 impl<K: PartialEq, V> VecMap<K, V> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             keys: Vec::with_capacity(capacity),
             values: Vec::with_capacity(capacity),
         }
-    }
-
-    pub fn len(&self) -> usize {
-        debug_assert_eq!(self.keys.len(), self.values.len());
-        self.keys.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -58,15 +60,9 @@ impl<K: PartialEq, V> VecMap<K, V> {
         self.keys.contains(key)
     }
 
-    pub fn remove(&mut self, key: &K) {
-        match self.keys.iter().position(|x| x == key) {
-            None => {
-                // just do nothing
-            }
-            Some(index) => {
-                self.swap_remove(index);
-            }
-        }
+    pub fn remove(&mut self, key: &K) -> Option<(K, V)> {
+        let index = self.keys.iter().position(|x| x == key)?;
+        Some(self.swap_remove(index))
     }
 
     pub fn get(&self, key: &K) -> Option<&V> {
@@ -83,7 +79,7 @@ impl<K: PartialEq, V> VecMap<K, V> {
         }
     }
 
-    pub fn get_or_insert(&mut self, key: K, default_value: impl Fn() -> V) -> &mut V {
+    pub fn get_or_insert(&mut self, key: K, default_value: impl FnOnce() -> V) -> &mut V {
         match self.keys.iter().position(|x| x == &key) {
             Some(index) => &mut self.values[index],
             None => {
@@ -97,15 +93,15 @@ impl<K: PartialEq, V> VecMap<K, V> {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&K, &V)> {
         self.keys.iter().zip(self.values.iter())
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &K> {
+    pub fn keys(&self) -> impl ExactSizeIterator<Item = &K> {
         self.keys.iter()
     }
 
-    pub fn values(&self) -> impl Iterator<Item = &V> {
+    pub fn values(&self) -> impl ExactSizeIterator<Item = &V> {
         self.values.iter()
     }
 
@@ -159,6 +155,7 @@ impl<K, V> IntoIterator for VecMap<K, V> {
 
     fn into_iter(self) -> Self::IntoIter {
         IntoIter {
+            len: self.len(),
             keys: self.keys.into_iter(),
             values: self.values.into_iter(),
         }
@@ -166,6 +163,7 @@ impl<K, V> IntoIterator for VecMap<K, V> {
 }
 
 pub struct IntoIter<K, V> {
+    len: usize,
     keys: std::vec::IntoIter<K>,
     values: std::vec::IntoIter<V>,
 }
@@ -178,5 +176,11 @@ impl<K, V> Iterator for IntoIter<K, V> {
             (Some(k), Some(v)) => Some((k, v)),
             _ => None,
         }
+    }
+}
+
+impl<K, V> ExactSizeIterator for IntoIter<K, V> {
+    fn len(&self) -> usize {
+        self.len
     }
 }
