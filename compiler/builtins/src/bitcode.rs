@@ -40,6 +40,9 @@ impl FloatWidth {
     pub const fn stack_size(&self) -> u32 {
         use FloatWidth::*;
 
+        // NOTE: this must never use mem::size_of, because that returns the size
+        // for the target of *the compiler itself* (e.g. this Rust code), not what
+        // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
             F32 => 4,
             F64 => 8,
@@ -49,29 +52,27 @@ impl FloatWidth {
 
     pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
         use roc_target::Architecture;
-        use std::mem::align_of;
         use FloatWidth::*;
 
-        // TODO actually alignment is architecture-specific
+        // NOTE: this must never use mem::align_of, because that returns the alignment
+        // for the target of *the compiler itself* (e.g. this Rust code), not what
+        // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
-            F32 => align_of::<f32>() as u32,
-            F64 => match target_info.architecture {
+            F32 => 4,
+            F64 | F128 => match target_info.architecture {
                 Architecture::X86_64
                 | Architecture::Aarch64
                 | Architecture::Arm
                 | Architecture::Wasm32 => 8,
                 Architecture::X86_32 => 4,
             },
-            F128 => align_of::<i128>() as u32,
         }
     }
 
     pub const fn try_from_symbol(symbol: Symbol) -> Option<Self> {
         match symbol {
             Symbol::NUM_F64 | Symbol::NUM_BINARY64 => Some(FloatWidth::F64),
-
             Symbol::NUM_F32 | Symbol::NUM_BINARY32 => Some(FloatWidth::F32),
-
             _ => None,
         }
     }
@@ -101,6 +102,9 @@ impl IntWidth {
     pub const fn stack_size(&self) -> u32 {
         use IntWidth::*;
 
+        // NOTE: this must never use mem::size_of, because that returns the size
+        // for the target of *the compiler itself* (e.g. this Rust code), not what
+        // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
             U8 | I8 => 1,
             U16 | I16 => 2,
@@ -112,13 +116,15 @@ impl IntWidth {
 
     pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
         use roc_target::Architecture;
-        use std::mem::align_of;
         use IntWidth::*;
 
+        // NOTE: this must never use mem::align_of, because that returns the alignment
+        // for the target of *the compiler itself* (e.g. this Rust code), not what
+        // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
-            U8 | I8 => align_of::<i8>() as u32,
-            U16 | I16 => align_of::<i16>() as u32,
-            U32 | I32 => align_of::<i32>() as u32,
+            U8 | I8 => 1,
+            U16 | I16 => 2,
+            U32 | I32 => 4,
             U64 | I64 => match target_info.architecture {
                 Architecture::X86_64
                 | Architecture::Aarch64
@@ -126,7 +132,11 @@ impl IntWidth {
                 | Architecture::Wasm32 => 8,
                 Architecture::X86_32 => 4,
             },
-            U128 | I128 => align_of::<i128>() as u32,
+            U128 | I128 => match target_info.architecture {
+                Architecture::Aarch64 => 16,
+                Architecture::X86_64 | Architecture::Arm | Architecture::Wasm32 => 8,
+                Architecture::X86_32 => 4,
+            },
         }
     }
 
