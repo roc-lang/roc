@@ -62,8 +62,8 @@ pub fn build_app<'a>() -> Command<'a> {
     let flag_max_threads = Arg::new(FLAG_MAX_THREADS)
         .long(FLAG_MAX_THREADS)
         .help("Limit the number of threads (and hence cores) used during compilation.")
-        .takes_value(true)
         .requires(ROC_FILE)
+        .takes_value(true)
         .validator(|s| s.parse::<usize>())
         .required(false);
 
@@ -185,6 +185,7 @@ pub fn build_app<'a>() -> Command<'a> {
         .subcommand(Command::new(CMD_CHECK)
             .about("Check the code for problems, but doesn’t build or run it")
             .arg(flag_time.clone())
+            .arg(flag_max_threads.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file of an app to check")

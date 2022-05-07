@@ -6,7 +6,7 @@ use roc_cli::{
     FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, ROC_FILE,
 };
 use roc_error_macros::user_error;
-use roc_load::LoadingProblem;
+use roc_load::{LoadingProblem, Threading};
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -94,7 +94,17 @@ fn main() -> io::Result<()> {
             let roc_file_path = PathBuf::from(filename);
             let src_dir = roc_file_path.parent().unwrap().to_owned();
 
-            match check_file(&arena, src_dir, roc_file_path, emit_timings) {
+            let threading = match matches
+                .value_of(roc_cli::FLAG_MAX_THREADS)
+                .and_then(|s| s.parse::<usize>().ok())
+            {
+                None => Threading::AllAvailable,
+                Some(0) => user_error!("cannot build with at most 0 threads"),
+                Some(1) => Threading::Single,
+                Some(n) => Threading::AtMost(n),
+            };
+
+            match check_file(&arena, src_dir, roc_file_path, emit_timings, threading) {
                 Ok((problems, total_time)) => {
                     println!(
                         "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",
