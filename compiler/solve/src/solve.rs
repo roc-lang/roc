@@ -17,8 +17,8 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, LambdaSet,
-    OptAbleType, OptAbleVar, PatternCategory, Reason, TypeExtension,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, OptAbleType,
+    OptAbleVar, PatternCategory, Reason, TypeExtension,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
 
@@ -327,9 +327,6 @@ impl Aliases {
         }
 
         let old_type_variables = delayed_variables.type_variables(&mut self.variables);
-        #[allow(clippy::needless_collect)] // otherwise we borrow self.variables immutably twice
-        let variable_opt_abilities: Vec<_> =
-            old_type_variables.iter().map(|ov| ov.opt_ability).collect();
         let new_type_variables = &subs.variables[alias_variables.type_variables().indices()];
 
         for (old, new) in old_type_variables.iter_mut().zip(new_type_variables) {
