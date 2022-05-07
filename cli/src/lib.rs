@@ -34,6 +34,7 @@ pub const CMD_FORMAT: &str = "format";
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
+pub const FLAG_MAX_THREADS: &str = "max-threads";
 pub const FLAG_OPT_SIZE: &str = "opt-size";
 pub const FLAG_LIB: &str = "lib";
 pub const FLAG_NO_LINK: &str = "no-link";
@@ -55,6 +56,14 @@ pub fn build_app<'a>() -> Command<'a> {
         .long(FLAG_OPTIMIZE)
         .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
         .requires(ROC_FILE)
+        .required(false);
+
+    let flag_max_threads = Arg::new(FLAG_MAX_THREADS)
+        .long(FLAG_MAX_THREADS)
+        .help("Limit the number of threads (and hence cores) used during compilation.")
+        .requires(ROC_FILE)
+        .takes_value(true)
+        .validator(|s| s.parse::<usize>())
         .required(false);
 
     let flag_opt_size = Arg::new(FLAG_OPT_SIZE)
@@ -111,6 +120,7 @@ pub fn build_app<'a>() -> Command<'a> {
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(flag_optimize.clone())
+            .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
             .arg(flag_dev.clone())
             .arg(flag_debug.clone())
@@ -151,6 +161,7 @@ pub fn build_app<'a>() -> Command<'a> {
         .subcommand(Command::new(CMD_RUN)
             .about("Run a .roc file even if it has build errors")
             .arg(flag_optimize.clone())
+            .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
             .arg(flag_dev.clone())
             .arg(flag_debug.clone())
@@ -181,6 +192,7 @@ pub fn build_app<'a>() -> Command<'a> {
         .subcommand(Command::new(CMD_CHECK)
             .about("Check the code for problems, but doesn’t build or run it")
             .arg(flag_time.clone())
+            .arg(flag_max_threads.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file of an app to check")
@@ -201,6 +213,7 @@ pub fn build_app<'a>() -> Command<'a> {
         )
         .trailing_var_arg(true)
         .arg(flag_optimize)
+            .arg(flag_max_threads.clone())
         .arg(flag_opt_size)
         .arg(flag_dev)
         .arg(flag_debug)
@@ -271,6 +284,16 @@ pub fn build(
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
 
+    let threading = match matches
+        .value_of(FLAG_MAX_THREADS)
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        None => Threading::AllAvailable,
+        Some(0) => user_error!("cannot build with at most 0 threads"),
+        Some(1) => Threading::Single,
+        Some(n) => Threading::AtMost(n),
+    };
+
     // Use surgical linking when supported, or when explicitly requested with --linker surgical
     let surgically_link = if matches.is_present(FLAG_LINKER) {
         matches.value_of(FLAG_LINKER) == Some("surgical")
@@ -320,7 +343,7 @@ pub fn build(
         surgically_link,
         precompiled,
         target_valgrind,
-        Threading::Multi,
+        threading,
     );
 
     match res_binary_path {

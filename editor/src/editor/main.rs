@@ -129,7 +129,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
 
     let file_path = Path::new(&file_path_str);
 
-    let loaded_module = load_module(file_path, Threading::Multi);
+    let loaded_module = load_module(file_path, Threading::AllAvailable);
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);

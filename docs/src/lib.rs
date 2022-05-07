@@ -435,7 +435,7 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
             Default::default(),
             roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
             roc_reporting::report::RenderTarget::ColorTerminal,
-            Threading::Multi,
+            Threading::AllAvailable,
         ) {
             Ok(loaded) => modules.push(loaded),
             Err(LoadingProblem::FormattedReport(report)) => {
