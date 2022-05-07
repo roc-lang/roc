@@ -5867,9 +5867,7 @@ pub fn from_can<'a>(
                     Err(_) => todo!(),
                 };
 
-            if matches!(mono_pattern, Pattern::Identifier(_symbol))
-                || matches!(def.loc_expr.value, roc_can::expr::Expr::Var(..))
-            {
+            if let Pattern::Identifier(_symbol) = mono_pattern {
                 internal_error!("Identifier patterns should be handled in a higher code pass!")
             }
 
@@ -5897,19 +5895,23 @@ pub fn from_can<'a>(
                 );
             }
 
-            let outer_symbol = env.unique_symbol();
-            stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
+            if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
+                store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+            } else {
+                let outer_symbol = env.unique_symbol();
+                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
 
-            // convert the def body, store in outer_symbol
-            with_hole(
-                env,
-                def.loc_expr.value,
-                def.expr_var,
-                procs,
-                layout_cache,
-                outer_symbol,
-                env.arena.alloc(stmt),
-            )
+                // convert the def body, store in outer_symbol
+                with_hole(
+                    env,
+                    def.loc_expr.value,
+                    def.expr_var,
+                    procs,
+                    layout_cache,
+                    outer_symbol,
+                    env.arena.alloc(stmt),
+                )
+            }
         }
 
         _ => {
