@@ -1254,7 +1254,7 @@ pub struct Env<'a, 'i> {
     pub target_info: TargetInfo,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
-    pub abilities_store: &'i AbilitiesStore,
+    pub abilities_store: &'i mut AbilitiesStore,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -2493,7 +2493,7 @@ fn resolve_abilities_in_specialized_body<'a>(
     struct Resolver<'a> {
         subs: &'a mut Subs,
         procs: &'a Procs<'a>,
-        abilities_store: &'a AbilitiesStore,
+        abilities_store: &'a mut AbilitiesStore,
         seen_defs: MutSet<Symbol>,
     }
     impl PatternVisitor for Resolver<'_> {}
@@ -2511,12 +2511,13 @@ fn resolve_abilities_in_specialized_body<'a>(
                     // So, we'll resolve any nested abilities when we know their specialized type
                     // during def construction.
                 }
-                Expr::AbilityMember(member_sym, specialization_cell) => {
-                    let mut specialization_cell = specialization_cell
-                        .write()
-                        .expect("Can't lock specialization cell");
-                    if specialization_cell.is_some() {
-                        // We already know the specialization; we are good to go.
+                Expr::AbilityMember(member_sym, specialization_id) => {
+                    if self
+                        .abilities_store
+                        .get_resolved(*specialization_id)
+                        .is_some()
+                    {
+                        // We already know the specialization from type solving; we are good to go.
                         return;
                     }
 
@@ -2555,7 +2556,8 @@ fn resolve_abilities_in_specialized_body<'a>(
                         self.seen_defs.insert(specialization);
                     }
 
-                    *specialization_cell = Some(specialization);
+                    self.abilities_store
+                        .insert_resolved(*specialization_id, specialization);
                 }
                 _ => walk_expr(self, expr),
             }
@@ -3657,10 +3659,10 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
-        AbilityMember(_member, specialization) => {
-            let specialization_symbol = specialization
-                .read()
-                .unwrap()
+        AbilityMember(_member, specialization_id) => {
+            let specialization_symbol = env
+                .abilities_store
+                .get_resolved(specialization_id)
                 .expect("Specialization was never made!");
 
             specialize_naked_symbol(
@@ -4531,9 +4533,8 @@ pub fn with_hole<'a>(
                         hole,
                     )
                 }
-                roc_can::expr::Expr::AbilityMember(_, specialization) => {
-                    let specialization_cell = specialization.read().unwrap();
-                    let proc_name = specialization_cell.expect(
+                roc_can::expr::Expr::AbilityMember(_, specialization_id) => {
+                    let proc_name = env.abilities_store.get_resolved(specialization_id).expect(
                         "Ability specialization is unknown - code generation cannot proceed!",
                     );
 
@@ -7040,10 +7041,10 @@ fn can_reuse_symbol<'a>(
     use ReuseSymbol::*;
 
     let symbol = match expr {
-        AbilityMember(_, specialization) => {
-            let specialization_symbol = specialization
-                .read()
-                .unwrap()
+        AbilityMember(_, specialization_id) => {
+            let specialization_symbol = env
+                .abilities_store
+                .get_resolved(*specialization_id)
                 .expect("Specialization must be known!");
             specialization_symbol
         }

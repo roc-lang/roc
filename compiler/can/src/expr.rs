@@ -1,3 +1,4 @@
+use crate::abilities::SpecializationId;
 use crate::annotation::{freshen_opaque_def, IntroducedVariables};
 use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Def};
@@ -21,7 +22,6 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
-use std::sync::{Arc, RwLock};
 use std::{char, u32};
 
 #[derive(Clone, Default, Debug)]
@@ -88,7 +88,7 @@ pub enum Expr {
         /// Actual member name
         Symbol,
         /// Specialization to use
-        Arc<RwLock<Option<Symbol>>>,
+        SpecializationId,
     ),
 
     // Branching
@@ -1328,7 +1328,7 @@ fn canonicalize_var_lookup(
                 output.references.insert_value_lookup(symbol);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
-                    AbilityMember(symbol, Arc::new(RwLock::new(None)))
+                    AbilityMember(symbol, scope.abilities_store.fresh_specialization_id())
                 } else {
                     Var(symbol)
                 }
@@ -1347,7 +1347,7 @@ fn canonicalize_var_lookup(
                 output.references.insert_value_lookup(symbol);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
-                    AbilityMember(symbol, Arc::new(RwLock::new(None)))
+                    AbilityMember(symbol, scope.abilities_store.fresh_specialization_id())
                 } else {
                     Var(symbol)
                 }
