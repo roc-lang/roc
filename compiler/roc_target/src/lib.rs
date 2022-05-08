@@ -12,6 +12,10 @@ impl TargetInfo {
         self.architecture.ptr_width()
     }
 
+    pub const fn ptr_alignment_bytes(&self) -> usize {
+        self.architecture.ptr_alignment_bytes()
+    }
+
     pub const fn default_aarch64() -> Self {
         TargetInfo {
             architecture: Architecture::Aarch64,
@@ -63,6 +67,10 @@ impl Architecture {
             X86_64 | Aarch64 | Arm => PtrWidth::Bytes8,
             X86_32 | Wasm32 => PtrWidth::Bytes4,
         }
+    }
+
+    pub const fn ptr_alignment_bytes(&self) -> usize {
+        self.ptr_width() as usize
     }
 }
 

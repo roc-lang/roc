@@ -95,16 +95,18 @@ use std::mem;
 /// set.sort();
 /// assert_eq!(set, vec![7, 8, 9]);
 /// //```
-pub fn topological_sort<N, FN, IN>(nodes: &[N], mut successors: FN) -> Result<Vec<N>, N>
+pub fn topological_sort<N, FN, IN, I>(nodes: I, mut successors: FN) -> Result<Vec<N>, N>
 where
     N: Eq + Hash + Clone,
+    I: Iterator<Item = N>,
     FN: FnMut(&N) -> IN,
     IN: IntoIterator<Item = N>,
 {
-    let mut unmarked: MutSet<N> = nodes.iter().cloned().collect::<MutSet<_>>();
-    let mut marked = HashSet::with_capacity_and_hasher(nodes.len(), default_hasher());
+    let size_hint = nodes.size_hint().1.unwrap_or_default();
+    let mut unmarked: MutSet<N> = nodes.collect::<MutSet<_>>();
+    let mut marked = HashSet::with_capacity_and_hasher(size_hint, default_hasher());
     let mut temp = MutSet::default();
-    let mut sorted = VecDeque::with_capacity(nodes.len());
+    let mut sorted = VecDeque::with_capacity(size_hint);
     while let Some(node) = unmarked.iter().next().cloned() {
         temp.clear();
         visit(
