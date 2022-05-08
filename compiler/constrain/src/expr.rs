@@ -879,7 +879,7 @@ pub fn constrain_expr(
                 cons,
             )
         }
-        LetRec(defs, loc_ret, var) => {
+        LetRec(defs, loc_ret) => {
             let body_con = constrain_expr(
                 constraints,
                 env,
@@ -888,29 +888,19 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            let cons = [
-                constrain_recursive_defs(constraints, env, defs, body_con),
-                // Record the type of tne entire def-expression in the variable.
-                // Code gen will need that later!
-                constraints.equal_types_var(
-                    *var,
-                    expected,
-                    Category::Storage(std::file!(), std::line!()),
-                    loc_ret.region,
-                ),
-            ];
+            let cons = constrain_recursive_defs(constraints, env, defs, body_con);
 
-            constraints.exists_many([*var], cons)
+            constraints.exists([], cons)
         }
-        LetNonRec(def, loc_ret, var) => {
+        LetNonRec(def, loc_ret) => {
             let mut stack = Vec::with_capacity(1);
 
             let mut loc_ret = loc_ret;
 
-            stack.push((def, var, loc_ret.region));
+            stack.push(def);
 
-            while let LetNonRec(def, new_loc_ret, var) = &loc_ret.value {
-                stack.push((def, var, new_loc_ret.region));
+            while let LetNonRec(def, new_loc_ret) = &loc_ret.value {
+                stack.push(def);
                 loc_ret = new_loc_ret;
             }
 
@@ -922,20 +912,10 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            while let Some((def, var, ret_region)) = stack.pop() {
-                let cons = [
-                    constrain_def(constraints, env, def, body_con),
-                    // Record the type of the entire def-expression in the variable.
-                    // Code gen will need that later!
-                    constraints.equal_types_var(
-                        *var,
-                        expected.clone(),
-                        Category::Storage(std::file!(), std::line!()),
-                        ret_region,
-                    ),
-                ];
+            while let Some(def) = stack.pop() {
+                let cons = constrain_def(constraints, env, def, body_con);
 
-                body_con = constraints.exists_many([*var], cons)
+                body_con = constraints.exists([], cons)
             }
 
             body_con

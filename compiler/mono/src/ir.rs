@@ -3404,7 +3404,7 @@ pub fn with_hole<'a>(
                 }
             }
         }
-        LetNonRec(def, cont, _) => {
+        LetNonRec(def, cont) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
                 if let Closure(closure_data) = def.loc_expr.value {
                     register_noncapturing_closure(env, procs, symbol, closure_data);
@@ -3527,7 +3527,7 @@ pub fn with_hole<'a>(
                 )
             }
         }
-        LetRec(defs, cont, _) => {
+        LetRec(defs, cont) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -5662,7 +5662,7 @@ pub fn from_can<'a>(
             )
         }
 
-        LetRec(defs, cont, _) => {
+        LetRec(defs, cont) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -5688,7 +5688,7 @@ pub fn from_can<'a>(
 
             from_can(env, variable, cont.value, procs, layout_cache)
         }
-        LetNonRec(def, cont, outer_annotation) => {
+        LetNonRec(def, cont) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                 match def.loc_expr.value {
                     roc_can::expr::Expr::Closure(closure_data) => {
@@ -5736,7 +5736,7 @@ pub fn from_can<'a>(
                             build_rest,
                         );
                     }
-                    roc_can::expr::Expr::LetNonRec(nested_def, nested_cont, nested_annotation) => {
+                    roc_can::expr::Expr::LetNonRec(nested_def, nested_cont) => {
                         use roc_can::expr::Expr::*;
                         // We must transform
                         //
@@ -5767,17 +5767,13 @@ pub fn from_can<'a>(
                             expr_var: def.expr_var,
                         };
 
-                        let new_inner = LetNonRec(Box::new(new_def), cont, outer_annotation);
+                        let new_inner = LetNonRec(Box::new(new_def), cont);
 
-                        let new_outer = LetNonRec(
-                            nested_def,
-                            Box::new(Loc::at_zero(new_inner)),
-                            nested_annotation,
-                        );
+                        let new_outer = LetNonRec(nested_def, Box::new(Loc::at_zero(new_inner)));
 
                         return from_can(env, variable, new_outer, procs, layout_cache);
                     }
-                    roc_can::expr::Expr::LetRec(nested_defs, nested_cont, nested_annotation) => {
+                    roc_can::expr::Expr::LetRec(nested_defs, nested_cont) => {
                         use roc_can::expr::Expr::*;
                         // We must transform
                         //
@@ -5808,13 +5804,9 @@ pub fn from_can<'a>(
                             expr_var: def.expr_var,
                         };
 
-                        let new_inner = LetNonRec(Box::new(new_def), cont, outer_annotation);
+                        let new_inner = LetNonRec(Box::new(new_def), cont);
 
-                        let new_outer = LetRec(
-                            nested_defs,
-                            Box::new(Loc::at_zero(new_inner)),
-                            nested_annotation,
-                        );
+                        let new_outer = LetRec(nested_defs, Box::new(Loc::at_zero(new_inner)));
 
                         return from_can(env, variable, new_outer, procs, layout_cache);
                     }
@@ -6011,11 +6003,8 @@ fn to_opt_branches<'a>(
                             ),
                             pattern_vars: std::iter::once((symbol, variable)).collect(),
                         };
-                        let new_expr = roc_can::expr::Expr::LetNonRec(
-                            Box::new(def),
-                            Box::new(loc_expr),
-                            variable,
-                        );
+                        let new_expr =
+                            roc_can::expr::Expr::LetNonRec(Box::new(def), Box::new(loc_expr));
                         loc_expr = Loc::at(region, new_expr);
                     }
 

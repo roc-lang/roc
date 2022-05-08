@@ -661,7 +661,7 @@ fn force_effect(
         Loc::at_zero(call)
     };
 
-    Expr::LetNonRec(Box::new(def), Box::new(force_thunk_call), var_store.fresh())
+    Expr::LetNonRec(Box::new(def), Box::new(force_thunk_call))
 }
 
 fn build_effect_forever(
@@ -917,9 +917,7 @@ fn build_effect_forever_inner_body(
         Box::new(Loc::at_zero(Expr::LetNonRec(
             Box::new(force_thunk1),
             Box::new(force_thunk2),
-            var_store.fresh(),
         ))),
-        var_store.fresh(),
     )
 }
 
@@ -1246,7 +1244,6 @@ fn build_effect_loop_inner_body(
     Expr::LetNonRec(
         Box::new(thunk_from_effect),
         Box::new(Loc::at_zero(match_on_force_thunk1)),
-        var_store.fresh(),
     )
 }
 
