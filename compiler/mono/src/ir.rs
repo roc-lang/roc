@@ -7,7 +7,7 @@ use crate::layout::{
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_can::abilities::AbilitiesStore;
+use roc_can::abilities::{AbilitiesStore, SpecializationId};
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::{MutSet, VecMap};
@@ -2485,7 +2485,7 @@ fn resolve_abilities_in_specialized_body<'a>(
     procs: &Procs<'a>,
     specialized_body: &roc_can::expr::Expr,
     body_var: Variable,
-) {
+) -> std::vec::Vec<SpecializationId> {
     use roc_can::expr::Expr;
     use roc_can::traverse::{walk_expr, PatternVisitor, Visitor};
     use roc_unify::unify::unify;
@@ -2495,6 +2495,7 @@ fn resolve_abilities_in_specialized_body<'a>(
         procs: &'a Procs<'a>,
         abilities_store: &'a mut AbilitiesStore,
         seen_defs: MutSet<Symbol>,
+        specialized: std::vec::Vec<SpecializationId>,
     }
     impl PatternVisitor for Resolver<'_> {}
     impl Visitor for Resolver<'_> {
@@ -2558,6 +2559,9 @@ fn resolve_abilities_in_specialized_body<'a>(
 
                     self.abilities_store
                         .insert_resolved(*specialization_id, specialization);
+
+                    debug_assert!(!self.specialized.contains(&specialization_id));
+                    self.specialized.push(*specialization_id);
                 }
                 _ => walk_expr(self, expr),
             }
@@ -2569,8 +2573,11 @@ fn resolve_abilities_in_specialized_body<'a>(
         procs,
         abilities_store: env.abilities_store,
         seen_defs: MutSet::default(),
+        specialized: vec![],
     };
     specializer.visit_expr(specialized_body, Region::zero(), body_var);
+
+    specializer.specialized
 }
 
 fn specialize_external<'a>(
@@ -2708,8 +2715,16 @@ fn specialize_external<'a>(
     };
 
     let body = partial_proc.body.clone();
-    resolve_abilities_in_specialized_body(env, procs, &body, partial_proc.body_var);
+    let resolved_ability_specializations =
+        resolve_abilities_in_specialized_body(env, procs, &body, partial_proc.body_var);
+
     let mut specialized_body = from_can(env, partial_proc.body_var, body, procs, layout_cache);
+
+    // reset the resolved ability specializations so as not to interfere with other specializations
+    // of this proc.
+    resolved_ability_specializations
+        .into_iter()
+        .for_each(|sid| env.abilities_store.remove_resolved(sid));
 
     match specialized {
         SpecializedLayout::FunctionPointerBody {
