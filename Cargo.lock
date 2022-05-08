@@ -3573,6 +3573,7 @@ dependencies = [
 name = "roc_collections"
 version = "0.1.0"
 dependencies = [
+ "bitvec 1.0.0",
  "bumpalo",
  "hashbrown 0.11.2",
  "im",
@@ -3868,7 +3869,6 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "static_assertions 1.1.0",
- "ven_graph",
  "ven_pretty",
 ]
 

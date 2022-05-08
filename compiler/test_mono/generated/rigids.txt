@@ -1,31 +1,31 @@
 procedure List.2 (#Attr.2, #Attr.3):
-    let List.154 : U64 = lowlevel ListLen #Attr.2;
-    let List.151 : Int1 = lowlevel NumLt #Attr.3 List.154;
-    if List.151 then
-        let List.153 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-        let List.152 : [C {}, C I64] = Ok List.153;
-        ret List.152;
+    let List.156 : U64 = lowlevel ListLen #Attr.2;
+    let List.153 : Int1 = lowlevel NumLt #Attr.3 List.156;
+    if List.153 then
+        let List.155 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+        let List.154 : [C {}, C I64] = Ok List.155;
+        ret List.154;
     else
-        let List.150 : {} = Struct {};
-        let List.149 : [C {}, C I64] = Err List.150;
-        ret List.149;
+        let List.152 : {} = Struct {};
+        let List.151 : [C {}, C I64] = Err List.152;
+        ret List.151;
 
 procedure List.3 (List.63, List.64, List.65):
-    let List.142 : {List I64, I64} = CallByName List.57 List.63 List.64 List.65;
-    let List.141 : List I64 = StructAtIndex 0 List.142;
-    inc List.141;
-    dec List.142;
-    ret List.141;
+    let List.143 : {List I64, I64} = CallByName List.57 List.63 List.64 List.65;
+    let List.142 : List I64 = StructAtIndex 0 List.143;
+    inc List.142;
+    dec List.143;
+    ret List.142;
 
 procedure List.57 (#Attr.2, #Attr.3, #Attr.4):
-    let List.158 : U64 = lowlevel ListLen #Attr.2;
-    let List.156 : Int1 = lowlevel NumLt #Attr.3 List.158;
-    if List.156 then
-        let List.157 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
-        ret List.157;
+    let List.160 : U64 = lowlevel ListLen #Attr.2;
+    let List.158 : Int1 = lowlevel NumLt #Attr.3 List.160;
+    if List.158 then
+        let List.159 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
+        ret List.159;
     else
-        let List.155 : {List I64, I64} = Struct {#Attr.2, #Attr.4};
-        ret List.155;
+        let List.157 : {List I64, I64} = Struct {#Attr.2, #Attr.4};
+        ret List.157;
 
 procedure Test.1 (Test.2, Test.3, Test.4):
     let Test.29 : [C {}, C I64] = CallByName List.2 Test.4 Test.3;
