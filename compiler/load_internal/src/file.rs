@@ -3873,7 +3873,7 @@ fn canonicalize_and_constrain<'a>(
     let before = roc_types::types::get_type_clone_count();
 
     let mut var_store = VarStore::default();
-    let canonicalized = canonicalize_module_defs(
+    let module_output = canonicalize_module_defs(
         arena,
         parsed_defs,
         &header_for,
@@ -3902,106 +3902,96 @@ fn canonicalize_and_constrain<'a>(
 
     module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();
 
-    match canonicalized {
-        Ok(module_output) => {
-            // Generate documentation information
-            // TODO: store timing information?
-            let module_docs = match module_name {
-                ModuleNameEnum::PkgConfig => None,
-                ModuleNameEnum::App(_) => None,
-                ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
-                    let docs = crate::docs::generate_module_docs(
-                        module_output.scope.clone(),
-                        name.as_str().into(),
-                        parsed_defs,
-                    );
-
-                    Some(docs)
-                }
-            };
-
-            let before = roc_types::types::get_type_clone_count();
-
-            let mut constraints = Constraints::new();
-
-            let constraint = if skip_constraint_gen {
-                roc_can::constraint::Constraint::True
-            } else {
-                constrain_module(
-                    &mut constraints,
-                    module_output.symbols_from_requires,
-                    &module_output.scope.abilities_store,
-                    &module_output.declarations,
-                    module_id,
-                )
-            };
-
-            let after = roc_types::types::get_type_clone_count();
-
-            log!(
-                "constraint gen of {:?} cloned Type {} times ({} -> {})",
-                module_id,
-                after - before,
-                before,
-                after
+    // Generate documentation information
+    // TODO: store timing information?
+    let module_docs = match module_name {
+        ModuleNameEnum::PkgConfig => None,
+        ModuleNameEnum::App(_) => None,
+        ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
+            let docs = crate::docs::generate_module_docs(
+                module_output.scope.clone(),
+                name.as_str().into(),
+                parsed_defs,
             );
 
-            // scope has imported aliases, but misses aliases from inner scopes
-            // module_output.aliases does have those aliases, so we combine them
-            let mut aliases: MutMap<Symbol, (bool, Alias)> = module_output
-                .aliases
-                .into_iter()
-                .map(|(k, v)| (k, (true, v)))
-                .collect();
-            for (name, alias) in module_output.scope.aliases {
-                match aliases.entry(name) {
-                    Occupied(_) => {
-                        // do nothing
-                    }
-                    Vacant(vacant) => {
-                        if !name.is_builtin() {
-                            vacant.insert((false, alias));
-                        }
-                    }
+            Some(docs)
+        }
+    };
+
+    let before = roc_types::types::get_type_clone_count();
+
+    let mut constraints = Constraints::new();
+
+    let constraint = if skip_constraint_gen {
+        roc_can::constraint::Constraint::True
+    } else {
+        constrain_module(
+            &mut constraints,
+            module_output.symbols_from_requires,
+            &module_output.scope.abilities_store,
+            &module_output.declarations,
+            module_id,
+        )
+    };
+
+    let after = roc_types::types::get_type_clone_count();
+
+    log!(
+        "constraint gen of {:?} cloned Type {} times ({} -> {})",
+        module_id,
+        after - before,
+        before,
+        after
+    );
+
+    // scope has imported aliases, but misses aliases from inner scopes
+    // module_output.aliases does have those aliases, so we combine them
+    let mut aliases: MutMap<Symbol, (bool, Alias)> = module_output
+        .aliases
+        .into_iter()
+        .map(|(k, v)| (k, (true, v)))
+        .collect();
+    for (name, alias) in module_output.scope.aliases {
+        match aliases.entry(name) {
+            Occupied(_) => {
+                // do nothing
+            }
+            Vacant(vacant) => {
+                if !name.is_builtin() {
+                    vacant.insert((false, alias));
                 }
             }
-
-            let module = Module {
-                module_id,
-                exposed_imports: module_output.exposed_imports,
-                exposed_symbols,
-                referenced_values: module_output.referenced_values,
-                referenced_types: module_output.referenced_types,
-                aliases,
-                rigid_variables: module_output.rigid_variables,
-                abilities_store: module_output.scope.abilities_store,
-            };
-
-            let constrained_module = ConstrainedModule {
-                module,
-                declarations: module_output.declarations,
-                imported_modules,
-                var_store,
-                constraints,
-                constraint,
-                ident_ids: module_output.scope.locals.ident_ids,
-                dep_idents,
-                module_timing,
-            };
-
-            Ok(Msg::CanonicalizedAndConstrained {
-                constrained_module,
-                canonicalization_problems: module_output.problems,
-                module_docs,
-            })
-        }
-        Err(runtime_error) => {
-            panic!(
-                "TODO gracefully handle module canonicalization error {:?}",
-                runtime_error
-            );
         }
     }
+
+    let module = Module {
+        module_id,
+        exposed_imports: module_output.exposed_imports,
+        exposed_symbols,
+        referenced_values: module_output.referenced_values,
+        referenced_types: module_output.referenced_types,
+        aliases,
+        rigid_variables: module_output.rigid_variables,
+        abilities_store: module_output.scope.abilities_store,
+    };
+
+    let constrained_module = ConstrainedModule {
+        module,
+        declarations: module_output.declarations,
+        imported_modules,
+        var_store,
+        constraints,
+        constraint,
+        ident_ids: module_output.scope.locals.ident_ids,
+        dep_idents,
+        module_timing,
+    };
+
+    Ok(Msg::CanonicalizedAndConstrained {
+        constrained_module,
+        canonicalization_problems: module_output.problems,
+        module_docs,
+    })
 }
 
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem<'a>> {
