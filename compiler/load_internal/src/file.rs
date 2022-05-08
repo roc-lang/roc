@@ -615,11 +615,7 @@ enum Msg<'a> {
     Many(Vec<Msg<'a>>),
     Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
-    CanonicalizedAndConstrained {
-        constrained_module: ConstrainedModule,
-        canonicalization_problems: Vec<roc_problem::can::Problem>,
-        module_docs: Option<ModuleDocumentation>,
-    },
+    CanonicalizedAndConstrained(CanAndCon),
     SolvedTypes {
         module_id: ModuleId,
         ident_ids: IdentIds,
@@ -672,6 +668,13 @@ enum Msg<'a> {
         filename: PathBuf,
         error: io::ErrorKind,
     },
+}
+
+#[derive(Debug)]
+struct CanAndCon {
+    constrained_module: ConstrainedModule,
+    canonicalization_problems: Vec<roc_problem::can::Problem>,
+    module_docs: Option<ModuleDocumentation>,
 }
 
 #[derive(Debug)]
@@ -2004,11 +2007,11 @@ fn update<'a>(
             Ok(state)
         }
 
-        CanonicalizedAndConstrained {
+        CanonicalizedAndConstrained(CanAndCon {
             constrained_module,
             canonicalization_problems,
             module_docs,
-        } => {
+        }) => {
             let module_id = constrained_module.module.module_id;
             log!("generated constraints for {:?}", module_id);
             state
@@ -3854,7 +3857,7 @@ fn canonicalize_and_constrain<'a>(
     aliases: MutMap<Symbol, Alias>,
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
-) -> Result<Msg<'a>, LoadingProblem<'a>> {
+) -> CanAndCon {
     let canonicalize_start = SystemTime::now();
 
     let ParsedModule {
@@ -3987,11 +3990,11 @@ fn canonicalize_and_constrain<'a>(
         module_timing,
     };
 
-    Ok(Msg::CanonicalizedAndConstrained {
+    CanAndCon {
         constrained_module,
         canonicalization_problems: module_output.problems,
         module_docs,
-    })
+    }
 }
 
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem<'a>> {
@@ -4460,15 +4463,19 @@ fn run_task<'a>(
             exposed_symbols,
             aliases,
             skip_constraint_gen,
-        } => canonicalize_and_constrain(
-            arena,
-            &module_ids,
-            dep_idents,
-            exposed_symbols,
-            aliases,
-            parsed,
-            skip_constraint_gen,
-        ),
+        } => {
+            let can_and_con = canonicalize_and_constrain(
+                arena,
+                &module_ids,
+                dep_idents,
+                exposed_symbols,
+                aliases,
+                parsed,
+                skip_constraint_gen,
+            );
+
+            Ok(Msg::CanonicalizedAndConstrained(can_and_con))
+        }
         Solve {
             module,
             module_timing,
