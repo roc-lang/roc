@@ -1,6 +1,6 @@
 use crate::ir::{Expr, HigherOrderLowLevel, JoinPointId, Param, Proc, ProcLayout, Stmt};
 use crate::layout::Layout;
-use bumpalo::collections::{CollectIn, Vec};
+use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_collections::ReferenceMatrix;
@@ -66,8 +66,7 @@ pub fn infer_borrow<'a>(
         }
     }
 
-    let nodes: Vec<_> = (0..procs.len() as u32).collect_in(arena);
-    let sccs = matrix.strongly_connected_components(nodes.as_slice());
+    let sccs = matrix.strongly_connected_components_all();
 
     for group in sccs.groups() {
         // This is a fixed-point analysis
