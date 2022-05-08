@@ -3394,11 +3394,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn num_to_float() {
+    fn num_to_frac() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Num.toFloat
+                Num.toFrac
                 "#
             ),
             "Num * -> Float *",

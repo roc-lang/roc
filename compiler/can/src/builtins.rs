@@ -196,8 +196,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SIN => num_sin,
         NUM_COS => num_cos,
         NUM_TAN => num_tan,
-        NUM_DIV_FLOAT => num_div_float,
-        NUM_DIV_FLOAT_CHECKED => num_div_float_checked,
+        NUM_DIV_FRAC => num_div_frac,
+        NUM_DIV_FRAC_CHECKED => num_div_frac_checked,
         NUM_DIV_TRUNC => num_div_trunc,
         NUM_DIV_TRUNC_CHECKED => num_div_trunc_checked,
         NUM_DIV_CEIL => num_div_ceil,
@@ -217,7 +217,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_IS_ZERO => num_is_zero,
         NUM_IS_POSITIVE => num_is_positive,
         NUM_IS_NEGATIVE => num_is_negative,
-        NUM_TO_FLOAT => num_to_float,
+        NUM_TO_FRAC => num_to_frac,
         NUM_POW => num_pow,
         NUM_CEILING => num_ceiling,
         NUM_POW_INT => num_pow_int,
@@ -939,74 +939,74 @@ fn num_compare(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_num_other_binop(symbol, var_store, LowLevel::NumCompare)
 }
 
-/// Num.sin : Float -> Float
+/// Num.sin : Frac -> Frac
 fn num_sin(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NumSin,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
-        ret_var: float_var,
+        args: vec![(frac_var, Var(Symbol::ARG_1))],
+        ret_var: frac_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        float_var,
+        frac_var,
     )
 }
 
-/// Num.cos : Float -> Float
+/// Num.cos : Frac -> Frac
 fn num_cos(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NumCos,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
-        ret_var: float_var,
+        args: vec![(frac_var, Var(Symbol::ARG_1))],
+        ret_var: frac_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        float_var,
+        frac_var,
     )
 }
 
-/// Num.tan : Float -> Float
+/// Num.tan : Frac -> Frac
 fn num_tan(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NumDivUnchecked,
         args: vec![
             (
-                float_var,
+                frac_var,
                 RunLowLevel {
                     op: LowLevel::NumSin,
-                    args: vec![(float_var, Var(Symbol::ARG_1))],
-                    ret_var: float_var,
+                    args: vec![(frac_var, Var(Symbol::ARG_1))],
+                    ret_var: frac_var,
                 },
             ),
             (
-                float_var,
+                frac_var,
                 RunLowLevel {
                     op: LowLevel::NumCos,
-                    args: vec![(float_var, Var(Symbol::ARG_1))],
-                    ret_var: float_var,
+                    args: vec![(frac_var, Var(Symbol::ARG_1))],
+                    ret_var: frac_var,
                 },
             ),
         ],
-        ret_var: float_var,
+        ret_var: frac_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        float_var,
+        frac_var,
     )
 }
 
@@ -1153,15 +1153,15 @@ fn num_is_even(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.toFloat : Num * -> Float
-fn num_to_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Num.toFrac : Num * -> Frac
+fn num_to_frac(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_var = var_store.fresh();
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
 
     let body = RunLowLevel {
-        op: LowLevel::NumToFloat,
+        op: LowLevel::NumToFrac,
         args: vec![(arg_var, Var(Symbol::ARG_1))],
-        ret_var: float_var,
+        ret_var: frac_var,
     };
 
     defn(
@@ -1169,19 +1169,19 @@ fn num_to_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
         vec![(arg_var, Symbol::ARG_1)],
         var_store,
         body,
-        float_var,
+        frac_var,
     )
 }
 
-/// Num.sqrt : Float a -> Float a
+/// Num.sqrt : Frac a -> Frac a
 fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_unaryop(symbol, var_store, LowLevel::NumSqrtUnchecked)
 }
 
-/// Num.sqrtChecked : Float a -> Result (Float a) [ SqrtOfNegative ]*
+/// Num.sqrtChecked : Frac a -> Result (Frac a) [ SqrtOfNegative ]*
 fn num_sqrt_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
     let precision_var = var_store.fresh();
     let ret_var = var_store.fresh();
@@ -1193,10 +1193,10 @@ fn num_sqrt_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
             no_region(RunLowLevel {
                 op: LowLevel::NumGte,
                 args: vec![
-                    (float_var, Var(Symbol::ARG_1)),
+                    (frac_var, Var(Symbol::ARG_1)),
                     (
-                        float_var,
-                        float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
+                        frac_var,
+                        frac(unbound_zero_var, precision_var, 0.0, float_no_bound()),
                     ),
                 ],
                 ret_var: bool_var,
@@ -1205,8 +1205,8 @@ fn num_sqrt_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 "Ok",
                 vec![RunLowLevel {
                     op: LowLevel::NumSqrtUnchecked,
-                    args: vec![(float_var, Var(Symbol::ARG_1))],
-                    ret_var: float_var,
+                    args: vec![(frac_var, Var(Symbol::ARG_1))],
+                    ret_var: frac_var,
                 }],
                 var_store,
             )),
@@ -1220,22 +1220,22 @@ fn num_sqrt_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
         ret_var,
     )
 }
 
-/// Num.log : Float a -> Float a
+/// Num.log : Frac a -> Frac a
 fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_unaryop(symbol, var_store, LowLevel::NumLogUnchecked)
 }
 
-/// Num.logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
+/// Num.logChecked : Frac a -> Result (Frac a) [ LogNeedsPositive ]*
 fn num_log_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
     let precision_var = var_store.fresh();
     let ret_var = var_store.fresh();
@@ -1247,10 +1247,10 @@ fn num_log_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
             no_region(RunLowLevel {
                 op: LowLevel::NumGt,
                 args: vec![
-                    (float_var, Var(Symbol::ARG_1)),
+                    (frac_var, Var(Symbol::ARG_1)),
                     (
-                        float_var,
-                        float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
+                        frac_var,
+                        frac(unbound_zero_var, precision_var, 0.0, float_no_bound()),
                     ),
                 ],
                 ret_var: bool_var,
@@ -1259,8 +1259,8 @@ fn num_log_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 "Ok",
                 vec![RunLowLevel {
                     op: LowLevel::NumLogUnchecked,
-                    args: vec![(float_var, Var(Symbol::ARG_1))],
-                    ret_var: float_var,
+                    args: vec![(frac_var, Var(Symbol::ARG_1))],
+                    ret_var: frac_var,
                 }],
                 var_store,
             )),
@@ -1274,69 +1274,69 @@ fn num_log_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
         ret_var,
     )
 }
 
-/// Num.round : Float -> Int
+/// Num.round : Frac -> Int
 fn num_round(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let int_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumRound,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
+        args: vec![(frac_var, Var(Symbol::ARG_1))],
         ret_var: int_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
         int_var,
     )
 }
 
-/// Num.pow : Float, Float -> Float
+/// Num.pow : Frac, Frac -> Frac
 fn num_pow(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumPow,
         args: vec![
-            (float_var, Var(Symbol::ARG_1)),
-            (float_var, Var(Symbol::ARG_2)),
+            (frac_var, Var(Symbol::ARG_1)),
+            (frac_var, Var(Symbol::ARG_2)),
         ],
-        ret_var: float_var,
+        ret_var: frac_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1), (float_var, Symbol::ARG_2)],
+        vec![(frac_var, Symbol::ARG_1), (frac_var, Symbol::ARG_2)],
         var_store,
         body,
-        float_var,
+        frac_var,
     )
 }
 
-/// Num.ceiling : Float -> Int
+/// Num.ceiling : Frac -> Int
 fn num_ceiling(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let int_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumCeiling,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
+        args: vec![(frac_var, Var(Symbol::ARG_1))],
         ret_var: int_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
         int_var,
@@ -1362,83 +1362,83 @@ fn num_pow_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.floor : Float -> Int
+/// Num.floor : Frac -> Int
 fn num_floor(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let int_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumFloor,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
+        args: vec![(frac_var, Var(Symbol::ARG_1))],
         ret_var: int_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
         int_var,
     )
 }
 
-/// Num.atan : Float -> Float
+/// Num.atan : Frac -> Frac
 fn num_atan(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_float_var = var_store.fresh();
-    let ret_float_var = var_store.fresh();
+    let arg_frac_var = var_store.fresh();
+    let ret_frac_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumAtan,
-        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
-        ret_var: ret_float_var,
+        args: vec![(arg_frac_var, Var(Symbol::ARG_1))],
+        ret_var: ret_frac_var,
     };
 
     defn(
         symbol,
-        vec![(arg_float_var, Symbol::ARG_1)],
+        vec![(arg_frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        ret_float_var,
+        ret_frac_var,
     )
 }
 
-/// Num.acos : Float -> Float
+/// Num.acos : Frac -> Frac
 fn num_acos(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_float_var = var_store.fresh();
-    let ret_float_var = var_store.fresh();
+    let arg_frac_var = var_store.fresh();
+    let ret_frac_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumAcos,
-        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
-        ret_var: ret_float_var,
+        args: vec![(arg_frac_var, Var(Symbol::ARG_1))],
+        ret_var: ret_frac_var,
     };
 
     defn(
         symbol,
-        vec![(arg_float_var, Symbol::ARG_1)],
+        vec![(arg_frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        ret_float_var,
+        ret_frac_var,
     )
 }
 
-/// Num.asin : Float -> Float
+/// Num.asin : Frac -> Frac
 fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_float_var = var_store.fresh();
-    let ret_float_var = var_store.fresh();
+    let arg_frac_var = var_store.fresh();
+    let ret_frac_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumAsin,
-        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
-        ret_var: ret_float_var,
+        args: vec![(arg_frac_var, Var(Symbol::ARG_1))],
+        ret_var: ret_frac_var,
     };
 
     defn(
         symbol,
-        vec![(arg_float_var, Symbol::ARG_1)],
+        vec![(arg_frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        ret_float_var,
+        ret_frac_var,
     )
 }
 
@@ -4275,13 +4275,13 @@ fn num_abs(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.div : Float, Float -> Float
-fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Num.div : Frac, Frac -> Frac
+fn num_div_frac(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumDivUnchecked)
 }
 
-/// Num.divChecked : Float, Float -> Result Float [ DivByZero ]*
-fn num_div_float_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Num.divChecked : Frac, Frac -> Result Frac [ DivByZero ]*
+fn num_div_frac_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
@@ -4301,7 +4301,7 @@ fn num_div_float_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         (num_var, Var(Symbol::ARG_2)),
                         (
                             num_var,
-                            float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
+                            frac(unbound_zero_var, precision_var, 0.0, float_no_bound()),
                         ),
                     ],
                     ret_var: bool_var,
@@ -4309,7 +4309,7 @@ fn num_div_float_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
             ),
             // denominator was not zero
             no_region(
-                // Ok (Float.#divUnchecked numerator denominator)
+                // Ok (Frac.#divUnchecked numerator denominator)
                 tag(
                     "Ok",
                     vec![
@@ -5446,7 +5446,7 @@ where
 }
 
 #[inline(always)]
-fn float(num_var: Variable, precision_var: Variable, f: f64, bound: FloatBound) -> Expr {
+fn frac(num_var: Variable, precision_var: Variable, f: f64, bound: FloatBound) -> Expr {
     Float(
         num_var,
         precision_var,

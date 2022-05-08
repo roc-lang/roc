@@ -64,7 +64,7 @@ updateCost = \current, neighbour, model ->
 
     distanceTo = reconstructPath newCameFrom neighbour
             |> List.len
-            |> Num.toFloat
+            |> Num.toFrac
 
     newModel = { model & costs : newCosts , cameFrom : newCameFrom }
 

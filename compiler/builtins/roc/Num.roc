@@ -62,7 +62,7 @@ interface Num
             isZero,
             isEven,
             isOdd,
-            toFloat,
+            toFrac,
             isPositive,
             isNegative,
             rem,
@@ -584,7 +584,7 @@ isPositive : Num a -> Bool
 ## Negative numbers are less than `0`.
 isNegative : Num a -> Bool
 
-toFloat : Num * -> Frac *
+toFrac : Num * -> Frac *
 
 ## Return the absolute value of the number.
 ##
