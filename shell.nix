@@ -36,7 +36,7 @@ let
       alsa-lib
     ];
 
-  llvmPkgs = pkgs.llvmPackages_12;
+  llvmPkgs = pkgs.llvmPackages_13;
 
   zig = import ./nix/zig.nix { inherit pkgs; };
   debugir = import ./nix/debugir.nix { inherit pkgs; };
@@ -78,7 +78,7 @@ in pkgs.mkShell {
   buildInputs = inputs ++ darwinInputs ++ linuxInputs;
 
   # Additional Env vars
-  LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
+  LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
   NIX_GLIBC_PATH =
     if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
   LD_LIBRARY_PATH = with pkgs;

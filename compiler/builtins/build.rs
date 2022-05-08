@@ -36,30 +36,15 @@ fn main() {
 
     // LLVM .bc FILES
 
-    generate_bc_file(&bitcode_path, &build_script_dir_path, "ir", "builtins-host");
+    generate_bc_file(&bitcode_path, "ir", "builtins-host");
 
     if !DEBUG {
-        generate_bc_file(
-            &bitcode_path,
-            &build_script_dir_path,
-            "ir-wasm32",
-            "builtins-wasm32",
-        );
+        generate_bc_file(&bitcode_path, "ir-wasm32", "builtins-wasm32");
     }
 
-    generate_bc_file(
-        &bitcode_path,
-        &build_script_dir_path,
-        "ir-i386",
-        "builtins-i386",
-    );
+    generate_bc_file(&bitcode_path, "ir-i386", "builtins-i386");
 
-    generate_bc_file(
-        &bitcode_path,
-        &build_script_dir_path,
-        "ir-x86_64",
-        "builtins-x86_64",
-    );
+    generate_bc_file(&bitcode_path, "ir-x86_64", "builtins-x86_64");
 
     // OBJECT FILES
     #[cfg(windows)]
@@ -131,34 +116,22 @@ fn generate_object_file(
     }
 }
 
-fn generate_bc_file(
-    bitcode_path: &Path,
-    build_script_dir_path: &Path,
-    zig_object: &str,
-    file_name: &str,
-) {
+fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     let mut ll_path = bitcode_path.join(file_name);
     ll_path.set_extension("ll");
     let dest_ir_host = ll_path.to_str().expect("Invalid dest ir path");
 
     println!("Compiling host ir to: {}", dest_ir_host);
 
+    let mut bc_path = bitcode_path.join(file_name);
+    bc_path.set_extension("bc");
+    let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
+    println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
+
     run_command(
         &bitcode_path,
         &zig_executable(),
         &["build", zig_object, "-Drelease=true"],
-    );
-
-    let mut bc_path = bitcode_path.join(file_name);
-    bc_path.set_extension("bc");
-    let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
-
-    println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
-
-    run_command(
-        &build_script_dir_path,
-        "llvm-as",
-        &[dest_ir_host, "-o", dest_bc_64bit],
     );
 }
 

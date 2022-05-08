@@ -756,7 +756,7 @@ mod cli_run {
                 stdin: &[],
                 input_file: None,
                 expected_ending: "",
-                use_valgrind: true,
+                use_valgrind: false,
             },
             issue2279 => Example {
                 filename: "Issue2279.roc",

@@ -19,11 +19,6 @@ pub struct CodeGenTiming {
     pub emit_o_file: Duration,
 }
 
-// TODO: If modules besides this one start needing to know which version of
-// llvm we're using, consider moving me somewhere else.
-#[cfg(feature = "llvm")]
-const LLVM_VERSION: &str = "12";
-
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Problems {
     report_problems_help(
         loaded.total_problems(),
@@ -357,9 +352,11 @@ pub fn gen_from_mono_module_llvm(
 
         use target_lexicon::Architecture;
         match target.architecture {
-            Architecture::X86_64 | Architecture::X86_32(_) | Architecture::Aarch64(_) => {
-                // assemble the .ll into a .bc
-                let _ = Command::new("llvm-as")
+            Architecture::X86_64
+            | Architecture::X86_32(_)
+            | Architecture::Aarch64(_)
+            | Architecture::Wasm32 => {
+                let ll_to_bc = Command::new("llvm-as")
                     .args(&[
                         app_ll_dbg_file.to_str().unwrap(),
                         "-o",
@@ -367,6 +364,8 @@ pub fn gen_from_mono_module_llvm(
                     ])
                     .output()
                     .unwrap();
+
+                assert!(ll_to_bc.stderr.is_empty(), "{:#?}", ll_to_bc);
 
                 let llc_args = &[
                     "-relocation-model=pic",
@@ -381,26 +380,9 @@ pub fn gen_from_mono_module_llvm(
                 //
                 // different systems name this executable differently, so we shotgun for
                 // the most common ones and then give up.
-                let _: Result<std::process::Output, std::io::Error> =
-                    Command::new(format!("llc-{}", LLVM_VERSION))
-                        .args(llc_args)
-                        .output()
-                        .or_else(|_| Command::new("llc").args(llc_args).output())
-                        .map_err(|_| {
-                            panic!("We couldn't find llc-{} on your machine!", LLVM_VERSION);
-                        });
-            }
+                let bc_to_object = Command::new("llc").args(llc_args).output().unwrap();
 
-            Architecture::Wasm32 => {
-                // assemble the .ll into a .bc
-                let _ = Command::new("llvm-as")
-                    .args(&[
-                        app_ll_dbg_file.to_str().unwrap(),
-                        "-o",
-                        app_o_file.to_str().unwrap(),
-                    ])
-                    .output()
-                    .unwrap();
+                assert!(bc_to_object.stderr.is_empty(), "{:#?}", bc_to_object);
             }
             _ => unreachable!(),
         }

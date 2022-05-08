@@ -115,7 +115,7 @@ fn section_size(bytes: &[u8]) -> usize {
 }
 
 fn parse_section<'a>(id: SectionId, module_bytes: &'a [u8], cursor: &mut usize) -> (u32, &'a [u8]) {
-    if module_bytes[*cursor] != id as u8 {
+    if (*cursor >= module_bytes.len()) || (module_bytes[*cursor] != id as u8) {
         return (0, &[]);
     }
     *cursor += 1;
@@ -809,56 +809,35 @@ impl Serialize for Export<'_> {
 
 #[derive(Debug)]
 pub struct ExportSection<'a> {
-    pub count: u32,
-    pub bytes: Vec<'a, u8>,
-    /// List of exported functions to keep during dead-code-elimination
-    pub function_indices: Vec<'a, u32>,
-    /// name -> index
-    pub globals_lookup: MutMap<&'a [u8], u32>,
+    pub exports: Vec<'a, Export<'a>>,
 }
 
 impl<'a> ExportSection<'a> {
     const ID: SectionId = SectionId::Export;
 
-    pub fn append(&mut self, export: Export) {
-        export.serialize(&mut self.bytes);
-        self.count += 1;
-        if matches!(export.ty, ExportType::Func) {
-            self.function_indices.push(export.index);
-        }
+    pub fn append(&mut self, export: Export<'a>) {
+        self.exports.push(export);
     }
 
     pub fn size(&self) -> usize {
-        section_size(&self.bytes)
+        self.exports
+            .iter()
+            .map(|ex| ex.name.len() + 1 + MAX_SIZE_ENCODED_U32)
+            .sum()
     }
 
-    fn empty(arena: &'a Bump) -> Self {
-        ExportSection {
-            count: 0,
-            bytes: Vec::with_capacity_in(256, arena),
-            function_indices: Vec::with_capacity_in(4, arena),
-            globals_lookup: MutMap::default(),
-        }
-    }
-
-    /// Preload from object file. Keep only the Global exports, ignore the rest.
-    pub fn preload_globals(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+    /// Preload from object file.
+    pub fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
         let (num_exports, body_bytes) = parse_section(Self::ID, module_bytes, cursor);
 
-        let mut export_section = ExportSection::empty(arena);
+        let mut export_section = ExportSection {
+            exports: Vec::with_capacity_in(num_exports as usize, arena),
+        };
 
         let mut body_cursor = 0;
-        for _ in 0..num_exports {
-            let export_start = body_cursor;
+        while body_cursor < body_bytes.len() {
             let export = Export::parse(arena, body_bytes, &mut body_cursor);
-            if matches!(export.ty, ExportType::Global) {
-                let global_bytes = &body_bytes[export_start..body_cursor];
-                export_section.bytes.extend_from_slice(global_bytes);
-                export_section.count += 1;
-                export_section
-                    .globals_lookup
-                    .insert(export.name, export.index);
-            }
+            export_section.exports.push(export);
         }
 
         export_section
@@ -867,10 +846,9 @@ impl<'a> ExportSection<'a> {
 
 impl<'a> Serialize for ExportSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if !self.bytes.is_empty() {
+        if !self.exports.is_empty() {
             let header_indices = write_section_header(buffer, Self::ID);
-            buffer.encode_u32(self.count);
-            buffer.append_slice(&self.bytes);
+            self.exports.serialize(buffer);
             update_section_size(buffer, header_indices);
         }
     }
@@ -1291,6 +1269,14 @@ impl<'a> NameSection<'a> {
     }
 
     pub fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+        // If we're already past the end of the preloaded file then there is no Name section
+        if *cursor >= module_bytes.len() {
+            return NameSection {
+                bytes: bumpalo::vec![in arena],
+                functions: MutMap::default(),
+            };
+        }
+
         // Custom section ID
         let section_id_byte = module_bytes[*cursor];
         if section_id_byte != Self::ID as u8 {

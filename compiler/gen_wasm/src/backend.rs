@@ -21,12 +21,11 @@ use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{DataSymbol, LinkingSegment, WasmObjectSymbol};
 use crate::wasm_module::sections::{DataMode, DataSegment, Limits};
 use crate::wasm_module::{
-    code_builder, CodeBuilder, Export, ExportType, LocalId, Signature, SymInfo, ValueType,
-    WasmModule,
+    code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
 };
 use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, MEMORY_NAME,
-    PTR_SIZE, PTR_TYPE, STACK_POINTER_GLOBAL_ID, STACK_POINTER_NAME, TARGET_INFO,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, PTR_SIZE,
+    PTR_TYPE, TARGET_INFO,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -77,21 +76,31 @@ impl<'a> WasmBackend<'a> {
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
-        module.export.append(Export {
-            name: MEMORY_NAME.as_bytes(),
-            ty: ExportType::Mem,
-            index: 0,
-        });
-        module.export.append(Export {
-            name: STACK_POINTER_NAME.as_bytes(),
-            ty: ExportType::Global,
-            index: STACK_POINTER_GLOBAL_ID,
-        });
+        // The preloaded builtins object file exports all functions, but the final app binary doesn't.
+        // Remove the function exports and use them to populate the Name section (debug info)
+        let platform_and_builtins_exports =
+            std::mem::replace(&mut module.export.exports, bumpalo::vec![in env.arena]);
+        let mut app_exports = Vec::with_capacity_in(32, env.arena);
+        for ex in platform_and_builtins_exports.into_iter() {
+            match ex.ty {
+                ExportType::Func => module.names.append_function(ex.index, ex.name),
+                _ => app_exports.push(ex),
+            }
+        }
 
         // The preloaded binary has a global to tell us where its data section ends
         // Note: We need this to account for zero data (.bss), which doesn't have an explicit DataSegment!
-        let data_end_idx = module.export.globals_lookup["__data_end".as_bytes()];
+        let data_end_name = "__data_end".as_bytes();
+        let data_end_idx = app_exports
+            .iter()
+            .find(|ex| ex.name == data_end_name)
+            .map(|ex| ex.index)
+            .unwrap_or_else(|| {
+                internal_error!("Preloaded Wasm binary must export global constant `__data_end`")
+            });
         let next_constant_addr = module.global.parse_u32_at_index(data_end_idx);
+
+        module.export.exports = app_exports;
 
         WasmBackend {
             env,
@@ -224,14 +233,18 @@ impl<'a> WasmBackend<'a> {
     }
 
     fn start_proc(&mut self, proc: &Proc<'a>) {
+        use ReturnMethod::*;
         let ret_layout = WasmLayout::new(&proc.ret_layout);
 
-        let ret_type = match ret_layout.return_method() {
-            ReturnMethod::Primitive(ty, _) => Some(ty),
-            ReturnMethod::NoReturnValue => None,
-            ReturnMethod::WriteToPointerArg => {
+        let ret_type = match ret_layout.return_method(CallConv::C) {
+            Primitive(ty, _) => Some(ty),
+            NoReturnValue => None,
+            WriteToPointerArg => {
                 self.storage.arg_types.push(PTR_TYPE);
                 None
+            }
+            ZigPackedStruct => {
+                internal_error!("C calling convention does not return Zig packed structs")
             }
         };
 
@@ -323,7 +336,7 @@ impl<'a> WasmBackend<'a> {
         };
 
         let mut n_inner_wasm_args = 0;
-        let ret_type_and_size = match inner_ret_layout.return_method() {
+        let ret_type_and_size = match inner_ret_layout.return_method(CallConv::C) {
             ReturnMethod::NoReturnValue => None,
             ReturnMethod::Primitive(ty, size) => {
                 // If the inner function returns a primitive, load the address to store it at
@@ -337,6 +350,7 @@ impl<'a> WasmBackend<'a> {
                 n_inner_wasm_args += 1;
                 None
             }
+            x => internal_error!("A Roc function should never use ReturnMethod {:?}", x),
         };
 
         // Load all the arguments for the inner function
@@ -1020,14 +1034,16 @@ impl<'a> WasmBackend<'a> {
             return self.expr_call_low_level(lowlevel, arguments, ret_sym, ret_layout, ret_storage);
         }
 
-        let (param_types, ret_type) = self.storage.load_symbols_for_call(
-            self.env.arena,
-            &mut self.code_builder,
-            arguments,
-            ret_sym,
-            &wasm_layout,
-            CallConv::C,
-        );
+        let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
+            self.storage.load_symbols_for_call(
+                self.env.arena,
+                &mut self.code_builder,
+                arguments,
+                ret_sym,
+                &wasm_layout,
+                CallConv::C,
+            );
+        debug_assert!(!ret_zig_packed_struct);
 
         for (roc_proc_index, lookup) in self.proc_lookup.iter().enumerate() {
             let ProcLookupData {
@@ -1038,8 +1054,6 @@ impl<'a> WasmBackend<'a> {
             } = lookup;
             if *ir_sym == func_sym && pl == proc_layout {
                 let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
-                let num_wasm_args = param_types.len();
-                let has_return_val = ret_type.is_some();
                 self.code_builder.call(
                     wasm_fn_index,
                     *linker_sym_index,

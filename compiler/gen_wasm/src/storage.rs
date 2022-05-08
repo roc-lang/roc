@@ -6,9 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::Layout;
 
-use crate::layout::{
-    CallConv, ReturnMethod, StackMemoryFormat, WasmLayout, ZigVersion, BUILTINS_ZIG_VERSION,
-};
+use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
 use crate::wasm_module::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_TYPE};
 
@@ -327,7 +325,7 @@ impl<'a> Storage<'a> {
                     code_builder.i32_load(align, offset);
                 } else if *size <= 8 {
                     code_builder.i64_load(align, offset);
-                } else if *size <= 12 && BUILTINS_ZIG_VERSION == ZigVersion::Zig9 {
+                } else if *size <= 12 {
                     code_builder.i64_load(align, offset);
                     code_builder.get_local(local_id);
                     code_builder.i32_load(align, offset + 8);
@@ -397,37 +395,47 @@ impl<'a> Storage<'a> {
         return_symbol: Symbol,
         return_layout: &WasmLayout,
         call_conv: CallConv,
-    ) -> (Vec<'a, ValueType>, Option<ValueType>) {
-        let mut wasm_arg_types = Vec::with_capacity_in(arguments.len() * 2 + 1, arena);
-        let mut wasm_args = Vec::with_capacity_in(arguments.len() * 2 + 1, arena);
+    ) -> (usize, bool, bool) {
+        use ReturnMethod::*;
 
-        let return_method = return_layout.return_method();
-        let return_type = match return_method {
-            ReturnMethod::Primitive(ty, _) => Some(ty),
-            ReturnMethod::NoReturnValue => None,
-            ReturnMethod::WriteToPointerArg => {
-                wasm_arg_types.push(PTR_TYPE);
-                wasm_args.push(return_symbol);
-                None
+        let mut num_wasm_args = 0;
+        let mut symbols_to_load = Vec::with_capacity_in(arguments.len() * 2 + 1, arena);
+
+        let return_method = return_layout.return_method(call_conv);
+        let has_return_val = match return_method {
+            Primitive(..) => true,
+            NoReturnValue => false,
+            WriteToPointerArg => {
+                num_wasm_args += 1;
+                symbols_to_load.push(return_symbol);
+                false
+            }
+            ZigPackedStruct => {
+                // Workaround for Zig's incorrect implementation of the C calling convention.
+                // We need to copy the packed struct into the stack frame
+                // Load the address before the call so that afterward, it will be 2nd on the value stack,
+                // ready for the store instruction.
+                symbols_to_load.push(return_symbol);
+                true
             }
         };
 
         for arg in arguments {
             let stored = self.symbol_storage_map.get(arg).unwrap();
             let arg_types = stored.arg_types(call_conv);
-            wasm_arg_types.extend_from_slice(arg_types);
+            num_wasm_args += arg_types.len();
             match arg_types.len() {
                 0 => {}
-                1 => wasm_args.push(*arg),
-                2 => wasm_args.extend_from_slice(&[*arg, *arg]),
+                1 => symbols_to_load.push(*arg),
+                2 => symbols_to_load.extend_from_slice(&[*arg, *arg]),
                 n => internal_error!("Cannot have {} Wasm arguments for 1 Roc argument", n),
             }
         }
 
         // If the symbols were already at the top of the stack, do nothing!
         // Should be common for simple cases, due to the structure of the Mono IR
-        if !code_builder.verify_stack_match(&wasm_args) {
-            if return_method == ReturnMethod::WriteToPointerArg {
+        if !code_builder.verify_stack_match(&symbols_to_load) {
+            if matches!(return_method, WriteToPointerArg | ZigPackedStruct) {
                 self.load_return_address_ccc(code_builder, return_symbol);
             };
 
@@ -439,7 +447,11 @@ impl<'a> Storage<'a> {
             }
         }
 
-        (wasm_arg_types, return_type)
+        (
+            num_wasm_args,
+            has_return_val,
+            return_method == ZigPackedStruct,
+        )
     }
 
     /// Generate code to copy a StoredValue to an arbitrary memory location

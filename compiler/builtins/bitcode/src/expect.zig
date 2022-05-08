@@ -27,18 +27,8 @@ pub fn expectFailed(
 
     // Lock the failures mutex before reading from any of the failures globals,
     // and then release the lock once we're done modifying things.
-
-    // TODO FOR ZIG 0.9: this API changed in https://github.com/ziglang/zig/commit/008b0ec5e58fc7e31f3b989868a7d1ea4df3f41d
-    // to this: https://github.com/ziglang/zig/blob/c710d5eefe3f83226f1651947239730e77af43cb/lib/std/Thread/Mutex.zig
-    //
-    // ...so just use these two lines of code instead of the non-commented-out ones to make this work in Zig 0.9:
-    //
-    // failures_mutex.lock();
-    // defer failures_mutex.release();
-    //
-    // 👆 👆 👆 IF UPGRADING TO ZIG 0.9, LOOK HERE! 👆 👆 👆
-    const held = failures_mutex.acquire();
-    defer held.release();
+    failures_mutex.lock();
+    defer failures_mutex.unlock();
 
     // If we don't have enough capacity to add a failure, allocate a new failures pointer.
     if (failure_length >= failure_capacity) {
@@ -87,17 +77,8 @@ pub fn expectFailedC(
 }
 
 pub fn getExpectFailures() []Failure {
-    // TODO FOR ZIG 0.9: this API changed in https://github.com/ziglang/zig/commit/008b0ec5e58fc7e31f3b989868a7d1ea4df3f41d
-    // to this: https://github.com/ziglang/zig/blob/c710d5eefe3f83226f1651947239730e77af43cb/lib/std/Thread/Mutex.zig
-    //
-    // ...so just use these two lines of code instead of the non-commented-out ones to make this work in Zig 0.9:
-    //
-    // failures_mutex.lock();
-    // defer failures_mutex.release();
-    //
-    // 👆 👆 👆 IF UPGRADING TO ZIG 0.9, LOOK HERE! 👆 👆 👆
-    const held = failures_mutex.acquire();
-    defer held.release();
+    failures_mutex.lock();
+    defer failures_mutex.unlock();
 
     if (failure_length > 0) {
         // defensively clone failures, in case someone modifies the originals after the mutex has been released.
@@ -116,23 +97,14 @@ pub fn getExpectFailures() []Failure {
 }
 
 pub fn getExpectFailuresC() callconv(.C) CSlice {
-    var bytes = @ptrCast(*c_void, failures);
+    var bytes = @ptrCast(*anyopaque, failures);
 
     return .{ .pointer = bytes, .len = failure_length };
 }
 
 pub fn deinitFailures() void {
-    // TODO FOR ZIG 0.9: this API changed in https://github.com/ziglang/zig/commit/008b0ec5e58fc7e31f3b989868a7d1ea4df3f41d
-    // to this: https://github.com/ziglang/zig/blob/c710d5eefe3f83226f1651947239730e77af43cb/lib/std/Thread/Mutex.zig
-    //
-    // ...so just use these two lines of code instead of the non-commented-out ones to make this work in Zig 0.9:
-    //
-    // failures_mutex.lock();
-    // defer failures_mutex.release();
-    //
-    // 👆 👆 👆 IF UPGRADING TO ZIG 0.9, LOOK HERE! 👆 👆 👆
-    const held = failures_mutex.acquire();
-    defer held.release();
+    failures_mutex.lock();
+    defer failures_mutex.unlock();
 
     utils.dealloc(@ptrCast([*]u8, failures), @alignOf(Failure));
     failure_length = 0;
