@@ -9,6 +9,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
+use roc_collections::soa::{Index, Slice};
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -1871,4 +1872,61 @@ pub fn unescape_char(escaped: &EscapedChar) -> char {
         Tab => '\t',
         Newline => '\n',
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct Declarations {
+    pub declarations: Vec<DeclarationTag>,
+
+    /// same lengths as declarations; has a dummy value if not applicable
+    pub variables: Vec<Variable>,
+    pub symbols: Vec<Loc<Symbol>>,
+    pub annotations: Vec<Option<crate::def::Annotation>>,
+
+    pub function_bodies: Vec<Loc<FunctionDef>>,
+    pub expressions: Vec<Loc<Expr>>,
+    pub destructs: Vec<DestructureDef>,
+}
+
+impl Declarations {
+    pub fn len(&self) -> usize {
+        let mut accum = 0;
+        for tag in self.declarations.iter() {
+            match tag {
+                DeclarationTag::Function(_) => accum += 1,
+                DeclarationTag::Value(_) => accum += 1,
+                DeclarationTag::Destructure(_) => accum += 1,
+                DeclarationTag::MutualRecursion(slice) => accum += slice.len(),
+            }
+        }
+
+        accum
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum DeclarationTag {
+    Value(Index<Loc<Expr>>),
+    Function(Index<Loc<FunctionDef>>),
+    Destructure(Index<DestructureDef>),
+    MutualRecursion(Slice<FunctionDef>),
+}
+
+#[derive(Clone, Debug)]
+pub struct FunctionDef {
+    pub closure_type: Variable,
+    pub closure_ext_var: Variable,
+    pub return_type: Variable,
+    pub captured_symbols: Vec<(Symbol, Variable)>,
+    pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DestructureDef {
+    pub loc_pattern: Loc<Pattern>,
+    pub pattern_vars: VecMap<Symbol, Variable>,
 }
