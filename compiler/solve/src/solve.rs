@@ -1966,10 +1966,8 @@ fn type_to_variable<'a>(
                                         match *subs.get_content_without_compacting(var) {
                                             FlexVar(opt_name) => subs
                                                 .set_content(var, FlexAbleVar(opt_name, *ability)),
-                                            RigidVar(name) => subs.set_content(
-                                                var,
-                                                FlexAbleVar(Some(name), *ability),
-                                            ),
+                                            RigidVar(..) => internal_error!("Rigid var in type arg for {:?} - this is a bug in the solver, or our understanding", actual),
+                                            RigidAbleVar(..) | FlexAbleVar(..) => internal_error!("Able var in type arg for {:?} - this is a bug in the solver, or our understanding", actual),
                                             _ => {
                                                 // TODO associate the type to the bound ability, and check
                                                 // that it correctly implements the ability.
