@@ -86,6 +86,85 @@ fn constrain_untyped_args(
     (vars, pattern_state, function_type)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn constrain_closure(
+    constraints: &mut Constraints,
+    env: &Env,
+    region: Region,
+    expected: Expected<Type>,
+
+    fn_var: Variable,
+    closure_var: Variable,
+    closure_ext_var: Variable,
+    ret_var: Variable,
+    arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
+    loc_body_expr: &Loc<Expr>,
+    captured_symbols: &[(Symbol, Variable)],
+    name: Symbol,
+) -> Constraint {
+    let closure_type = Type::Variable(closure_var);
+    let return_type = Type::Variable(ret_var);
+    let (mut vars, pattern_state, function_type) = constrain_untyped_args(
+        constraints,
+        env,
+        arguments,
+        closure_type,
+        return_type.clone(),
+    );
+
+    vars.push(ret_var);
+    vars.push(closure_var);
+    vars.push(closure_ext_var);
+    vars.push(fn_var);
+
+    let body_type = NoExpectation(return_type);
+    let ret_constraint = constrain_expr(
+        constraints,
+        env,
+        loc_body_expr.region,
+        &loc_body_expr.value,
+        body_type,
+    );
+
+    // make sure the captured symbols are sorted!
+    debug_assert_eq!(captured_symbols.to_vec(), {
+        let mut copy = captured_symbols.to_vec();
+        copy.sort();
+        copy
+    });
+
+    let closure_constraint = constrain_closure_size(
+        constraints,
+        name,
+        region,
+        captured_symbols,
+        closure_var,
+        closure_ext_var,
+        &mut vars,
+    );
+
+    let pattern_state_constraints = constraints.and_constraint(pattern_state.constraints);
+    let cons = [
+        constraints.let_constraint(
+            [],
+            pattern_state.vars,
+            pattern_state.headers,
+            pattern_state_constraints,
+            ret_constraint,
+        ),
+        constraints.equal_types_with_storage(
+            function_type,
+            expected,
+            Category::Lambda,
+            region,
+            fn_var,
+        ),
+        closure_constraint,
+    ];
+
+    constraints.exists_many(vars, cons)
+}
+
 pub fn constrain_expr(
     constraints: &mut Constraints,
     env: &Env,
@@ -347,74 +426,21 @@ pub fn constrain_expr(
             name,
             ..
         }) => {
-            // NOTE defs are treated somewhere else!
-            let loc_body_expr = &**boxed;
-
-            let ret_var = *ret_var;
-            let closure_var = *closure_var;
-            let closure_ext_var = *closure_ext_var;
-
-            let closure_type = Type::Variable(closure_var);
-            let return_type = Type::Variable(ret_var);
-            let (mut vars, pattern_state, function_type) = constrain_untyped_args(
+            // shared code with function defs without an annotation
+            constrain_closure(
                 constraints,
                 env,
-                arguments,
-                closure_type,
-                return_type.clone(),
-            );
-
-            vars.push(ret_var);
-            vars.push(closure_var);
-            vars.push(closure_ext_var);
-            vars.push(*fn_var);
-
-            let body_type = NoExpectation(return_type);
-            let ret_constraint = constrain_expr(
-                constraints,
-                env,
-                loc_body_expr.region,
-                &loc_body_expr.value,
-                body_type,
-            );
-
-            // make sure the captured symbols are sorted!
-            debug_assert_eq!(captured_symbols.clone(), {
-                let mut copy = captured_symbols.clone();
-                copy.sort();
-                copy
-            });
-
-            let closure_constraint = constrain_closure_size(
-                constraints,
-                *name,
                 region,
+                expected,
+                *fn_var,
+                *closure_var,
+                *closure_ext_var,
+                *ret_var,
+                arguments,
+                boxed,
                 captured_symbols,
-                closure_var,
-                closure_ext_var,
-                &mut vars,
-            );
-
-            let pattern_state_constraints = constraints.and_constraint(pattern_state.constraints);
-            let cons = [
-                constraints.let_constraint(
-                    [],
-                    pattern_state.vars,
-                    pattern_state.headers,
-                    pattern_state_constraints,
-                    ret_constraint,
-                ),
-                constraints.equal_types_with_storage(
-                    function_type,
-                    expected,
-                    Category::Lambda,
-                    region,
-                    *fn_var,
-                ),
-                closure_constraint,
-            ];
-
-            constraints.exists_many(vars, cons)
+                *name,
+            )
         }
 
         Expect(loc_cond, continuation) => {
@@ -1001,7 +1027,55 @@ pub fn constrain_expr(
 
                         index -= 1;
                     }
-                    roc_can::expr::DeclarationTag::Function(_) => todo!(),
+                    roc_can::expr::DeclarationTag::Function(function_def_index) => {
+                        let loc_expr = &declarations.expressions[index];
+                        let loc_symbol = declarations.symbols[index];
+                        let expr_var = declarations.variables[index];
+                        let opt_annotation = &declarations.annotations[index];
+
+                        let loc_function_def =
+                            &declarations.function_bodies[function_def_index.index()];
+                        let function_def = &loc_function_def.value;
+
+                        match opt_annotation {
+                            Some(_) => todo!(),
+                            None => {
+                                let expr_type = Type::Variable(expr_var);
+
+                                let expr_con = constrain_closure(
+                                    constraints,
+                                    env,
+                                    loc_function_def.region,
+                                    NoExpectation(expr_type),
+                                    expr_var,
+                                    function_def.closure_type,
+                                    function_def.closure_ext_var,
+                                    function_def.return_type,
+                                    &function_def.arguments,
+                                    loc_expr,
+                                    &function_def.captured_symbols,
+                                    loc_symbol.value,
+                                );
+
+                                body_con = constrain_def_make_constraint_simple(
+                                    constraints,
+                                    vec![],
+                                    vec![],
+                                    expr_con,
+                                    body_con,
+                                    loc_symbol,
+                                    expr_var,
+                                    Type::Variable(expr_var),
+                                );
+                            }
+                        }
+
+                        if index == 0 {
+                            break;
+                        }
+
+                        index -= 1;
+                    }
                     roc_can::expr::DeclarationTag::Destructure(_) => todo!(),
                     roc_can::expr::DeclarationTag::MutualRecursion(_) => todo!(),
                 }
