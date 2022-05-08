@@ -352,7 +352,7 @@ pub fn canonicalize_module_defs<'a>(
     };
 
     match sort_can_defs(&mut env, defs, new_output) {
-        (Ok(mut declarations), mut output) => {
+        (mut declarations, mut output) => {
             use crate::def::Declaration::*;
 
             let symbols_from_requires = symbols_from_requires
@@ -582,7 +582,6 @@ pub fn canonicalize_module_defs<'a>(
 
             Ok(output)
         }
-        (Err(runtime_error), _) => Err(runtime_error),
     }
 }
 

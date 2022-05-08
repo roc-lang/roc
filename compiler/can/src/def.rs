@@ -757,7 +757,7 @@ pub(crate) fn sort_can_defs(
     env: &mut Env<'_>,
     defs: CanDefs,
     mut output: Output,
-) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
+) -> (Vec<Declaration>, Output) {
     let CanDefs {
         mut defs,
         def_ordering,
@@ -861,7 +861,7 @@ pub(crate) fn sort_can_defs(
         }
     }
 
-    (Ok(declarations), output)
+    (declarations, output)
 }
 
 fn mark_def_recursive(mut def: Def) -> Def {
@@ -1270,23 +1270,18 @@ pub fn can_defs_with_return<'a>(
         }
     }
 
-    let (can_defs, output) = sort_can_defs(env, unsorted, output);
+    let (declarations, output) = sort_can_defs(env, unsorted, output);
 
-    match can_defs {
-        Ok(decls) => {
-            let mut loc_expr: Loc<Expr> = ret_expr;
+    let mut loc_expr: Loc<Expr> = ret_expr;
 
-            for declaration in decls.into_iter().rev() {
-                loc_expr = Loc {
-                    region: Region::zero(),
-                    value: decl_to_let(var_store, declaration, loc_expr),
-                };
-            }
-
-            (loc_expr.value, output)
-        }
-        Err(err) => (RuntimeError(err), output),
+    for declaration in declarations.into_iter().rev() {
+        loc_expr = Loc {
+            region: Region::zero(),
+            value: decl_to_let(var_store, declaration, loc_expr),
+        };
     }
+
+    (loc_expr.value, output)
 }
 
 fn decl_to_let(var_store: &mut VarStore, decl: Declaration, loc_ret: Loc<Expr>) -> Expr {
