@@ -22,7 +22,7 @@ use crate::TARGET_INFO;
 /// the smallest integer supported in the Wasm instruction set.
 /// We may choose different instructions for signed and unsigned integers,
 /// but they share the same Wasm value type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum CodeGenNumType {
     I32,     // Supported in Wasm instruction set
     I64,     // Supported in Wasm instruction set
@@ -627,7 +627,25 @@ impl<'a> LowLevelCall<'a> {
                     _ => panic_ret_type(),
                 }
             }
-            NumPowInt => todo!("{:?}", self.lowlevel),
+            NumPowInt => {
+                self.load_args(backend);
+                let base_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
+                let exponent_type = CodeGenNumType::for_symbol(backend, self.arguments[1]);
+                let ret_type = CodeGenNumType::from(self.ret_layout);
+
+                debug_assert!(base_type == exponent_type);
+                debug_assert!(exponent_type == ret_type);
+
+                let width = match ret_type {
+                    CodeGenNumType::I32 => IntWidth::I32,
+                    CodeGenNumType::I64 => IntWidth::I64,
+                    CodeGenNumType::I128 => todo!("{:?} for I128", self.lowlevel),
+                    _ => internal_error!("Invalid return type for pow: {:?}", ret_type),
+                };
+
+                self.load_args_and_call_zig(backend, &bitcode::NUM_POW_INT[width])
+            }
+
             NumIsFinite => num_is_finite(backend, self.arguments[0]),
 
             NumAtan => match self.ret_layout {
