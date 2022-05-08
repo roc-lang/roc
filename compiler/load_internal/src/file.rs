@@ -79,7 +79,7 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 const PRELUDE_TYPES: [(&str, Symbol); 33] = [
     ("Num", Symbol::NUM_NUM),
     ("Int", Symbol::NUM_INT),
-    ("Float", Symbol::NUM_FLOAT),
+    ("Frac", Symbol::NUM_FRAC),
     ("Integer", Symbol::NUM_INTEGER),
     ("FloatingPoint", Symbol::NUM_FLOATINGPOINT),
     ("Binary32", Symbol::NUM_BINARY32),

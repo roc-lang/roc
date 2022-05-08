@@ -1086,7 +1086,7 @@ define_builtins! {
         78 NUM_MUL_WRAP: "mulWrap"
         79 NUM_MUL_CHECKED: "mulChecked"
         80 NUM_INT: "Int"
-        81 NUM_FLOAT: "Float"
+        81 NUM_FRAC: "Frac"
         82 NUM_NATURAL: "Natural"
         83 NUM_NAT: "Nat"
         84 NUM_INT_CAST: "intCast"

@@ -1038,7 +1038,7 @@ impl<'a> Layout<'a> {
                         return Ok(Layout::i64());
                     }
 
-                    Symbol::NUM_FLOAT | Symbol::NUM_FLOATINGPOINT
+                    Symbol::NUM_FRAC | Symbol::NUM_FLOATINGPOINT
                         if is_unresolved_var(env.subs, actual_var) =>
                     {
                         // default to f64

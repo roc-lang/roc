@@ -3,7 +3,7 @@ interface Num
         [
             Num,
             Int,
-            Float,
+            Frac,
 
             Integer,
             FloatingPoint,
