@@ -1277,19 +1277,17 @@ pub fn can_defs_with_return<'a>(
     for declaration in declarations.into_iter().rev() {
         loc_expr = Loc {
             region: Region::zero(),
-            value: decl_to_let(var_store, declaration, loc_expr),
+            value: decl_to_let(declaration, loc_expr),
         };
     }
 
     (loc_expr.value, output)
 }
 
-fn decl_to_let(var_store: &mut VarStore, decl: Declaration, loc_ret: Loc<Expr>) -> Expr {
+fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Expr {
     match decl {
-        Declaration::Declare(def) => {
-            Expr::LetNonRec(Box::new(def), Box::new(loc_ret), var_store.fresh())
-        }
-        Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret), var_store.fresh()),
+        Declaration::Declare(def) => Expr::LetNonRec(Box::new(def), Box::new(loc_ret)),
+        Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret)),
         Declaration::InvalidCycle(entries) => {
             Expr::RuntimeError(RuntimeError::CircularDef(entries))
         }

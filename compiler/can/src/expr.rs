@@ -106,8 +106,8 @@ pub enum Expr {
     },
 
     // Let
-    LetRec(Vec<Def>, Box<Loc<Expr>>, Variable),
-    LetNonRec(Box<Def>, Box<Loc<Expr>>, Variable),
+    LetRec(Vec<Def>, Box<Loc<Expr>>),
+    LetNonRec(Box<Def>, Box<Loc<Expr>>),
 
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
@@ -214,8 +214,8 @@ impl Expr {
             &Self::Var(sym) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
-            Self::LetRec(_, expr, _) => expr.value.category(),
-            Self::LetNonRec(_, expr, _) => expr.value.category(),
+            Self::LetRec(_, expr) => expr.value.category(),
+            Self::LetNonRec(_, expr) => expr.value.category(),
             &Self::Call(_, _, called_via) => Category::CallResult(None, called_via),
             &Self::RunLowLevel { op, .. } => Category::LowLevelOpResult(op),
             Self::ForeignCall { .. } => Category::ForeignCall,
@@ -1477,7 +1477,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             Expect(Box::new(loc_condition), Box::new(loc_expr))
         }
 
-        LetRec(defs, loc_expr, var) => {
+        LetRec(defs, loc_expr) => {
             let mut new_defs = Vec::with_capacity(defs.len());
 
             for def in defs {
@@ -1498,10 +1498,10 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 value: inline_calls(var_store, scope, loc_expr.value),
             };
 
-            LetRec(new_defs, Box::new(loc_expr), var)
+            LetRec(new_defs, Box::new(loc_expr))
         }
 
-        LetNonRec(def, loc_expr, var) => {
+        LetNonRec(def, loc_expr) => {
             let def = Def {
                 loc_pattern: def.loc_pattern,
                 loc_expr: Loc {
@@ -1518,7 +1518,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 value: inline_calls(var_store, scope, loc_expr.value),
             };
 
-            LetNonRec(Box::new(def), Box::new(loc_expr), var)
+            LetNonRec(Box::new(def), Box::new(loc_expr))
         }
 
         Closure(ClosureData {
@@ -1672,11 +1672,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
 
                             loc_answer = Loc {
                                 region: Region::zero(),
-                                value: LetNonRec(
-                                    Box::new(def),
-                                    Box::new(loc_answer),
-                                    var_store.fresh(),
-                                ),
+                                value: LetNonRec(Box::new(def), Box::new(loc_answer)),
                             };
                         }
 

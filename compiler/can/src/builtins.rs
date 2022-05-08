@@ -561,7 +561,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
         annotation: None,
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)));
 
     defn(
         symbol,
@@ -858,7 +858,7 @@ fn num_overflow_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowL
         annotation: None,
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)));
 
     defn(
         symbol,
@@ -1662,7 +1662,7 @@ fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
         annotation: None,
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)));
 
     defn(
         symbol,
@@ -1898,7 +1898,7 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ),
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)));
 
     defn(
         symbol,
@@ -2003,7 +2003,7 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ),
     };
 
-    let roc_result = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let roc_result = LetNonRec(Box::new(def), Box::new(no_region(cont)));
 
     // Only do the business with the let if we're in bounds!
 
@@ -3759,11 +3759,7 @@ fn list_find(symbol: Symbol, var_store: &mut VarStore) -> Def {
         final_else: Box::new(no_region(make_err)),
     };
 
-    let body = LetNonRec(
-        Box::new(find_result_def),
-        Box::new(no_region(inspect)),
-        t_ret,
-    );
+    let body = LetNonRec(Box::new(find_result_def), Box::new(no_region(inspect)));
 
     defn(
         symbol,
@@ -3933,7 +3929,7 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
         final_else: Box::new(no_region(make_err)),
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(inspect)), ret_var);
+    let body = LetNonRec(Box::new(def), Box::new(no_region(inspect)));
 
     defn(
         symbol,

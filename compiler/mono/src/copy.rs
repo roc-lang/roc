@@ -114,7 +114,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 final_else: Box::new(final_else.map(go_help)),
             },
 
-            LetRec(defs, body, var) => LetRec(
+            LetRec(defs, body) => LetRec(
                 defs.iter()
                     .map(
                         |Def {
@@ -136,9 +136,8 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                     )
                     .collect(),
                 Box::new(body.map(go_help)),
-                sub!(*var),
             ),
-            LetNonRec(def, body, var) => {
+            LetNonRec(def, body) => {
                 let Def {
                     loc_pattern,
                     loc_expr,
@@ -153,7 +152,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                     pattern_vars: pattern_vars.iter().map(|(s, v)| (*s, sub!(*v))).collect(),
                     annotation: annotation.clone(),
                 };
-                LetNonRec(Box::new(def), Box::new(body.map(go_help)), sub!(*var))
+                LetNonRec(Box::new(def), Box::new(body.map(go_help)))
             }
 
             Call(f, args, called_via) => {
