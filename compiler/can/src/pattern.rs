@@ -47,7 +47,6 @@ pub enum Pattern {
         // for the expression from the opaque definition. `type_arguments` is something like
         // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
         specialized_def_type: Box<Type>,
-        // Fresh type variable and any ability it is bound to
         type_arguments: Vec<OptAbleVar>,
         lambda_set_variables: Vec<LambdaSet>,
     },
