@@ -34,6 +34,7 @@ pub struct MemberSpecialization {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SpecializationId(u64);
 
+#[allow(clippy::derivable_impls)] // let's be explicit about this
 impl Default for SpecializationId {
     fn default() -> Self {
         Self(0)

@@ -2560,7 +2560,7 @@ fn resolve_abilities_in_specialized_body<'a>(
                     self.abilities_store
                         .insert_resolved(*specialization_id, specialization);
 
-                    debug_assert!(!self.specialized.contains(&specialization_id));
+                    debug_assert!(!self.specialized.contains(specialization_id));
                     self.specialized.push(*specialization_id);
                 }
                 _ => walk_expr(self, expr),
@@ -7056,13 +7056,10 @@ fn can_reuse_symbol<'a>(
     use ReuseSymbol::*;
 
     let symbol = match expr {
-        AbilityMember(_, specialization_id) => {
-            let specialization_symbol = env
-                .abilities_store
-                .get_resolved(*specialization_id)
-                .expect("Specialization must be known!");
-            specialization_symbol
-        }
+        AbilityMember(_, specialization_id) => env
+            .abilities_store
+            .get_resolved(*specialization_id)
+            .expect("Specialization must be known!"),
         Var(symbol) => *symbol,
         _ => return NotASymbol,
     };
