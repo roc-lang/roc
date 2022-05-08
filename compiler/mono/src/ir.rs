@@ -2563,7 +2563,7 @@ fn resolve_abilities_in_specialized_body<'a>(
                     debug_assert!(!self.specialized.contains(specialization_id));
                     self.specialized.push(*specialization_id);
                 }
-                _ => walk_expr(self, expr),
+                _ => walk_expr(self, expr, var),
             }
         }
     }

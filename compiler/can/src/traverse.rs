@@ -58,7 +58,7 @@ pub fn walk_def<V: Visitor>(visitor: &mut V, def: &Def) {
     }
 }
 
-pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr) {
+pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
     match expr {
         Expr::Closure(closure_data) => walk_closure(visitor, closure_data),
         Expr::When {
@@ -91,13 +91,13 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr) {
             branch_var,
             final_else,
         } => walk_if(visitor, *cond_var, branches, *branch_var, final_else),
-        Expr::LetRec(defs, body, body_var) => {
+        Expr::LetRec(defs, body) => {
             defs.iter().for_each(|def| visitor.visit_def(def));
-            visitor.visit_expr(&body.value, body.region, *body_var);
+            visitor.visit_expr(&body.value, body.region, var);
         }
-        Expr::LetNonRec(def, body, body_var) => {
+        Expr::LetNonRec(def, body) => {
             visitor.visit_def(def);
-            visitor.visit_expr(&body.value, body.region, *body_var);
+            visitor.visit_expr(&body.value, body.region, var);
         }
         Expr::Call(f, args, _called_via) => {
             let (fn_var, loc_fn, _closure_var, _ret_var) = &**f;
@@ -288,8 +288,8 @@ pub trait Visitor: Sized + PatternVisitor {
         // ignore by default
     }
 
-    fn visit_expr(&mut self, expr: &Expr, _region: Region, _var: Variable) {
-        walk_expr(self, expr);
+    fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
+        walk_expr(self, expr, var);
     }
 }
 
@@ -328,7 +328,7 @@ impl Visitor for TypeAtVisitor {
             return;
         }
         if region.contains(&self.region) {
-            walk_expr(self, expr);
+            walk_expr(self, expr, var);
         }
     }
 }
