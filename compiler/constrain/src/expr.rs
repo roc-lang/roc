@@ -888,9 +888,7 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            let cons = constrain_recursive_defs(constraints, env, defs, body_con);
-
-            constraints.exists([], cons)
+            constrain_recursive_defs(constraints, env, defs, body_con)
         }
         LetNonRec(def, loc_ret) => {
             let mut stack = Vec::with_capacity(1);
@@ -913,9 +911,7 @@ pub fn constrain_expr(
             );
 
             while let Some(def) = stack.pop() {
-                let cons = constrain_def(constraints, env, def, body_con);
-
-                body_con = constraints.exists([], cons)
+                body_con = constrain_def(constraints, env, def, body_con)
             }
 
             body_con
