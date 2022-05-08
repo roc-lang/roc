@@ -890,6 +890,125 @@ pub fn constrain_expr(
 
             constrain_recursive_defs(constraints, env, defs, body_con)
         }
+        LetBlock(declarations, loc_ret) => {
+            let mut body_con = constrain_expr(
+                constraints,
+                env,
+                loc_ret.region,
+                &loc_ret.value,
+                expected.clone(),
+            );
+
+            debug_assert!(!declarations.is_empty());
+            let mut index = declarations.len() - 1;
+
+            loop {
+                match declarations.declarations[index] {
+                    roc_can::expr::DeclarationTag::Value => {
+                        let loc_expr = &declarations.expressions[index];
+                        let loc_symbol = declarations.symbols[index];
+                        let expr_var = declarations.variables[index];
+                        let opt_annotation = &declarations.annotations[index];
+
+                        match opt_annotation {
+                            Some(annotation) => {
+                                let arity = 1;
+                                let rigids = &env.rigids;
+                                let mut ftv = rigids.clone();
+
+                                let loc_pattern = Loc::at(
+                                    loc_symbol.region,
+                                    Pattern::Identifier(loc_symbol.value),
+                                );
+
+                                let InstantiateRigids {
+                                    signature,
+                                    new_rigid_variables,
+                                    new_infer_variables,
+                                } = instantiate_rigids_simple(
+                                    &annotation.signature,
+                                    &annotation.introduced_variables,
+                                    &mut ftv,
+                                );
+
+                                let annotation_expected = FromAnnotation(
+                                    loc_pattern,
+                                    arity,
+                                    AnnotationSource::TypedBody {
+                                        region: annotation.region,
+                                    },
+                                    signature.clone(),
+                                );
+
+                                let ret_constraint = constrain_expr(
+                                    constraints,
+                                    env,
+                                    loc_expr.region,
+                                    &loc_expr.value,
+                                    annotation_expected,
+                                );
+
+                                let cons = [
+                                    ret_constraint,
+                                    // Store type into AST vars. We use Store so errors aren't reported twice
+                                    constraints.store(
+                                        signature.clone(),
+                                        expr_var,
+                                        std::file!(),
+                                        std::line!(),
+                                    ),
+                                ];
+                                let expr_con = constraints.and_constraint(cons);
+
+                                body_con = constrain_def_make_constraint_simple(
+                                    constraints,
+                                    new_rigid_variables,
+                                    new_infer_variables,
+                                    expr_con,
+                                    body_con,
+                                    loc_symbol,
+                                    expr_var,
+                                    signature,
+                                );
+                            }
+                            None => {
+                                let expr_type = Type::Variable(expr_var);
+
+                                let expr_con = constrain_expr(
+                                    constraints,
+                                    env,
+                                    loc_expr.region,
+                                    &loc_expr.value,
+                                    NoExpectation(expr_type),
+                                );
+
+                                body_con = constrain_def_make_constraint_simple(
+                                    constraints,
+                                    vec![],
+                                    vec![],
+                                    expr_con,
+                                    body_con,
+                                    loc_symbol,
+                                    expr_var,
+                                    Type::Variable(expr_var),
+                                );
+                            }
+                        }
+
+                        if index == 0 {
+                            break;
+                        }
+
+                        index -= 1;
+                    }
+                    roc_can::expr::DeclarationTag::Function(_) => todo!(),
+                    roc_can::expr::DeclarationTag::Destructure(_) => todo!(),
+                    roc_can::expr::DeclarationTag::MutualRecursion(_) => todo!(),
+                }
+            }
+
+            body_con
+        }
         LetNonRec(def, loc_ret) => {
             let mut stack = Vec::with_capacity(1);
 
@@ -1276,7 +1395,7 @@ pub fn constrain_decls(
     constraint
 }
 
-pub fn constrain_def_pattern(
+pub(crate) fn constrain_def_pattern(
     constraints: &mut Constraints,
     env: &Env,
     loc_pattern: &Loc<Pattern>,
@@ -1682,7 +1801,7 @@ fn constrain_def(
     }
 }
 
-pub fn constrain_def_make_constraint(
+pub(crate) fn constrain_def_make_constraint(
     constraints: &mut Constraints,
     new_rigid_variables: Vec<Variable>,
     new_infer_variables: Vec<Variable>,
@@ -1707,6 +1826,29 @@ pub fn constrain_def_make_constraint(
         def_con,
         body_con,
     )
+}
+
+fn constrain_def_make_constraint_simple(
+    constraints: &mut Constraints,
+    new_rigid_variables: Vec<Variable>,
+    new_infer_variables: Vec<Variable>,
+    expr_con: Constraint,
+    body_con: Constraint,
+    symbol: Loc<Symbol>,
+    expr_var: Variable,
+    expr_type: Type,
+) -> Constraint {
+    let def_con = constraints.let_constraint(
+        [],
+        new_infer_variables,
+        [], // empty, because our functions have no arguments!
+        Constraint::True,
+        expr_con,
+    );
+
+    let headers = [(symbol.value, Loc::at(symbol.region, expr_type))];
+
+    constraints.let_constraint(new_rigid_variables, [expr_var], headers, def_con, body_con)
 }
 
 fn constrain_closure_size(
@@ -1824,6 +1966,52 @@ fn instantiate_rigids(
         crate::pattern::headers_from_annotation(&loc_pattern.value, &loc_annotation_ref)
     {
         headers.extend(new_headers)
+    }
+
+    InstantiateRigids {
+        signature: annotation,
+        new_rigid_variables,
+        new_infer_variables,
+    }
+}
+
+fn instantiate_rigids_simple(
+    annotation: &Type,
+    introduced_vars: &IntroducedVariables,
+    ftv: &mut MutMap<Lowercase, Variable>, // rigids defined before the current annotation
+) -> InstantiateRigids {
+    let mut annotation = annotation.clone();
+    let mut new_rigid_variables: Vec<Variable> = Vec::new();
+
+    let mut rigid_substitution: MutMap<Variable, Variable> = MutMap::default();
+    for named in introduced_vars.iter_named() {
+        use std::collections::hash_map::Entry::*;
+
+        match ftv.entry(named.name().clone()) {
+            Occupied(occupied) => {
+                let existing_rigid = occupied.get();
+                rigid_substitution.insert(named.variable(), *existing_rigid);
+            }
+            Vacant(vacant) => {
+                // It's possible to use this rigid in nested defs
+                vacant.insert(named.variable());
+                new_rigid_variables.push(named.variable());
+            }
+        }
+    }
+
+    // wildcards are always freshly introduced in this annotation
+    new_rigid_variables.extend(introduced_vars.wildcards.iter().map(|v| v.value));
+
+    // lambda set vars are always freshly introduced in this annotation
+    new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
+
+    let new_infer_variables: Vec<Variable> =
+        introduced_vars.inferred.iter().map(|v| v.value).collect();
+
+    // Instantiate rigid variables
+    if !rigid_substitution.is_empty() {
+        annotation.substitute_variables(&rigid_substitution);
     }
 
     InstantiateRigids {

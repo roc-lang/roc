@@ -109,6 +109,7 @@ pub enum Expr {
     // Let
     LetRec(Vec<Def>, Box<Loc<Expr>>),
     LetNonRec(Box<Def>, Box<Loc<Expr>>),
+    LetBlock(Declarations, Box<Loc<Expr>>),
 
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
@@ -217,6 +218,7 @@ impl Expr {
             Self::If { .. } => Category::If,
             Self::LetRec(_, expr) => expr.value.category(),
             Self::LetNonRec(_, expr) => expr.value.category(),
+            Self::LetBlock(_, expr) => expr.value.category(),
             &Self::Call(_, _, called_via) => Category::CallResult(None, called_via),
             &Self::RunLowLevel { op, .. } => Category::LowLevelOpResult(op),
             Self::ForeignCall { .. } => Category::ForeignCall,
@@ -1522,6 +1524,11 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             LetNonRec(Box::new(def), Box::new(loc_expr))
         }
 
+        LetBlock(declarations, loc_expr) => {
+            eprintln!("TODO `inline_calls` for let block");
+            LetBlock(declarations, loc_expr)
+        }
+
         Closure(ClosureData {
             function_type,
             closure_type,
@@ -1894,7 +1901,7 @@ impl Declarations {
         for tag in self.declarations.iter() {
             match tag {
                 DeclarationTag::Function(_) => accum += 1,
-                DeclarationTag::Value(_) => accum += 1,
+                DeclarationTag::Value => accum += 1,
                 DeclarationTag::Destructure(_) => accum += 1,
                 DeclarationTag::MutualRecursion(slice) => accum += slice.len(),
             }
@@ -1910,7 +1917,7 @@ impl Declarations {
 
 #[derive(Clone, Copy, Debug)]
 pub enum DeclarationTag {
-    Value(Index<Loc<Expr>>),
+    Value,
     Function(Index<Loc<FunctionDef>>),
     Destructure(Index<DestructureDef>),
     MutualRecursion(Slice<FunctionDef>),
