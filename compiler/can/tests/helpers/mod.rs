@@ -11,7 +11,7 @@ use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::Type;
+use roc_types::types::{AliasVar, Type};
 use std::hash::Hash;
 
 pub fn test_home() -> ModuleId {
@@ -59,7 +59,10 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     scope.add_alias(
         Symbol::NUM_INT,
         Region::zero(),
-        vec![Loc::at_zero(("a".into(), Variable::EMPTY_RECORD))],
+        vec![Loc::at_zero(AliasVar::unbound(
+            "a".into(),
+            Variable::EMPTY_RECORD,
+        ))],
         Type::EmptyRec,
         roc_types::types::AliasKind::Structural,
     );

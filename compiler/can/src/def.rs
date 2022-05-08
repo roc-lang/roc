@@ -2,6 +2,7 @@ use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::find_type_def_symbols;
 use crate::annotation::IntroducedVariables;
+use crate::annotation::OwnedNamedOrAble;
 use crate::env::Env;
 use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
@@ -29,6 +30,7 @@ use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AliasKind;
+use roc_types::types::AliasVar;
 use roc_types::types::LambdaSet;
 use roc_types::types::{Alias, Type};
 use std::fmt::Debug;
@@ -318,38 +320,43 @@ pub(crate) fn canonicalize_defs<'a>(
                     &abilities_in_scope,
                 );
 
-                // Does this alias reference any abilities? For now, we don't permit that.
-                let ability_references = can_ann
-                    .references
-                    .iter()
-                    .filter_map(|&ty_ref| abilities_in_scope.iter().find(|&&name| name == ty_ref))
-                    .collect::<Vec<_>>();
-
-                if let Some(one_ability_ref) = ability_references.first() {
-                    env.problem(Problem::AliasUsesAbility {
-                        loc_name: name,
-                        ability: **one_ability_ref,
-                    });
-                }
-
                 // Record all the annotation's references in output.references.lookups
                 for symbol in can_ann.references {
                     output.references.insert_type_lookup(symbol);
                 }
 
-                let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
+                let mut can_vars: Vec<Loc<AliasVar>> = Vec::with_capacity(vars.len());
                 let mut is_phantom = false;
 
-                let mut named = can_ann.introduced_variables.named;
+                let IntroducedVariables {
+                    named,
+                    able,
+                    wildcards,
+                    inferred,
+                    ..
+                } = can_ann.introduced_variables;
+
+                let mut named: Vec<_> = (named.into_iter().map(OwnedNamedOrAble::Named))
+                    .chain(able.into_iter().map(OwnedNamedOrAble::Able))
+                    .collect();
                 for loc_lowercase in vars.iter() {
-                    let opt_index = named.iter().position(|nv| nv.name == loc_lowercase.value);
+                    let opt_index = named
+                        .iter()
+                        .position(|nv| nv.ref_name() == &loc_lowercase.value);
                     match opt_index {
                         Some(index) => {
                             // This is a valid lowercase rigid var for the type def.
                             let named_variable = named.swap_remove(index);
+                            let var = named_variable.variable();
+                            let opt_bound_ability = named_variable.opt_ability();
+                            let name = named_variable.name();
 
                             can_vars.push(Loc {
-                                value: (named_variable.name, named_variable.variable),
+                                value: AliasVar {
+                                    name,
+                                    var,
+                                    opt_bound_ability,
+                                },
                                 region: loc_lowercase.region,
                             });
                         }
@@ -370,16 +377,11 @@ pub(crate) fn canonicalize_defs<'a>(
                     continue;
                 }
 
-                let IntroducedVariables {
-                    wildcards,
-                    inferred,
-                    ..
-                } = can_ann.introduced_variables;
                 let num_unbound = named.len() + wildcards.len() + inferred.len();
                 if num_unbound > 0 {
                     let one_occurrence = named
                         .iter()
-                        .map(|nv| Loc::at(nv.first_seen, nv.variable))
+                        .map(|nv| Loc::at(nv.first_seen(), nv.variable()))
                         .chain(wildcards)
                         .chain(inferred)
                         .next()
@@ -578,12 +580,14 @@ fn resolve_abilities<'a>(
 
             // What variables in the annotation are bound to the parent ability, and what variables
             // are bound to some other ability?
-            let (variables_bound_to_ability, variables_bound_to_other_abilities): (Vec<_>, Vec<_>) =
-                member_annot
-                    .introduced_variables
-                    .able
-                    .iter()
-                    .partition(|av| av.ability == loc_ability_name.value);
+            let (variables_bound_to_ability, _variables_bound_to_other_abilities): (
+                Vec<_>,
+                Vec<_>,
+            ) = member_annot
+                .introduced_variables
+                .able
+                .iter()
+                .partition(|av| av.ability == loc_ability_name.value);
 
             let mut bad_has_clauses = false;
 
@@ -615,18 +619,6 @@ fn resolve_abilities<'a>(
                     span_has_clauses,
                     bound_var_names,
                 });
-                bad_has_clauses = true;
-            }
-
-            if !variables_bound_to_other_abilities.is_empty() {
-                // Disallow variables bound to other abilities, for now.
-                for bad_variable in variables_bound_to_other_abilities.iter() {
-                    env.problem(Problem::AbilityMemberBindsExternalAbility {
-                        member: member_sym,
-                        ability: loc_ability_name.value,
-                        region: bad_variable.first_seen,
-                    });
-                }
                 bad_has_clauses = true;
             }
 
@@ -1740,7 +1732,7 @@ fn make_tag_union_of_alias_recursive<'a>(
     let alias_args = alias
         .type_variables
         .iter()
-        .map(|l| (l.value.0.clone(), Type::Variable(l.value.1)))
+        .map(|l| (l.value.name.clone(), Type::Variable(l.value.var)))
         .collect::<Vec<_>>();
 
     let made_recursive = make_tag_union_recursive_help(
@@ -1847,10 +1839,17 @@ fn make_tag_union_recursive_help<'a, 'b>(
             type_arguments,
             ..
         } => {
+            // NB: We need to collect the type arguments to shut off rustc's closure type
+            // instantiator. Otherwise we get unfortunate errors like
+            //   reached the recursion limit while instantiating `make_tag_union_recursive_help::<...n/src/def.rs:1879:65: 1879:77]>>`
+            #[allow(clippy::needless_collect)]
+            let type_arguments: Vec<&Type> = type_arguments.iter().map(|ta| &ta.typ).collect();
+            let recursive_alias = Loc::at_zero((symbol, type_arguments.into_iter()));
+
             // try to make `actual` recursive
             make_tag_union_recursive_help(
                 env,
-                Loc::at_zero((symbol, type_arguments.iter())),
+                recursive_alias,
                 region,
                 others,
                 actual,

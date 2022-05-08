@@ -17,7 +17,7 @@ use roc_problem::can::Problem;
 use roc_region::all::Loc;
 use roc_solve::solve::{self, Aliases};
 use roc_types::subs::{Content, Subs, VarStore, Variable};
-use roc_types::types::Type;
+use roc_types::types::{AliasVar, Type};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
@@ -228,7 +228,10 @@ fn add_aliases(scope: &mut Scope, var_store: &mut VarStore) {
         let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
         type_variables.sort();
         for (loc_name, (_, var)) in vars.iter().zip(type_variables) {
-            variables.push(Loc::at(loc_name.region, (loc_name.value.clone(), var)));
+            variables.push(Loc::at(
+                loc_name.region,
+                AliasVar::unbound(loc_name.value.clone(), var),
+            ));
         }
 
         scope.add_alias(symbol, region, variables, typ, kind);

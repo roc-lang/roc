@@ -1,3 +1,4 @@
+use crate::abilities::SpecializationId;
 use crate::annotation::{freshen_opaque_def, IntroducedVariables};
 use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Def};
@@ -19,7 +20,7 @@ use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
-use roc_types::types::{Alias, Category, LambdaSet, Type};
+use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
 
@@ -83,6 +84,13 @@ pub enum Expr {
 
     // Lookups
     Var(Symbol),
+    AbilityMember(
+        /// Actual member name
+        Symbol,
+        /// Specialization to use
+        SpecializationId,
+    ),
+
     // Branching
     When {
         /// The actual condition of the when expression.
@@ -191,7 +199,7 @@ pub enum Expr {
         // for the expression from the opaque definition. `type_arguments` is something like
         // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
         specialized_def_type: Box<Type>,
-        type_arguments: Vec<Variable>,
+        type_arguments: Vec<OptAbleVar>,
         lambda_set_variables: Vec<LambdaSet>,
     },
 
@@ -212,6 +220,7 @@ impl Expr {
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym) => Category::Lookup(sym),
+            &Self::AbilityMember(sym, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
             Self::LetRec(_, expr) => expr.value.category(),
@@ -386,6 +395,17 @@ impl WhenBranch {
                 .last()
                 .expect("when branch has no pattern?")
                 .region,
+        )
+    }
+}
+
+impl WhenBranch {
+    pub fn region(&self) -> Region {
+        Region::across_all(
+            self.patterns
+                .iter()
+                .map(|p| &p.region)
+                .chain([self.value.region].iter()),
         )
     }
 }
@@ -1307,7 +1327,11 @@ fn canonicalize_var_lookup(
             Ok(symbol) => {
                 output.references.insert_value_lookup(symbol);
 
-                Var(symbol)
+                if scope.abilities_store.is_ability_member_name(symbol) {
+                    AbilityMember(symbol, scope.abilities_store.fresh_specialization_id())
+                } else {
+                    Var(symbol)
+                }
             }
             Err(problem) => {
                 env.problem(Problem::RuntimeError(problem.clone()));
@@ -1322,7 +1346,11 @@ fn canonicalize_var_lookup(
             Ok(symbol) => {
                 output.references.insert_value_lookup(symbol);
 
-                Var(symbol)
+                if scope.abilities_store.is_ability_member_name(symbol) {
+                    AbilityMember(symbol, scope.abilities_store.fresh_specialization_id())
+                } else {
+                    Var(symbol)
+                }
             }
             Err(problem) => {
                 // Either the module wasn't imported, or
@@ -1356,6 +1384,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Accessor { .. }
         | other @ Update { .. }
         | other @ Var(_)
+        | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
         | other @ ForeignCall { .. } => other,
 

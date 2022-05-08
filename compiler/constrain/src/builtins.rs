@@ -5,9 +5,9 @@ use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumericBound, Sig
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::subs::Variable;
-use roc_types::types::Reason;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{AliasKind, Category};
+use roc_types::types::{OptAbleType, Reason};
 
 #[must_use]
 #[inline(always)]
@@ -160,7 +160,7 @@ pub fn str_type() -> Type {
 #[inline(always)]
 fn builtin_alias(
     symbol: Symbol,
-    type_arguments: Vec<Type>,
+    type_arguments: Vec<OptAbleType>,
     actual: Box<Type>,
     kind: AliasKind,
 ) -> Type {
@@ -177,7 +177,7 @@ fn builtin_alias(
 pub fn num_float(range: Type) -> Type {
     builtin_alias(
         Symbol::NUM_FLOAT,
-        vec![range.clone()],
+        vec![OptAbleType::unbound(range.clone())],
         Box::new(num_num(num_floatingpoint(range))),
         AliasKind::Structural,
     )
@@ -187,7 +187,7 @@ pub fn num_float(range: Type) -> Type {
 pub fn num_floatingpoint(range: Type) -> Type {
     builtin_alias(
         Symbol::NUM_FLOATINGPOINT,
-        vec![range.clone()],
+        vec![OptAbleType::unbound(range.clone())],
         Box::new(range),
         AliasKind::Opaque,
     )
@@ -227,7 +227,7 @@ pub fn num_binary64() -> Type {
 pub fn num_int(range: Type) -> Type {
     builtin_alias(
         Symbol::NUM_INT,
-        vec![range.clone()],
+        vec![OptAbleType::unbound(range.clone())],
         Box::new(num_num(num_integer(range))),
         AliasKind::Structural,
     )
@@ -247,7 +247,7 @@ pub fn num_signed64() -> Type {
 pub fn num_integer(range: Type) -> Type {
     builtin_alias(
         Symbol::NUM_INTEGER,
-        vec![range.clone()],
+        vec![OptAbleType::unbound(range.clone())],
         Box::new(range),
         AliasKind::Opaque,
     )
@@ -257,7 +257,7 @@ pub fn num_integer(range: Type) -> Type {
 pub fn num_num(typ: Type) -> Type {
     builtin_alias(
         Symbol::NUM_NUM,
-        vec![typ.clone()],
+        vec![OptAbleType::unbound(typ.clone())],
         Box::new(typ),
         AliasKind::Opaque,
     )

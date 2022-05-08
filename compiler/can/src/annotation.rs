@@ -9,8 +9,8 @@ use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
-    name_type_var, Alias, AliasCommon, AliasKind, LambdaSet, Problem, RecordField, Type,
-    TypeExtension,
+    name_type_var, Alias, AliasCommon, AliasKind, AliasVar, LambdaSet, OptAbleType, OptAbleVar,
+    Problem, RecordField, Type, TypeExtension,
 };
 
 #[derive(Clone, Debug)]
@@ -67,6 +67,48 @@ impl<'a> NamedOrAbleVariable<'a> {
         match self {
             NamedOrAbleVariable::Named(nv) => nv.variable,
             NamedOrAbleVariable::Able(av) => av.variable,
+        }
+    }
+}
+
+pub enum OwnedNamedOrAble {
+    Named(NamedVariable),
+    Able(AbleVariable),
+}
+
+impl OwnedNamedOrAble {
+    pub fn first_seen(&self) -> Region {
+        match self {
+            OwnedNamedOrAble::Named(nv) => nv.first_seen,
+            OwnedNamedOrAble::Able(av) => av.first_seen,
+        }
+    }
+
+    pub fn ref_name(&self) -> &Lowercase {
+        match self {
+            OwnedNamedOrAble::Named(nv) => &nv.name,
+            OwnedNamedOrAble::Able(av) => &av.name,
+        }
+    }
+
+    pub fn name(self) -> Lowercase {
+        match self {
+            OwnedNamedOrAble::Named(nv) => nv.name,
+            OwnedNamedOrAble::Able(av) => av.name,
+        }
+    }
+
+    pub fn variable(&self) -> Variable {
+        match self {
+            OwnedNamedOrAble::Named(nv) => nv.variable,
+            OwnedNamedOrAble::Able(av) => av.variable,
+        }
+    }
+
+    pub fn opt_ability(&self) -> Option<Symbol> {
+        match self {
+            OwnedNamedOrAble::Named(_) => None,
+            OwnedNamedOrAble::Able(av) => Some(av.ability),
         }
     }
 }
@@ -603,7 +645,7 @@ fn can_annotation_help(
                 references,
             );
             let mut vars = Vec::with_capacity(loc_vars.len());
-            let mut lowercase_vars = Vec::with_capacity(loc_vars.len());
+            let mut lowercase_vars: Vec<Loc<AliasVar>> = Vec::with_capacity(loc_vars.len());
 
             references.insert(symbol);
 
@@ -616,9 +658,17 @@ fn can_annotation_help(
                 };
                 let var_name = Lowercase::from(var);
 
+                // TODO(abilities): check that there are no abilities bound here.
                 if let Some(var) = introduced_variables.var_by_name(&var_name) {
                     vars.push(Type::Variable(var));
-                    lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
+                    lowercase_vars.push(Loc::at(
+                        loc_var.region,
+                        AliasVar {
+                            name: var_name,
+                            var,
+                            opt_bound_ability: None,
+                        },
+                    ));
                 } else {
                     let var = var_store.fresh();
 
@@ -626,7 +676,14 @@ fn can_annotation_help(
                         .insert_named(var_name.clone(), Loc::at(loc_var.region, var));
                     vars.push(Type::Variable(var));
 
-                    lowercase_vars.push(Loc::at(loc_var.region, (var_name, var)));
+                    lowercase_vars.push(Loc::at(
+                        loc_var.region,
+                        AliasVar {
+                            name: var_name,
+                            var,
+                            opt_bound_ability: None,
+                        },
+                    ));
                 }
             }
 
@@ -675,7 +732,7 @@ fn can_annotation_help(
             hidden_variables.extend(alias_actual.variables());
 
             for loc_var in lowercase_vars.iter() {
-                hidden_variables.remove(&loc_var.value.1);
+                hidden_variables.remove(&loc_var.value.var);
             }
 
             scope.add_alias(
@@ -702,7 +759,13 @@ fn can_annotation_help(
             } else {
                 Type::Alias {
                     symbol,
-                    type_arguments: vars,
+                    type_arguments: vars
+                        .into_iter()
+                        .map(|typ| OptAbleType {
+                            typ,
+                            opt_ability: None,
+                        })
+                        .collect(),
                     lambda_set_variables: alias.lambda_set_variables.clone(),
                     actual: Box::new(alias.typ.clone()),
                     kind: alias.kind,
@@ -995,7 +1058,7 @@ fn shallow_dealias_with_scope<'a>(scope: &'a mut Scope, typ: &'a Type) -> &'a Ty
 pub fn instantiate_and_freshen_alias_type(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    type_variables: &[Loc<(Lowercase, Variable)>],
+    type_variables: &[Loc<AliasVar>],
     type_arguments: Vec<Type>,
     lambda_set_variables: &[LambdaSet],
     mut actual_type: Type,
@@ -1004,8 +1067,8 @@ pub fn instantiate_and_freshen_alias_type(
     let mut type_var_to_arg = Vec::new();
 
     for (loc_var, arg_ann) in type_variables.iter().zip(type_arguments.into_iter()) {
-        let name = loc_var.value.0.clone();
-        let var = loc_var.value.1;
+        let name = loc_var.value.name.clone();
+        let var = loc_var.value.var;
 
         substitutions.insert(var, arg_ann.clone());
         type_var_to_arg.push((name.clone(), arg_ann));
@@ -1040,19 +1103,21 @@ pub fn instantiate_and_freshen_alias_type(
 pub fn freshen_opaque_def(
     var_store: &mut VarStore,
     opaque: &Alias,
-) -> (Vec<Variable>, Vec<LambdaSet>, Type) {
+) -> (Vec<OptAbleVar>, Vec<LambdaSet>, Type) {
     debug_assert!(opaque.kind == AliasKind::Opaque);
 
-    let fresh_variables: Vec<Variable> = opaque
+    let fresh_variables: Vec<OptAbleVar> = opaque
         .type_variables
         .iter()
-        .map(|_| var_store.fresh())
+        .map(|alias_var| OptAbleVar {
+            var: var_store.fresh(),
+            opt_ability: alias_var.value.opt_bound_ability,
+        })
         .collect();
 
     let fresh_type_arguments = fresh_variables
         .iter()
-        .copied()
-        .map(Type::Variable)
+        .map(|av| Type::Variable(av.var))
         .collect();
 
     // NB: We don't introduce the fresh variables here, we introduce them during constraint gen.

@@ -25,7 +25,8 @@ mod solve_expr {
     // HELPERS
 
     lazy_static! {
-        static ref RE_TYPE_QUERY: Regex = Regex::new(r#"^\s*#\s*(?P<where>\^+)\s*$"#).unwrap();
+        static ref RE_TYPE_QUERY: Regex =
+            Regex::new(r#"(?P<where>\^+)(?:\{-(?P<sub>\d+)\})?"#).unwrap();
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -35,9 +36,14 @@ mod solve_expr {
         let line_info = LineInfo::new(src);
         let mut queries = vec![];
         for (i, line) in src.lines().enumerate() {
-            if let Some(capture) = RE_TYPE_QUERY.captures(line) {
+            for capture in RE_TYPE_QUERY.captures_iter(line) {
                 let wher = capture.name("where").unwrap();
+                let subtract_col = capture
+                    .name("sub")
+                    .and_then(|m| str::parse(m.as_str()).ok())
+                    .unwrap_or(0);
                 let (start, end) = (wher.start() as u32, wher.end() as u32);
+                let (start, end) = (start - subtract_col, end - subtract_col);
                 let last_line = i as u32 - 1;
                 let start_lc = LineColumn {
                     line: last_line,
@@ -273,7 +279,8 @@ mod solve_expr {
             let start = region.start().offset;
             let end = region.end().offset;
             let text = &src[start as usize..end as usize];
-            let var = find_type_at(region, &decls).expect(&format!("No type for {}!", &text));
+            let var = find_type_at(region, &decls)
+                .expect(&format!("No type for {} ({:?})!", &text, region));
 
             name_all_type_vars(var, subs);
             let content = subs.get_content_without_compacting(var);
@@ -6232,7 +6239,7 @@ mod solve_expr {
                 "#
             ),
             "F b -> b",
-        )
+        );
     }
 
     #[test]
@@ -6250,6 +6257,131 @@ mod solve_expr {
                 "#
             ),
             "MyResult",
+        )
+    }
+
+    #[test]
+    fn alias_propagates_able_var() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ zeroEncoder ] to "./platform"
+
+                Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+
+                Format has it : fmt -> {} | fmt has Format
+
+                zeroEncoder = @Encoder \lst, _ -> lst
+                "#
+            ),
+            "Encoder a | a has Format",
+        )
+    }
+
+    #[test]
+    fn encoder() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test" provides [ myU8Bytes ] to "./platform"
+
+                Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+
+                Encoding has
+                  toEncoder : val -> Encoder fmt | val has Encoding, fmt has Format
+
+                Format has
+                  u8 : U8 -> Encoder fmt | fmt has Format
+
+                appendWith : List U8, Encoder fmt, fmt -> List U8 | fmt has Format
+                appendWith = \lst, (@Encoder doFormat), fmt -> doFormat lst fmt
+
+                toBytes : val, fmt -> List U8 | val has Encoding, fmt has Format
+                toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
+
+
+                Linear := {}
+
+                # impl Format for Linear
+                u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
+                #^^{-1}
+
+                MyU8 := U8
+
+                # impl Encoding for MyU8
+                toEncoder = \@MyU8 n -> u8 n
+                #^^^^^^^^^{-1}
+
+                myU8Bytes = toBytes (@MyU8 15) (@Linear {})
+                #^^^^^^^^^{-1}
+                "#
+            ),
+            &[
+                "u8 : U8 -> Encoder Linear",
+                "toEncoder : MyU8 -> Encoder fmt | fmt has Format",
+                "myU8Bytes : List U8",
+            ],
+        )
+    }
+
+    #[test]
+    fn decoder() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test" provides [ myU8 ] to "./platform"
+
+                DecodeError : [ TooShort, Leftover (List U8) ]
+
+                Decoder val fmt := List U8, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
+
+                Decoding has
+                    decoder : Decoder val fmt | val has Decoding, fmt has DecoderFormatting
+
+                DecoderFormatting has
+                    u8 : Decoder U8 fmt | fmt has DecoderFormatting
+
+                decodeWith : List U8, Decoder val fmt, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
+                decodeWith = \lst, (@Decoder doDecode), fmt -> doDecode lst fmt
+
+                fromBytes : List U8, fmt -> Result val DecodeError
+                            | fmt has DecoderFormatting, val has Decoding
+                fromBytes = \lst, fmt ->
+                    when decodeWith lst decoder fmt is
+                        { result, rest } ->
+                            when result is
+                                Ok val -> if List.isEmpty rest then Ok val else Err (Leftover rest)
+                                Err e -> Err e
+
+
+                Linear := {}
+
+                # impl DecoderFormatting for Linear
+                u8 = @Decoder \lst, @Linear {} ->
+                #^^{-1}
+                        when List.first lst is
+                            Ok n -> { result: Ok n, rest: List.dropFirst lst }
+                            Err _ -> { result: Err TooShort, rest: [] }
+
+                MyU8 := U8
+
+                # impl Decoding for MyU8
+                decoder = @Decoder \lst, fmt ->
+                #^^^^^^^{-1}
+                    when decodeWith lst u8 fmt is
+                        { result, rest } ->
+                            { result: Result.map result (\n -> @MyU8 n), rest }
+
+                myU8 : Result MyU8 _
+                myU8 = fromBytes [ 15 ] (@Linear {})
+                #^^^^{-1}
+                "#
+            ),
+            &[
+                "u8 : Decoder U8 Linear",
+                "decoder : Decoder MyU8 fmt | fmt has DecoderFormatting",
+                "myU8 : Result MyU8 DecodeError",
+            ],
         )
     }
 }

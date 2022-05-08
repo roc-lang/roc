@@ -9020,41 +9020,6 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn alias_using_ability() {
-        new_report_problem_as(
-            "alias_using_ability",
-            indoc!(
-                r#"
-                app "test" provides [ a ] to "./platform"
-
-                Ability has ab : a -> {} | a has Ability
-
-                Alias : Ability
-
-                a : Alias
-                "#
-            ),
-            indoc!(
-                r#"
-                ── ALIAS USES ABILITY ──────────────────────────────────── /code/proj/Main.roc ─
-
-                The definition of the `Alias` aliases references the ability `Ability`:
-
-                5│  Alias : Ability
-                    ^^^^^
-
-                Abilities are not types, but you can add an ability constraint to a
-                type variable `a` by writing
-
-                    | a has Ability
-
-                 at the end of the type.
-                "#
-            ),
-        )
-    }
-
-    #[test]
     fn ability_shadows_ability() {
         new_report_problem_as(
             "ability_shadows_ability",
@@ -9125,37 +9090,6 @@ I need all branches in an `if` to have the same type!
 
                 If you didn't intend on using `Ability` then remove it so future readers
                 of your code don't wonder why it is there.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn ability_member_binds_extra_ability() {
-        new_report_problem_as(
-            "ability_member_binds_extra_ability",
-            indoc!(
-                r#"
-                app "test" provides [ eq ] to "./platform"
-
-                Eq has eq : a, a -> Bool.Bool | a has Eq
-                Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
-                "#
-            ),
-            indoc!(
-                r#"
-                ── ABILITY MEMBER HAS EXTRANEOUS HAS CLAUSE ────────────── /code/proj/Main.roc ─
-
-                The definition of the ability member `hash` includes a has clause
-                binding an ability it is not a part of:
-
-                4│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
-                                                      ^^^^^^^^
-
-                Currently, ability members can only bind variables to the ability they
-                are a part of.
-
-                Hint: Did you mean to bind the `Hash` ability instead?
                 "#
             ),
         )
