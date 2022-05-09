@@ -9,6 +9,7 @@ edition = "2018"
 # Having its own (extremely minimal) CLI means docs can be generated
 # on a build server after building this crate from source, without
 # having to install non-Rust dependencies (LLVM, Zig, wasm things, etc.)
+# It gets called in www/build.sh via `cargo run -p roc-docs`
 [[bin]]
 name = "roc-docs"
 path = "src/main.rs"
