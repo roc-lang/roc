@@ -1751,11 +1751,12 @@ fn layout_from_flat_type<'a>(
         Record(fields, ext_var) => {
             // extract any values from the ext_var
 
-            let mut pairs = Vec::with_capacity_in(fields.len(), arena);
+            let mut sortables = Vec::with_capacity_in(fields.len(), arena);
             let it = match fields.unsorted_iterator(subs, ext_var) {
                 Ok(it) => it,
                 Err(RecordFieldsError) => return Err(LayoutProblem::Erroneous),
             };
+
             for (label, field) in it {
                 // drop optional fields
                 let var = match field {
@@ -1764,10 +1765,10 @@ fn layout_from_flat_type<'a>(
                     RecordField::Demanded(var) => var,
                 };
 
-                pairs.push((label, Layout::from_var(env, var)?));
+                sortables.push((label, Layout::from_var(env, var)?));
             }
 
-            pairs.sort_by(|(label1, layout1), (label2, layout2)| {
+            sortables.sort_by(|(label1, layout1), (label2, layout2)| {
                 let size1 = layout1.alignment_bytes(target_info);
                 let size2 = layout2.alignment_bytes(target_info);
 
@@ -1775,17 +1776,17 @@ fn layout_from_flat_type<'a>(
             });
 
             let ordered_field_names =
-                Vec::from_iter_in(pairs.iter().map(|(label, _)| *label), arena);
+                Vec::from_iter_in(sortables.iter().map(|(label, _)| *label), arena);
             let field_order_hash =
                 FieldOrderHash::from_ordered_fields(ordered_field_names.as_slice());
 
-            let mut layouts = Vec::from_iter_in(pairs.into_iter().map(|t| t.1), arena);
-
-            if layouts.len() == 1 {
+            if sortables.len() == 1 {
                 // If the record has only one field that isn't zero-sized,
                 // unwrap it.
-                Ok(layouts.pop().unwrap())
+                Ok(sortables.pop().unwrap().1)
             } else {
+                let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
+
                 Ok(Layout::Struct {
                     field_order_hash,
                     field_layouts: layouts.into_bump_slice(),
