@@ -1759,14 +1759,14 @@ fn layout_from_flat_type<'a>(
             };
 
             for (label, field) in it {
-                // drop optional fields
-                let var = match field {
-                    RecordField::Optional(_) => continue,
-                    RecordField::Required(var) => var,
-                    RecordField::Demanded(var) => var,
-                };
-
-                sortables.push((label, Layout::from_var(env, var)?));
+                match field {
+                    RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
+                        sortables.push((label, Layout::from_var(env, field_var)?));
+                    }
+                    RecordField::Optional(_) => {
+                        // drop optional fields
+                    }
+                }
             }
 
             sortables.sort_by(|(label1, layout1), (label2, layout2)| {
