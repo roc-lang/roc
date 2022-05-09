@@ -177,7 +177,6 @@ comptime {
 // setjmp/longjmp. LLVM is unable to generate code for longjmp on AArch64 (https://github.com/rtfeldman/roc/issues/2965),
 // so instead we ask Zig to please provide implementations for us, which is does
 // (seemingly via musl).
-pub usingnamespace @import("std").c.builtins;
 pub extern fn setjmp([*c]c_int) c_int;
 pub extern fn longjmp([*c]c_int, c_int) noreturn;
 pub extern fn _setjmp([*c]c_int) c_int;

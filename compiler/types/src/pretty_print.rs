@@ -116,7 +116,7 @@ fn find_names_needed(
     }
 
     match &subs.get_content_without_compacting(variable).clone() {
-        RecursionVar { opt_name: None, .. } | FlexVar(None) | FlexAbleVar(None, _) => {
+        RecursionVar { opt_name: None, .. } | FlexVar(None) => {
             let root = subs.get_root_key_without_compacting(variable);
 
             // If this var is *not* its own root, then the
@@ -134,6 +134,15 @@ fn find_names_needed(
                     root_appearances.insert(root, Appearances::Single);
                 }
             }
+        }
+        FlexAbleVar(None, _) => {
+            let root = subs.get_root_key_without_compacting(variable);
+            if !root_appearances.contains_key(&root) {
+                roots.push(root);
+            }
+            // Able vars are always printed at least twice (in the signature, and in the "has"
+            // clause set).
+            root_appearances.insert(root, Appearances::Multiple);
         }
         RecursionVar {
             opt_name: Some(name_index),
@@ -269,6 +278,11 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
         FlexVar(None) => {
             let name_index = SubsIndex::push_new(&mut subs.field_names, name);
             let content = FlexVar(Some(name_index));
+            subs.set_content(root, content);
+        }
+        &FlexAbleVar(None, ability) => {
+            let name_index = SubsIndex::push_new(&mut subs.field_names, name);
+            let content = FlexAbleVar(Some(name_index), ability);
             subs.set_content(root, content);
         }
         RecursionVar {
@@ -423,7 +437,7 @@ fn write_content<'a>(
                     write_integer(env, ctx, content, subs, buf, parens, write_parens)
                 }
 
-                Symbol::NUM_FLOAT => write_float(
+                Symbol::NUM_FRAC => write_float(
                     env,
                     ctx,
                     get_single_arg(subs, args),

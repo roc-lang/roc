@@ -474,11 +474,26 @@ checksum = "47582c09be7c8b32c0ab3a6181825ababb713fde6fff20fc573a3870dd45c6a0"
 dependencies = [
  "atty",
  "bitflags",
+ "clap_derive",
  "clap_lex",
  "indexmap",
+ "lazy_static",
  "strsim 0.10.0",
  "termcolor",
  "textwrap 0.15.0",
+]
+
+[[package]]
+name = "clap_derive"
+version = "3.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3aab4734e083b809aaf5794e14e756d1c798d2c69c7f7de7a09a2f5214993c1"
+dependencies = [
+ "heck",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -2071,9 +2086,9 @@ checksum = "d4d2456c373231a208ad294c33dc5bff30051eafd954cd4caae83a712b12854d"
 
 [[package]]
 name = "llvm-sys"
-version = "120.2.4"
+version = "130.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09b716322964966a62377cf86e64f00ca7043505fdf27bd2ec7d41ae6682d1e7"
+checksum = "95eb03b4f7ae21f48ef7c565a3e3aa22c50616aea64645fb1fd7f6f56b51c274"
 dependencies = [
  "cc",
  "lazy_static",
@@ -3414,6 +3429,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc-bindgen"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "clap 3.1.17",
+ "indoc",
+ "pretty_assertions",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_error_macros",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_reporting",
+ "roc_std",
+ "roc_target",
+ "roc_types",
+ "target-lexicon",
+ "tempfile",
+ "ven_graph",
+]
+
+[[package]]
 name = "roc_alias_analysis"
 version = "0.1.0"
 dependencies = [
@@ -3622,6 +3661,14 @@ dependencies = [
  "roc_target",
  "roc_types",
  "snafu",
+]
+
+[[package]]
+name = "roc_docs_cli"
+version = "0.1.0"
+dependencies = [
+ "clap 3.1.17",
+ "roc_docs",
 ]
 
 [[package]]

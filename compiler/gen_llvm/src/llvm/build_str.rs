@@ -1,5 +1,5 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_str_bitcode_fn, call_void_bitcode_fn};
-use crate::llvm::build::{complex_bitcast, Env, Scope};
+use crate::llvm::build::{Env, Scope};
 use crate::llvm::build_list::{allocate_list, pass_update_mode, store_list};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue, StructValue};
@@ -155,16 +155,22 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
     let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
     let result_ptr = builder.build_alloca(result_type, "alloca_utf8_validate_bytes_result");
 
+    let count = env
+        .builder
+        .build_extract_value(count_and_start, 0, "get_count")
+        .unwrap();
+
+    let start = env
+        .builder
+        .build_extract_value(count_and_start, 1, "get_start")
+        .unwrap();
+
     call_void_bitcode_fn(
         env,
         &[
             list_symbol_to_c_abi(env, scope, list).into(),
-            complex_bitcast(
-                env.builder,
-                count_and_start.into(),
-                env.twice_ptr_int().into(),
-                "to_i128",
-            ),
+            count,
+            start,
             result_ptr.into(),
         ],
         bitcode::STR_FROM_UTF8_RANGE,

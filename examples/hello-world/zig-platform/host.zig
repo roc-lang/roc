@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const str = @import("str");
 const RocStr = str.RocStr;
 const testing = std.testing;
@@ -14,21 +15,21 @@ comptime {
     // -fcompiler-rt in link.rs instead of doing this. Note that this
     // workaround is present in many host.zig files, so make sure to undo
     // it everywhere!
-    if (std.builtin.os.tag == .macos) {
+    if (builtin.os.tag == .macos) {
         _ = @import("compiler_rt");
     }
 }
 
 const Align = 2 * @alignOf(usize);
-extern fn malloc(size: usize) callconv(.C) ?*align(Align) c_void;
-extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*c_void;
+extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
+extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*anyopaque;
 extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 const DEBUG: bool = false;
 
-export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
+export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     if (DEBUG) {
         var ptr = malloc(size);
         const stdout = std.io.getStdOut().writer();
@@ -39,7 +40,7 @@ export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     }
 }
 
-export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
+export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     if (DEBUG) {
         const stdout = std.io.getStdOut().writer();
         stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
@@ -48,7 +49,7 @@ export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignmen
     return realloc(@alignCast(Align, @ptrCast([*]u8, c_ptr)), new_size);
 }
 
-export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
+export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     if (DEBUG) {
         const stdout = std.io.getStdOut().writer();
         stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
@@ -57,7 +58,7 @@ export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     free(@alignCast(Align, @ptrCast([*]u8, c_ptr)));
 }
 
-export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
+export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     _ = tag_id;
 
     const stderr = std.io.getStdErr().writer();
@@ -87,7 +88,7 @@ pub fn main() u8 {
 
     // start time
     var ts1: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
+    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
 
     // actually call roc to populate the callresult
     var callresult = RocStr.empty();
@@ -95,7 +96,7 @@ pub fn main() u8 {
 
     // end time
     var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
+    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts2) catch unreachable;
 
     // stdout the result
     stdout.print("{s}", .{callresult.asSlice()}) catch unreachable;

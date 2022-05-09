@@ -11,7 +11,7 @@ use roc_mono::ir::OptLevel;
 use std::env;
 use std::ffi::OsStr;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
@@ -204,7 +204,6 @@ pub fn build_app<'a>() -> Command<'a> {
             Command::new(CMD_DOCS)
                 .about("Generate documentation for Roc modules (Work In Progress)")
                 .arg(Arg::new(DIRECTORY_OR_FILES)
-                    .index(1)
                     .multiple_values(true)
                     .required(false)
                     .help("The directory or files to build documentation for")
@@ -230,7 +229,6 @@ pub fn build_app<'a>() -> Command<'a> {
                 .about("Launch the Roc editor (Work In Progress)")
                 .arg(
                     Arg::new(DIRECTORY_OR_FILES)
-                        .index(1)
                         .multiple_values(true)
                         .required(false)
                         .help("(optional) The directory or files to open on launch."),
@@ -239,10 +237,6 @@ pub fn build_app<'a>() -> Command<'a> {
     } else {
         app
     }
-}
-
-pub fn docs(files: Vec<PathBuf>) {
-    roc_docs::generate_docs_html(files, Path::new("./generated-docs"))
 }
 
 #[derive(Debug, PartialEq, Eq)]

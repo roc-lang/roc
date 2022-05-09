@@ -67,6 +67,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 loc_elems: loc_elems.iter().map(|le| le.map(go_help)).collect(),
             },
             Var(sym) => Var(*sym),
+            AbilityMember(sym, specialization) => AbilityMember(*sym, *specialization),
             When {
                 loc_cond,
                 cond_var,

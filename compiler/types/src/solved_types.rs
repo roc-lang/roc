@@ -1,5 +1,5 @@
 use crate::subs::{VarId, VarStore, Variable};
-use crate::types::{AliasKind, Problem, RecordField, Type, TypeExtension};
+use crate::types::{AliasKind, OptAbleType, Problem, RecordField, Type, TypeExtension};
 use roc_collections::all::{ImMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -213,7 +213,11 @@ pub fn to_type(
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
 
             for solved_arg in solved_type_variables {
-                type_variables.push(to_type(solved_arg, free_vars, var_store));
+                type_variables.push(OptAbleType {
+                    typ: to_type(solved_arg, free_vars, var_store),
+                    // TODO: is this always correct?
+                    opt_ability: None,
+                });
             }
 
             let mut lambda_set_variables = Vec::with_capacity(solved_lambda_sets.len());

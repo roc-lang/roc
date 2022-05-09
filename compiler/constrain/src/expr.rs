@@ -18,7 +18,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    AliasKind, AnnotationSource, Category, PReason, Reason, RecordField, TypeExtension,
+    AliasKind, AnnotationSource, Category, OptAbleType, PReason, Reason, RecordField, TypeExtension,
 };
 
 /// This is for constraining Defs
@@ -337,7 +337,7 @@ pub fn constrain_expr(
             let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
-            let opt_symbol = if let Var(symbol) = loc_fn.value {
+            let opt_symbol = if let Var(symbol) | AbilityMember(symbol, _) = loc_fn.value {
                 Some(symbol)
             } else {
                 None
@@ -414,6 +414,11 @@ pub fn constrain_expr(
         Var(symbol) => {
             // make lookup constraint to lookup this symbol's type in the environment
             constraints.lookup(*symbol, expected, region)
+        }
+        AbilityMember(symbol, _specialization) => {
+            // make lookup constraint to lookup this symbol's type in the environment
+            constraints.lookup(*symbol, expected, region)
+            // TODO: consider trying to solve `_specialization` here.
         }
         Closure(ClosureData {
             function_type: fn_var,
@@ -1354,7 +1359,13 @@ pub fn constrain_expr(
 
             let opaque_type = Type::Alias {
                 symbol: *name,
-                type_arguments: type_arguments.iter().copied().map(Type::Variable).collect(),
+                type_arguments: type_arguments
+                    .iter()
+                    .map(|v| OptAbleType {
+                        typ: Type::Variable(v.var),
+                        opt_ability: v.opt_ability,
+                    })
+                    .collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: Box::new(arg_type.clone()),
                 kind: AliasKind::Opaque,
@@ -1391,7 +1402,7 @@ pub fn constrain_expr(
 
             let mut vars = vec![*arg_var, *opaque_var];
             // Also add the fresh variables we created for the type argument and lambda sets
-            vars.extend(type_arguments);
+            vars.extend(type_arguments.iter().map(|v| v.var));
             vars.extend(lambda_set_variables.iter().map(|v| {
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));
@@ -1827,8 +1838,8 @@ fn constrain_typed_def(
 
             constrain_def_make_constraint(
                 constraints,
-                new_rigid_variables,
-                new_infer_variables,
+                new_rigid_variables.into_iter(),
+                new_infer_variables.into_iter(),
                 expr_con,
                 body_con,
                 def_pattern_state,
@@ -1862,8 +1873,8 @@ fn constrain_typed_def(
 
             constrain_def_make_constraint(
                 constraints,
-                new_rigid_variables,
-                new_infer_variables,
+                new_rigid_variables.into_iter(),
+                new_infer_variables.into_iter(),
                 expr_con,
                 body_con,
                 def_pattern_state,
@@ -2140,8 +2151,8 @@ fn constrain_def(
 
             constrain_def_make_constraint(
                 constraints,
-                vec![],
-                vec![],
+                std::iter::empty(),
+                std::iter::empty(),
                 expr_con,
                 body_con,
                 def_pattern_state,
@@ -2152,8 +2163,8 @@ fn constrain_def(
 
 pub(crate) fn constrain_def_make_constraint(
     constraints: &mut Constraints,
-    new_rigid_variables: Vec<Variable>,
-    new_infer_variables: Vec<Variable>,
+    new_rigid_variables: impl Iterator<Item = Variable>,
+    new_infer_variables: impl Iterator<Item = Variable>,
     expr_con: Constraint,
     body_con: Constraint,
     def_pattern_state: PatternState,

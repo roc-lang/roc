@@ -1317,7 +1317,7 @@ mod test_reporting {
 
                 This `Blue` tag application has the type:
 
-                    [ Blue (Float a) ]b
+                    [ Blue (Frac a) ]b
 
                 But `f` needs the 1st argument to be:
 
@@ -1354,16 +1354,16 @@ mod test_reporting {
                 2│  x = if True then 3.14 else 4
                                      ^^^^
 
-                The 1st branch is a float of type:
+                The 1st branch is a frac of type:
 
-                    Float a
+                    Frac a
 
                 But the type annotation on `x` says it should be:
 
                     Int *
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1395,14 +1395,14 @@ mod test_reporting {
 
                 This `when` expression produces:
 
-                    Float a
+                    Frac a
 
                 But the type annotation on `x` says it should be:
 
                     Int *
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1429,16 +1429,16 @@ mod test_reporting {
                 2│  x = \_ -> 3.14
                               ^^^^
 
-                The body is a float of type:
+                The body is a frac of type:
 
-                    Float a
+                    Frac a
 
                 But the type annotation on `x` says it should be:
 
                     Int *
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1801,14 +1801,14 @@ mod test_reporting {
 
                 The body is a record of type:
 
-                    { x : Float a }
+                    { x : Frac a }
 
                 But the type annotation says it should be:
 
                     { x : Int * }
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1944,7 +1944,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : { a : Num.Int *, b : Num.Float *, c : Str }
+                x : { a : Num.Int *, b : Num.Frac *, c : Str }
                 x = { b: 4.0 }
 
                 x
@@ -1956,17 +1956,17 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│  x : { a : Num.Int *, b : Num.Float *, c : Str }
+                1│  x : { a : Num.Int *, b : Num.Frac *, c : Str }
                 2│  x = { b: 4.0 }
                         ^^^^^^^^^^
 
                 The body is a record of type:
 
-                    { b : Float a }
+                    { b : Frac a }
 
                 But the type annotation on `x` says it should be:
 
-                    { a : Int *, b : Float *, c : Str }
+                    { a : Int *, b : Frac *, c : Str }
 
                 Tip: Looks like the c and a fields are missing.
                 "#
@@ -2405,7 +2405,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn int_float() {
+    fn int_frac() {
         report_problem_as(
             indoc!(
                 r#"
@@ -2421,16 +2421,16 @@ mod test_reporting {
                 1│  0x4 + 3.14
                           ^^^^
 
-                This argument is a float of type:
+                This argument is a frac of type:
 
-                    Float a
+                    Frac a
 
                 But `add` needs the 2nd argument to be:
 
                     Num (Integer a)
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -2893,7 +2893,7 @@ mod test_reporting {
 
                 This argument is a record of type:
 
-                    { y : Float a }
+                    { y : Frac a }
 
                 But `f` needs the 1st argument to be:
 
@@ -7275,7 +7275,7 @@ I need all branches in an `if` to have the same type!
                 let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
                 let carets = "^".repeat(number.len() + $suffix.len());
                 let kind = match $suffix {
-                    "dec"|"f32"|"f64" => "a float",
+                    "dec"|"f32"|"f64" => "a frac",
                     _ => "an integer",
                 };
 
@@ -9020,41 +9020,6 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
-    fn alias_using_ability() {
-        new_report_problem_as(
-            "alias_using_ability",
-            indoc!(
-                r#"
-                app "test" provides [ a ] to "./platform"
-
-                Ability has ab : a -> {} | a has Ability
-
-                Alias : Ability
-
-                a : Alias
-                "#
-            ),
-            indoc!(
-                r#"
-                ── ALIAS USES ABILITY ──────────────────────────────────── /code/proj/Main.roc ─
-
-                The definition of the `Alias` aliases references the ability `Ability`:
-
-                5│  Alias : Ability
-                    ^^^^^
-
-                Abilities are not types, but you can add an ability constraint to a
-                type variable `a` by writing
-
-                    | a has Ability
-
-                 at the end of the type.
-                "#
-            ),
-        )
-    }
-
-    #[test]
     fn ability_shadows_ability() {
         new_report_problem_as(
             "ability_shadows_ability",
@@ -9125,37 +9090,6 @@ I need all branches in an `if` to have the same type!
 
                 If you didn't intend on using `Ability` then remove it so future readers
                 of your code don't wonder why it is there.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn ability_member_binds_extra_ability() {
-        new_report_problem_as(
-            "ability_member_binds_extra_ability",
-            indoc!(
-                r#"
-                app "test" provides [ eq ] to "./platform"
-
-                Eq has eq : a, a -> Bool.Bool | a has Eq
-                Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
-                "#
-            ),
-            indoc!(
-                r#"
-                ── ABILITY MEMBER HAS EXTRANEOUS HAS CLAUSE ────────────── /code/proj/Main.roc ─
-
-                The definition of the ability member `hash` includes a has clause
-                binding an ability it is not a part of:
-
-                4│  Hash has hash : a, b -> Num.U64 | a has Eq, b has Hash
-                                                      ^^^^^^^^
-
-                Currently, ability members can only bind variables to the ability they
-                are a part of.
-
-                Hint: Did you mean to bind the `Hash` ability instead?
                 "#
             ),
         )
@@ -9828,6 +9762,38 @@ I need all branches in an `if` to have the same type!
                 "#
             ),
             "", // no problem
+        )
+    }
+
+    #[test]
+    fn nested_specialization() {
+        new_report_problem_as(
+            "nested_specialization",
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Default has default : {} -> a | a has Default
+
+                main =
+                    A := {}
+                    default = \{} -> @A {}
+                    default {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SPECIALIZATION NOT ON TOP-LEVEL ─────────────────────── /code/proj/Main.roc ─
+
+                This specialization of the `default` ability member is in a nested
+                scope:
+
+                7│      default = \{} -> @A {}
+                        ^^^^^^^
+
+                Specializations can only be defined on the top-level of a module.
+                "#
+            ),
         )
     }
 }

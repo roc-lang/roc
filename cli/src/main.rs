@@ -1,10 +1,11 @@
 use roc_build::link::LinkType;
 use roc_cli::build::check_file;
 use roc_cli::{
-    build_app, docs, format, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DOCS,
-    CMD_EDIT, CMD_FORMAT, CMD_REPL, CMD_RUN, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB,
+    build_app, format, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
+    CMD_FORMAT, CMD_REPL, CMD_RUN, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB,
     FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, ROC_FILE,
 };
+use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
 use roc_load::{LoadingProblem, Threading};
 use std::fs::{self, FileType};
@@ -135,16 +136,12 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_REPL, _)) => {
-            #[cfg(feature = "llvm")]
             {
                 roc_repl_cli::main()?;
 
                 // Exit 0 if the repl exited normally
                 Ok(0)
             }
-
-            #[cfg(not(feature = "llvm"))]
-            todo!("enable roc repl without llvm");
         }
         Some((CMD_EDIT, matches)) => {
             match matches
@@ -193,7 +190,7 @@ fn main() -> io::Result<()> {
                 roc_files_recursive(os_str.as_os_str(), metadata.file_type(), &mut roc_files)?;
             }
 
-            docs(roc_files);
+            generate_docs_html(roc_files);
 
             Ok(0)
         }

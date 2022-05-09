@@ -1519,18 +1519,18 @@ fn gen_basic_fn() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_to_float() {
-    assert_evals_to!("Num.toFloat 0x9", 9.0, f64);
+    assert_evals_to!("Num.toFrac 0x9", 9.0, f64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn num_to_float() {
-    assert_evals_to!("Num.toFloat 9", 9.0, f64);
+fn num_to_frac() {
+    assert_evals_to!("Num.toFrac 9", 9.0, f64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn num_to_float_f64_to_f32() {
+fn num_to_frac_f64_to_f32() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1538,7 +1538,7 @@ fn num_to_float_f64_to_f32() {
                     f64 = 9.0
 
                     f32 : F32
-                    f32 = Num.toFloat f64
+                    f32 = Num.toFrac f64
                     f32
                 "#
         ),
@@ -1549,7 +1549,7 @@ fn num_to_float_f64_to_f32() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn num_to_float_f32_to_f32() {
+fn num_to_frac_f32_to_f32() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1558,7 +1558,7 @@ fn num_to_float_f32_to_f32() {
                     arg = 9.0
 
                     ret : F32
-                    ret = Num.toFloat arg
+                    ret = Num.toFrac arg
                     ret
                 "#
         ),
@@ -1569,7 +1569,7 @@ fn num_to_float_f32_to_f32() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn num_to_float_f64_to_f64() {
+fn num_to_frac_f64_to_f64() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1578,7 +1578,7 @@ fn num_to_float_f64_to_f64() {
                     arg = 9.0
 
                     ret : F64
-                    ret = Num.toFloat arg
+                    ret = Num.toFrac arg
                     ret
                 "#
         ),
@@ -1589,7 +1589,7 @@ fn num_to_float_f64_to_f64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn num_to_float_f32_to_f64() {
+fn num_to_frac_f32_to_f64() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1598,7 +1598,7 @@ fn num_to_float_f32_to_f64() {
                     f32 = 9.0
 
                     f64 : F64
-                    f64 = Num.toFloat f32
+                    f64 = Num.toFrac f32
                     f64
                 "#
         ),
@@ -1610,7 +1610,7 @@ fn num_to_float_f32_to_f64() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn float_to_float() {
-    assert_evals_to!("Num.toFloat 0.5", 0.5, f64);
+    assert_evals_to!("Num.toFrac 0.5", 0.5, f64);
 }
 
 #[test]
@@ -3169,7 +3169,7 @@ fn to_float_f32() {
             n = 100
 
             f : F32
-            f = Num.toFloat n
+            f = Num.toFrac n
             f
             "#
         ),
@@ -3188,7 +3188,7 @@ fn to_float_f64() {
             n = 100
 
             f : F64
-            f = Num.toFloat n
+            f = Num.toFrac n
             f
             "#
         ),

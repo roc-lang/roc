@@ -1038,7 +1038,7 @@ impl<'a> Layout<'a> {
                         return Ok(Layout::i64());
                     }
 
-                    Symbol::NUM_FLOAT | Symbol::NUM_FLOATINGPOINT
+                    Symbol::NUM_FRAC | Symbol::NUM_FLOATINGPOINT
                         if is_unresolved_var(env.subs, actual_var) =>
                     {
                         // default to f64
@@ -1328,7 +1328,7 @@ impl<'a> Layout<'a> {
 /// But if we're careful when to invalidate certain keys, we still get some benefit
 #[derive(Debug)]
 pub struct LayoutCache<'a> {
-    target_info: TargetInfo,
+    pub target_info: TargetInfo,
     _marker: std::marker::PhantomData<&'a u8>,
 }
 

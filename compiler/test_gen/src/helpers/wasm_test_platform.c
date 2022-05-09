@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 // Makes test runs take 50% longer, due to linking
 #define ENABLE_PRINTF 0
@@ -138,9 +139,9 @@ void roc_panic(char *msg, unsigned int tag_id)
 
 //--------------------------
 
-void *roc_memcpy(void *dest, const void *src, size_t n)
+void roc_memcpy(void *dest, const void *src, size_t n)
 {
-    return memcpy(dest, src, n);
+    memcpy(dest, src, n);
 }
 
 //--------------------------

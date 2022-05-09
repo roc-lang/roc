@@ -1,4 +1,3 @@
-use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::{get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
@@ -14,7 +13,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
-use super::build::{load_roc_value, use_roc_value};
+use super::build::{dec_binop_with_unchecked, load_roc_value, use_roc_value};
 use super::convert::argument_type_from_union_layout;
 
 #[derive(Clone, Debug)]
@@ -124,7 +123,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
         }
 
         Builtin::Bool => int_cmp(IntPredicate::EQ, "eq_i1"),
-        Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], bitcode::DEC_EQ),
+        Builtin::Decimal => dec_binop_with_unchecked(env, bitcode::DEC_EQ, lhs_val, rhs_val),
 
         Builtin::Str => str_equal(env, lhs_val, rhs_val),
         Builtin::List(elem) => build_list_eq(
@@ -289,7 +288,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
         }
 
         Builtin::Bool => int_cmp(IntPredicate::NE, "neq_i1"),
-        Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], bitcode::DEC_NEQ),
+        Builtin::Decimal => dec_binop_with_unchecked(env, bitcode::DEC_NEQ, lhs_val, rhs_val),
 
         Builtin::Str => {
             let is_equal = str_equal(env, lhs_val, rhs_val).into_int_value();

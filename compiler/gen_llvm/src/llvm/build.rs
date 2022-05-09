@@ -68,6 +68,8 @@ use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, Unio
 use roc_target::{PtrWidth, TargetInfo};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
+use super::convert::zig_with_overflow_roc_dec;
+
 #[inline(always)]
 fn print_fn_verification_output() -> bool {
     dbg_do!(ROC_PRINT_LLVM_FN_VERIFICATION, {
@@ -5246,6 +5248,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         argument_layouts,
                         Layout::Builtin(Builtin::Bool),
                     );
+
                     list_find_unsafe(env, layout_ids, roc_function_call, list, element_layout)
                 }
                 _ => unreachable!("invalid list layout"),
@@ -5368,7 +5371,17 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
 
-            call_bitcode_fn(env, &[string], intrinsic)
+            let result = call_bitcode_fn(env, &[string], intrinsic);
+
+            // zig passes the result as a packed integer sometimes, instead of a struct. So we cast
+            let expected_type = basic_type_from_layout(env, layout);
+            let actual_type = result.get_type();
+
+            if expected_type != actual_type {
+                complex_bitcast_check_size(env, result, expected_type, "str_to_num_cast")
+            } else {
+                result
+            }
         }
         StrFromInt => {
             // Str.fromInt : Int -> Str
@@ -5696,7 +5709,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
-        | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin
+        | NumCeiling | NumFloor | NumToFrac | NumIsFinite | NumAtan | NumAcos | NumAsin
         | NumToIntChecked => {
             debug_assert_eq!(args.len(), 1);
 
@@ -7054,6 +7067,76 @@ fn build_float_binop<'a, 'ctx, 'env>(
     }
 }
 
+fn dec_binop_with_overflow<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+) -> StructValue<'ctx> {
+    let lhs = lhs.into_int_value();
+    let rhs = rhs.into_int_value();
+
+    let return_type = zig_with_overflow_roc_dec(env);
+    let return_alloca = env.builder.build_alloca(return_type, "return_alloca");
+
+    let int_64 = env.context.i128_type().const_int(64, false);
+    let int_64_type = env.context.i64_type();
+
+    let lhs1 = env
+        .builder
+        .build_right_shift(lhs, int_64, false, "lhs_left_bits");
+    let rhs1 = env
+        .builder
+        .build_right_shift(rhs, int_64, false, "rhs_left_bits");
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            return_alloca.into(),
+            env.builder.build_int_cast(lhs, int_64_type, "").into(),
+            env.builder.build_int_cast(lhs1, int_64_type, "").into(),
+            env.builder.build_int_cast(rhs, int_64_type, "").into(),
+            env.builder.build_int_cast(rhs1, int_64_type, "").into(),
+        ],
+        fn_name,
+    );
+
+    env.builder
+        .build_load(return_alloca, "load_dec")
+        .into_struct_value()
+}
+
+pub fn dec_binop_with_unchecked<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fn_name: &str,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let lhs = lhs.into_int_value();
+    let rhs = rhs.into_int_value();
+
+    let int_64 = env.context.i128_type().const_int(64, false);
+    let int_64_type = env.context.i64_type();
+
+    let lhs1 = env
+        .builder
+        .build_right_shift(lhs, int_64, false, "lhs_left_bits");
+    let rhs1 = env
+        .builder
+        .build_right_shift(rhs, int_64, false, "rhs_left_bits");
+
+    call_bitcode_fn(
+        env,
+        &[
+            env.builder.build_int_cast(lhs, int_64_type, "").into(),
+            env.builder.build_int_cast(lhs1, int_64_type, "").into(),
+            env.builder.build_int_cast(rhs, int_64_type, "").into(),
+            env.builder.build_int_cast(rhs1, int_64_type, "").into(),
+        ],
+        fn_name,
+    )
+}
+
 fn build_dec_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -7093,7 +7176,7 @@ fn build_dec_binop<'a, 'ctx, 'env>(
             rhs,
             "decimal multiplication overflowed",
         ),
-        NumDivUnchecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_DIV),
+        NumDivUnchecked => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -7108,15 +7191,7 @@ fn build_dec_binop_throw_on_overflow<'a, 'ctx, 'env>(
     rhs: BasicValueEnum<'ctx>,
     message: &str,
 ) -> BasicValueEnum<'ctx> {
-    let overflow_type = crate::llvm::convert::zig_with_overflow_roc_dec(env);
-
-    let result_ptr = env.builder.build_alloca(overflow_type, "result_ptr");
-    call_void_bitcode_fn(env, &[result_ptr.into(), lhs, rhs], operation);
-
-    let result = env
-        .builder
-        .build_load(result_ptr, "load_overflow")
-        .into_struct_value();
+    let result = dec_binop_with_overflow(env, operation, lhs, rhs);
 
     let value = throw_on_overflow(env, parent, result, message).into_struct_value();
 
@@ -7161,7 +7236,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             // integer abs overflows when applied to the minimum value of a signed type
             int_abs_raise_on_overflow(env, arg, arg_int_type)
         }
-        NumToFloat => {
+        NumToFrac => {
             // This is an Int, so we need to convert it.
 
             let target_float_type = match return_layout {
@@ -7211,6 +7286,9 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 || // Or if the two types are the same, they trivially fit.
                 arg_width == target_int_width;
 
+            let return_type =
+                convert::basic_type_from_layout(env, return_layout).into_struct_type();
+
             if arg_always_fits_in_target {
                 // This is guaranteed to succeed so we can just make it an int cast and let LLVM
                 // optimize it away.
@@ -7225,8 +7303,6 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     )
                     .into();
 
-                let return_type =
-                    convert::basic_type_from_layout(env, return_layout).into_struct_type();
                 let r = return_type.const_zero();
                 let r = bd
                     .build_insert_value(r, target_int_val, 0, "converted_int")
@@ -7249,7 +7325,14 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     &bitcode::NUM_INT_TO_INT_CHECKING_MAX_AND_MIN[target_int_width][arg_width]
                 };
 
-                call_bitcode_fn_fixing_for_convention(env, &[arg.into()], return_layout, bitcode_fn)
+                let result = call_bitcode_fn_fixing_for_convention(
+                    env,
+                    &[arg.into()],
+                    return_layout,
+                    bitcode_fn,
+                );
+
+                complex_bitcast_check_size(env, result, return_type.into(), "cast_bitpacked")
             }
         }
         _ => {
@@ -7375,7 +7458,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumAbs => env.call_intrinsic(&LLVM_FABS[float_width], &[arg.into()]),
         NumSqrtUnchecked => env.call_intrinsic(&LLVM_SQRT[float_width], &[arg.into()]),
         NumLogUnchecked => env.call_intrinsic(&LLVM_LOG[float_width], &[arg.into()]),
-        NumToFloat => {
+        NumToFrac => {
             let return_width = match layout {
                 Layout::Builtin(Builtin::Float(return_width)) => *return_width,
                 _ => internal_error!("Layout for returning is not Float : {:?}", layout),
@@ -7397,10 +7480,10 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
                 (FloatWidth::F64, FloatWidth::F64) => arg.into(),
                 (FloatWidth::F128, FloatWidth::F128) => arg.into(),
                 (FloatWidth::F128, _) => {
-                    unimplemented!("I cannot handle F128 with Num.toFloat yet")
+                    unimplemented!("I cannot handle F128 with Num.toFrac yet")
                 }
                 (_, FloatWidth::F128) => {
-                    unimplemented!("I cannot handle F128 with Num.toFloat yet")
+                    unimplemented!("I cannot handle F128 with Num.toFrac yet")
                 }
             }
         }

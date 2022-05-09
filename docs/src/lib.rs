@@ -21,7 +21,10 @@ use std::path::{Path, PathBuf};
 mod docs_error;
 mod html;
 
-pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
+const BUILD_DIR: &str = "./generated-docs";
+
+pub fn generate_docs_html(filenames: Vec<PathBuf>) {
+    let build_dir = Path::new(BUILD_DIR);
     let loaded_modules = load_modules_for_files(filenames);
 
     // TODO: get info from a package module; this is all hardcoded for now.
