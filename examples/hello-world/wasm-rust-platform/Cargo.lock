@@ -44,12 +44,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
-name = "libc"
-version = "0.2.124"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21a41fed9d98f27ab1c6d161da622a4fa35e8a54a8adc24bbf3ddd0ef70b0e50"
-
-[[package]]
 name = "log"
 version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -63,8 +57,8 @@ name = "platform"
 version = "0.1.0"
 dependencies = [
  "app_sys",
- "libc",
  "roc_std",
+ "wasi_libc_sys",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -116,6 +110,10 @@ name = "unicode-xid"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ccb82d61f80a663efe1f787a51b16b5a51e3314d6ac365b08639f52387b33f3"
+
+[[package]]
+name = "wasi_libc_sys"
+version = "0.1.0"
 
 [[package]]
 name = "wasm-bindgen"

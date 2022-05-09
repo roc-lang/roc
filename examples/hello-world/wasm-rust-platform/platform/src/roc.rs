@@ -2,16 +2,10 @@ use core::ffi::c_void;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-// Rust's libc crate doesn't support Wasm, but we can link another libc implementation
-extern "C" {
-    fn malloc(size: usize) -> *mut c_void;
-    fn free(p: *mut c_void);
-    fn realloc(p: *mut c_void, size: usize) -> *mut c_void;
-}
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
-    return malloc(size);
+    return wasi_libc_sys::malloc(size);
 }
 
 #[no_mangle]
@@ -21,12 +15,12 @@ pub unsafe extern "C" fn roc_realloc(
     _old_size: usize,
     _alignment: u32,
 ) -> *mut c_void {
-    return realloc(c_ptr, new_size);
+    return wasi_libc_sys::realloc(c_ptr, new_size);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
-    free(c_ptr);
+    wasi_libc_sys::free(c_ptr);
 }
 
 #[no_mangle]
