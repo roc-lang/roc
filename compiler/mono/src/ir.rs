@@ -3816,22 +3816,6 @@ pub fn with_hole<'a>(
                         hole,
                     );
                 }
-                // special-case the form `let x = E in x`
-                // not doing so will drop the `hole`
-                match &cont.value {
-                    roc_can::expr::Expr::Var(original) if *original == symbol => {
-                        return with_hole(
-                            env,
-                            def.loc_expr.value,
-                            def.expr_var,
-                            procs,
-                            layout_cache,
-                            assigned,
-                            hole,
-                        );
-                    }
-                    _ => {}
-                }
 
                 let build_rest =
                     |env: &mut Env<'a, '_>,
