@@ -3,7 +3,7 @@ use crate::types::{TypeId, Types};
 use crate::{enums::Enums, types::RocType};
 use bumpalo::Bump;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::layout::{Layout, LayoutCache};
+use roc_mono::layout::{cmp_fields, Layout, LayoutCache};
 use roc_types::{
     subs::{Content, FlatType, RecordFields, Subs, Variable},
     types::RecordField,
@@ -145,34 +145,39 @@ fn add_struct(
     types: &mut Types,
 ) -> TypeId {
     let subs = env.subs;
-    let mut pairs = bumpalo::collections::Vec::with_capacity_in(record_fields.len(), env.arena);
+    let mut sortables = bumpalo::collections::Vec::with_capacity_in(record_fields.len(), env.arena);
     let it = record_fields
         .unsorted_iterator(subs, ext)
         .expect("something weird in content");
 
     for (label, field) in it {
-        // drop optional fields
-        let var = match field {
-            RecordField::Optional(_) => continue,
-            RecordField::Required(var) => var,
-            RecordField::Demanded(var) => var,
+        match field {
+            RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
+                sortables.push((
+                    label,
+                    field_var,
+                    env.layout_cache
+                        .from_var(env.arena, field_var, subs)
+                        .unwrap(),
+                ));
+            }
+            RecordField::Optional(_) => {
+                // drop optional fields
+            }
         };
-
-        pairs.push((
-            label,
-            var,
-            env.layout_cache.from_var(env.arena, var, subs).unwrap(),
-        ));
     }
 
-    pairs.sort_by(|(label1, _, layout1), (label2, _, layout2)| {
-        let size1 = layout1.alignment_bytes(env.layout_cache.target_info);
-        let size2 = layout2.alignment_bytes(env.layout_cache.target_info);
-
-        size2.cmp(&size1).then(label1.cmp(label2))
+    sortables.sort_by(|(label1, _, layout1), (label2, _, layout2)| {
+        cmp_fields(
+            label1,
+            layout1,
+            label2,
+            layout2,
+            env.layout_cache.target_info,
+        )
     });
 
-    let fields = pairs
+    let fields = sortables
         .into_iter()
         .map(|(label, field_var, field_layout)| {
             (
