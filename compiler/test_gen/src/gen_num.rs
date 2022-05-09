@@ -591,8 +591,6 @@ fn f64_round() {
 fn f64_abs() {
     assert_evals_to!("Num.abs -4.7", 4.7, f64);
     assert_evals_to!("Num.abs 5.8", 5.8, f64);
-    //assert_evals_to!("Num.abs Num.maxFloat", f64::MAX, f64);
-    //assert_evals_to!("Num.abs Num.minFloat", -f64::MIN, f64);
 }
 
 #[test]
@@ -2317,6 +2315,62 @@ fn max_u8() {
         ),
         u8::MAX,
         u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Num.maxF64
+            "#
+        ),
+        f64::MAX,
+        f64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_f64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Num.minF64
+            "#
+        ),
+        f64::MIN,
+        f64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn max_f32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Num.maxF32
+            "#
+        ),
+        f32::MAX,
+        f32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn min_f32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Num.minF32
+            "#
+        ),
+        f32::MIN,
+        f32
     );
 }
 
