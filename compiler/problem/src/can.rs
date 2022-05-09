@@ -125,20 +125,11 @@ pub enum Problem {
         span_has_clauses: Region,
         bound_var_names: Vec<Lowercase>,
     },
-    // TODO(abilities): remove me when ability hierarchies are supported
-    AbilityMemberBindsExternalAbility {
-        member: Symbol,
-        ability: Symbol,
-        region: Region,
-    },
-    AliasUsesAbility {
-        loc_name: Loc<Symbol>,
-        ability: Symbol,
-    },
     AbilityNotOnToplevel {
         region: Region,
     },
     AbilityUsedAsType(Lowercase, Symbol, Region),
+    NestedSpecialization(Symbol, Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]

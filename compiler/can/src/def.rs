@@ -505,6 +505,7 @@ pub(crate) fn canonicalize_defs<'a>(
             output,
             scope,
             var_store,
+            pattern_type,
             &mut aliases,
             &abilities_in_scope,
         );
@@ -981,12 +982,13 @@ fn canonicalize_pending_value_def<'a>(
     mut output: Output,
     scope: &mut Scope,
     var_store: &mut VarStore,
+    pattern_type: PatternType,
     aliases: &mut VecMap<Symbol, Alias>,
     abilities_in_scope: &[Symbol],
 ) -> DefOutput {
     use PendingValueDef::*;
 
-    match pending_def {
+    let output = match pending_def {
         AnnotationOnly(_, loc_can_pattern, loc_ann) => {
             // Make types for the body expr, even if we won't end up having a body.
             let expr_var = var_store.fresh();
@@ -1129,7 +1131,21 @@ fn canonicalize_pending_value_def<'a>(
                 None,
             )
         }
+    };
+
+    // Disallow ability specializations that aren't on the toplevel (note: we might loosen this
+    // restriction later on).
+    if pattern_type != PatternType::TopLevelDef {
+        if let Loc {
+            value: Pattern::AbilityMemberSpecialization { specializes, .. },
+            region,
+        } = output.def.loc_pattern
+        {
+            env.problem(Problem::NestedSpecialization(specializes, region));
+        }
     }
+
+    output
 }
 
 // TODO trim down these arguments!
