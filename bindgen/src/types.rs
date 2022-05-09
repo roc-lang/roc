@@ -121,6 +121,7 @@ pub enum RocType {
         tags: Vec<(String, Vec<TypeId>)>,
     },
     TagUnion {
+        tag_bytes: u8,
         name: String,
         tags: Vec<(String, Vec<TypeId>)>,
     },

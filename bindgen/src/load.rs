@@ -92,12 +92,8 @@ pub fn load_types(
                 let var = pattern_vars
                     .get(&sym)
                     .expect("Indetifier known but it has no var?");
-                let layout = env
-                    .layout_cache
-                    .from_var(arena, *var, subs)
-                    .expect("Something weird ended up in the content");
 
-                bindgen::add_type(&mut env, layout, *var, &mut types);
+                bindgen::add_type(&mut env, *var, &mut types);
             } else {
                 // figure out if we need to export non-identifier defs - when would that
                 // happen?
