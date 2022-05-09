@@ -2811,38 +2811,57 @@ fn resolve_abilities_in_specialized_body<'a>(
                     // during def construction.
                 }
                 Expr::AbilityMember(member_sym, specialization_id, _specialization_var) => {
-                    if self
+                    let (specialization, specialization_def) = match self
                         .abilities_store
                         .get_resolved(*specialization_id)
-                        .is_some()
                     {
-                        // We already know the specialization from type solving; we are good to go.
-                        return;
-                    }
+                        Some(specialization) => (
+                            specialization,
+                            // If we know the specialization at this point, the specialization must
+                            // be static. That means the relevant type state was populated during
+                            // solving, so we don't need additional unification here.
+                            //
+                            // However, we do need to walk the specialization def, because it may
+                            // itself contain unspecialized defs.
+                            self.procs
+                                .partial_procs
+                                .get_symbol(specialization)
+                                .expect("Specialization found, but it's not in procs"),
+                        ),
+                        None => {
+                            let specialization = resolve_ability_specialization(
+                                self.subs,
+                                self.abilities_store,
+                                *member_sym,
+                                var,
+                            )
+                            .expect("Ability specialization is unknown - code generation cannot proceed!");
 
-                    let specialization = resolve_ability_specialization(
-                        self.subs,
-                        self.abilities_store,
-                        *member_sym,
-                        var,
-                    )
-                    .expect("Ability specialization is unknown - code generation cannot proceed!");
+                            self.abilities_store
+                                .insert_resolved(*specialization_id, specialization);
 
-                    // We must now refine the current type state to account for this specialization,
-                    // since `var` may only have partial specialization information - enough to
-                    // figure out what specialization we need, but not the types of all arguments
-                    // and return types. So, unify with the variable with the specialization's type.
-                    let specialization_def = self
-                        .procs
-                        .partial_procs
-                        .get_symbol(specialization)
-                        .expect("Specialization found, but it's not in procs");
-                    let specialization_var = specialization_def.annotation;
+                            debug_assert!(!self.specialized.contains(specialization_id));
+                            self.specialized.push(*specialization_id);
 
-                    let unified = unify(self.subs, var, specialization_var, Mode::EQ);
-                    unified.expect_success(
-                        "Specialization does not unify - this is a typechecker bug!",
-                    );
+                            // We must now refine the current type state to account for this specialization,
+                            // since `var` may only have partial specialization information - enough to
+                            // figure out what specialization we need, but not the types of all arguments
+                            // and return types. So, unify with the variable with the specialization's type.
+                            let specialization_def = self
+                                .procs
+                                .partial_procs
+                                .get_symbol(specialization)
+                                .expect("Specialization found, but it's not in procs");
+                            let specialization_var = specialization_def.annotation;
+
+                            let unified = unify(self.subs, var, specialization_var, Mode::EQ);
+                            unified.expect_success(
+                                "Specialization does not unify - this is a typechecker bug!",
+                            );
+
+                            (specialization, specialization_def)
+                        }
+                    };
 
                     // Now walk the specialization def to pick up any more needed types. Of course,
                     // we only want to pass through it once to avoid unbounded recursion.
@@ -2854,28 +2873,22 @@ fn resolve_abilities_in_specialized_body<'a>(
                         );
                         self.seen_defs.insert(specialization);
                     }
-
-                    self.abilities_store
-                        .insert_resolved(*specialization_id, specialization);
-
-                    debug_assert!(!self.specialized.contains(specialization_id));
-                    self.specialized.push(*specialization_id);
                 }
                 _ => walk_expr(self, expr, var),
             }
         }
     }
 
-    let mut specializer = Resolver {
+    let mut resolver = Resolver {
         subs: env.subs,
         procs,
         abilities_store: env.abilities_store,
         seen_defs: MutSet::default(),
         specialized: vec![],
     };
-    specializer.visit_expr(specialized_body, Region::zero(), body_var);
+    resolver.visit_expr(specialized_body, Region::zero(), body_var);
 
-    specializer.specialized
+    resolver.specialized
 }
 
 fn specialize_external<'a>(
