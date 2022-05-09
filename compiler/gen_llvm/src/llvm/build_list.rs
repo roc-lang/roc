@@ -494,7 +494,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
                     layout_width(env, element_layout),
                     layout_width(env, function_call_return_layout),
                     layout_width(env, default_layout),
-                    has_tag_id.as_global_value().as_pointer_value().into(),
+                    has_tag_id_helper(env, has_tag_id).into(),
                     dec_element_fn.as_global_value().as_pointer_value().into(),
                     pass_as_opaque(env, result_ptr),
                 ],
@@ -603,6 +603,30 @@ fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx>
     BasicValueEnum::StructValue(struct_type.const_zero())
 }
 
+fn has_tag_id_helper<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    has_tag_id: FunctionValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let u8_t = env.context.i8_type();
+    let u16_t = env.context.i16_type();
+
+    let u8_ptr_t = u8_t.ptr_type(AddressSpace::Generic);
+
+    let struct_t = env
+        .context
+        .struct_type(&[u8_t.into(), env.ptr_int().into()], false);
+
+    let has_tag_id_type = struct_t
+        .fn_type(&[u16_t.into(), u8_ptr_t.into()], false)
+        .ptr_type(AddressSpace::Generic);
+
+    env.builder.build_pointer_cast(
+        has_tag_id.as_global_value().as_pointer_value(),
+        has_tag_id_type,
+        "has_tag_id_cast",
+    )
+}
+
 /// List.keepOks : List before, (before -> Result after *) -> List after
 pub fn list_keep_oks<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -626,7 +650,7 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
     let has_tag_id = match result_layout {
         Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
         Layout::Builtin(Builtin::Bool) => {
-            // a `Result [] whatever`, so there is nothing to keep
+            // a `Result whatever []`, so there is nothing to keep
             return empty_list(env);
         }
         _ => unreachable!(),
@@ -644,7 +668,7 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
-            has_tag_id.as_global_value().as_pointer_value().into(),
+            has_tag_id_helper(env, has_tag_id).into(),
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_KEEP_OKS,
@@ -692,7 +716,7 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
-            has_tag_id.as_global_value().as_pointer_value().into(),
+            has_tag_id_helper(env, has_tag_id).into(),
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_KEEP_ERRS,
@@ -968,7 +992,6 @@ pub fn list_find_unsafe<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
@@ -982,17 +1005,21 @@ pub fn list_find_unsafe<'a, 'ctx, 'env>(
     // in the Zig definition called above, because we don't know the size of the
     // element until user compile time, which is later than the compile time of bitcode defs.
 
-    let value_u8_ptr = env
+    let value_u8_ptr_int = env
         .builder
-        .build_extract_value(result, 0, "get_value_ptr")
+        .build_extract_value(result, 0, "get_value_ptr_int")
         .unwrap()
-        .into_pointer_value();
+        .into_int_value();
 
-    let found = env
+    let found_u8 = env
         .builder
         .build_extract_value(result, 1, "get_found")
         .unwrap()
         .into_int_value();
+
+    let found = env
+        .builder
+        .build_int_cast(found_u8, env.context.bool_type(), "found_as_bool");
 
     let start_block = env.builder.get_insert_block().unwrap();
     let parent = start_block.get_parent().unwrap();
@@ -1007,14 +1034,13 @@ pub fn list_find_unsafe<'a, 'ctx, 'env>(
         .build_conditional_branch(found, if_not_null, done_block);
 
     env.builder.position_at_end(if_not_null);
-    let value_ptr = env
-        .builder
-        .build_bitcast(
-            value_u8_ptr,
-            value_bt.ptr_type(AddressSpace::Generic),
-            "from_opaque",
-        )
-        .into_pointer_value();
+
+    let value_ptr = env.builder.build_int_to_ptr(
+        value_u8_ptr_int,
+        value_bt.ptr_type(AddressSpace::Generic),
+        "get_value_ptr",
+    );
+
     let loaded = env.builder.build_load(value_ptr, "load_value");
     env.builder.build_unconditional_branch(done_block);
 

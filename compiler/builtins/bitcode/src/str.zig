@@ -2041,7 +2041,7 @@ test "ReverseUtf8View: empty" {
     const original_bytes = "";
 
     var iter = ReverseUtf8View.initUnchecked(original_bytes).iterator();
-    while (iter.nextCodepoint()) |codepoint| {
+    while (iter.nextCodepoint()) |_| {
         try expect(false);
     }
 }

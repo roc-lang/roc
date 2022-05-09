@@ -6,6 +6,8 @@ use roc_types::{subs::Variable, types::Type};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberVariables {
     pub able_vars: Vec<Variable>,
+    /// This includes - named rigid vars, lambda sets, wildcards. See
+    /// [`IntroducedVariables::collect_rigid`](crate::annotation::IntroducedVariables::collect_rigid).
     pub rigid_vars: Vec<Variable>,
     pub flex_vars: Vec<Variable>,
 }
@@ -13,7 +15,7 @@ pub struct MemberVariables {
 /// Stores information about an ability member definition, including the parent ability, the
 /// defining type, and what type variables need to be instantiated with instances of the ability.
 // TODO: SoA and put me in an arena
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct AbilityMemberData {
     pub parent_ability: Symbol,
     pub signature_var: Variable,
@@ -29,11 +31,22 @@ pub struct MemberSpecialization {
     pub region: Region,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SpecializationId(u64);
+
+#[allow(clippy::derivable_impls)] // let's be explicit about this
+impl Default for SpecializationId {
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
 /// Stores information about what abilities exist in a scope, what it means to implement an
 /// ability, and what types implement them.
 // TODO(abilities): this should probably go on the Scope, I don't put it there for now because we
-// are only dealing with inter-module abilities for now.
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+// are only dealing with intra-module abilities for now.
+// TODO(abilities): many of these should be `VecMap`s. Do some benchmarking.
+#[derive(Default, Debug, Clone)]
 pub struct AbilitiesStore {
     /// Maps an ability to the members defining it.
     members_of_ability: MutMap<Symbol, Vec<Symbol>>,
@@ -54,6 +67,12 @@ pub struct AbilitiesStore {
     /// Maps a tuple (member, type) specifying that `type` declares an implementation of an ability
     /// member `member`, to the exact symbol that implements the ability.
     declared_specializations: MutMap<(Symbol, Symbol), MemberSpecialization>,
+
+    next_specialization_id: u64,
+
+    /// Resolved specializations for a symbol. These might be ephemeral (known due to type solving),
+    /// or resolved on-the-fly during mono.
+    resolved_specializations: MutMap<SpecializationId, Symbol>,
 }
 
 impl AbilitiesStore {
@@ -167,5 +186,38 @@ impl AbilitiesStore {
     /// specialization with type "type".
     pub fn members_of_ability(&self, ability: Symbol) -> Option<&[Symbol]> {
         self.members_of_ability.get(&ability).map(|v| v.as_ref())
+    }
+
+    pub fn fresh_specialization_id(&mut self) -> SpecializationId {
+        debug_assert!(self.next_specialization_id != std::u64::MAX);
+
+        let id = SpecializationId(self.next_specialization_id);
+        self.next_specialization_id += 1;
+        id
+    }
+
+    pub fn insert_resolved(&mut self, id: SpecializationId, specialization: Symbol) {
+        debug_assert!(self.is_specialization_name(specialization));
+
+        let old_specialization = self.resolved_specializations.insert(id, specialization);
+
+        debug_assert!(
+            old_specialization.is_none(),
+            "Existing resolution: {:?}",
+            old_specialization
+        );
+    }
+
+    pub fn remove_resolved(&mut self, id: SpecializationId) {
+        let old_specialization = self.resolved_specializations.remove(&id);
+
+        debug_assert!(
+            old_specialization.is_some(),
+            "Trying to remove a resolved specialization that was never there!",
+        );
+    }
+
+    pub fn get_resolved(&self, id: SpecializationId) -> Option<Symbol> {
+        self.resolved_specializations.get(&id).copied()
     }
 }

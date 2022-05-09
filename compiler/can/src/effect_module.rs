@@ -9,7 +9,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
-use roc_types::types::{AliasKind, LambdaSet, Type, TypeExtension};
+use roc_types::types::{AliasKind, LambdaSet, OptAbleType, OptAbleVar, Type, TypeExtension};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct HostedGeneratedFunctions {
@@ -661,7 +661,7 @@ fn force_effect(
         Loc::at_zero(call)
     };
 
-    Expr::LetNonRec(Box::new(def), Box::new(force_thunk_call), var_store.fresh())
+    Expr::LetNonRec(Box::new(def), Box::new(force_thunk_call))
 }
 
 fn build_effect_forever(
@@ -917,9 +917,7 @@ fn build_effect_forever_inner_body(
         Box::new(Loc::at_zero(Expr::LetNonRec(
             Box::new(force_thunk1),
             Box::new(force_thunk2),
-            var_store.fresh(),
         ))),
-        var_store.fresh(),
     )
 }
 
@@ -1009,7 +1007,7 @@ fn build_effect_loop(
 
             Type::Alias {
                 symbol: effect_symbol,
-                type_arguments: vec![state_type],
+                type_arguments: vec![OptAbleType::unbound(state_type)],
                 lambda_set_variables: vec![roc_types::types::LambdaSet(Type::Variable(
                     closure_var,
                 ))],
@@ -1246,7 +1244,6 @@ fn build_effect_loop_inner_body(
     Expr::LetNonRec(
         Box::new(thunk_from_effect),
         Box::new(Loc::at_zero(match_on_force_thunk1)),
-        var_store.fresh(),
     )
 }
 
@@ -1448,7 +1445,7 @@ fn build_effect_opaque(
 
     Type::Alias {
         symbol: effect_symbol,
-        type_arguments: vec![Type::Variable(a_var)],
+        type_arguments: vec![OptAbleType::unbound(Type::Variable(a_var))],
         lambda_set_variables: vec![roc_types::types::LambdaSet(Type::Variable(closure_var))],
         actual: Box::new(actual),
         kind: AliasKind::Opaque,
@@ -1457,7 +1454,7 @@ fn build_effect_opaque(
 
 fn build_fresh_opaque_variables(
     var_store: &mut VarStore,
-) -> (Box<Type>, Vec<Variable>, Vec<LambdaSet>) {
+) -> (Box<Type>, Vec<OptAbleVar>, Vec<LambdaSet>) {
     let closure_var = var_store.fresh();
 
     // NB: if there are bugs, check whether not introducing variables is a problem!
@@ -1469,7 +1466,10 @@ fn build_fresh_opaque_variables(
         Box::new(Type::Variable(closure_var)),
         Box::new(Type::Variable(a_var)),
     );
-    let type_arguments = vec![a_var];
+    let type_arguments = vec![OptAbleVar {
+        var: a_var,
+        opt_ability: None,
+    }];
     let lambda_set_variables = vec![roc_types::types::LambdaSet(Type::Variable(closure_var))];
 
     (Box::new(actual), type_arguments, lambda_set_variables)

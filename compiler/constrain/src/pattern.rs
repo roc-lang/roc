@@ -10,7 +10,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{
-    AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type, TypeExtension,
+    AliasKind, Category, OptAbleType, PReason, PatternCategory, Reason, RecordField, Type,
+    TypeExtension,
 };
 
 #[derive(Default)]
@@ -514,7 +515,13 @@ pub fn constrain_pattern(
 
             let opaque_type = Type::Alias {
                 symbol: *opaque,
-                type_arguments: type_arguments.iter().copied().map(Type::Variable).collect(),
+                type_arguments: type_arguments
+                    .iter()
+                    .map(|v| OptAbleType {
+                        typ: Type::Variable(v.var),
+                        opt_ability: v.opt_ability,
+                    })
+                    .collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: Box::new(arg_pattern_type.clone()),
                 kind: AliasKind::Opaque,
@@ -571,7 +578,7 @@ pub fn constrain_pattern(
                 .vars
                 .extend_from_slice(&[*arg_pattern_var, *whole_var]);
             // Also add the fresh variables we created for the type argument and lambda sets
-            state.vars.extend(type_arguments);
+            state.vars.extend(type_arguments.iter().map(|v| v.var));
             state.vars.extend(lambda_set_variables.iter().map(|v| {
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));

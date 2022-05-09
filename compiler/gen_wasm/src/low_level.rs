@@ -22,7 +22,7 @@ use crate::TARGET_INFO;
 /// the smallest integer supported in the Wasm instruction set.
 /// We may choose different instructions for signed and unsigned integers,
 /// but they share the same Wasm value type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum CodeGenNumType {
     I32,     // Supported in Wasm instruction set
     I64,     // Supported in Wasm instruction set
@@ -136,7 +136,7 @@ impl<'a> LowLevelCall<'a> {
     /// For numerical ops, this just pushes the arguments to the Wasm VM's value stack
     /// It implements the calling convention used by Zig for both numbers and structs
     /// Result is the type signature of the call
-    fn load_args(&self, backend: &mut WasmBackend<'a>) -> (Vec<'a, ValueType>, Option<ValueType>) {
+    fn load_args(&self, backend: &mut WasmBackend<'a>) -> (usize, bool, bool) {
         backend.storage.load_symbols_for_call(
             backend.env.arena,
             &mut backend.code_builder,
@@ -148,8 +148,29 @@ impl<'a> LowLevelCall<'a> {
     }
 
     fn load_args_and_call_zig(&self, backend: &mut WasmBackend<'a>, name: &'a str) {
-        let (param_types, ret_type) = self.load_args(backend);
-        backend.call_zig_builtin_after_loading_args(name, param_types.len(), ret_type.is_some());
+        let (num_wasm_args, has_return_val, ret_zig_packed_struct) = self.load_args(backend);
+        backend.call_zig_builtin_after_loading_args(name, num_wasm_args, has_return_val);
+
+        if ret_zig_packed_struct {
+            match self.ret_storage {
+                StoredValue::StackMemory {
+                    size,
+                    alignment_bytes,
+                    ..
+                } => {
+                    // The address of the return value was already loaded before the call
+                    let align = Align::from(alignment_bytes);
+                    if size > 4 {
+                        backend.code_builder.i64_store(align, 0);
+                    } else {
+                        backend.code_builder.i32_store(align, 0);
+                    }
+                }
+                _ => {
+                    internal_error!("Zig packed struct should always be stored to StackMemory")
+                }
+            }
+        }
     }
 
     /// Wrap an integer whose Wasm representation is i32
@@ -627,7 +648,25 @@ impl<'a> LowLevelCall<'a> {
                     _ => panic_ret_type(),
                 }
             }
-            NumPowInt => todo!("{:?}", self.lowlevel),
+            NumPowInt => {
+                self.load_args(backend);
+                let base_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
+                let exponent_type = CodeGenNumType::for_symbol(backend, self.arguments[1]);
+                let ret_type = CodeGenNumType::from(self.ret_layout);
+
+                debug_assert!(base_type == exponent_type);
+                debug_assert!(exponent_type == ret_type);
+
+                let width = match ret_type {
+                    CodeGenNumType::I32 => IntWidth::I32,
+                    CodeGenNumType::I64 => IntWidth::I64,
+                    CodeGenNumType::I128 => todo!("{:?} for I128", self.lowlevel),
+                    _ => internal_error!("Invalid return type for pow: {:?}", ret_type),
+                };
+
+                self.load_args_and_call_zig(backend, &bitcode::NUM_POW_INT[width])
+            }
+
             NumIsFinite => num_is_finite(backend, self.arguments[0]),
 
             NumAtan => match self.ret_layout {

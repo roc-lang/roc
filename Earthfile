@@ -17,9 +17,9 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # editor
     RUN apt -y install libxkbcommon-dev
     # zig
-    RUN wget -c https://ziglang.org/download/0.8.0/zig-linux-x86_64-0.8.0.tar.xz --no-check-certificate
-    RUN tar -xf zig-linux-x86_64-0.8.0.tar.xz
-    RUN ln -s /earthbuild/zig-linux-x86_64-0.8.0/zig /bin/zig
+    RUN wget -c https://ziglang.org/download/0.9.1/zig-linux-x86_64-0.9.1.tar.xz --no-check-certificate
+    RUN tar -xf zig-linux-x86_64-0.9.1.tar.xz
+    RUN ln -s /earthbuild/zig-linux-x86_64-0.9.1/zig /bin/zig
     # zig builtins wasm tests
     RUN apt -y install build-essential
     RUN cargo install wasmer-cli --features "singlepass"
@@ -27,11 +27,10 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN apt -y install lsb-release software-properties-common gnupg
     RUN wget https://apt.llvm.org/llvm.sh
     RUN chmod +x llvm.sh
-    RUN ./llvm.sh 12
-    RUN ln -s /usr/bin/clang-12 /usr/bin/clang
-    RUN ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
+    RUN ./llvm.sh 13
+    RUN ln -s /usr/bin/clang-13 /usr/bin/clang
     # use lld as linker
-    RUN ln -s /usr/bin/lld-12 /usr/bin/ld.lld
+    RUN ln -s /usr/bin/lld-13 /usr/bin/ld.lld
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     # valgrind
     RUN apt -y install valgrind
@@ -54,7 +53,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir cli cli_utils compiler docs editor ast code_markup error_macros highlight utils test_utils reporting repl_cli repl_eval repl_test repl_wasm repl_www roc_std vendor examples linker Cargo.toml Cargo.lock version.txt www wasi-libc-sys ./
+    COPY --dir bindgen cli cli_utils compiler docs editor ast code_markup error_macros highlight utils test_utils reporting repl_cli repl_eval repl_test repl_wasm repl_www roc_std vendor examples linker Cargo.toml Cargo.lock version.txt www wasi-libc-sys ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt

@@ -191,6 +191,36 @@ pub struct AliasCommon {
     pub lambda_set_variables: Vec<LambdaSet>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct OptAbleVar {
+    pub var: Variable,
+    pub opt_ability: Option<Symbol>,
+}
+
+impl OptAbleVar {
+    pub fn unbound(var: Variable) -> Self {
+        Self {
+            var,
+            opt_ability: None,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub struct OptAbleType {
+    pub typ: Type,
+    pub opt_ability: Option<Symbol>,
+}
+
+impl OptAbleType {
+    pub fn unbound(typ: Type) -> Self {
+        Self {
+            typ,
+            opt_ability: None,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq)]
 pub enum Type {
     EmptyRec,
@@ -208,7 +238,7 @@ pub enum Type {
     DelayedAlias(AliasCommon),
     Alias {
         symbol: Symbol,
-        type_arguments: Vec<Type>,
+        type_arguments: Vec<OptAbleType>,
         lambda_set_variables: Vec<LambdaSet>,
         actual: Box<Type>,
         kind: AliasKind,
@@ -296,6 +326,16 @@ impl Clone for Type {
             Self::Variable(arg0) => Self::Variable(*arg0),
             Self::RangedNumber(arg0, arg1) => Self::RangedNumber(arg0.clone(), arg1.clone()),
             Self::Erroneous(arg0) => Self::Erroneous(arg0.clone()),
+        }
+    }
+}
+
+impl Clone for OptAbleType {
+    fn clone(&self) -> Self {
+        // This passes through `Type`, so defer to that to bump the clone counter.
+        Self {
+            typ: self.typ.clone(),
+            opt_ability: self.opt_ability,
         }
     }
 }
@@ -410,7 +450,10 @@ impl fmt::Debug for Type {
                 write!(f, "(Alias {:?}", symbol)?;
 
                 for arg in type_arguments {
-                    write!(f, " {:?}", arg)?;
+                    write!(f, " {:?}", &arg.typ)?;
+                    if let Some(ab) = arg.opt_ability {
+                        write!(f, ":{:?}", ab)?;
+                    }
                 }
 
                 for (lambda_set, greek_letter) in
@@ -709,7 +752,7 @@ impl Type {
                     ..
                 } => {
                     for value in type_arguments.iter_mut() {
-                        stack.push(value);
+                        stack.push(&mut value.typ);
                     }
 
                     for lambda_set in lambda_set_variables.iter_mut() {
@@ -818,7 +861,7 @@ impl Type {
                     ..
                 } => {
                     for value in type_arguments.iter_mut() {
-                        stack.push(value);
+                        stack.push(&mut value.typ);
                     }
                     for lambda_set in lambda_set_variables.iter_mut() {
                         stack.push(lambda_set.as_inner_mut());
@@ -915,7 +958,7 @@ impl Type {
                 ..
             } => {
                 for ta in type_arguments {
-                    ta.substitute_alias(rep_symbol, rep_args, actual)?;
+                    ta.typ.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
                 alias_actual.substitute_alias(rep_symbol, rep_args, actual)
             }
@@ -1140,15 +1183,35 @@ impl Type {
                 lambda_set_variables,
                 actual: actual_type,
                 ..
+            } => {
+                for arg in type_args {
+                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                }
+
+                for arg in lambda_set_variables {
+                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                }
+
+                actual_type.instantiate_aliases(
+                    region,
+                    aliases,
+                    var_store,
+                    new_lambda_set_variables,
+                );
             }
-            | Alias {
+            Alias {
                 type_arguments: type_args,
                 lambda_set_variables,
                 actual: actual_type,
                 ..
             } => {
                 for arg in type_args {
-                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    arg.typ.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                    );
                 }
 
                 for arg in lambda_set_variables {
@@ -1210,7 +1273,12 @@ impl Type {
                         // TODO substitute further in args
                         for (
                             Loc {
-                                value: (_, placeholder),
+                                value:
+                                    AliasVar {
+                                        var: placeholder,
+                                        opt_bound_ability,
+                                        ..
+                                    },
                                 ..
                             },
                             filler,
@@ -1223,7 +1291,10 @@ impl Type {
                                 var_store,
                                 new_lambda_set_variables,
                             );
-                            named_args.push(filler.clone());
+                            named_args.push(OptAbleType {
+                                typ: filler.clone(),
+                                opt_ability: *opt_bound_ability,
+                            });
                             substitution.insert(*placeholder, filler);
                         }
 
@@ -1509,7 +1580,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             ..
         } => {
             for arg in type_arguments {
-                variables_help(arg, accum);
+                variables_help(&arg.typ, accum);
             }
             variables_help(actual, accum);
         }
@@ -1645,7 +1716,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             ..
         } => {
             for arg in type_arguments {
-                variables_help_detailed(arg, accum);
+                variables_help_detailed(&arg.typ, accum);
             }
             variables_help_detailed(actual, accum);
         }
@@ -1863,9 +1934,36 @@ pub enum AliasKind {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct AliasVar {
+    pub name: Lowercase,
+    pub var: Variable,
+    /// `Some` if this variable is bound to an ability; `None` otherwise.
+    pub opt_bound_ability: Option<Symbol>,
+}
+
+impl AliasVar {
+    pub fn unbound(name: Lowercase, var: Variable) -> AliasVar {
+        Self {
+            name,
+            var,
+            opt_bound_ability: None,
+        }
+    }
+}
+
+impl From<&AliasVar> for OptAbleVar {
+    fn from(av: &AliasVar) -> OptAbleVar {
+        OptAbleVar {
+            var: av.var,
+            opt_ability: av.opt_bound_ability,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Alias {
     pub region: Region,
-    pub type_variables: Vec<Loc<(Lowercase, Variable)>>,
+    pub type_variables: Vec<Loc<AliasVar>>,
 
     /// lambda set variables, e.g. the one annotating the arrow in
     /// a |c|-> b

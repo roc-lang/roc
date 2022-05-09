@@ -18,7 +18,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    AliasKind, AnnotationSource, Category, PReason, Reason, RecordField, TypeExtension,
+    AliasKind, AnnotationSource, Category, OptAbleType, PReason, Reason, RecordField, TypeExtension,
 };
 
 /// This is for constraining Defs
@@ -258,7 +258,7 @@ pub fn constrain_expr(
             let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
-            let opt_symbol = if let Var(symbol) = loc_fn.value {
+            let opt_symbol = if let Var(symbol) | AbilityMember(symbol, _) = loc_fn.value {
                 Some(symbol)
             } else {
                 None
@@ -335,6 +335,11 @@ pub fn constrain_expr(
         Var(symbol) => {
             // make lookup constraint to lookup this symbol's type in the environment
             constraints.lookup(*symbol, expected, region)
+        }
+        AbilityMember(symbol, _specialization) => {
+            // make lookup constraint to lookup this symbol's type in the environment
+            constraints.lookup(*symbol, expected, region)
+            // TODO: consider trying to solve `_specialization` here.
         }
         Closure(ClosureData {
             function_type: fn_var,
@@ -879,7 +884,7 @@ pub fn constrain_expr(
                 cons,
             )
         }
-        LetRec(defs, loc_ret, var) => {
+        LetRec(defs, loc_ret) => {
             let body_con = constrain_expr(
                 constraints,
                 env,
@@ -888,29 +893,17 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            let cons = [
-                constrain_recursive_defs(constraints, env, defs, body_con),
-                // Record the type of tne entire def-expression in the variable.
-                // Code gen will need that later!
-                constraints.equal_types_var(
-                    *var,
-                    expected,
-                    Category::Storage(std::file!(), std::line!()),
-                    loc_ret.region,
-                ),
-            ];
-
-            constraints.exists_many([*var], cons)
+            constrain_recursive_defs(constraints, env, defs, body_con)
         }
-        LetNonRec(def, loc_ret, var) => {
+        LetNonRec(def, loc_ret) => {
             let mut stack = Vec::with_capacity(1);
 
             let mut loc_ret = loc_ret;
 
-            stack.push((def, var, loc_ret.region));
+            stack.push(def);
 
-            while let LetNonRec(def, new_loc_ret, var) = &loc_ret.value {
-                stack.push((def, var, new_loc_ret.region));
+            while let LetNonRec(def, new_loc_ret) = &loc_ret.value {
+                stack.push(def);
                 loc_ret = new_loc_ret;
             }
 
@@ -922,20 +915,8 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            while let Some((def, var, ret_region)) = stack.pop() {
-                let cons = [
-                    constrain_def(constraints, env, def, body_con),
-                    // Record the type of the entire def-expression in the variable.
-                    // Code gen will need that later!
-                    constraints.equal_types_var(
-                        *var,
-                        expected.clone(),
-                        Category::Storage(std::file!(), std::line!()),
-                        ret_region,
-                    ),
-                ];
-
-                body_con = constraints.exists_many([*var], cons)
+            while let Some(def) = stack.pop() {
+                body_con = constrain_def(constraints, env, def, body_con)
             }
 
             body_con
@@ -1022,7 +1003,13 @@ pub fn constrain_expr(
 
             let opaque_type = Type::Alias {
                 symbol: *name,
-                type_arguments: type_arguments.iter().copied().map(Type::Variable).collect(),
+                type_arguments: type_arguments
+                    .iter()
+                    .map(|v| OptAbleType {
+                        typ: Type::Variable(v.var),
+                        opt_ability: v.opt_ability,
+                    })
+                    .collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: Box::new(arg_type.clone()),
                 kind: AliasKind::Opaque,
@@ -1059,7 +1046,7 @@ pub fn constrain_expr(
 
             let mut vars = vec![*arg_var, *opaque_var];
             // Also add the fresh variables we created for the type argument and lambda sets
-            vars.extend(type_arguments);
+            vars.extend(type_arguments.iter().map(|v| v.var));
             vars.extend(lambda_set_variables.iter().map(|v| {
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));
@@ -1495,8 +1482,8 @@ fn constrain_typed_def(
 
             constrain_def_make_constraint(
                 constraints,
-                new_rigid_variables,
-                new_infer_variables,
+                new_rigid_variables.into_iter(),
+                new_infer_variables.into_iter(),
                 expr_con,
                 body_con,
                 def_pattern_state,
@@ -1530,8 +1517,8 @@ fn constrain_typed_def(
 
             constrain_def_make_constraint(
                 constraints,
-                new_rigid_variables,
-                new_infer_variables,
+                new_rigid_variables.into_iter(),
+                new_infer_variables.into_iter(),
                 expr_con,
                 body_con,
                 def_pattern_state,
@@ -1696,8 +1683,8 @@ fn constrain_def(
 
             constrain_def_make_constraint(
                 constraints,
-                vec![],
-                vec![],
+                std::iter::empty(),
+                std::iter::empty(),
                 expr_con,
                 body_con,
                 def_pattern_state,
@@ -1708,8 +1695,8 @@ fn constrain_def(
 
 pub fn constrain_def_make_constraint(
     constraints: &mut Constraints,
-    new_rigid_variables: Vec<Variable>,
-    new_infer_variables: Vec<Variable>,
+    new_rigid_variables: impl Iterator<Item = Variable>,
+    new_infer_variables: impl Iterator<Item = Variable>,
     expr_con: Constraint,
     body_con: Constraint,
     def_pattern_state: PatternState,

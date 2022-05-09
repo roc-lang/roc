@@ -1648,7 +1648,7 @@ fn floor() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn pow_int() {
     assert_evals_to!("Num.powInt 2 3", 8, i64);
 }
