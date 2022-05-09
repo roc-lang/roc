@@ -3,7 +3,7 @@ use crate::builtins::{
 };
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
-use roc_can::constraint::{Constraint, Constraints};
+use roc_can::constraint::{Constraint, Constraints, OpportunisticResolve};
 use roc_can::def::{Declaration, Def};
 use roc_can::exhaustive::{sketch_pattern_to_rows, sketch_when_branches, ExhaustiveContext};
 use roc_can::expected::Expected::{self, *};
@@ -12,6 +12,7 @@ use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{AccessorData, AnnotatedMark, ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
+use roc_collections::KnownSizeIterator;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -40,16 +41,16 @@ impl Info {
 }
 
 pub struct Env {
-    /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
     /// for example `a` in the annotation `identity : a -> a`, we add it to this
     /// map so that expressions within that annotation can share these vars.
     pub rigids: MutMap<Lowercase, Variable>,
+    pub resolutions_to_make: Vec<OpportunisticResolve>,
     pub home: ModuleId,
 }
 
 fn constrain_untyped_args(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     closure_type: Type,
     return_type: Type,
@@ -88,7 +89,7 @@ fn constrain_untyped_args(
 
 pub fn constrain_expr(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     region: Region,
     expr: &Expr,
     expected: Expected<Type>,
@@ -258,7 +259,7 @@ pub fn constrain_expr(
             let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
-            let opt_symbol = if let Var(symbol) | AbilityMember(symbol, _) = loc_fn.value {
+            let opt_symbol = if let Var(symbol) | AbilityMember(symbol, _, _) = loc_fn.value {
                 Some(symbol)
             } else {
                 None
@@ -336,10 +337,31 @@ pub fn constrain_expr(
             // make lookup constraint to lookup this symbol's type in the environment
             constraints.lookup(*symbol, expected, region)
         }
-        AbilityMember(symbol, _specialization) => {
+        &AbilityMember(symbol, specialization_id, specialization_var) => {
             // make lookup constraint to lookup this symbol's type in the environment
-            constraints.lookup(*symbol, expected, region)
-            // TODO: consider trying to solve `_specialization` here.
+            let store_expected = constraints.equal_types_var(
+                specialization_var,
+                expected,
+                Category::Storage(file!(), line!()),
+                region,
+            );
+            let lookup_constr = constraints.lookup(
+                symbol,
+                Expected::NoExpectation(Type::Variable(specialization_var)),
+                region,
+            );
+
+            // Make sure we attempt to resolve the specialization.
+            env.resolutions_to_make.push(OpportunisticResolve {
+                specialization_variable: specialization_var,
+                specialization_expectation: constraints.push_expected_type(
+                    Expected::NoExpectation(Type::Variable(specialization_var)),
+                ),
+                member: symbol,
+                specialization_id,
+            });
+
+            constraints.and_constraint([store_expected, lookup_constr])
         }
         Closure(ClosureData {
             function_type: fn_var,
@@ -799,16 +821,8 @@ pub fn constrain_expr(
                 region,
             );
 
-            let constraint = constrain_expr(
-                constraints,
-                &Env {
-                    home: env.home,
-                    rigids: MutMap::default(),
-                },
-                region,
-                &loc_expr.value,
-                record_expected,
-            );
+            let constraint =
+                constrain_expr(constraints, env, region, &loc_expr.value, record_expected);
 
             let eq = constraints.equal_types_var(field_var, expected, category, region);
             constraints.exists_many(
@@ -1142,7 +1156,7 @@ pub fn constrain_expr(
 #[inline(always)]
 fn constrain_when_branch_help(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     region: Region,
     when_branch: &WhenBranch,
     pattern_expected: impl Fn(HumanIndex, Region) -> PExpected<Type>,
@@ -1222,7 +1236,7 @@ fn constrain_when_branch_help(
 
 fn constrain_field(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     field_var: Variable,
     loc_expr: &Loc<Expr>,
 ) -> (Type, Constraint) {
@@ -1260,6 +1274,7 @@ pub fn constrain_decls(
     let mut env = Env {
         home,
         rigids: MutMap::default(),
+        resolutions_to_make: vec![],
     };
 
     for decl in decls.iter().rev() {
@@ -1269,16 +1284,21 @@ pub fn constrain_decls(
 
         match decl {
             Declaration::Declare(def) | Declaration::Builtin(def) => {
-                constraint = constrain_def(constraints, &env, def, constraint);
+                constraint = constrain_def(constraints, &mut env, def, constraint);
             }
             Declaration::DeclareRec(defs) => {
-                constraint = constrain_recursive_defs(constraints, &env, defs, constraint);
+                constraint = constrain_recursive_defs(constraints, &mut env, defs, constraint);
             }
             Declaration::InvalidCycle(_) => {
                 // invalid cycles give a canonicalization error. we skip them here.
                 continue;
             }
         }
+
+        debug_assert!(
+            env.resolutions_to_make.is_empty(),
+            "Resolutions not attached after def!"
+        );
     }
 
     // this assert make the "root" of the constraint wasn't dropped
@@ -1289,7 +1309,7 @@ pub fn constrain_decls(
 
 pub fn constrain_def_pattern(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     loc_pattern: &Loc<Pattern>,
     expr_type: Type,
 ) -> PatternState {
@@ -1317,7 +1337,7 @@ pub fn constrain_def_pattern(
 /// Generate constraints for a definition with a type signature
 fn constrain_typed_def(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     def: &Def,
     body_con: Constraint,
     annotation: &roc_can::def::Annotation,
@@ -1346,8 +1366,9 @@ fn constrain_typed_def(
         &mut def_pattern_state.headers,
     );
 
-    let env = &Env {
+    let env = &mut Env {
         home: env.home,
+        resolutions_to_make: vec![],
         rigids: ftv,
     };
 
@@ -1445,6 +1466,7 @@ fn constrain_typed_def(
                 &loc_body_expr.value,
                 body_type,
             );
+            let ret_constraint = attach_resolution_constraints(constraints, env, ret_constraint);
 
             vars.push(*fn_var);
             let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
@@ -1507,6 +1529,7 @@ fn constrain_typed_def(
                 &def.loc_expr.value,
                 annotation_expected,
             );
+            let ret_constraint = attach_resolution_constraints(constraints, env, ret_constraint);
 
             let cons = [
                 ret_constraint,
@@ -1529,7 +1552,7 @@ fn constrain_typed_def(
 
 fn constrain_typed_function_arguments(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     def: &Def,
     def_pattern_state: &mut PatternState,
     argument_pattern_state: &mut PatternState,
@@ -1655,9 +1678,21 @@ fn constrain_typed_function_arguments(
     }
 }
 
+fn attach_resolution_constraints(
+    constraints: &mut Constraints,
+    env: &mut Env,
+    constraint: Constraint,
+) -> Constraint {
+    let resolution_constrs = env.resolutions_to_make.drain(..).map(Constraint::Resolve);
+    constraints.and_constraint(KnownSizeIterator::from_2(
+        std::iter::once(constraint),
+        resolution_constrs,
+    ))
+}
+
 fn constrain_def(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     def: &Def,
     body_con: Constraint,
 ) -> Constraint {
@@ -1680,6 +1715,7 @@ fn constrain_def(
                 &def.loc_expr.value,
                 NoExpectation(expr_type),
             );
+            let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
             constrain_def_make_constraint(
                 constraints,
@@ -1846,7 +1882,7 @@ fn instantiate_rigids(
 
 fn constrain_recursive_defs(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     defs: &[Def],
     body_con: Constraint,
 ) -> Constraint {
@@ -1862,7 +1898,7 @@ fn constrain_recursive_defs(
 
 pub fn rec_defs_help(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     defs: &[Def],
     body_con: Constraint,
     mut rigid_info: Info,
@@ -1886,6 +1922,7 @@ pub fn rec_defs_help(
                     &def.loc_expr.value,
                     NoExpectation(expr_type),
                 );
+                let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
                 let def_con = expr_con;
 
@@ -1998,6 +2035,7 @@ pub fn rec_defs_help(
                             &loc_body_expr.value,
                             body_type,
                         );
+                        let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
                         vars.push(*fn_var);
 
@@ -2059,6 +2097,8 @@ pub fn rec_defs_help(
                             &def.loc_expr.value,
                             expected,
                         );
+                        let ret_constraint =
+                            attach_resolution_constraints(constraints, env, ret_constraint);
 
                         let cons = [
                             ret_constraint,
@@ -2119,7 +2159,7 @@ pub fn rec_defs_help(
 #[inline(always)]
 fn constrain_field_update(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     var: Variable,
     region: Region,
     field: Lowercase,

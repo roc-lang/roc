@@ -1,3 +1,4 @@
+use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
 use roc_collections::soa::{EitherIndex, Index, Slice};
@@ -580,7 +581,8 @@ impl Constraints {
             | Constraint::IsOpenType(_)
             | Constraint::IncludesTag(_)
             | Constraint::PatternPresence(_, _, _, _)
-            | Constraint::Exhaustive { .. } => false,
+            | Constraint::Exhaustive { .. }
+            | Constraint::Resolve(..) => false,
         }
     }
 
@@ -664,6 +666,31 @@ pub struct PatternEq(
     pub Region,
 );
 
+/// When we come across a lookup of an ability member, we'd like to try to specialize that
+/// lookup during solving (knowing the specialization statically avoids re-solving during mono,
+/// and always gives us a way to show what specialization was intended in the editor).
+///
+/// However, we attempting to resolve the specialization right at the lookup site is futile
+/// (we may not have solved enough of the surrounding context to know the specialization).
+/// So, we only collect what resolutions we'd like to make, and attempt to resolve them once
+/// we pass through a let-binding (a def, or a normal `=` binding). At those positions, the
+/// expression is generalized, so if there is a static specialization, we'd know it at that
+/// point.
+///
+/// Note that this entirely opportunistic; if a lookup of an ability member uses it
+/// polymorphically, we won't find its specialization(s) until monomorphization.
+#[derive(Clone, Copy, Debug)]
+pub struct OpportunisticResolve {
+    /// The specialized type of this lookup, to try to resolve.
+    pub specialization_variable: Variable,
+    pub specialization_expectation: Index<Expected<Type>>,
+
+    /// The ability member to try to resolve.
+    pub member: Symbol,
+    /// If we resolve a specialization, what specialization ID to store it on.
+    pub specialization_id: SpecializationId,
+}
+
 #[derive(Clone, Copy)]
 pub enum Constraint {
     Eq(Eq),
@@ -705,6 +732,8 @@ pub enum Constraint {
         ExhaustiveContext,
         ExhaustiveMark,
     ),
+    /// Attempt to resolve a specialization.
+    Resolve(OpportunisticResolve),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -765,6 +794,9 @@ impl std::fmt::Debug for Constraint {
                     "Exhaustive({:?}, {:?}, {:?}, {:?})",
                     arg0, arg1, arg2, arg3
                 )
+            }
+            Self::Resolve(arg0) => {
+                write!(f, "Resolve({:?})", arg0)
             }
         }
     }

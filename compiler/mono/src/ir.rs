@@ -2810,7 +2810,7 @@ fn resolve_abilities_in_specialized_body<'a>(
                     // So, we'll resolve any nested abilities when we know their specialized type
                     // during def construction.
                 }
-                Expr::AbilityMember(member_sym, specialization_id) => {
+                Expr::AbilityMember(member_sym, specialization_id, _specialization_var) => {
                     if self
                         .abilities_store
                         .get_resolved(*specialization_id)
@@ -3858,7 +3858,7 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
-        AbilityMember(_member, specialization_id) => {
+        AbilityMember(_member, specialization_id, _) => {
             let specialization_symbol = env
                 .abilities_store
                 .get_resolved(specialization_id)
@@ -4732,7 +4732,7 @@ pub fn with_hole<'a>(
                         hole,
                     )
                 }
-                roc_can::expr::Expr::AbilityMember(_, specialization_id) => {
+                roc_can::expr::Expr::AbilityMember(_, specialization_id, _) => {
                     let proc_name = env.abilities_store.get_resolved(specialization_id).expect(
                         "Ability specialization is unknown - code generation cannot proceed!",
                     );
@@ -6961,7 +6961,7 @@ fn can_reuse_symbol<'a>(
     use ReuseSymbol::*;
 
     let symbol = match expr {
-        AbilityMember(_, specialization_id) => env
+        AbilityMember(_, specialization_id, _) => env
             .abilities_store
             .get_resolved(*specialization_id)
             .expect("Specialization must be known!"),

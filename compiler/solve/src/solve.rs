@@ -1,8 +1,11 @@
-use crate::ability::{type_implementing_member, AbilityImplError, DeferredMustImplementAbility};
+use crate::ability::{
+    resolve_ability_specialization, type_implementing_member, AbilityImplError,
+    DeferredMustImplementAbility,
+};
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
 use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::{Constraints, LetConstraint};
+use roc_can::constraint::{Constraints, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
 use roc_debug_flags::{dbg_do, ROC_VERIFY_RIGID_LET_GENERALIZED};
@@ -1363,6 +1366,35 @@ fn solve(
 
                 state
             }
+            &Resolve(OpportunisticResolve {
+                specialization_variable,
+                specialization_expectation,
+                member,
+                specialization_id,
+            }) => {
+                if let Some(specialization) = resolve_ability_specialization(
+                    subs,
+                    abilities_store,
+                    member,
+                    specialization_variable,
+                ) {
+                    abilities_store.insert_resolved(specialization_id, specialization);
+
+                    // We must now refine the current type state to account for this specialization.
+                    let lookup_constr = arena.alloc(Constraint::Lookup(
+                        specialization,
+                        specialization_expectation,
+                        Region::zero(),
+                    ));
+                    stack.push(Work::Constraint {
+                        env,
+                        rank,
+                        constraint: lookup_constr,
+                    });
+                }
+
+                state
+            }
         };
     }
 
@@ -1473,7 +1505,8 @@ fn check_ability_specialization(
                 // First, figure out and register for what type does this symbol specialize
                 // the ability member.
                 let specialization_type =
-                    type_implementing_member(&must_implement_ability, root_data.parent_ability);
+                    type_implementing_member(&must_implement_ability, root_data.parent_ability)
+                        .expect("checked in previous branch");
                 let specialization = MemberSpecialization {
                     symbol,
                     region: symbol_loc_var.region,
