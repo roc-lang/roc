@@ -64,10 +64,10 @@ fn record_aliased() {
         "#
     );
 
-    let bindings_rust = generate_bindings(module);
-
     assert_eq!(
-        bindings_rust.strip_prefix("\n").unwrap(),
+        generate_bindings(module)
+            .strip_prefix("\n")
+            .unwrap_or_default(),
         indoc!(
             r#"
                 #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
@@ -94,10 +94,10 @@ fn nested_record_aliased() {
         "#
     );
 
-    let bindings_rust = generate_bindings(module);
-
     assert_eq!(
-        bindings_rust.strip_prefix("\n").unwrap(),
+        generate_bindings(module)
+            .strip_prefix("\n")
+            .unwrap_or_default(),
         indoc!(
             r#"
                 #[derive(Clone, PartialEq, PartialOrd, Default, Debug)]
@@ -122,10 +122,11 @@ fn nested_record_aliased() {
 #[test]
 fn record_anonymous() {
     let module = "main = { a: 1u64, b: 2u128 }";
-    let bindings_rust = generate_bindings(module);
 
     assert_eq!(
-        bindings_rust.strip_prefix("\n").unwrap(),
+        generate_bindings(module)
+            .strip_prefix("\n")
+            .unwrap_or_default(),
         indoc!(
             r#"
                 #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
@@ -142,10 +143,11 @@ fn record_anonymous() {
 #[test]
 fn nested_record_anonymous() {
     let module = r#"main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }"#;
-    let bindings_rust = generate_bindings(module);
 
     assert_eq!(
-        bindings_rust.strip_prefix("\n").unwrap(),
+        generate_bindings(module)
+            .strip_prefix("\n")
+            .unwrap_or_default(),
         indoc!(
             r#"
                 #[derive(Clone, PartialEq, PartialOrd, Default, Debug)]
@@ -179,10 +181,10 @@ fn tag_union_aliased() {
         "#
     );
 
-    let bindings_rust = generate_bindings(module);
-
     assert_eq!(
-        bindings_rust.strip_prefix("\n").unwrap(),
+        generate_bindings(module)
+            .strip_prefix("\n")
+            .unwrap_or_default(),
         indoc!(
             r#"
                 #[repr(C)]
