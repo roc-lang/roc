@@ -2644,12 +2644,13 @@ impl RecordFields {
             field_types_start,
         }
     }
+
     #[inline(always)]
     pub fn unsorted_iterator<'a>(
         &'a self,
         subs: &'a Subs,
         ext: Variable,
-    ) -> Result<impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a, RecordFieldsError>
+    ) -> Result<impl Iterator<Item = (&'a Lowercase, RecordField<Variable>)> + 'a, RecordFieldsError>
     {
         let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext)?;
 
