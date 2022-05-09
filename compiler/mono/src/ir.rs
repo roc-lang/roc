@@ -3813,65 +3813,16 @@ pub fn with_hole<'a>(
             }
         }
         LetNonRec(def, cont) => {
-            if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
-                if matches!(def.loc_expr.value, Closure(_)) {
-                    return from_can_let(
-                        env,
-                        procs,
-                        layout_cache,
-                        def,
-                        cont,
-                        variable,
-                        Some((assigned, hole)),
-                    );
-                }
-
-                let build_rest =
-                    |env: &mut Env<'a, '_>,
-                     procs: &mut Procs<'a>,
-                     layout_cache: &mut LayoutCache<'a>| {
-                        with_hole(
-                            env,
-                            cont.value,
-                            variable,
-                            procs,
-                            layout_cache,
-                            assigned,
-                            hole,
-                        )
-                    };
-
-                // a variable is aliased
-                if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
-                    // a variable is aliased, e.g.
-                    //
-                    //  foo = bar
-                    //
-                    // or
-                    //
-                    //  foo = RBTRee.empty
-
-                    handle_variable_aliasing(
-                        env,
-                        procs,
-                        layout_cache,
-                        def.expr_var,
-                        symbol,
-                        original,
-                        build_rest,
-                    )
-                } else {
-                    let rest = build_rest(env, procs, layout_cache);
-                    with_hole(
-                        env,
-                        def.loc_expr.value,
-                        def.expr_var,
-                        procs,
-                        layout_cache,
-                        symbol,
-                        env.arena.alloc(rest),
-                    )
-                }
+            if let roc_can::pattern::Pattern::Identifier(_) = def.loc_pattern.value {
+                from_can_let(
+                    env,
+                    procs,
+                    layout_cache,
+                    def,
+                    cont,
+                    variable,
+                    Some((assigned, hole)),
+                )
             } else {
                 // this may be a destructure pattern
                 let (mono_pattern, assignments) =
