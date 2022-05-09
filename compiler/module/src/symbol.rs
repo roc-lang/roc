@@ -1020,8 +1020,8 @@ define_builtins! {
         12 NUM_F64: "F64"  // the Num.F64 type alias
         13 NUM_F32: "F32"  // the Num.F32 type alias
         14 NUM_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
-        15 NUM_MAX_FLOAT: "maxFloat"
-        16 NUM_MIN_FLOAT: "minFloat"
+        15 NUM_MAX_F32: "maxF32"
+        16 NUM_MIN_F32: "minF32"
         17 NUM_ABS: "abs"
         18 NUM_NEG: "neg"
         19 NUM_ADD: "add"
@@ -1143,6 +1143,8 @@ define_builtins! {
         135 NUM_TO_F32_CHECKED: "toF32Checked"
         136 NUM_TO_F64: "toF64"
         137 NUM_TO_F64_CHECKED: "toF64Checked"
+        138 NUM_MAX_F64: "maxF64"
+        139 NUM_MIN_F64: "minF64"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
