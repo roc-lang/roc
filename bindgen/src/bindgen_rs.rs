@@ -39,7 +39,7 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
                     _ => {
                         if is_enumeration {
                             write_deriving(id, types, buf)?;
-                            write_enum(&name, tags.iter().map(|(name, _)| name), *tag_bytes, buf)?;
+                            write_enum(name, tags.iter().map(|(name, _)| name), *tag_bytes, buf)?;
                         } else {
                             todo!();
                         }
@@ -83,10 +83,10 @@ fn write_enum<I: IntoIterator<Item = S>, S: AsRef<str>>(
     buf: &mut String,
 ) -> fmt::Result {
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
-    write!(buf, "#[repr(u{})]\npub enum {} {{\n", tag_bytes * 8, name)?;
+    writeln!(buf, "#[repr(u{})]\npub enum {} {{", tag_bytes * 8, name)?;
 
     for name in tags {
-        write!(buf, "{}{},\n", INDENT, name.as_ref())?;
+        writeln!(buf, "{}{},", INDENT, name.as_ref())?;
     }
 
     buf.write_str("}\n")
