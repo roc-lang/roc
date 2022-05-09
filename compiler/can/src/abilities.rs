@@ -171,10 +171,12 @@ impl AbilitiesStore {
         self.ability_members.get(&member)
     }
 
-    /// Returns an iterator over pairs (ability member, type) specifying that
-    /// "ability member" has a specialization with type "type".
-    pub fn get_known_specializations(&self) -> impl Iterator<Item = (Symbol, Symbol)> + '_ {
-        self.declared_specializations.keys().copied()
+    /// Returns an iterator over pairs ((ability member, type), specialization) specifying that
+    /// "ability member" has a "specialization" for type "type".
+    pub fn iter_specializations(
+        &self,
+    ) -> impl Iterator<Item = ((Symbol, Symbol), MemberSpecialization)> + '_ {
+        self.declared_specializations.iter().map(|(k, v)| (*k, *v))
     }
 
     /// Retrieves the specialization of `member` for `typ`, if it exists.
