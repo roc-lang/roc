@@ -32,7 +32,7 @@ pub struct MemberSpecialization {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SpecializationId(u64);
+pub struct SpecializationId(u32);
 
 #[allow(clippy::derivable_impls)] // let's be explicit about this
 impl Default for SpecializationId {
@@ -68,7 +68,7 @@ pub struct AbilitiesStore {
     /// member `member`, to the exact symbol that implements the ability.
     declared_specializations: MutMap<(Symbol, Symbol), MemberSpecialization>,
 
-    next_specialization_id: u64,
+    next_specialization_id: u32,
 
     /// Resolved specializations for a symbol. These might be ephemeral (known due to type solving),
     /// or resolved on-the-fly during mono.
@@ -189,7 +189,7 @@ impl AbilitiesStore {
     }
 
     pub fn fresh_specialization_id(&mut self) -> SpecializationId {
-        debug_assert!(self.next_specialization_id != std::u64::MAX);
+        debug_assert!(self.next_specialization_id != std::u32::MAX);
 
         let id = SpecializationId(self.next_specialization_id);
         self.next_specialization_id += 1;
