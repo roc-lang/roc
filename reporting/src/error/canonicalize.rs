@@ -200,7 +200,7 @@ pub fn can_problem<'b>(
                 WhenBranch => unreachable!("all patterns are allowed in a When"),
             };
 
-            let suggestion = vec![
+            let suggestion = [
                 alloc.reflow(
                     "Patterns like this don't cover all possible shapes of the input type. Use a ",
                 ),
@@ -685,10 +685,10 @@ pub fn can_problem<'b>(
         }
 
         Problem::AbilityNotOnToplevel { region } => {
-            doc = alloc.stack(vec![
-                alloc.concat(vec![alloc.reflow(
-                    "This ability definition is not on the top-level of a module:",
-                )]),
+            doc = alloc.stack([
+                alloc
+                    .concat([alloc
+                        .reflow("This ability definition is not on the top-level of a module:")]),
                 alloc.region(lines.convert_region(region)),
                 alloc.reflow("Abilities can only be defined on the top-level of a Roc module."),
             ]);
@@ -697,8 +697,8 @@ pub fn can_problem<'b>(
         }
 
         Problem::AbilityUsedAsType(suggested_var_name, ability, region) => {
-            doc = alloc.stack(vec![
-                alloc.concat(vec![
+            doc = alloc.stack([
+                alloc.concat([
                     alloc.reflow("You are attempting to use the ability "),
                     alloc.symbol_unqualified(ability),
                     alloc.reflow(" as a type directly:"),
@@ -712,7 +712,7 @@ pub fn can_problem<'b>(
                     .append(alloc.reflow("Perhaps you meant to include a "))
                     .append(alloc.keyword("has"))
                     .append(alloc.reflow(" annotation, like")),
-                alloc.type_block(alloc.concat(vec![
+                alloc.type_block(alloc.concat([
                     alloc.type_variable(suggested_var_name),
                     alloc.space(),
                     alloc.keyword("has"),
