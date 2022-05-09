@@ -52,7 +52,7 @@ wasmer = { version = "2.2.1", default-features = false, features = ["cranelift",
 
 [features]
 default = ["gen-llvm"]
-gen-llvm = ["roc_build/llvm"]
+gen-llvm = []
 gen-dev = []
 gen-wasm = []
 wasm-cli-run = []
