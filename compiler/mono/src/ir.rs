@@ -2082,15 +2082,26 @@ fn from_can_let<'a>(
     def: Box<roc_can::def::Def>,
     cont: Box<Loc<roc_can::expr::Expr>>,
     variable: Variable,
-    hole: Option<Stmt<'a>>,
+    opt_assigned_and_hole: Option<(Symbol, &'a Stmt<'a>)>,
 ) -> Stmt<'a> {
     use roc_can::expr::Expr::*;
 
     macro_rules! lower_rest {
         ($variable:expr, $expr:expr) => {
-            match hole {
-                None => from_can(env, $variable, $expr, procs, layout_cache),
-                Some(_) => unreachable!(),
+            lower_rest!(env, procs, layout_cache, $variable, $expr)
+        };
+        ($env:expr, $procs:expr, $layout_cache:expr, $variable:expr, $expr:expr) => {
+            match opt_assigned_and_hole {
+                None => from_can($env, $variable, $expr, $procs, $layout_cache),
+                Some((assigned, hole)) => with_hole(
+                    $env,
+                    $expr,
+                    $variable,
+                    $procs,
+                    $layout_cache,
+                    assigned,
+                    hole,
+                ),
             }
         };
     }
@@ -2129,7 +2140,7 @@ fn from_can_let<'a>(
                     |env: &mut Env<'a, '_>,
                      procs: &mut Procs<'a>,
                      layout_cache: &mut LayoutCache<'a>| {
-                        from_can(env, def.expr_var, cont.value, procs, layout_cache)
+                        lower_rest!(env, procs, layout_cache, variable, cont.value)
                     };
 
                 return handle_variable_aliasing(
@@ -3803,17 +3814,15 @@ pub fn with_hole<'a>(
         }
         LetNonRec(def, cont) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
-                if let Closure(closure_data) = def.loc_expr.value {
-                    register_noncapturing_closure(env, procs, symbol, closure_data);
-
-                    return with_hole(
+                if matches!(def.loc_expr.value, Closure(_)) {
+                    return from_can_let(
                         env,
-                        cont.value,
-                        variable,
                         procs,
                         layout_cache,
-                        assigned,
-                        hole,
+                        def,
+                        cont,
+                        variable,
+                        Some((assigned, hole)),
                     );
                 }
 
