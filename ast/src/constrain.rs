@@ -1845,7 +1845,7 @@ fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
     let num_num_id = pool.add(num_num_type);
 
     Type2::Alias(
-        Symbol::NUM_FLOAT,
+        Symbol::NUM_FRAC,
         PoolVec::new(vec![range].into_iter(), pool),
         num_num_id,
     )

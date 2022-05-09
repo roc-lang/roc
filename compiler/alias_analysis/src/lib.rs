@@ -1272,7 +1272,7 @@ fn lowlevel_spec(
 
             builder.add_sub_block(block, sub_block)
         }
-        NumToFloat => {
+        NumToFrac => {
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
         }

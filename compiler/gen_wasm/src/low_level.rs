@@ -582,7 +582,7 @@ impl<'a> LowLevelCall<'a> {
             NumCos => todo!("{:?}", self.lowlevel),
             NumSqrtUnchecked => todo!("{:?}", self.lowlevel),
             NumLogUnchecked => todo!("{:?}", self.lowlevel),
-            NumToFloat => {
+            NumToFrac => {
                 self.load_args(backend);
                 let ret_type = CodeGenNumType::from(self.ret_layout);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);

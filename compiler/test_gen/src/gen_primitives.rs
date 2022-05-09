@@ -328,7 +328,7 @@ fn return_unnamed_fn() {
         indoc!(
             r#"
             wrapper = \{} ->
-                alwaysFloatIdentity : Int * -> (Float a -> Float a)
+                alwaysFloatIdentity : Int * -> (Frac a -> Frac a)
                 alwaysFloatIdentity = \_ ->
                     (\a -> a)
 
@@ -1820,7 +1820,7 @@ fn unified_empty_closure_bool() {
                     A -> (\_ -> 3.14)
                     B -> (\_ -> 3.14)
 
-            main : Float *
+            main : Frac *
             main =
                 (foo {}) 0
             "#
@@ -1846,7 +1846,7 @@ fn unified_empty_closure_byte() {
                     B -> (\_ -> 3.14)
                     C -> (\_ -> 3.14)
 
-            main : Float *
+            main : Frac *
             main =
                 (foo {}) 0
             "#
@@ -1890,7 +1890,7 @@ fn task_always_twice() {
                         Ok x -> transform x
                         Err e -> fail e
 
-            main : Task {} (Float *)
+            main : Task {} (Frac *)
             main = after (always "foo") (\_ -> always {})
 
             "#
@@ -1921,7 +1921,7 @@ fn wildcard_rigid() {
                 @Effect inner
 
 
-            main : Task {} (Float *)
+            main : Task {} (Frac *)
             main = always {}
             "#
         ),
@@ -1950,7 +1950,7 @@ fn alias_of_alias_with_type_arguments() {
                 @Effect inner
 
 
-            main : Task {} (Float *)
+            main : Task {} (Frac *)
             main = always {}
             "#
         ),
@@ -1982,7 +1982,7 @@ fn todo_bad_error_message() {
 
             Task a err : Effect (Result a err)
 
-            always : a -> Task a (Float *)
+            always : a -> Task a (Frac *)
             always = \x -> effectAlways (Ok x)
 
             # the problem is that this restricts to `Task {} *`
@@ -1997,7 +1997,7 @@ fn todo_bad_error_message() {
                         # but here it must be `forall b. Task b {}`
                         Err e -> fail e
 
-            main : Task {} (Float *)
+            main : Task {} (Frac *)
             main =
                 after (always "foo") (\_ -> always {})
             "#

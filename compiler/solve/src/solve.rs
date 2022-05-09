@@ -262,8 +262,8 @@ impl Aliases {
 
                 Some((num_content_var, AliasKind::Structural))
             }
-            Symbol::NUM_FLOAT => {
-                // Float range : Num (FloatingPoint range)
+            Symbol::NUM_FRAC => {
+                // Frac range : Num (FloatingPoint range)
                 //
                 // build `FloatingPoint range := range`
                 let fpoint_content_var = Self::build_num_opaque(

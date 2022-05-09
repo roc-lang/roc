@@ -1317,7 +1317,7 @@ mod test_reporting {
 
                 This `Blue` tag application has the type:
 
-                    [ Blue (Float a) ]b
+                    [ Blue (Frac a) ]b
 
                 But `f` needs the 1st argument to be:
 
@@ -1354,16 +1354,16 @@ mod test_reporting {
                 2│  x = if True then 3.14 else 4
                                      ^^^^
 
-                The 1st branch is a float of type:
+                The 1st branch is a frac of type:
 
-                    Float a
+                    Frac a
 
                 But the type annotation on `x` says it should be:
 
                     Int *
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1395,14 +1395,14 @@ mod test_reporting {
 
                 This `when` expression produces:
 
-                    Float a
+                    Frac a
 
                 But the type annotation on `x` says it should be:
 
                     Int *
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1429,16 +1429,16 @@ mod test_reporting {
                 2│  x = \_ -> 3.14
                               ^^^^
 
-                The body is a float of type:
+                The body is a frac of type:
 
-                    Float a
+                    Frac a
 
                 But the type annotation on `x` says it should be:
 
                     Int *
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1801,14 +1801,14 @@ mod test_reporting {
 
                 The body is a record of type:
 
-                    { x : Float a }
+                    { x : Frac a }
 
                 But the type annotation says it should be:
 
                     { x : Int * }
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1944,7 +1944,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : { a : Num.Int *, b : Num.Float *, c : Str }
+                x : { a : Num.Int *, b : Num.Frac *, c : Str }
                 x = { b: 4.0 }
 
                 x
@@ -1956,17 +1956,17 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│  x : { a : Num.Int *, b : Num.Float *, c : Str }
+                1│  x : { a : Num.Int *, b : Num.Frac *, c : Str }
                 2│  x = { b: 4.0 }
                         ^^^^^^^^^^
 
                 The body is a record of type:
 
-                    { b : Float a }
+                    { b : Frac a }
 
                 But the type annotation on `x` says it should be:
 
-                    { a : Int *, b : Float *, c : Str }
+                    { a : Int *, b : Frac *, c : Str }
 
                 Tip: Looks like the c and a fields are missing.
                 "#
@@ -2405,7 +2405,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn int_float() {
+    fn int_frac() {
         report_problem_as(
             indoc!(
                 r#"
@@ -2421,16 +2421,16 @@ mod test_reporting {
                 1│  0x4 + 3.14
                           ^^^^
 
-                This argument is a float of type:
+                This argument is a frac of type:
 
-                    Float a
+                    Frac a
 
                 But `add` needs the 2nd argument to be:
 
                     Num (Integer a)
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -2893,7 +2893,7 @@ mod test_reporting {
 
                 This argument is a record of type:
 
-                    { y : Float a }
+                    { y : Frac a }
 
                 But `f` needs the 1st argument to be:
 
@@ -7275,7 +7275,7 @@ I need all branches in an `if` to have the same type!
                 let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
                 let carets = "^".repeat(number.len() + $suffix.len());
                 let kind = match $suffix {
-                    "dec"|"f32"|"f64" => "a float",
+                    "dec"|"f32"|"f64" => "a frac",
                     _ => "an integer",
                 };
 

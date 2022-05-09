@@ -437,7 +437,7 @@ fn write_content<'a>(
                     write_integer(env, ctx, content, subs, buf, parens, write_parens)
                 }
 
-                Symbol::NUM_FLOAT => write_float(
+                Symbol::NUM_FRAC => write_float(
                     env,
                     ctx,
                     get_single_arg(subs, args),

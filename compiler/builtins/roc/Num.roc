@@ -3,7 +3,7 @@ interface Num
         [
             Num,
             Int,
-            Float,
+            Frac,
 
             Integer,
             FloatingPoint,
@@ -62,7 +62,7 @@ interface Num
             isZero,
             isEven,
             isOdd,
-            toFloat,
+            toFrac,
             isPositive,
             isNegative,
             rem,
@@ -158,7 +158,7 @@ interface Num
             Bool.{ Bool }
         ]
 
-## Represents a number that could be either an [Int] or a [Float].
+## Represents a number that could be either an [Int] or a [Frac].
 ##
 ## This is useful for functions that can work on either, for example #Num.add, whose type is:
 ##
@@ -173,8 +173,8 @@ interface Num
 ## technically has the type `Num (Integer *)`, so when you pass two of them to
 ## [Num.add], the answer you get is `2 : Num (Integer *)`.
 ##
-## The type [`Float a`](#Float) is defined to be an alias for `Num (Fraction a)`,
-## so `3.0 : Num (Fraction *)` is the same value as `3.0 : Float *`.
+## The type [`Frac a`](#Frac) is defined to be an alias for `Num (Fraction a)`,
+## so `3.0 : Num (Fraction *)` is the same value as `3.0 : Frac *`.
 ## Similarly, the type [`Int a`](#Int) is defined to be an alias for
 ## `Num (Integer a)`, so `2 : Num (Integer *)` is the same value as
 ## `2 : Int *`.
@@ -413,7 +413,7 @@ Int range : Num (Integer range)
 ## loops and conditionals. If you need to do performance-critical trigonometry
 ## or square roots, either [F64] or [F32] is probably a better choice than the
 ## usual default choice of [Dec], despite the precision problems they bring.
-Float range : Num (FloatingPoint range)
+Frac range : Num (FloatingPoint range)
 
 Signed128 := []
 Signed64 := []
@@ -509,7 +509,7 @@ Dec : Num (FloatingPoint Decimal)
 ##
 ## >>> Num.toStr 42
 ##
-## Only [Float] values will include a decimal point, and they will always include one.
+## Only [Frac] values will include a decimal point, and they will always include one.
 ##
 ## >>> Num.toStr 4.2
 ##
@@ -584,7 +584,7 @@ isPositive : Num a -> Bool
 ## Negative numbers are less than `0`.
 isNegative : Num a -> Bool
 
-toFloat : Num * -> Float *
+toFrac : Num * -> Frac *
 
 ## Return the absolute value of the number.
 ##
@@ -600,7 +600,7 @@ toFloat : Num * -> Float *
 ##
 ## >>> Num.abs 0.0
 ##
-## This is safe to use with any [Float], but it can cause overflow when used with certain [Int] values.
+## This is safe to use with any [Frac], but it can cause overflow when used with certain [Int] values.
 ##
 ## For example, calling #Num.abs on the lowest value of a signed integer (such as [Num.minI64] or [Num.minI32]) will cause overflow.
 ## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
@@ -619,7 +619,7 @@ abs : Num a -> Num a
 ##
 ## >>> Num.neg 0.0
 ##
-## This is safe to use with any [Float], but it can cause overflow when used with certain [Int] values.
+## This is safe to use with any [Frac], but it can cause overflow when used with certain [Int] values.
 ##
 ## For example, calling #Num.neg on the lowest value of a signed integer (such as [Num.minI64] or [Num.minI32]) will cause overflow.
 ## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
@@ -627,12 +627,12 @@ abs : Num a -> Num a
 ##
 ## Additionally, calling #Num.neg on any unsigned integer (such as any [U64] or [U32] value) other than zero will cause overflow.
 ##
-## (It will never crash when given a [Float], however, because of how floating point numbers represent positive and negative numbers.)
+## (It will never crash when given a [Frac], however, because of how floating point numbers represent positive and negative numbers.)
 neg : Num a -> Num a
 
 ## Add two numbers of the same type.
 ##
-## (To add an [Int] and a [Float], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Float] and the other way around.)
+## (To add an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a + b` is shorthand for `Num.add a b`.
 ##
@@ -653,7 +653,7 @@ add : Num a, Num a -> Num a
 
 ## Subtract two numbers of the same type.
 ##
-## (To subtract an [Int] and a [Float], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Float] and the other way around.)
+## (To subtract an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a - b` is shorthand for `Num.sub a b`.
 ##
@@ -674,7 +674,7 @@ sub : Num a, Num a -> Num a
 
 ## Multiply two numbers of the same type.
 ##
-## (To multiply an [Int] and a [Float], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Float] and the other way around.)
+## (To multiply an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a * b` is shorthand for `Num.mul a b`.
 ##
@@ -693,17 +693,17 @@ sub : Num a, Num a -> Num a
 ## ∞ or -∞. For all other number types, overflow results in a panic.
 mul : Num a, Num a -> Num a
 
-sin : Float a -> Float a
-cos : Float a -> Float a
-tan : Float a -> Float a
+sin : Frac a -> Frac a
+cos : Frac a -> Frac a
+tan : Frac a -> Frac a
 
-asin : Float a -> Float a
-acos : Float a -> Float a
-atan : Float a -> Float a
+asin : Frac a -> Frac a
+acos : Frac a -> Frac a
+atan : Frac a -> Frac a
 
-## Returns an approximation of the absolute value of a [Float]'s square root.
+## Returns an approximation of the absolute value of a [Frac]'s square root.
 ##
-## The square root of a negative number is an irrational number, and [Float] only
+## The square root of a negative number is an irrational number, and [Frac] only
 ## supports rational numbers. As such, you should make sure never to pass this
 ## function a negative number! Calling [sqrt] on a negative [Dec] will cause a panic.
 ##
@@ -725,12 +725,12 @@ atan : Float a -> Float a
 ## >>> Num.sqrt 0.0
 ##
 ## >>> Num.sqrt -4.0f64
-sqrt : Float a -> Float a
-sqrtChecked : Float a -> Result (Float a) [ SqrtOfNegative ]*
-log : Float a -> Float a
-logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
+sqrt : Frac a -> Frac a
+sqrtChecked : Frac a -> Result (Frac a) [ SqrtOfNegative ]*
+log : Frac a -> Frac a
+logChecked : Frac a -> Result (Frac a) [ LogNeedsPositive ]*
 
-## Divide one [Float] by another.
+## Divide one [Frac] by another.
 ##
 ## `a / b` is shorthand for `Num.div a b`.
 ##
@@ -749,7 +749,7 @@ logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
 ## > cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
 ## > access to hardware-accelerated performance, Roc follows these rules exactly.
 ##
-## To divide an [Int] and a [Float], first convert the [Int] to a [Float] using
+## To divide an [Int] and a [Frac], first convert the [Int] to a [Frac] using
 ## one of the functions in this module like #toDec.
 ##
 ## >>> 5.0 / 7.0
@@ -760,8 +760,8 @@ logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
 ##
 ## >>> Num.pi
 ## >>>     |> Num.div 2.0
-div : Float a, Float a -> Float a
-divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
+div : Frac a, Frac a -> Frac a
+divChecked : Frac a, Frac a -> Result (Frac a) [ DivByZero ]*
 divCeil : Int a, Int a -> Int a
 divCeilChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
 
@@ -807,22 +807,22 @@ shiftLeftBy : Int a, Int a -> Int a
 shiftRightBy : Int a, Int a -> Int a
 shiftRightZfBy : Int a, Int a -> Int a
 
-## Round off the given float to the nearest integer.
-round : Float * -> Int *
-floor : Float * -> Int *
-ceiling : Float * -> Int *
+## Round off the given fraction to the nearest integer.
+round : Frac * -> Int *
+floor : Frac * -> Int *
+ceiling : Frac * -> Int *
 
-## Raises a [Float] to the power of another [Float].
+## Raises a [Frac] to the power of another [Frac].
 ##
 ## For an [Int] alternative to this function, see [Num.powInt]
-pow : Float a, Float a -> Float a
+pow : Frac a, Frac a -> Frac a
 
 ## Raises an integer to the power of another, by multiplying the integer by
 ## itself the given number of times.
 ##
 ## This process is known as [exponentiation by squaring](https://en.wikipedia.org/wiki/Exponentiation_by_squaring).
 ##
-## For a [Float] alternative to this function, which supports negative exponents,
+## For a [Frac] alternative to this function, which supports negative exponents,
 ## see #Num.exp.
 ##
 ## >>> Num.exp 5 0
@@ -1113,7 +1113,7 @@ toU128 : Int * -> U128
 ## the #Nat value of 9_000_000_000. This is because on a 64-bit system, [Nat] can
 ## hold up to [Num.maxU64], and 9_000_000_000 is lower than [Num.maxU64].
 ##
-## To convert a [Float] to a [Nat], first call either #Num.round, #Num.ceil, or [Num.floor]
+## To convert a [Frac] to a [Nat], first call either #Num.round, #Num.ceil, or [Num.floor]
 ## on it, then call this on the resulting [Int].
 toNat : Int * -> Nat
 
@@ -1152,7 +1152,7 @@ toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 ##
 ## This is the opposite of [isInfinite], except when given [*NaN*](Num.isNaN). Both
 ## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
-#isFinite : Float * -> Bool
+#isFinite : Frac * -> Bool
 
 ## When given a [F64] or [F32] value, returns `True` if that value is either
 ## ∞ or -∞, and `False` otherwise.
@@ -1161,7 +1161,7 @@ toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 ##
 ## This is the opposite of [isFinite], except when given [*NaN*](Num.isNaN). Both
 ## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
-#isInfinite : Float * -> Bool
+#isInfinite : Frac * -> Bool
 
 ## When given a [F64] or [F32] value, returns `True` if that value is
 ## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `False` otherwise.
@@ -1185,7 +1185,7 @@ toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 ## Note that you should never put a *NaN* into a [Set], or use it as the key in
 ## a [Dict]. The result is entries that can never be removed from those
 ## collections! See the documentation for [Set.add] and [Dict.insert] for details.
-#isNaN : Float * -> Bool
+#isNaN : Frac * -> Bool
 
 
 ## Returns the higher of two numbers.
@@ -1226,12 +1226,12 @@ toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 
 ## when Num.parseBytes bytes Big is
 ##     Ok { val: f64, rest } -> ...
-##     Err (ExpectedNum (Float Binary64)) -> ...
+##     Err (ExpectedNum (Frac Binary64)) -> ...
 # parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ ExpectedNum a ]*
 
 ## when Num.fromBytes bytes Big is
 ##     Ok f64 -> ...
-##     Err (ExpectedNum (Float Binary64)) -> ...
+##     Err (ExpectedNum (Frac Binary64)) -> ...
 # fromBytes : List U8, Endi -> Result (Num a) [ ExpectedNum a ]*
 
 # Bit shifts
