@@ -204,7 +204,6 @@ pub fn build_app<'a>() -> Command<'a> {
             Command::new(CMD_DOCS)
                 .about("Generate documentation for Roc modules (Work In Progress)")
                 .arg(Arg::new(DIRECTORY_OR_FILES)
-                    .index(1)
                     .multiple_values(true)
                     .required(false)
                     .help("The directory or files to build documentation for")
@@ -230,7 +229,6 @@ pub fn build_app<'a>() -> Command<'a> {
                 .about("Launch the Roc editor (Work In Progress)")
                 .arg(
                     Arg::new(DIRECTORY_OR_FILES)
-                        .index(1)
                         .multiple_values(true)
                         .required(false)
                         .help("(optional) The directory or files to open on launch."),
