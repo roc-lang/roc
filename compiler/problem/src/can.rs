@@ -139,6 +139,7 @@ pub enum Problem {
         region: Region,
     },
     AbilityUsedAsType(Lowercase, Symbol, Region),
+    NestedSpecialization(Symbol, Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]

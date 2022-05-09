@@ -46,6 +46,7 @@ const ABILITY_MEMBER_MISSING_HAS_CLAUSE: &str = "ABILITY MEMBER MISSING HAS CLAU
 const ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE: &str = "ABILITY MEMBER HAS EXTRANEOUS HAS CLAUSE";
 const ABILITY_MEMBER_BINDS_MULTIPLE_VARIABLES: &str = "ABILITY MEMBER BINDS MULTIPLE VARIABLES";
 const ABILITY_NOT_ON_TOPLEVEL: &str = "ABILITY NOT ON TOP-LEVEL";
+const SPECIALIZATION_NOT_ON_TOPLEVEL: &str = "SPECIALIZATION NOT ON TOP-LEVEL";
 const ABILITY_USED_AS_TYPE: &str = "ABILITY USED AS TYPE";
 
 pub fn can_problem<'b>(
@@ -778,6 +779,19 @@ pub fn can_problem<'b>(
             ]);
             title = ABILITY_USED_AS_TYPE.to_string();
             severity = Severity::RuntimeError;
+        }
+        Problem::NestedSpecialization(member, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This specialization of the "),
+                    alloc.symbol_unqualified(member),
+                    alloc.reflow("ability member is in a nested scope:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Specializations can only be defined on the top-level of a module."),
+            ]);
+            title = SPECIALIZATION_NOT_ON_TOPLEVEL.to_string();
+            severity = Severity::Warning;
         }
     };
 

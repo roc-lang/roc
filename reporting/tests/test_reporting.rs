@@ -9764,4 +9764,35 @@ I need all branches in an `if` to have the same type!
             "", // no problem
         )
     }
+
+    #[test]
+    fn nested_specialization() {
+        new_report_problem_as(
+            "nested_specialization",
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Default has default : {} -> a | a has Default
+
+                main =
+                    A := {}
+                    default = \{} -> @A {}
+                    default {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SPECIALIZATION NOT ON TOP-LEVEL ─────────────────────── /code/proj/Main.roc ─
+
+                This specialization of the `default`ability member is in a nested scope:
+
+                7│      default = \{} -> @A {}
+                        ^^^^^^^
+
+                Specializations can only be defined on the top-level of a module.
+                "#
+            ),
+        )
+    }
 }
