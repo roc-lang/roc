@@ -728,7 +728,7 @@ pub fn can_problem<'b>(
                 alloc.concat([
                     alloc.reflow("This specialization of the "),
                     alloc.symbol_unqualified(member),
-                    alloc.reflow("ability member is in a nested scope:"),
+                    alloc.reflow(" ability member is in a nested scope:"),
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.reflow("Specializations can only be defined on the top-level of a module."),

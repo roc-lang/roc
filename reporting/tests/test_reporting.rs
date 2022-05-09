@@ -9785,7 +9785,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── SPECIALIZATION NOT ON TOP-LEVEL ─────────────────────── /code/proj/Main.roc ─
 
-                This specialization of the `default`ability member is in a nested scope:
+                This specialization of the `default` ability member is in a nested scope:
 
                 7│      default = \{} -> @A {}
                         ^^^^^^^
