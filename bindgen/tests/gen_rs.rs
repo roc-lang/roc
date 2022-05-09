@@ -318,3 +318,32 @@ fn tag_union_aliased() {
         )
     );
 }
+
+#[test]
+fn tag_union_enumeration() {
+    let module = indoc!(
+        r#"
+            MyTagUnion : [ Blah, Foo, Bar, ]
+
+            main : MyTagUnion
+            main = Foo
+        "#
+    );
+
+    assert_eq!(
+        generate_bindings(module)
+            .strip_prefix("\n")
+            .unwrap_or_default(),
+        indoc!(
+            r#"
+                #[derive(Clone, PartialEq, PartialOrd, Copy, Eq, Ord, Hash, Debug)]
+                #[repr(u8)]
+                pub enum MyTagUnion {
+                    Bar,
+                    Blah,
+                    Foo,
+                }
+            "#
+        )
+    );
+}
