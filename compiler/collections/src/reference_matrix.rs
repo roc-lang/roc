@@ -282,6 +282,9 @@ impl Sccs {
             self.matrix.length
         };
 
-        self.matrix.bitvec.chunks_exact(length).take(self.components)
+        self.matrix
+            .bitvec
+            .chunks_exact(length)
+            .take(self.components)
     }
 }
