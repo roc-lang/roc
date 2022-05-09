@@ -46,6 +46,7 @@ members = [
     "test_utils",
     "utils",
     "docs",
+    "docs_cli",
     "linker",
     "wasi-libc-sys",
 ]

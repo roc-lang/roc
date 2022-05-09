@@ -50,7 +50,7 @@ BUILTINS_HOST_O=""
 # We run the CLI with --no-default-features because that way we don't have the
 # "llvm" feature and therefore don't depend on LLVM being installed on the
 # system. (Netlify's build servers have Rust installed, but not LLVM.)
-cargo run -p roc_cli --no-default-features docs compiler/builtins/roc/*.roc
+cargo run --bin roc-docs compiler/builtins/roc/*.roc
 mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
 mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 popd
