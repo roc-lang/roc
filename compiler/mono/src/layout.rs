@@ -12,6 +12,7 @@ use roc_types::subs::{
     Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
+use std::cmp::Ordering;
 use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -1769,10 +1770,7 @@ fn layout_from_flat_type<'a>(
             }
 
             sortables.sort_by(|(label1, layout1), (label2, layout2)| {
-                let size1 = layout1.alignment_bytes(target_info);
-                let size2 = layout2.alignment_bytes(target_info);
-
-                size2.cmp(&size1).then(label1.cmp(label2))
+                cmp_fields(label1, layout1, label2, layout2, target_info)
             });
 
             let ordered_field_names =
@@ -1952,10 +1950,7 @@ fn sort_record_fields_help<'a>(
         |(label1, _, res_layout1), (label2, _, res_layout2)| match res_layout1 {
             Ok(layout1) | Err(layout1) => match res_layout2 {
                 Ok(layout2) | Err(layout2) => {
-                    let size1 = layout1.alignment_bytes(target_info);
-                    let size2 = layout2.alignment_bytes(target_info);
-
-                    size2.cmp(&size1).then(label1.cmp(label2))
+                    cmp_fields(label1, layout1, label2, layout2, target_info)
                 }
             },
         },
@@ -2921,4 +2916,17 @@ mod test {
         let target_info = TargetInfo::default_x86_64();
         assert_eq!(layout.stack_size_without_alignment(target_info), 5);
     }
+}
+
+pub fn cmp_fields(
+    label1: &Lowercase,
+    layout1: &Layout<'_>,
+    label2: &Lowercase,
+    layout2: &Layout<'_>,
+    target_info: TargetInfo,
+) -> Ordering {
+    let size1 = layout1.alignment_bytes(target_info);
+    let size2 = layout2.alignment_bytes(target_info);
+
+    size2.cmp(&size1).then(label1.cmp(label2))
 }
