@@ -3812,62 +3812,15 @@ pub fn with_hole<'a>(
                 }
             }
         }
-        LetNonRec(def, cont) => {
-            if let roc_can::pattern::Pattern::Identifier(_) = def.loc_pattern.value {
-                from_can_let(
-                    env,
-                    procs,
-                    layout_cache,
-                    def,
-                    cont,
-                    variable,
-                    Some((assigned, hole)),
-                )
-            } else {
-                // this may be a destructure pattern
-                let (mono_pattern, assignments) =
-                    match from_can_pattern(env, procs, layout_cache, &def.loc_pattern.value) {
-                        Ok(v) => v,
-                        Err(_runtime_error) => {
-                            // todo
-                            panic!();
-                        }
-                    };
-
-                let mut hole = hole;
-
-                for (symbol, variable, expr) in assignments {
-                    let stmt = with_hole(env, expr, variable, procs, layout_cache, symbol, hole);
-
-                    hole = env.arena.alloc(stmt);
-                }
-
-                // convert the continuation
-                let mut stmt = with_hole(
-                    env,
-                    cont.value,
-                    variable,
-                    procs,
-                    layout_cache,
-                    assigned,
-                    hole,
-                );
-
-                let outer_symbol = env.unique_symbol();
-                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
-
-                // convert the def body, store in outer_symbol
-                with_hole(
-                    env,
-                    def.loc_expr.value,
-                    def.expr_var,
-                    procs,
-                    layout_cache,
-                    outer_symbol,
-                    env.arena.alloc(stmt),
-                )
-            }
-        }
+        LetNonRec(def, cont) => from_can_let(
+            env,
+            procs,
+            layout_cache,
+            def,
+            cont,
+            variable,
+            Some((assigned, hole)),
+        ),
         LetRec(defs, cont) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
