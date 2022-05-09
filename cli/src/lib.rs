@@ -11,7 +11,7 @@ use roc_mono::ir::OptLevel;
 use std::env;
 use std::ffi::OsStr;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
@@ -237,10 +237,6 @@ pub fn build_app<'a>() -> Command<'a> {
     } else {
         app
     }
-}
-
-pub fn docs(files: Vec<PathBuf>) {
-    roc_docs::generate_docs_html(files, Path::new("./generated-docs"))
 }
 
 #[derive(Debug, PartialEq, Eq)]
