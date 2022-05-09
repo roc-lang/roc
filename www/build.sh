@@ -11,21 +11,9 @@ cd $SCRIPT_RELATIVE_DIR
 rm -rf build/
 cp -r public/ build/
 
-pushd build
-
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
+pushd build
 wget https://github.com/rtfeldman/elm-css/files/8037422/roc-source-code.zip
-
-# Copy REPL webpage source files
-cp -r ../../repl_www/public/* .
-
-# grab the pre-compiled REPL and copy it to Netlify's server; if it's not there, fail the build.
-wget https://github.com/brian-carroll/mock-repl/archive/refs/heads/deploy.zip
-unzip deploy.zip
-mv mock-repl-deploy/* .
-rmdir mock-repl-deploy
-rm deploy.zip
-
 popd
 
 pushd ..
@@ -47,10 +35,12 @@ export ROC_DOCS_URL_ROOT=/builtins
 BUILTINS_WASM32_O=""
 BUILTINS_HOST_O=""
 
-# We run the CLI with --no-default-features because that way we don't have the
-# "llvm" feature and therefore don't depend on LLVM being installed on the
-# system. (Netlify's build servers have Rust installed, but not LLVM.)
 cargo run --bin roc-docs compiler/builtins/roc/*.roc
 mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
 mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
+
+# Web REPL
+repl_www/build.sh
+cp -r repl_www/public/* www/build
+
 popd
