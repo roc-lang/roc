@@ -19,7 +19,7 @@ mod solve_expr {
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
     use roc_solve::solve::TypeError;
-    use roc_types::pretty_print::{content_to_string, name_all_type_vars};
+    use roc_types::pretty_print::name_and_print_var;
     use std::path::PathBuf;
 
     // HELPERS
@@ -172,18 +172,9 @@ mod solve_expr {
 
         let subs = solved.inner_mut();
 
-        // name type vars
-        for var in exposed_to_host.values() {
-            name_all_type_vars(*var, subs);
-        }
-
-        let content = {
-            debug_assert!(exposed_to_host.len() == 1);
-            let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
-            subs.get_content_without_compacting(variable)
-        };
-
-        let actual_str = content_to_string(content, subs, home, &interns);
+        debug_assert!(exposed_to_host.len() == 1);
+        let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
+        let actual_str = name_and_print_var(variable, subs, home, &interns);
 
         Ok((type_problems, can_problems, actual_str))
     }
@@ -282,9 +273,7 @@ mod solve_expr {
             let var = find_type_at(region, &decls)
                 .expect(&format!("No type for {} ({:?})!", &text, region));
 
-            name_all_type_vars(var, subs);
-            let content = subs.get_content_without_compacting(var);
-            let actual_str = content_to_string(content, subs, home, &interns);
+            let actual_str = name_and_print_var(var, subs, home, &interns);
 
             solved_queries.push(format!("{} : {}", text, actual_str));
         }
@@ -5445,26 +5434,19 @@ mod solve_expr {
     }
 
     #[test]
-    fn copy_vars_referencing_copied_vars_specialized() {
+    fn generalize_and_specialize_recursion_var() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Job a : [ Job [ Command ] (Job a) (List (Job a)) a ]
+                Job a : [ Job (List (Job a)) a ]
 
                 job : Job Str
 
                 when job is
-                    Job _ j lst _ ->
-                        when j is
-                            Job _ _ _ s ->
-                                { j, lst, s }
+                    Job lst s -> P lst s
                 "#
             ),
-            // TODO: this means that we're doing our job correctly, as now both `Job a`s have been
-            // specialized to the same type, and the second destructuring proves the reified type
-            // is `Job Str`. But we should just print the structure of the recursive type directly.
-            // See https://github.com/rtfeldman/roc/issues/2513
-            "{ j : a, lst : List a, s : Str }",
+            "[ P (List [ Job (List a) Str ] as a) Str ]*",
         )
     }
 
@@ -6383,5 +6365,26 @@ mod solve_expr {
                 "myU8 : Result MyU8 DecodeError",
             ],
         )
+    }
+
+    #[test]
+    fn task_wildcard_wildcard() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ tforever ] to "./platform"
+
+                Effect a := {} -> a
+
+                eforever : Effect a -> Effect b
+
+                Task a err : Effect (Result a err)
+
+                tforever : Task val err -> Task * *
+                tforever = \task -> eforever task
+                "#
+            ),
+            "Task val err -> Task * *",
+        );
     }
 }

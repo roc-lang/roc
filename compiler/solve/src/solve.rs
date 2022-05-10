@@ -2685,19 +2685,49 @@ fn adjust_rank_content(
                         }
                     }
 
-                    // THEORY: the recursion var has the same rank as the tag union itself
+                    // The recursion var may have a higher rank than the tag union itself, if it is
+                    // erroneous and escapes into a region where it is let-generalized before it is
+                    // constrained back down to the rank it originated from.
+                    //
+                    // For example, see the `recursion_var_specialization_error` reporting test -
+                    // there, we have
+                    //
+                    //      Job a : [ Job (List (Job a)) a ]
+                    //
+                    //      job : Job Str
+                    //
+                    //      when job is
+                    //          Job lst _ -> lst == ""
+                    //
+                    // In this case, `lst` is generalized and has a higher rank for the type
+                    // `(List (Job a)) as a` - notice that only the recursion var `a` is active
+                    // here, not the entire recursive tag union. In the body of this branch, `lst`
+                    // becomes a type error, but the nested recursion var `a` is left untouched,
+                    // because it is nested under the of `lst`, not the surface type that becomes
+                    // an error.
+                    //
+                    // Had this not become a type error, `lst` would then be constrained against
+                    // `job`, and its rank would get pulled back down. So, this can only happen in
+                    // the presence of type errors.
+                    //
+                    // In all other cases, the recursion var has the same rank as the tag union itself
                     // all types it uses are also in the tags already, so it cannot influence the
-                    // rank
-
-                    if cfg!(debug_assertions) {
+                    // rank.
+                    if cfg!(debug_assertions)
+                        && !matches!(
+                            subs.get_content_without_compacting(*rec_var),
+                            Content::Error | Content::FlexVar(..)
+                        )
+                    {
                         let rec_var_rank =
                             adjust_rank(subs, young_mark, visit_mark, group_rank, *rec_var);
 
                         debug_assert!(
                             rank >= rec_var_rank,
-                            "rank was {:?} but recursion var {:?} has higher rank {:?}",
+                            "rank was {:?} but recursion var <{:?}>{:?} has higher rank {:?}",
                             rank,
                             rec_var,
+                            subs.get_content_without_compacting(*rec_var),
                             rec_var_rank
                         );
                     }

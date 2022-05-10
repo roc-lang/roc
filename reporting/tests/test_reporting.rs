@@ -22,7 +22,6 @@ mod test_reporting {
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
     use roc_test_utils::assert_multiline_str_eq;
-    use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
 
@@ -122,19 +121,11 @@ mod test_reporting {
             mut can_problems,
             mut type_problems,
             interns,
-            mut solved,
-            exposed_to_host,
             ..
         } = result?;
 
         let can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
-
-        let subs = solved.inner_mut();
-
-        for var in exposed_to_host.values() {
-            name_all_type_vars(*var, subs);
-        }
 
         Ok((module_src, type_problems, can_problems, home, interns))
     }
@@ -233,7 +224,7 @@ mod test_reporting {
 
         let mut unify_problems = Vec::new();
         let mut abilities_store = AbilitiesStore::default();
-        let (_content, mut subs) = infer_expr(
+        let (_content, _subs) = infer_expr(
             subs,
             &mut unify_problems,
             &constraints,
@@ -242,8 +233,6 @@ mod test_reporting {
             &mut abilities_store,
             var,
         );
-
-        name_all_type_vars(var, &mut subs);
 
         Ok((unify_problems, can_problems, home, interns))
     }
@@ -3520,8 +3509,9 @@ mod test_reporting {
                 This `ACons` tag application has the type:
 
                     [ ACons (Num (Integer Signed64)) [
-                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 a, BNil ],
-                    ANil ], BNil ], ANil ]
+                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 [
+                    ACons I64 (BList I64 I64), ANil ] as ∞, BNil ], ANil ], BNil ],
+                    ANil ]
 
                 But the type annotation on `x` says it should be:
 
@@ -9792,6 +9782,126 @@ I need all branches in an `if` to have the same type!
                         ^^^^^^^
 
                 Specializations can only be defined on the top-level of a module.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursion_var_specialization_error() {
+        new_report_problem_as(
+            "recursion_var_specialization_error",
+            indoc!(
+                r#"
+                Job a : [ Job (List (Job a)) ]
+
+                job : Job Str
+
+                when job is
+                    Job lst -> lst == ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                The 2nd argument to `isEq` is not what I expect:
+
+                9│          Job lst -> lst == ""
+                                              ^^
+
+                This argument is a string of type:
+
+                    Str
+
+                But `isEq` needs the 2nd argument to be:
+
+                    List [ Job ∞ ] as ∞
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_error_in_apply_is_circular() {
+        new_report_problem_as(
+            "type_error_in_apply_is_circular",
+            indoc!(
+                r#"
+                app "test" provides [ go ] to "./platform"
+
+                S a : { set : Set a }
+
+                go : a, S a -> Result (List a) *
+                go = \goal, model ->
+                        if goal == goal
+                        then Ok []
+                        else
+                            new = { model & set : Set.remove goal model.set }
+                            go goal new
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                The 1st argument to `remove` is not what I expect:
+
+                10│              new = { model & set : Set.remove goal model.set }
+                                                                  ^^^^
+
+                This `goal` value is a:
+
+                    a
+
+                But `remove` needs the 1st argument to be:
+
+                    Set a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `Set` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `new`:
+
+                10│              new = { model & set : Set.remove goal model.set }
+                                 ^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    { set : Set ∞ }
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `model`:
+
+                6│  go = \goal, model ->
+                                ^^^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    S (Set ∞)
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `goal`:
+
+                6│  go = \goal, model ->
+                          ^^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    Set ∞
                 "#
             ),
         )

@@ -3474,3 +3474,22 @@ fn list_map2_conslist() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymorphic_lambda_captures_polymorphic_value() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = 2
+
+            f1 = \_ -> x
+
+            f = if True then f1 else f1
+            f {}
+            "#
+        ),
+        2,
+        u64
+    )
+}
