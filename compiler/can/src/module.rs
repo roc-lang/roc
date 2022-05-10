@@ -594,7 +594,9 @@ fn fix_values_captured_in_closure_defs(
 ) {
     // recursive defs cannot capture each other
     for def in defs.iter() {
-        no_capture_symbols.extend(crate::pattern::symbols_from_pattern(&def.loc_pattern.value));
+        no_capture_symbols.extend(
+            crate::traverse::symbols_introduced_from_pattern(&def.loc_pattern).map(|ls| ls.value),
+        );
     }
 
     // TODO mutually recursive functions should both capture the union of both their capture sets
