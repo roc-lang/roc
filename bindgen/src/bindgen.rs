@@ -257,7 +257,7 @@ fn add_tag_union(
         // If there was a type alias name, use that. Otherwise use the tag name.
         let name = match opt_name {
             Some(sym) => sym.as_str(env.interns).to_string(),
-            None => tag_name.to_string(),
+            None => tag_name,
         };
 
         return match payload_vars.len() {
@@ -272,7 +272,7 @@ fn add_tag_union(
             1 => {
                 // This is a single-tag union with 1 payload field, e.g.`[ Foo Str ]`.
                 // We'll just wrap that.
-                let var = *payload_vars.iter().next().unwrap();
+                let var = *payload_vars.get(0).unwrap();
                 let content = add_type(env, var, types);
 
                 types.add(RocType::TransparentWrapper { name, content })
