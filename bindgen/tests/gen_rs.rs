@@ -152,15 +152,15 @@ fn nested_record_anonymous() {
             r#"
                 #[derive(Clone, PartialEq, PartialOrd, Default, Debug)]
                 #[repr(C)]
-                pub struct R2 {
+                pub struct R1 {
                     y: roc_std::RocStr,
                     z: roc_std::RocList<u8>,
-                    x: R1,
+                    x: R2,
                 }
 
                 #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Debug)]
                 #[repr(C)]
-                pub struct R1 {
+                pub struct R2 {
                     b: f32,
                     a: u16,
                 }
@@ -343,6 +343,59 @@ fn tag_union_enumeration() {
                     Blah,
                     Foo,
                 }
+            "#
+        )
+    );
+}
+
+#[test]
+fn single_tag_union_with_payloads() {
+    let module = indoc!(
+        r#"
+            UserId : [ Id U32 Str ]
+
+            main : UserId
+            main = Id 42 "blah"
+        "#
+    );
+
+    assert_eq!(
+        generate_bindings(module)
+            .strip_prefix('\n')
+            .unwrap_or_default(),
+        indoc!(
+            r#"
+                #[derive(Clone, PartialEq, PartialOrd, Default, Eq, Ord, Hash, Debug)]
+                #[repr(C)]
+                pub struct UserId {
+                    f1: roc_std::RocStr,
+                    f0: u32,
+                }
+            "#
+        )
+    );
+}
+
+#[test]
+fn single_tag_union_with_one_payload_field() {
+    let module = indoc!(
+        r#"
+            UserId : [ Id Str ]
+
+            main : UserId
+            main = Id "blah"
+        "#
+    );
+
+    assert_eq!(
+        generate_bindings(module)
+            .strip_prefix('\n')
+            .unwrap_or_default(),
+        indoc!(
+            r#"
+                #[derive(Clone, PartialEq, PartialOrd, Default, Eq, Ord, Hash, Debug)]
+                #[repr(transparent)]
+                pub struct UserId(roc_std::RocStr);
             "#
         )
     );

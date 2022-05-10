@@ -2252,7 +2252,8 @@ fn register_tag_arguments<'a>(
         VariableSubsSlice::default()
     } else {
         let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-        let it = (new_variables.indices()).zip(arguments);
+        let it = new_variables.indices().zip(arguments);
+
         for (target_index, argument) in it {
             let var = RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
             subs.variables[target_index] = var;

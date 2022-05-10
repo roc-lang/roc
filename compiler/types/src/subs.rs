@@ -2396,6 +2396,17 @@ impl UnionTags {
             .zip(self.variables().into_iter())
     }
 
+    /// Iterator over (TagName, &[Variable]) pairs obtained by
+    /// looking up slices in the given Subs
+    pub fn iter_from_subs<'a>(
+        &'a self,
+        subs: &'a Subs,
+    ) -> impl Iterator<Item = (&'a TagName, &'a [Variable])> + ExactSizeIterator {
+        self.iter_all().map(move |(name_index, payload_index)| {
+            (&subs[name_index], subs.get_subs_slice(subs[payload_index]))
+        })
+    }
+
     #[inline(always)]
     pub fn unsorted_iterator<'a>(
         &'a self,

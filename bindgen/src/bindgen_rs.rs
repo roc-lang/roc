@@ -70,6 +70,12 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
             | RocType::RocSet(_)
             | RocType::RocList(_)
             | RocType::RocBox(_) => {}
+            RocType::TransparentWrapper { name, content } => {
+                write_deriving(id, types, buf)?;
+                write!(buf, "#[repr(transparent)]\npub struct {}(", name)?;
+                write_type_name(*content, types, buf)?;
+                buf.write_str(");\n")?;
+            }
         }
     }
 
@@ -101,14 +107,10 @@ fn write_struct(
 ) -> fmt::Result {
     write_deriving(struct_id, types, buf)?;
 
-    buf.write_str("#[repr(C)]\npub struct ")?;
-    buf.write_str(name)?;
-    buf.write_str(" {\n")?;
+    writeln!(buf, "#[repr(C)]\npub struct {} {{", name)?;
 
     for (label, field_id) in fields {
-        buf.write_str(INDENT)?;
-        buf.write_str(label.as_str())?;
-        buf.write_str(": ")?;
+        write!(buf, "{}{}: ", INDENT, label.as_str())?;
         write_type_name(*field_id, types, buf)?;
         buf.write_str(",\n")?;
     }
@@ -158,6 +160,7 @@ fn write_type_name(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
         }
         RocType::Struct { name, .. }
         | RocType::TagUnion { name, .. }
+        | RocType::TransparentWrapper { name, .. }
         | RocType::RecursiveTagUnion { name, .. } => buf.write_str(name),
     }
 }
