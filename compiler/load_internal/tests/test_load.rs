@@ -420,12 +420,13 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "floatTest" => "Float *",
+                "floatTest" => "F64",
                 "divisionFn" => "Float a, Float a -> Float a",
-                "divisionTest" => "Float *",
-                "intTest" => "I64",
                 "x" => "Float *",
+                "divisionTest" => "F64",
+                "intTest" => "I64",
                 "constantNum" => "Num *",
+                "divisionTest" => "F64",
                 "divDep1ByDep2" => "Float *",
                 "fromDep2" => "Float *",
             },

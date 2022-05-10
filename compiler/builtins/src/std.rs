@@ -749,12 +749,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(frac_type(flex(TVAR1))),
     );
 
-    // maxFloat : Frac a
-    add_type!(Symbol::NUM_MAX_FLOAT, frac_type(flex(TVAR1)));
-
-    // minFloat : Frac a
-    add_type!(Symbol::NUM_MIN_FLOAT, frac_type(flex(TVAR1)));
-
     // pow : Frac a, Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_POW,
