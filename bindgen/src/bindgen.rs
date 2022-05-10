@@ -227,45 +227,48 @@ fn add_struct(
 fn add_tag_union(
     env: &mut Env<'_>,
     opt_name: Option<Symbol>,
-    tags: &UnionTags,
+    union_tags: &UnionTags,
     var: Variable,
     types: &mut Types,
 ) -> TypeId {
     let subs = env.subs;
+    let mut tags: Vec<_> = union_tags
+        .iter_from_subs(subs)
+        .map(|(tag_name, payload_vars)| {
+            let name_str = match tag_name {
+                TagName::Tag(uppercase) => uppercase.as_str().to_string(),
+                TagName::Closure(_) => unreachable!(),
+            };
+
+            let payloads = payload_vars
+                .iter()
+                .map(|payload_var| add_type(env, *payload_var, types))
+                .collect();
+
+            (name_str, payloads)
+        })
+        .collect();
+
+    let name = match opt_name {
+        Some(sym) => sym.as_str(env.interns).to_string(),
+        None => env.enum_names.get_name(var),
+    };
+
+    // Sort tags alphabetically by tag name
+    tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
     let typ = match env.layout_cache.from_var(env.arena, var, subs).unwrap() {
         Layout::Struct { .. } => {
-            // a single-tag union with a payload
-            todo!();
+            // a single-tag union with multiple payload values, e.g. [ Foo Str Str ]
+            unreachable!()
         }
         Layout::Union(_) => todo!(),
         Layout::Builtin(builtin) => match builtin {
-            Builtin::Int(int_width) => {
-                let tag_pairs = subs.tag_names[tags.tag_names().indices()]
-                    .iter()
-                    .map(|tag_name| {
-                        let name_str = match tag_name {
-                            TagName::Tag(uppercase) => uppercase.as_str().to_string(),
-                            TagName::Closure(_) => unreachable!(),
-                        };
-
-                        // This is an enum, so there's no payload.
-                        (name_str, Vec::new())
-                    })
-                    .collect();
-
-                let tag_bytes = int_width.stack_size().try_into().unwrap();
-                let name = match opt_name {
-                    Some(sym) => sym.as_str(env.interns).to_string(),
-                    None => env.enum_names.get_name(var),
-                };
-
-                RocType::TagUnion {
-                    tag_bytes,
-                    name,
-                    tags: tag_pairs,
-                }
-            }
+            Builtin::Int(int_width) => RocType::TagUnion {
+                tag_bytes: int_width.stack_size().try_into().unwrap(),
+                name,
+                tags,
+            },
             Builtin::Bool => RocType::Bool,
             Builtin::Float(_)
             | Builtin::Decimal
