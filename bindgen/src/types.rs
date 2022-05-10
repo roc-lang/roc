@@ -129,6 +129,11 @@ pub enum RocType {
         name: String,
         fields: Vec<(String, TypeId)>,
     },
+    /// Either a single-tag union or a single-field record
+    TransparentWrapper {
+        name: String,
+        content: TypeId,
+    },
 }
 
 impl RocType {
@@ -162,6 +167,7 @@ impl RocType {
             RocType::Struct { fields, .. } => fields
                 .iter()
                 .any(|(_, id)| types.get(*id).has_pointer(types)),
+            RocType::TransparentWrapper { content, .. } => types.get(*content).has_pointer(types),
         }
     }
 
@@ -194,6 +200,7 @@ impl RocType {
             RocType::Struct { fields, .. } => {
                 fields.iter().any(|(_, id)| types.get(*id).has_float(types))
             }
+            RocType::TransparentWrapper { content, .. } => types.get(*content).has_float(types),
         }
     }
 
@@ -226,6 +233,7 @@ impl RocType {
             RocType::Struct { fields, .. } => fields
                 .iter()
                 .any(|(_, id)| types.get(*id).has_tag_union(types)),
+            RocType::TransparentWrapper { content, .. } => types.get(*content).has_tag_union(types),
         }
     }
 
@@ -283,6 +291,9 @@ impl RocType {
             RocType::F32 => FloatWidth::F32.alignment_bytes(target_info) as usize,
             RocType::F64 => FloatWidth::F64.alignment_bytes(target_info) as usize,
             RocType::F128 => FloatWidth::F128.alignment_bytes(target_info) as usize,
+            RocType::TransparentWrapper { content, .. } => {
+                types.get(*content).alignment(types, target_info)
+            }
         }
     }
 }

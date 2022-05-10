@@ -70,6 +70,11 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
             | RocType::RocSet(_)
             | RocType::RocList(_)
             | RocType::RocBox(_) => {}
+            RocType::TransparentWrapper { name, content } => {
+                write!(buf, "\nstruct {}(", name)?;
+                write_type_name(*content, types, buf)?;
+                buf.write_str(");\n")?;
+            }
         }
     }
 
@@ -154,6 +159,7 @@ fn write_type_name(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
         }
         RocType::Struct { name, .. }
         | RocType::TagUnion { name, .. }
+        | RocType::TransparentWrapper { name, .. }
         | RocType::RecursiveTagUnion { name, .. } => buf.write_str(name),
     }
 }
