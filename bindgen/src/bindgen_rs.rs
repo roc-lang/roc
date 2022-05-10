@@ -9,8 +9,42 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
     for id in types.sorted_ids() {
         match types.get(id) {
             RocType::Struct { name, fields } => write_struct(name, fields, id, types, buf)?,
-            RocType::TagUnion { .. } => {
-                todo!();
+            RocType::TagUnion {
+                tags,
+                name,
+                tag_bytes,
+            } => {
+                let is_enumeration = tags.iter().all(|(_, payloads)| payloads.is_empty());
+
+                match tags.len() {
+                    0 => {
+                        // Empty tag unions can never come up at runtime,
+                        // and so don't need declared types.
+                    }
+                    1 => {
+                        if is_enumeration {
+                            // A tag union with one tag is a zero-sized unit type, so
+                            // represent it as a zero-sized struct (e.g. "struct Foo()").
+                            write_deriving(id, types, buf)?;
+                            buf.write_str("\nstruct ")?;
+                            write_type_name(id, types, buf)?;
+                            buf.write_str("();\n")?;
+                        } else {
+                            // if it wasn't an enumeration
+                            // this is a newtype wrapper around something,
+                            // so write an alias for its contents
+                            todo!();
+                        }
+                    }
+                    _ => {
+                        if is_enumeration {
+                            write_deriving(id, types, buf)?;
+                            write_enum(name, tags.iter().map(|(name, _)| name), *tag_bytes, buf)?;
+                        } else {
+                            todo!();
+                        }
+                    }
+                }
             }
             RocType::RecursiveTagUnion { .. } => {
                 todo!();
@@ -40,6 +74,22 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
     }
 
     Ok(())
+}
+
+fn write_enum<I: IntoIterator<Item = S>, S: AsRef<str>>(
+    name: &str,
+    tags: I,
+    tag_bytes: u8,
+    buf: &mut String,
+) -> fmt::Result {
+    // e.g. "#[repr(u8)]\npub enum Foo {\n"
+    writeln!(buf, "#[repr(u{})]\npub enum {} {{", tag_bytes * 8, name)?;
+
+    for name in tags {
+        writeln!(buf, "{}{},", INDENT, name.as_ref())?;
+    }
+
+    buf.write_str("}\n")
 }
 
 fn write_struct(
