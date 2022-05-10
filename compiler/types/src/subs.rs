@@ -62,6 +62,7 @@ struct ErrorTypeState {
     letters_used: u32,
     problems: Vec<crate::types::Problem>,
     context: ErrorTypeContext,
+    recursive_tag_unions_seen: Vec<Variable>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1869,6 +1870,7 @@ impl Subs {
             letters_used: 0,
             problems: Vec::new(),
             context,
+            recursive_tag_unions_seen: Vec::new(),
         };
 
         (var_to_err_type(self, &mut state, var), state.problems)
@@ -3337,7 +3339,10 @@ fn content_to_err_type(
             ErrorType::RigidAbleVar(name, ability)
         }
 
-        RecursionVar { opt_name, .. } => {
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
             let name = match opt_name {
                 Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
@@ -3350,7 +3355,11 @@ fn content_to_err_type(
                 }
             };
 
-            ErrorType::FlexVar(name)
+            if state.recursive_tag_unions_seen.contains(&var) {
+                ErrorType::FlexVar(name)
+            } else {
+                var_to_err_type(subs, state, structure)
+            }
         }
 
         Alias(symbol, args, aliased_to, kind) => {
@@ -3531,6 +3540,8 @@ fn flat_type_to_err_type(
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {
+            state.recursive_tag_unions_seen.push(rec_var);
+
             let mut err_tags = SendMap::default();
 
             for (name_index, slice_index) in tags.iter_all() {

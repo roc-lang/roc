@@ -3509,8 +3509,9 @@ mod test_reporting {
                 This `ACons` tag application has the type:
 
                     [ ACons (Num (Integer Signed64)) [
-                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 a, BNil ],
-                    ANil ], BNil ], ANil ]
+                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 [
+                    ACons I64 (BList I64 I64), ANil ] as ∞, BNil ], ANil ], BNil ],
+                    ANil ]
 
                 But the type annotation on `x` says it should be:
 
@@ -9792,12 +9793,12 @@ I need all branches in an `if` to have the same type!
             "recursion_var_specialization_error",
             indoc!(
                 r#"
-                Job a : [ Job (List (Job a)) a ]
+                Job a : [ Job (List (Job a)) ]
 
                 job : Job Str
 
                 when job is
-                    Job lst _ -> lst == ""
+                    Job lst -> lst == ""
                 "#
             ),
             indoc!(
@@ -9806,8 +9807,8 @@ I need all branches in an `if` to have the same type!
 
                 The 2nd argument to `isEq` is not what I expect:
 
-                9│          Job lst _ -> lst == ""
-                                                ^^
+                9│          Job lst -> lst == ""
+                                              ^^
 
                 This argument is a string of type:
 
@@ -9815,7 +9816,7 @@ I need all branches in an `if` to have the same type!
 
                 But `isEq` needs the 2nd argument to be:
 
-                    List a
+                    List [ Job ∞ ] as ∞
                 "#
             ),
         )
