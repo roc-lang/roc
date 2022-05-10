@@ -663,10 +663,6 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
 
-        LetBlock(declarations, loc_expr) => {
-            eprintln!("TODO `fix_values_captured_in_closure_expr` for let block");
-        }
-
         Expect(condition, loc_expr) => {
             fix_values_captured_in_closure_expr(&mut condition.value, no_capture_symbols);
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);

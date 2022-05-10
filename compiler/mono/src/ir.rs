@@ -3514,7 +3514,6 @@ pub fn with_hole<'a>(
                 }
             }
         }
-        LetBlock(_, _) => todo!(),
 
         LetNonRec(def, cont) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {

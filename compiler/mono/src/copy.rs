@@ -115,8 +115,6 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 final_else: Box::new(final_else.map(go_help)),
             },
 
-            LetBlock(_, _) => todo!(),
-
             LetRec(defs, body) => LetRec(
                 defs.iter()
                     .map(

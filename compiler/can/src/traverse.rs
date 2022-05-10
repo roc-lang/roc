@@ -99,10 +99,6 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             visitor.visit_def(def);
             visitor.visit_expr(&body.value, body.region, var);
         }
-        Expr::LetBlock(declarations, body) => {
-            todo!("visit {:?}", declarations);
-            visitor.visit_expr(&body.value, body.region, var);
-        }
         Expr::Call(f, args, _called_via) => {
             let (fn_var, loc_fn, _closure_var, _ret_var) = &**f;
             walk_call(visitor, *fn_var, loc_fn, args);
