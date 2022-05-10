@@ -9,6 +9,7 @@ use roc_builtins::std::borrow_stdlib;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
+use roc_can::expr::Declarations;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecSet};
 use roc_constrain::module::{
@@ -459,7 +460,7 @@ pub struct LoadedModule {
     pub solved: Solved<Subs>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
-    pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
+    pub declarations_by_id: MutMap<ModuleId, Declarations>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub dep_idents: IdentIdsByModule,
     pub exposed_aliases: MutMap<Symbol, Alias>,
@@ -520,7 +521,7 @@ struct ModuleHeader<'a> {
 #[derive(Debug)]
 struct ConstrainedModule {
     module: Module,
-    declarations: Vec<Declaration>,
+    declarations: Declarations,
     imported_modules: MutMap<ModuleId, Region>,
     constraints: Constraints,
     constraint: ConstraintSoa,
@@ -536,7 +537,7 @@ pub struct TypeCheckedModule<'a> {
     pub layout_cache: LayoutCache<'a>,
     pub module_timing: ModuleTiming,
     pub solved_subs: Solved<Subs>,
-    pub decls: Vec<Declaration>,
+    pub decls: Declarations,
     pub ident_ids: IdentIds,
     pub abilities_store: AbilitiesStore,
 }
@@ -621,7 +622,7 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         solved_module: SolvedModule,
         solved_subs: Solved<Subs>,
-        decls: Vec<Declaration>,
+        decls: Declarations,
         dep_idents: IdentIdsByModule,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
@@ -718,7 +719,7 @@ struct State<'a> {
 
     pub ident_ids_by_module: SharedIdentIdsByModule,
 
-    pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
+    pub declarations_by_id: MutMap<ModuleId, Declarations>,
 
     pub exposed_symbols_by_module: MutMap<ModuleId, VecSet<Symbol>>,
 
@@ -879,7 +880,7 @@ enum BuildTask<'a> {
         constraints: Constraints,
         constraint: ConstraintSoa,
         var_store: VarStore,
-        declarations: Vec<Declaration>,
+        declarations: Declarations,
         dep_idents: IdentIdsByModule,
         cached_subs: CachedSubs,
     },
@@ -890,7 +891,7 @@ enum BuildTask<'a> {
         imported_module_thunks: &'a [Symbol],
         module_id: ModuleId,
         ident_ids: IdentIds,
-        decls: Vec<Declaration>,
+        decls: Declarations,
         exposed_to_host: ExposedToHost,
         abilities_store: AbilitiesStore,
     },
@@ -3544,7 +3545,7 @@ impl<'a> BuildTask<'a> {
         imported_modules: MutMap<ModuleId, Region>,
         exposed_types: &mut ExposedByModule,
         dep_idents: IdentIdsByModule,
-        declarations: Vec<Declaration>,
+        declarations: Declarations,
         cached_subs: CachedSubs,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
@@ -3724,7 +3725,7 @@ fn run_solve<'a>(
     constraints: Constraints,
     constraint: ConstraintSoa,
     var_store: VarStore,
-    decls: Vec<Declaration>,
+    decls: Declarations,
     dep_idents: IdentIdsByModule,
     cached_subs: CachedSubs,
 ) -> Msg<'a> {
@@ -4188,7 +4189,7 @@ fn build_pending_specializations<'a>(
     imported_module_thunks: &'a [Symbol],
     home: ModuleId,
     mut ident_ids: IdentIds,
-    decls: Vec<Declaration>,
+    decls: Declarations,
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     target_info: TargetInfo,
@@ -4223,6 +4224,8 @@ fn build_pending_specializations<'a>(
         call_specialization_counter: 1,
         abilities_store: &mut abilities_store,
     };
+
+    let decls = [];
 
     // Add modules' decls to Procs
     for decl in decls {

@@ -4,6 +4,7 @@ use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
 use roc_can::expected::Expected;
+use roc_can::expr::Declarations;
 use roc_can::pattern::Pattern;
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
@@ -98,7 +99,7 @@ pub fn constrain_module(
     constraints: &mut Constraints,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     abilities_store: &AbilitiesStore,
-    declarations: &[Declaration],
+    declarations: &Declarations,
     home: ModuleId,
 ) -> Constraint {
     let constraint = crate::expr::constrain_decls(constraints, home, declarations);

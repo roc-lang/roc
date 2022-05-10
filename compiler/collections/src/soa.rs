@@ -31,7 +31,7 @@ impl<T> Index<T> {
         }
     }
 
-    pub const fn index(&self) -> usize {
+    pub const fn index(self) -> usize {
         self.index as usize
     }
 
@@ -41,6 +41,10 @@ impl<T> Index<T> {
         vector.push(value);
 
         index
+    }
+
+    pub const fn as_slice(self) -> Slice<T> {
+        Slice::new(self.index, 1)
     }
 }
 

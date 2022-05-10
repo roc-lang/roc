@@ -6,6 +6,7 @@ use crate::annotation::OwnedNamedOrAble;
 use crate::env::Env;
 use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
+use crate::expr::Declarations;
 use crate::expr::Expr::{self, *};
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
@@ -743,6 +744,108 @@ impl DefOrdering {
 
         None
     }
+}
+
+#[inline(always)]
+pub(crate) fn sort_can_defs_new(
+    env: &mut Env<'_>,
+    defs: CanDefs,
+    mut output: Output,
+) -> (Declarations, Output) {
+    let CanDefs {
+        defs,
+        def_ordering,
+        aliases,
+        abilities_in_scope,
+    } = defs;
+
+    // TODO: inefficient, but I want to make this what CanDefs contains in the future
+    let mut defs: Vec<_> = defs.into_iter().map(|x| x.unwrap()).collect();
+
+    let mut declarations = Declarations::with_capacity(defs.len());
+
+    output.abilities_in_scope = abilities_in_scope;
+
+    for (symbol, alias) in aliases.into_iter() {
+        output.aliases.insert(symbol, alias);
+    }
+
+    // We first perform SCC based on any reference, both variable usage and calls
+    // considering both value definitions and function bodies. This will spot any
+    // recursive relations between any 2 definitions.
+    let sccs = def_ordering.references.strongly_connected_components_all();
+
+    sccs.reorder(&mut defs);
+
+    for group in sccs.groups().rev() {
+        match group.count_ones() {
+            1 => {
+                // a group with a single Def, nice and simple
+                let def = defs.pop().unwrap();
+                let index = group.first_one().unwrap();
+
+                if def_ordering.direct_references.get_row_col(index, index) {
+                    // a definition like `x = x + 1`, which is invalid in roc
+                    let symbol = def_ordering.get_symbol(index).unwrap();
+
+                    let entries = vec![make_cycle_entry(symbol, &def)];
+
+                    let problem = Problem::RuntimeError(RuntimeError::CircularDef(entries.clone()));
+                    env.problem(problem);
+
+                    // Declaration::InvalidCycle(entries)
+                    todo!("InvalidCycle: {:?}", entries)
+                } else if def_ordering.references.get_row_col(index, index) {
+                    // this function calls itself, and must be typechecked as a recursive def
+                    match def.loc_pattern.value {
+                        Pattern::Identifier(symbol) => match def.loc_expr.value {
+                            Closure(closure_data) => {
+                                declarations.push_recursive_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    Loc::at(def.loc_expr.region, closure_data),
+                                    def.expr_var,
+                                    def.annotation,
+                                );
+                            }
+                            _ => todo!(),
+                        },
+                        _ => todo!(),
+                    }
+                } else {
+                    // Declaration::Declare(def)
+                    match def.loc_pattern.value {
+                        Pattern::Identifier(symbol) => match def.loc_expr.value {
+                            Closure(closure_data) => {
+                                declarations.push_function_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    Loc::at(def.loc_expr.region, closure_data),
+                                    def.expr_var,
+                                    def.annotation,
+                                );
+                            }
+                            _ => {
+                                declarations.push_value_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    def.loc_expr,
+                                    def.expr_var,
+                                    def.annotation,
+                                );
+                            }
+                        },
+                        _ => todo!(),
+                    }
+                }
+            }
+            group_length => {
+                let group_defs = defs.split_off(defs.len() - group_length);
+
+                dbg!(&group_defs);
+                todo!();
+            }
+        }
+    }
+
+    (declarations, output)
 }
 
 #[inline(always)]

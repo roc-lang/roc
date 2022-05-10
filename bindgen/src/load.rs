@@ -68,6 +68,7 @@ pub fn load_types(
 
     let mut types = Types::default();
 
+    let decls = vec![];
     for decl in decls.into_iter() {
         let defs = match decl {
             Declaration::Declare(def) => {

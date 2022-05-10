@@ -1,9 +1,9 @@
 use crate::abilities::AbilitiesStore;
 use crate::annotation::canonicalize_annotation;
-use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
+use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
-use crate::expr::{ClosureData, Expr, Output};
+use crate::expr::{ClosureData, Declarations, Expr, Output};
 use crate::operator::desugar_def;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
@@ -44,7 +44,7 @@ pub struct RigidVariables {
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: RigidVariables,
-    pub declarations: Vec<Declaration>,
+    pub declarations: Declarations,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub problems: Vec<Problem>,
@@ -351,7 +351,7 @@ pub fn canonicalize_module_defs<'a>(
         ..Default::default()
     };
 
-    let (mut declarations, mut output) = sort_can_defs(&mut env, defs, new_output);
+    let (mut declarations, mut output) = crate::def::sort_can_defs_new(&mut env, defs, new_output);
 
     let symbols_from_requires = symbols_from_requires
         .iter()
@@ -399,40 +399,39 @@ pub fn canonicalize_module_defs<'a>(
         );
     }
 
-    use crate::def::Declaration::*;
-    for decl in declarations.iter_mut() {
-        match decl {
-            Declare(def) => {
-                for (symbol, _) in def.pattern_vars.iter() {
-                    if exposed_but_not_defined.contains(symbol) {
-                        // Remove this from exposed_symbols,
-                        // so that at the end of the process,
-                        // we can see if there were any
-                        // exposed symbols which did not have
-                        // corresponding defs.
-                        exposed_but_not_defined.remove(symbol);
-                    }
-                }
+    let mut index = 0;
+    while index < declarations.len() {
+        use crate::expr::DeclarationTag::*;
+
+        let tag = declarations.declarations[index];
+
+        match tag {
+            Value => {
+                let symbol = &declarations.symbols[index].value;
+
+                // Remove this from exposed_symbols,
+                // so that at the end of the process,
+                // we can see if there were any
+                // exposed symbols which did not have
+                // corresponding defs.
+                exposed_but_not_defined.remove(symbol);
 
                 // Temporary hack: we don't know exactly what symbols are hosted symbols,
                 // and which are meant to be normal definitions without a body. So for now
                 // we just assume they are hosted functions (meant to be provided by the platform)
-                if has_no_implementation(&def.loc_expr.value) {
+                if has_no_implementation(&declarations.expressions[index].value) {
                     match generated_info {
                         GeneratedInfo::Builtin => {
-                            let symbol = def.pattern_vars.iter().next().unwrap().0;
                             match crate::builtins::builtin_defs_map(*symbol, var_store) {
                                 None => {
                                     panic!("A builtin module contains a signature without implementation for {:?}", symbol)
                                 }
-                                Some(mut replacement_def) => {
-                                    replacement_def.annotation = def.annotation.take();
-                                    *def = replacement_def;
+                                Some(replacement_def) => {
+                                    declarations.update_builtin_def(index, replacement_def);
                                 }
                             }
                         }
                         GeneratedInfo::Hosted { effect_symbol, .. } => {
-                            let symbol = def.pattern_vars.iter().next().unwrap().0;
                             let ident_id = symbol.ident_id();
                             let ident = scope
                                 .locals
@@ -440,7 +439,9 @@ pub fn canonicalize_module_defs<'a>(
                                 .get_name(ident_id)
                                 .unwrap()
                                 .to_string();
-                            let def_annotation = def.annotation.clone().unwrap();
+
+                            let def_annotation = declarations.annotations[index].clone().unwrap();
+
                             let annotation = crate::annotation::Annotation {
                                 typ: def_annotation.signature,
                                 introduced_variables: def_annotation.introduced_variables,
@@ -457,38 +458,28 @@ pub fn canonicalize_module_defs<'a>(
                                 annotation,
                             );
 
-                            *def = hosted_def;
+                            declarations.update_builtin_def(index, hosted_def);
                         }
                         _ => (),
                     }
                 }
-            }
-            DeclareRec(defs) => {
-                for def in defs {
-                    for (symbol, _) in def.pattern_vars.iter() {
-                        if exposed_but_not_defined.contains(symbol) {
-                            // Remove this from exposed_symbols,
-                            // so that at the end of the process,
-                            // we can see if there were any
-                            // exposed symbols which did not have
-                            // corresponding defs.
-                            exposed_but_not_defined.remove(symbol);
-                        }
-                    }
-                }
-            }
 
-            InvalidCycle(entries) => {
-                env.problems.push(Problem::BadRecursion(entries.to_vec()));
+                index += 1;
             }
-            Builtin(def) => {
-                // Builtins cannot be exposed in module declarations.
-                // This should never happen!
-                debug_assert!(def
-                    .pattern_vars
-                    .iter()
-                    .all(|(symbol, _)| !exposed_but_not_defined.contains(symbol)));
+            Function(_) | Recursive(_) | TailRecursive(_) => {
+                let symbol = &declarations.symbols[index].value;
+
+                // Remove this from exposed_symbols,
+                // so that at the end of the process,
+                // we can see if there were any
+                // exposed symbols which did not have
+                // corresponding defs.
+                exposed_but_not_defined.remove(symbol);
+
+                index += 1;
             }
+            Destructure(_) => todo!(),
+            MutualRecursion(_) => todo!(),
         }
     }
 
@@ -542,7 +533,7 @@ pub fn canonicalize_module_defs<'a>(
             annotation: None,
         };
 
-        declarations.push(Declaration::Declare(def));
+        declarations.push_def(def);
     }
 
     // Incorporate any remaining output.lookups entries into references.
@@ -556,13 +547,14 @@ pub fn canonicalize_module_defs<'a>(
     referenced_values.extend(env.qualified_value_lookups.iter().copied());
     referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
-    for declaration in declarations.iter_mut() {
-        match declaration {
-            Declare(def) => fix_values_captured_in_closure_def(def, &mut VecSet::default()),
-            DeclareRec(defs) => fix_values_captured_in_closure_defs(defs, &mut VecSet::default()),
-            InvalidCycle(_) | Builtin(_) => {}
-        }
-    }
+    // TODO
+    //    for declaration in declarations.iter_mut() {
+    //        match declaration {
+    //            Declare(def) => fix_values_captured_in_closure_def(def, &mut VecSet::default()),
+    //            DeclareRec(defs) => fix_values_captured_in_closure_defs(defs, &mut VecSet::default()),
+    //            InvalidCycle(_) | Builtin(_) => {}
+    //        }
+    //    }
 
     ModuleOutput {
         scope,

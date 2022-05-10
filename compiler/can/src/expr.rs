@@ -1,7 +1,7 @@
 use crate::abilities::SpecializationId;
 use crate::annotation::{freshen_opaque_def, IntroducedVariables};
 use crate::builtins::builtin_defs_map;
-use crate::def::{can_defs_with_return, Def};
+use crate::def::{can_defs_with_return, Annotation, Def};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
@@ -1924,23 +1924,218 @@ pub struct Declarations {
     pub destructs: Vec<DestructureDef>,
 }
 
+impl Default for Declarations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Declarations {
-    pub fn len(&self) -> usize {
-        let mut accum = 0;
-        for tag in self.declarations.iter() {
-            match tag {
-                DeclarationTag::Function(_) => accum += 1,
-                DeclarationTag::Value => accum += 1,
-                DeclarationTag::Destructure(_) => accum += 1,
-                DeclarationTag::MutualRecursion(slice) => accum += slice.len(),
+    pub fn new() -> Self {
+        Self::with_capacity(0)
+    }
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            declarations: Vec::with_capacity(capacity),
+            variables: Vec::with_capacity(capacity),
+            symbols: Vec::with_capacity(capacity),
+            annotations: Vec::with_capacity(capacity),
+            function_bodies: Vec::with_capacity(capacity),
+            expressions: Vec::with_capacity(capacity),
+            destructs: Vec::new(), // number of destructs is probably low
+        }
+    }
+
+    pub fn push_recursive_def(
+        &mut self,
+        symbol: Loc<Symbol>,
+        loc_closure_data: Loc<ClosureData>,
+        expr_var: Variable,
+        annotation: Option<Annotation>,
+    ) -> usize {
+        let index = self.declarations.len();
+
+        let function_def = FunctionDef {
+            closure_type: loc_closure_data.value.closure_type,
+            closure_ext_var: loc_closure_data.value.closure_ext_var,
+            return_type: loc_closure_data.value.return_type,
+            captured_symbols: loc_closure_data.value.captured_symbols,
+            arguments: loc_closure_data.value.arguments,
+        };
+
+        let loc_function_def = Loc::at(loc_closure_data.region, function_def);
+
+        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+
+        let tag = match loc_closure_data.value.recursive {
+            Recursive::NotRecursive | Recursive::Recursive => {
+                DeclarationTag::Recursive(function_def_index)
             }
+            Recursive::TailRecursive => DeclarationTag::TailRecursive(function_def_index),
+        };
+
+        self.declarations.push(tag);
+        self.variables.push(expr_var);
+        self.symbols.push(symbol);
+        self.annotations.push(annotation);
+
+        self.expressions.push(*loc_closure_data.value.loc_body);
+
+        index
+    }
+
+    pub fn push_function_def(
+        &mut self,
+        symbol: Loc<Symbol>,
+        loc_closure_data: Loc<ClosureData>,
+        expr_var: Variable,
+        annotation: Option<Annotation>,
+    ) -> usize {
+        let index = self.declarations.len();
+
+        let function_def = FunctionDef {
+            closure_type: loc_closure_data.value.closure_type,
+            closure_ext_var: loc_closure_data.value.closure_ext_var,
+            return_type: loc_closure_data.value.return_type,
+            captured_symbols: loc_closure_data.value.captured_symbols,
+            arguments: loc_closure_data.value.arguments,
+        };
+
+        let loc_function_def = Loc::at(loc_closure_data.region, function_def);
+
+        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+
+        self.declarations
+            .push(DeclarationTag::Function(function_def_index));
+        self.variables.push(expr_var);
+        self.symbols.push(symbol);
+        self.annotations.push(annotation);
+
+        self.expressions.push(*loc_closure_data.value.loc_body);
+
+        index
+    }
+
+    pub fn push_value_def(
+        &mut self,
+        symbol: Loc<Symbol>,
+        loc_expr: Loc<Expr>,
+        expr_var: Variable,
+        annotation: Option<Annotation>,
+    ) -> usize {
+        let index = self.declarations.len();
+
+        self.declarations.push(DeclarationTag::Value);
+        self.variables.push(expr_var);
+        self.symbols.push(symbol);
+        self.annotations.push(annotation);
+
+        self.expressions.push(loc_expr);
+
+        index
+    }
+
+    pub fn push_def(&mut self, def: Def) {
+        match def.loc_pattern.value {
+            Pattern::Identifier(symbol) => match def.loc_expr.value {
+                Expr::Closure(closure_data) => match closure_data.recursive {
+                    Recursive::NotRecursive => {
+                        self.push_function_def(
+                            Loc::at(def.loc_pattern.region, symbol),
+                            Loc::at(def.loc_expr.region, closure_data),
+                            def.expr_var,
+                            def.annotation,
+                        );
+                    }
+
+                    Recursive::Recursive | Recursive::TailRecursive => {
+                        self.push_recursive_def(
+                            Loc::at(def.loc_pattern.region, symbol),
+                            Loc::at(def.loc_expr.region, closure_data),
+                            def.expr_var,
+                            def.annotation,
+                        );
+                    }
+                },
+                _ => {
+                    self.push_value_def(
+                        Loc::at(def.loc_pattern.region, symbol),
+                        def.loc_expr,
+                        def.expr_var,
+                        def.annotation,
+                    );
+                }
+            },
+            _ => todo!(),
+        }
+    }
+
+    pub fn update_builtin_def(&mut self, index: usize, def: Def) {
+        match def.loc_pattern.value {
+            Pattern::Identifier(s) => assert_eq!(s, self.symbols[index].value),
+            _ => panic!(),
         }
 
-        accum
+        match def.loc_expr.value {
+            Expr::Closure(closure_data) => {
+                let function_def = FunctionDef {
+                    closure_type: closure_data.closure_type,
+                    closure_ext_var: closure_data.closure_ext_var,
+                    return_type: closure_data.return_type,
+                    captured_symbols: closure_data.captured_symbols,
+                    arguments: closure_data.arguments,
+                };
+
+                let loc_function_def = Loc::at(def.loc_expr.region, function_def);
+
+                let function_def_index =
+                    Index::push_new(&mut self.function_bodies, loc_function_def);
+
+                self.declarations[index] = DeclarationTag::Function(function_def_index);
+                self.expressions[index] = *closure_data.loc_body;
+
+                // TODO investigate whether this matters, and if we can be more efficient here
+                self.variables[index] = def.expr_var;
+            }
+            _ => {
+                self.declarations[index] = DeclarationTag::Value;
+                self.expressions[index] = def.loc_expr;
+
+                // TODO investigate whether this matters, and if we can be more efficient here
+                self.variables[index] = def.expr_var;
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.declarations.iter().map(|d| d.len()).sum()
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn iter_top_down(&self) -> impl Iterator<Item = (usize, DeclarationTag)> + '_ {
+        self.declarations.iter().scan(0, |state, e| {
+            let length_so_far = *state;
+
+            *state += e.len();
+
+            Some((length_so_far, *e))
+        })
+    }
+
+    pub fn iter_bottom_up(&self) -> impl Iterator<Item = (usize, DeclarationTag)> + '_ {
+        self.declarations
+            .iter()
+            .rev()
+            .scan(self.declarations.len() - 1, |state, e| {
+                let length_so_far = *state;
+
+                *state = length_so_far.saturating_sub(e.len());
+
+                Some((length_so_far, *e))
+            })
     }
 }
 
@@ -1948,8 +2143,23 @@ impl Declarations {
 pub enum DeclarationTag {
     Value,
     Function(Index<Loc<FunctionDef>>),
+    Recursive(Index<Loc<FunctionDef>>),
+    TailRecursive(Index<Loc<FunctionDef>>),
     Destructure(Index<DestructureDef>),
     MutualRecursion(Slice<FunctionDef>),
+}
+
+impl DeclarationTag {
+    fn len(self) -> usize {
+        match self {
+            DeclarationTag::Function(_) => 1,
+            DeclarationTag::Recursive(_) => 1,
+            DeclarationTag::TailRecursive(_) => 1,
+            DeclarationTag::Value => 1,
+            DeclarationTag::Destructure(_) => 1,
+            DeclarationTag::MutualRecursion(slice) => slice.len(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -3,4 +3,7 @@ app "helloZig"
     imports []
     provides [ main ] to pf
 
-main = "Hello, World!\n"
+f : Str -> Str
+f = \s -> Str.concat s "!"
+
+main = f "Hello, World!\n"

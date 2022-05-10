@@ -9,9 +9,12 @@ use roc_can::exhaustive::{sketch_pattern_to_rows, sketch_when_branches, Exhausti
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
-use roc_can::expr::{AccessorData, AnnotatedMark, ClosureData, Field, WhenBranch};
+use roc_can::expr::{
+    AccessorData, AnnotatedMark, ClosureData, Declarations, Field, FunctionDef, WhenBranch,
+};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
+use roc_collections::soa::{Index, Slice};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -87,7 +90,7 @@ fn constrain_untyped_args(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn constrain_closure(
+fn constrain_untyped_closure(
     constraints: &mut Constraints,
     env: &Env,
     region: Region,
@@ -432,7 +435,7 @@ pub fn constrain_expr(
             ..
         }) => {
             // shared code with function defs without an annotation
-            constrain_closure(
+            constrain_untyped_closure(
                 constraints,
                 env,
                 region,
@@ -936,98 +939,8 @@ pub fn constrain_expr(
             loop {
                 match declarations.declarations[index] {
                     roc_can::expr::DeclarationTag::Value => {
-                        let loc_expr = &declarations.expressions[index];
-                        let loc_symbol = declarations.symbols[index];
-                        let expr_var = declarations.variables[index];
-                        let opt_annotation = &declarations.annotations[index];
-
-                        match opt_annotation {
-                            Some(annotation) => {
-                                let arity = 1;
-                                let rigids = &env.rigids;
-                                let mut ftv = rigids.clone();
-
-                                let InstantiateRigids {
-                                    signature,
-                                    new_rigid_variables,
-                                    new_infer_variables,
-                                } = instantiate_rigids_simple(
-                                    &annotation.signature,
-                                    &annotation.introduced_variables,
-                                    &mut ftv,
-                                );
-
-                                let loc_pattern = Loc::at(
-                                    loc_symbol.region,
-                                    Pattern::Identifier(loc_symbol.value),
-                                );
-
-                                let annotation_expected = FromAnnotation(
-                                    loc_pattern,
-                                    arity,
-                                    AnnotationSource::TypedBody {
-                                        region: annotation.region,
-                                    },
-                                    signature.clone(),
-                                );
-
-                                // TODO missing equality of annotation_expected with expr_var?
-                                // but the signature is stored into the expr_var below?!
-
-                                let ret_constraint = constrain_expr(
-                                    constraints,
-                                    env,
-                                    loc_expr.region,
-                                    &loc_expr.value,
-                                    annotation_expected,
-                                );
-
-                                let cons = [
-                                    ret_constraint,
-                                    // Store type into AST vars. We use Store so errors aren't reported twice
-                                    constraints.store(
-                                        signature.clone(),
-                                        expr_var,
-                                        std::file!(),
-                                        std::line!(),
-                                    ),
-                                ];
-                                let expr_con = constraints.and_constraint(cons);
-
-                                body_con = constrain_def_make_constraint_simple(
-                                    constraints,
-                                    new_rigid_variables,
-                                    new_infer_variables,
-                                    expr_con,
-                                    body_con,
-                                    loc_symbol,
-                                    expr_var,
-                                    signature,
-                                );
-                            }
-                            None => {
-                                let expr_type = Type::Variable(expr_var);
-
-                                let expr_con = constrain_expr(
-                                    constraints,
-                                    env,
-                                    loc_expr.region,
-                                    &loc_expr.value,
-                                    NoExpectation(expr_type),
-                                );
-
-                                body_con = constrain_def_make_constraint_simple(
-                                    constraints,
-                                    vec![],
-                                    vec![],
-                                    expr_con,
-                                    body_con,
-                                    loc_symbol,
-                                    expr_var,
-                                    Type::Variable(expr_var),
-                                );
-                            }
-                        }
+                        body_con =
+                            constrain_value_def(constraints, env, declarations, index, body_con);
 
                         if index == 0 {
                             break;
@@ -1035,6 +948,7 @@ pub fn constrain_expr(
 
                         index -= 1;
                     }
+
                     roc_can::expr::DeclarationTag::Function(function_def_index) => {
                         let loc_expr = &declarations.expressions[index];
                         let loc_symbol = declarations.symbols[index];
@@ -1210,7 +1124,7 @@ pub fn constrain_expr(
                             None => {
                                 let expr_type = Type::Variable(expr_var);
 
-                                let expr_con = constrain_closure(
+                                let expr_con = constrain_untyped_closure(
                                     constraints,
                                     env,
                                     loc_function_def.region,
@@ -1246,6 +1160,8 @@ pub fn constrain_expr(
                     }
                     roc_can::expr::DeclarationTag::Destructure(_) => todo!(),
                     roc_can::expr::DeclarationTag::MutualRecursion(_) => todo!(),
+                    roc_can::expr::DeclarationTag::Recursive(_) => todo!(),
+                    roc_can::expr::DeclarationTag::TailRecursive(_) => todo!(),
                 }
             }
 
@@ -1493,6 +1409,288 @@ pub fn constrain_expr(
     }
 }
 
+fn constrain_function_def(
+    constraints: &mut Constraints,
+    env: &Env,
+    declarations: &Declarations,
+    index: usize,
+    function_def_index: Index<Loc<FunctionDef>>,
+    body_con: Constraint,
+) -> Constraint {
+    let loc_expr = &declarations.expressions[index];
+    let loc_symbol = declarations.symbols[index];
+    let expr_var = declarations.variables[index];
+    let opt_annotation = &declarations.annotations[index];
+
+    let loc_function_def = &declarations.function_bodies[function_def_index.index()];
+    let function_def = &loc_function_def.value;
+
+    match opt_annotation {
+        Some(annotation) => {
+            let arity = annotation.signature.arity();
+            let rigids = &env.rigids;
+            let mut ftv = rigids.clone();
+
+            let InstantiateRigids {
+                signature,
+                new_rigid_variables,
+                new_infer_variables,
+            } = instantiate_rigids_simple(
+                &annotation.signature,
+                &annotation.introduced_variables,
+                &mut ftv,
+            );
+
+            let loc_pattern = Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
+
+            // TODO missing equality of annotation_expected with expr_var?
+            // but the signature is stored into the expr_var below?!
+
+            let region = loc_function_def.region;
+
+            let loc_body_expr = loc_expr;
+            let mut argument_pattern_state = PatternState {
+                headers: SendMap::default(),
+                vars: Vec::with_capacity(function_def.arguments.len()),
+                constraints: Vec::with_capacity(1),
+                delayed_is_open_constraints: vec![],
+            };
+            let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
+            let ret_var = function_def.return_type;
+            let closure_var = function_def.closure_type;
+            let closure_ext_var = function_def.closure_ext_var;
+
+            let (arg_types, signature_closure_type, ret_type) = match &signature {
+                Type::Function(arg_types, signature_closure_type, ret_type) => {
+                    (arg_types, signature_closure_type, ret_type)
+                }
+                _ => todo!("TODO {:?}", (loc_symbol, &signature)),
+            };
+
+            // Type::Function(arg_types, signature_closure_type, ret_type),
+            let ret_type = *ret_type.clone();
+
+            vars.push(ret_var);
+            vars.push(closure_var);
+            vars.push(closure_ext_var);
+
+            let mut def_pattern_state = PatternState::default();
+
+            def_pattern_state.headers.insert(
+                loc_symbol.value,
+                Loc {
+                    region,
+                    value: Type::Variable(expr_var),
+                },
+            );
+
+            constrain_typed_function_arguments_simple(
+                constraints,
+                env,
+                loc_symbol.value,
+                &mut def_pattern_state,
+                &mut argument_pattern_state,
+                &function_def.arguments,
+                arg_types,
+            );
+
+            let closure_constraint = constrain_closure_size(
+                constraints,
+                loc_symbol.value,
+                region,
+                &function_def.captured_symbols,
+                closure_var,
+                closure_ext_var,
+                &mut vars,
+            );
+
+            let annotation_expected = FromAnnotation(
+                loc_pattern.clone(),
+                arity,
+                AnnotationSource::TypedBody {
+                    region: annotation.region,
+                },
+                ret_type.clone(),
+            );
+
+            let ret_constraint = constrain_expr(
+                constraints,
+                env,
+                loc_body_expr.region,
+                &loc_body_expr.value,
+                annotation_expected,
+            );
+
+            vars.push(expr_var);
+            let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
+
+            let signature_closure_type = *signature_closure_type.clone();
+            let signature_index = constraints.push_type(signature.clone());
+            let cons = [
+                constraints.let_constraint(
+                    [],
+                    argument_pattern_state.vars,
+                    argument_pattern_state.headers,
+                    defs_constraint,
+                    ret_constraint,
+                ),
+                constraints.equal_types_var(
+                    closure_var,
+                    Expected::FromAnnotation(
+                        loc_pattern.clone(),
+                        arity,
+                        AnnotationSource::TypedBody {
+                            region: annotation.region,
+                        },
+                        signature_closure_type,
+                    ),
+                    Category::ClosureSize,
+                    region,
+                ),
+                constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
+                constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
+                constraints.store(ret_type, ret_var, std::file!(), std::line!()),
+                closure_constraint,
+            ];
+
+            let expr_con = constraints.exists_many(vars, cons);
+
+            constrain_def_make_constraint_simple(
+                constraints,
+                new_rigid_variables,
+                new_infer_variables,
+                expr_con,
+                body_con,
+                loc_symbol,
+                expr_var,
+                signature,
+            )
+        }
+        None => {
+            let expr_type = Type::Variable(expr_var);
+
+            let expr_con = constrain_untyped_closure(
+                constraints,
+                env,
+                loc_function_def.region,
+                NoExpectation(expr_type),
+                expr_var,
+                function_def.closure_type,
+                function_def.closure_ext_var,
+                function_def.return_type,
+                &function_def.arguments,
+                loc_expr,
+                &function_def.captured_symbols,
+                loc_symbol.value,
+            );
+
+            constrain_def_make_constraint_simple(
+                constraints,
+                vec![],
+                vec![],
+                expr_con,
+                body_con,
+                loc_symbol,
+                expr_var,
+                Type::Variable(expr_var),
+            )
+        }
+    }
+}
+
+fn constrain_value_def(
+    constraints: &mut Constraints,
+    env: &Env,
+    declarations: &Declarations,
+    index: usize,
+    body_con: Constraint,
+) -> Constraint {
+    let loc_expr = &declarations.expressions[index];
+    let loc_symbol = declarations.symbols[index];
+    let expr_var = declarations.variables[index];
+    let opt_annotation = &declarations.annotations[index];
+
+    match opt_annotation {
+        Some(annotation) => {
+            let arity = 1;
+            let rigids = &env.rigids;
+            let mut ftv = rigids.clone();
+
+            let InstantiateRigids {
+                signature,
+                new_rigid_variables,
+                new_infer_variables,
+            } = instantiate_rigids_simple(
+                &annotation.signature,
+                &annotation.introduced_variables,
+                &mut ftv,
+            );
+
+            let loc_pattern = Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
+
+            let annotation_expected = FromAnnotation(
+                loc_pattern,
+                arity,
+                AnnotationSource::TypedBody {
+                    region: annotation.region,
+                },
+                signature.clone(),
+            );
+
+            // TODO missing equality of annotation_expected with expr_var?
+            // but the signature is stored into the expr_var below?!
+
+            let ret_constraint = constrain_expr(
+                constraints,
+                env,
+                loc_expr.region,
+                &loc_expr.value,
+                annotation_expected,
+            );
+
+            let cons = [
+                ret_constraint,
+                // Store type into AST vars. We use Store so errors aren't reported twice
+                constraints.store(signature.clone(), expr_var, std::file!(), std::line!()),
+            ];
+            let expr_con = constraints.and_constraint(cons);
+
+            constrain_def_make_constraint_simple(
+                constraints,
+                new_rigid_variables,
+                new_infer_variables,
+                expr_con,
+                body_con,
+                loc_symbol,
+                expr_var,
+                signature,
+            )
+        }
+        None => {
+            let expr_type = Type::Variable(expr_var);
+
+            let expr_con = constrain_expr(
+                constraints,
+                env,
+                loc_expr.region,
+                &loc_expr.value,
+                NoExpectation(expr_type),
+            );
+
+            constrain_def_make_constraint_simple(
+                constraints,
+                vec![],
+                vec![],
+                expr_con,
+                body_con,
+                loc_symbol,
+                expr_var,
+                Type::Variable(expr_var),
+            )
+        }
+    }
+}
+
 /// Constrain a when branch, returning (variables in pattern, symbols introduced in pattern, pattern constraint, body constraint).
 /// We want to constraint all pattern constraints in a "when" before body constraints.
 #[inline(always)]
@@ -1609,7 +1807,7 @@ fn constrain_empty_record(
 pub fn constrain_decls(
     constraints: &mut Constraints,
     home: ModuleId,
-    decls: &[Declaration],
+    declarations: &Declarations,
 ) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
 
@@ -1618,22 +1816,42 @@ pub fn constrain_decls(
         rigids: MutMap::default(),
     };
 
-    for decl in decls.iter().rev() {
+    debug_assert_eq!(declarations.declarations.len(), declarations.symbols.len());
+
+    for (index, tag) in declarations.iter_top_down() {
         // Clear the rigids from the previous iteration.
         // rigids are not shared between top-level definitions
         env.rigids.clear();
 
-        match decl {
-            Declaration::Declare(def) | Declaration::Builtin(def) => {
-                constraint = constrain_def(constraints, &env, def, constraint);
+        use roc_can::expr::DeclarationTag::*;
+        match tag {
+            Value => {
+                constraint =
+                    constrain_value_def(constraints, &env, declarations, index, constraint);
             }
-            Declaration::DeclareRec(defs) => {
-                constraint = constrain_recursive_defs(constraints, &env, defs, constraint);
+            Function(function_def_index) => {
+                constraint = constrain_function_def(
+                    constraints,
+                    &env,
+                    declarations,
+                    index,
+                    function_def_index,
+                    constraint,
+                );
             }
-            Declaration::InvalidCycle(_) => {
-                // invalid cycles give a canonicalization error. we skip them here.
-                continue;
+            Recursive(function_def_index) | TailRecursive(function_def_index) => {
+                // for the type it does not matter that a recursive call is a tail call
+                constraint = constrain_recursive_defs_simple(
+                    constraints,
+                    &env,
+                    declarations,
+                    index,
+                    function_def_index.as_slice(),
+                    constraint,
+                );
             }
+            Destructure(_) => todo!(),
+            MutualRecursion(_) => todo!(),
         }
     }
 
@@ -2379,6 +2597,255 @@ fn instantiate_rigids_simple(
         new_rigid_variables,
         new_infer_variables,
     }
+}
+
+fn constrain_recursive_defs_simple(
+    constraints: &mut Constraints,
+    env: &Env,
+    declarations: &Declarations,
+    start_index: usize,
+    defs: Slice<Loc<FunctionDef>>,
+    body_con: Constraint,
+) -> Constraint {
+    rec_defs_help_simple(
+        constraints,
+        env,
+        declarations,
+        defs,
+        start_index,
+        body_con,
+        Info::with_capacity(defs.len()),
+        Info::with_capacity(defs.len()),
+    )
+}
+
+pub fn rec_defs_help_simple(
+    constraints: &mut Constraints,
+    env: &Env,
+    declarations: &Declarations,
+    defs: Slice<Loc<FunctionDef>>,
+    start_index: usize,
+    body_con: Constraint,
+    mut rigid_info: Info,
+    mut flex_info: Info,
+) -> Constraint {
+    for (index, function_def_index) in (start_index..).zip(defs.indices()) {
+        let loc_expr = &declarations.expressions[index];
+        let loc_symbol = declarations.symbols[index];
+        let expr_var = declarations.variables[index];
+        let opt_annotation = &declarations.annotations[index];
+
+        let loc_function_def = &declarations.function_bodies[function_def_index];
+        let function_def = &loc_function_def.value;
+
+        match opt_annotation {
+            None => {
+                let expr_type = Type::Variable(expr_var);
+
+                let expr_con = constrain_untyped_closure(
+                    constraints,
+                    env,
+                    loc_function_def.region,
+                    NoExpectation(expr_type),
+                    expr_var,
+                    function_def.closure_type,
+                    function_def.closure_ext_var,
+                    function_def.return_type,
+                    &function_def.arguments,
+                    loc_expr,
+                    &function_def.captured_symbols,
+                    loc_symbol.value,
+                );
+
+                let def_con = expr_con;
+
+                flex_info.vars = vec![expr_var];
+                flex_info.constraints.push(def_con);
+                flex_info.def_types.insert(
+                    loc_symbol.value,
+                    Loc::at(loc_symbol.region, Type::Variable(expr_var)),
+                );
+            }
+
+            Some(annotation) => {
+                let arity = annotation.signature.arity();
+                let rigids = &env.rigids;
+                let mut ftv = rigids.clone();
+
+                let InstantiateRigids {
+                    signature,
+                    new_rigid_variables,
+                    new_infer_variables,
+                } = instantiate_rigids_simple(
+                    &annotation.signature,
+                    &annotation.introduced_variables,
+                    &mut ftv,
+                );
+
+                let loc_pattern = Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
+
+                flex_info.vars.extend(new_infer_variables);
+
+                let annotation_expected = FromAnnotation(
+                    loc_pattern.clone(),
+                    arity,
+                    AnnotationSource::TypedBody {
+                        region: annotation.region,
+                    },
+                    signature.clone(),
+                );
+
+                let (arg_types, _signature_closure_type, ret_type) = match &signature {
+                    Type::Function(arg_types, signature_closure_type, ret_type) => {
+                        (arg_types, signature_closure_type, ret_type)
+                    }
+                    _ => todo!("TODO {:?}", (loc_symbol, &signature)),
+                };
+
+                let expected = annotation_expected;
+                let region = loc_function_def.region;
+
+                let loc_body_expr = loc_expr;
+                let mut argument_pattern_state = PatternState {
+                    headers: SendMap::default(),
+                    vars: Vec::with_capacity(function_def.arguments.len()),
+                    constraints: Vec::with_capacity(1),
+                    delayed_is_open_constraints: vec![],
+                };
+                let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
+                let ret_var = function_def.return_type;
+                let closure_var = function_def.closure_type;
+                let closure_ext_var = function_def.closure_ext_var;
+                let ret_type = *ret_type.clone();
+
+                vars.push(ret_var);
+                vars.push(closure_var);
+                vars.push(closure_ext_var);
+
+                let mut def_pattern_state = PatternState::default();
+
+                def_pattern_state.headers.insert(
+                    loc_symbol.value,
+                    Loc {
+                        region,
+                        value: Type::Variable(expr_var),
+                    },
+                );
+
+                constrain_typed_function_arguments_simple(
+                    constraints,
+                    env,
+                    loc_symbol.value,
+                    &mut def_pattern_state,
+                    &mut argument_pattern_state,
+                    &function_def.arguments,
+                    arg_types,
+                );
+
+                let pattern_types = function_def
+                    .arguments
+                    .iter()
+                    .map(|a| Type::Variable(a.0))
+                    .collect();
+
+                let closure_constraint = constrain_closure_size(
+                    constraints,
+                    loc_symbol.value,
+                    region,
+                    &function_def.captured_symbols,
+                    closure_var,
+                    closure_ext_var,
+                    &mut vars,
+                );
+
+                let fn_type = Type::Function(
+                    pattern_types,
+                    Box::new(Type::Variable(closure_var)),
+                    Box::new(ret_type.clone()),
+                );
+
+                let expr_con = constrain_expr(
+                    constraints,
+                    env,
+                    loc_body_expr.region,
+                    &loc_body_expr.value,
+                    NoExpectation(ret_type.clone()),
+                );
+
+                vars.push(expr_var);
+
+                let signature_index = constraints.push_type(signature);
+                let state_constraints =
+                    constraints.and_constraint(argument_pattern_state.constraints);
+                let cons = [
+                    constraints.let_constraint(
+                        [],
+                        argument_pattern_state.vars,
+                        argument_pattern_state.headers,
+                        state_constraints,
+                        expr_con,
+                    ),
+                    constraints.equal_types(
+                        fn_type.clone(),
+                        expected.clone(),
+                        Category::Lambda,
+                        region,
+                    ),
+                    // "fn_var is equal to the closure's type" - fn_var is used in code gen
+                    // Store type into AST vars. We use Store so errors aren't reported twice
+                    constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
+                    constraints.store(ret_type, ret_var, std::file!(), std::line!()),
+                    closure_constraint,
+                ];
+
+                let and_constraint = constraints.and_constraint(cons);
+                let def_con = constraints.exists(vars, and_constraint);
+
+                rigid_info.vars.extend(&new_rigid_variables);
+
+                rigid_info.constraints.push(constraints.let_constraint(
+                    new_rigid_variables,
+                    def_pattern_state.vars,
+                    [], // no headers introduced (at this level)
+                    def_con,
+                    Constraint::True,
+                ));
+                rigid_info.def_types.extend(def_pattern_state.headers);
+            }
+        }
+    }
+
+    let flex_constraints = constraints.and_constraint(flex_info.constraints);
+    let inner_inner = constraints.let_constraint(
+        [],
+        [],
+        flex_info.def_types.clone(),
+        Constraint::True,
+        flex_constraints,
+    );
+
+    let rigid_constraints = {
+        let mut temp = rigid_info.constraints;
+        temp.push(body_con);
+
+        constraints.and_constraint(temp)
+    };
+
+    let inner = constraints.let_constraint(
+        [],
+        flex_info.vars,
+        flex_info.def_types,
+        inner_inner,
+        rigid_constraints,
+    );
+
+    constraints.let_constraint(
+        rigid_info.vars,
+        [],
+        rigid_info.def_types,
+        Constraint::True,
+        inner,
+    )
 }
 
 fn constrain_recursive_defs(
