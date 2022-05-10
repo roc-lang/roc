@@ -636,6 +636,9 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
 
             type_annotation_to_html(next_indent_level, buf, output);
         }
+        TypeAnnotation::Ability { members: _ } => {
+            // TODO(abilities): fill me in
+        }
         TypeAnnotation::ObscuredTagUnion => {
             buf.push_str("[ @.. ]");
         }
@@ -712,6 +715,7 @@ fn should_be_multiline(type_ann: &TypeAnnotation) -> bool {
 
             is_multiline
         }
+        TypeAnnotation::Ability { .. } => true,
         TypeAnnotation::Wildcard => false,
         TypeAnnotation::NoTypeAnn => false,
     }
