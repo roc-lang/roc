@@ -107,7 +107,7 @@ fn build_wasm_libc_compilerrt(out_dir: &str, source_path: &str) -> (String, Stri
 fn feature_is_enabled(feature_name: &str) -> bool {
     let cargo_env_var = format!(
         "CARGO_FEATURE_{}",
-        feature_name.replace("-", "_").to_uppercase()
+        feature_name.replace('-', "_").to_uppercase()
     );
     env::var(cargo_env_var).is_ok()
 }

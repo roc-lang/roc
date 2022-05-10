@@ -66,7 +66,7 @@ fn record_aliased() {
 
     assert_eq!(
         generate_bindings(module)
-            .strip_prefix("\n")
+            .strip_prefix('\n')
             .unwrap_or_default(),
         indoc!(
             r#"
@@ -96,7 +96,7 @@ fn nested_record_aliased() {
 
     assert_eq!(
         generate_bindings(module)
-            .strip_prefix("\n")
+            .strip_prefix('\n')
             .unwrap_or_default(),
         indoc!(
             r#"
@@ -125,7 +125,7 @@ fn record_anonymous() {
 
     assert_eq!(
         generate_bindings(module)
-            .strip_prefix("\n")
+            .strip_prefix('\n')
             .unwrap_or_default(),
         indoc!(
             r#"
@@ -146,7 +146,7 @@ fn nested_record_anonymous() {
 
     assert_eq!(
         generate_bindings(module)
-            .strip_prefix("\n")
+            .strip_prefix('\n')
             .unwrap_or_default(),
         indoc!(
             r#"
@@ -183,7 +183,7 @@ fn tag_union_aliased() {
 
     assert_eq!(
         generate_bindings(module)
-            .strip_prefix("\n")
+            .strip_prefix('\n')
             .unwrap_or_default(),
         indoc!(
             r#"
@@ -332,7 +332,7 @@ fn tag_union_enumeration() {
 
     assert_eq!(
         generate_bindings(module)
-            .strip_prefix("\n")
+            .strip_prefix('\n')
             .unwrap_or_default(),
         indoc!(
             r#"

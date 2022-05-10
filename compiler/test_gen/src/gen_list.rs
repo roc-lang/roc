@@ -1089,7 +1089,7 @@ fn list_map_closure() {
         indoc!(
             r#"
             pi : F64
-            pi = 3.14
+            pi = 1.23
 
             single : List F64
             single =
@@ -1098,7 +1098,7 @@ fn list_map_closure() {
             List.map single (\x -> x + pi)
             "#
         ),
-        RocList::from_slice(&[3.14]),
+        RocList::from_slice(&[1.23]),
         RocList<f64>
     );
 }

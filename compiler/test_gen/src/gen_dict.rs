@@ -65,7 +65,7 @@ fn dict_nonempty_contains() {
         indoc!(
             r#"
             empty : Dict I64 F64
-            empty = Dict.insert Dict.empty 42 3.14
+            empty = Dict.insert Dict.empty 42 1.23
 
             Dict.contains empty 42
             "#
@@ -101,7 +101,7 @@ fn dict_nonempty_remove() {
         indoc!(
             r#"
             empty : Dict I64 F64
-            empty = Dict.insert Dict.empty 42 3.14
+            empty = Dict.insert Dict.empty 42 1.23
 
             empty
                 |> Dict.remove 42
@@ -120,7 +120,7 @@ fn dict_nonempty_get() {
         indoc!(
             r#"
             empty : Dict I64 F64
-            empty = Dict.insert Dict.empty 42 3.14
+            empty = Dict.insert Dict.empty 42 1.23
 
             withDefault = \x, def ->
                 when  x is
@@ -128,12 +128,12 @@ fn dict_nonempty_get() {
                     Err _ -> def
 
             empty
-                |> Dict.insert 42 3.14
+                |> Dict.insert 42 1.23
                 |> Dict.get 42
                 |> withDefault 0
             "#
         ),
-        3.14,
+        1.23,
         f64
     );
 
@@ -146,7 +146,7 @@ fn dict_nonempty_get() {
                     Err _ -> def
 
             Dict.empty
-                |> Dict.insert 42 3.14
+                |> Dict.insert 42 1.23
                 |> Dict.get 43
                 |> withDefault 0
             "#

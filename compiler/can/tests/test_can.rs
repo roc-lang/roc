@@ -326,10 +326,12 @@ mod test_can {
         // 2. Thus, `g` is not defined then final reference to it is a
         //    `LookupNotInScope`.
         assert_eq!(problems.len(), 2);
-        assert!(problems.iter().all(|problem| match problem {
-            Problem::SignatureDefMismatch { .. } => true,
-            Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _)) => true,
-            _ => false,
+        assert!(problems.iter().all(|problem| {
+            matches!(
+                problem,
+                Problem::SignatureDefMismatch { .. }
+                    | Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _))
+            )
         }));
     }
 
@@ -352,10 +354,12 @@ mod test_can {
         // 2. Thus, `g` is not defined then final reference to it is a
         //    `LookupNotInScope`.
         assert_eq!(problems.len(), 2);
-        assert!(problems.iter().all(|problem| match problem {
-            Problem::SignatureDefMismatch { .. } => true,
-            Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _)) => true,
-            _ => false,
+        assert!(problems.iter().all(|problem| {
+            matches!(
+                problem,
+                Problem::SignatureDefMismatch { .. }
+                    | Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _))
+            )
         }));
     }
 
@@ -374,10 +378,10 @@ mod test_can {
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems.len(), 1);
-        assert!(problems.iter().all(|problem| match problem {
-            Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            _ => false,
-        }));
+        assert!(problems.iter().all(|problem| matches!(
+            problem,
+            Problem::RuntimeError(RuntimeError::Shadowing { .. })
+        )));
     }
 
     #[test]
@@ -395,10 +399,10 @@ mod test_can {
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems.len(), 1);
-        assert!(problems.iter().all(|problem| match problem {
-            Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            _ => false,
-        }));
+        assert!(problems.iter().all(|problem| matches!(
+            problem,
+            Problem::RuntimeError(RuntimeError::Shadowing { .. })
+        )));
     }
 
     #[test]
@@ -417,10 +421,10 @@ mod test_can {
 
         assert_eq!(problems.len(), 1);
         println!("{:#?}", problems);
-        assert!(problems.iter().all(|problem| match problem {
-            Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            _ => false,
-        }));
+        assert!(problems.iter().all(|problem| matches!(
+            problem,
+            Problem::RuntimeError(RuntimeError::Shadowing { .. })
+        )));
     }
 
     #[test]
@@ -540,10 +544,9 @@ mod test_can {
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems.len(), 1);
-        assert!(problems.iter().all(|problem| match problem {
-            Problem::UnusedDef(_, _) => true,
-            _ => false,
-        }));
+        assert!(problems
+            .iter()
+            .all(|problem| matches!(problem, Problem::UnusedDef(_, _))));
     }
 
     #[test]
@@ -563,10 +566,9 @@ mod test_can {
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems.len(), 2);
-        assert!(problems.iter().all(|problem| match problem {
-            Problem::UnusedDef(_, _) => true,
-            _ => false,
-        }));
+        assert!(problems
+            .iter()
+            .all(|problem| matches!(problem, Problem::UnusedDef(_, _))));
     }
     // LOCALS
 
@@ -643,10 +645,9 @@ mod test_can {
         } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems.len(), 1);
-        assert!(problems.iter().all(|problem| match problem {
-            Problem::InvalidOptionalValue { .. } => true,
-            _ => false,
-        }));
+        assert!(problems
+            .iter()
+            .all(|problem| matches!(problem, Problem::InvalidOptionalValue { .. })));
 
         assert!(matches!(
             loc_expr.value,
