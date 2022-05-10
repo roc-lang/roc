@@ -101,6 +101,7 @@ mod test_reporting {
         (module_src, loaded)
     }
 
+    #[allow(clippy::type_complexity)]
     fn infer_expr_help_new<'a>(
         subdir: &str,
         arena: &'a Bump,
@@ -176,8 +177,7 @@ mod test_reporting {
                 buf
             }
             Err(other) => {
-                assert!(false, "failed to load: {:?}", other);
-                unreachable!()
+                panic!("failed to load: {:?}", other);
             }
         }
     }
@@ -342,7 +342,7 @@ mod test_reporting {
         list_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
-        if true && buf != expected_rendering {
+        if buf != expected_rendering {
             for line in buf.split('\n') {
                 println!("                {}", line);
             }
@@ -364,7 +364,7 @@ mod test_reporting {
         list_header_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
-        if true && buf != expected_rendering {
+        if buf != expected_rendering {
             for line in buf.split('\n') {
                 println!("                {}", line);
             }

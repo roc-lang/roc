@@ -2425,12 +2425,13 @@ mod tests {
         let mut buf = bumpalo::vec![in &arena];
         let cvtss2sd_code: u8 = 0x5A;
 
-        for (op_code, reg1, reg2, expected) in &[(
+        {
+            let (op_code, reg1, reg2, expected) = &(
             cvtss2sd_code,
             X86_64FloatReg::XMM1,
             X86_64FloatReg::XMM0,
             [0xF3, 0x0F, 0x5A, 0xC8],
-        )] {
+        );
             buf.clear();
             cvtsx2_help(&mut buf, 0xF3, *op_code, *reg1, *reg2);
             assert_eq!(expected, &buf[..]);

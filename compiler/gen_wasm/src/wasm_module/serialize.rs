@@ -331,7 +331,7 @@ mod tests {
     use super::*;
     use bumpalo::{self, collections::Vec, Bump};
 
-    fn help_u32<'a>(arena: &'a Bump, value: u32) -> Vec<'a, u8> {
+    fn help_u32(arena: &Bump, value: u32) -> Vec<'_, u8> {
         let mut buffer = Vec::with_capacity_in(MAX_SIZE_ENCODED_U32, arena);
         buffer.encode_u32(value);
         buffer
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(help_u32(a, u32::MAX), &[0xff, 0xff, 0xff, 0xff, 0x0f]);
     }
 
-    fn help_u64<'a>(arena: &'a Bump, value: u64) -> Vec<'a, u8> {
+    fn help_u64(arena: &Bump, value: u64) -> Vec<'_, u8> {
         let mut buffer = Vec::with_capacity_in(10, arena);
         buffer.encode_u64(value);
         buffer
@@ -370,7 +370,7 @@ mod tests {
         );
     }
 
-    fn help_i32<'a>(arena: &'a Bump, value: i32) -> Vec<'a, u8> {
+    fn help_i32(arena: &Bump, value: i32) -> Vec<'_, u8> {
         let mut buffer = Vec::with_capacity_in(MAX_SIZE_ENCODED_U32, arena);
         buffer.encode_i32(value);
         buffer
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(help_i32(a, i32::MIN), &[0x80, 0x80, 0x80, 0x80, 0x78]);
     }
 
-    fn help_i64<'a>(arena: &'a Bump, value: i64) -> Vec<'a, u8> {
+    fn help_i64(arena: &Bump, value: i64) -> Vec<'_, u8> {
         let mut buffer = Vec::with_capacity_in(10, arena);
         buffer.encode_i64(value);
         buffer

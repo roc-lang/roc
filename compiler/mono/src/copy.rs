@@ -663,7 +663,7 @@ mod test {
             FlexVar(Some(name)) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
-            it => assert!(false, "{:?}", it),
+            it => unreachable!("{:?}", it),
         }
     }
 
@@ -686,7 +686,7 @@ mod test {
             RigidVar(name) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
-            it => assert!(false, "{:?}", it),
+            it => unreachable!("{:?}", it),
         }
     }
 
@@ -709,7 +709,7 @@ mod test {
             FlexAbleVar(Some(name), Symbol::UNDERSCORE) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
-            it => assert!(false, "{:?}", it),
+            it => unreachable!("{:?}", it),
         }
     }
 
@@ -732,7 +732,7 @@ mod test {
             RigidAbleVar(name, Symbol::UNDERSCORE) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
-            it => assert!(false, "{:?}", it),
+            it => unreachable!("{:?}", it),
         }
     }
 }

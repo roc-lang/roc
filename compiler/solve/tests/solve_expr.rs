@@ -113,7 +113,7 @@ mod solve_expr {
         let filename = PathBuf::from("test.roc");
         let src_lines: Vec<&str> = src.split('\n').collect();
         let lines = LineInfo::new(src);
-        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+        let alloc = RocDocAllocator::new(&src_lines, home, interns);
 
         let mut can_reports = vec![];
         let mut type_reports = vec![];
@@ -271,7 +271,7 @@ mod solve_expr {
             let end = region.end().offset;
             let text = &src[start as usize..end as usize];
             let var = find_type_at(region, &decls)
-                .expect(&format!("No type for {} ({:?})!", &text, region));
+                .unwrap_or_else(|| panic!("No type for {} ({:?})!", &text, region));
 
             let actual_str = name_and_print_var(var, subs, home, &interns);
 
@@ -323,8 +323,7 @@ mod solve_expr {
             let has_the_one = pretty_specializations
                 .iter()
                 // references are annoying so we do this
-                .find(|(p, s)| p == parent && s == &specialization)
-                .is_some();
+                .any(|(p, s)| p == parent && s == &specialization);
             assert!(
                 has_the_one,
                 "{:#?} not in {:#?}",

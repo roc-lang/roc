@@ -342,7 +342,7 @@ mod test_parse {
         assert_eq!(Ok(expected_expr), actual);
     }
 
-    fn assert_parsing_fails<'a>(input: &'a str, _reason: SyntaxError) {
+    fn assert_parsing_fails(input: &str, _reason: SyntaxError) {
         let arena = Bump::new();
         let actual = parse_expr_with(&arena, input);
 
@@ -820,7 +820,7 @@ mod test_parse {
             }
             Err((_, _fail, _state)) => {
                 // dbg!(_fail, _state);
-                assert!(false);
+                panic!("Failed to parse!");
             }
         }
     }
