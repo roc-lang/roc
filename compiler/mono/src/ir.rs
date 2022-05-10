@@ -2785,7 +2785,7 @@ fn resolve_abilities_in_specialized_body<'a>(
     body_var: Variable,
 ) -> std::vec::Vec<SpecializationId> {
     use roc_can::expr::Expr;
-    use roc_can::traverse::{walk_expr, PatternVisitor, Visitor};
+    use roc_can::traverse::{walk_expr, Visitor};
     use roc_unify::unify::unify;
 
     struct Resolver<'a> {
@@ -2795,7 +2795,6 @@ fn resolve_abilities_in_specialized_body<'a>(
         seen_defs: MutSet<Symbol>,
         specialized: std::vec::Vec<SpecializationId>,
     }
-    impl PatternVisitor for Resolver<'_> {}
     impl Visitor for Resolver<'_> {
         fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
             match expr {
