@@ -71,7 +71,8 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
             | RocType::RocList(_)
             | RocType::RocBox(_) => {}
             RocType::TransparentWrapper { name, content } => {
-                write!(buf, "\nstruct {}(", name)?;
+                write_deriving(id, types, buf)?;
+                write!(buf, "#[repr(transparent)]\npub struct {}(", name)?;
                 write_type_name(*content, types, buf)?;
                 buf.write_str(");\n")?;
             }
