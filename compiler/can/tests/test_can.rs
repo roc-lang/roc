@@ -658,7 +658,7 @@ mod test_can {
     // TAIL CALLS
     fn get_closure(expr: &Expr, i: usize) -> roc_can::expr::Recursive {
         match expr {
-            LetRec(assignments, body) => match &assignments.get(i).map(|def| &def.loc_expr.value) {
+            LetRec(assignments, body, _) => match &assignments.get(i).map(|def| &def.loc_expr.value) {
                 Some(Closure(ClosureData {
                     recursive: recursion,
                     ..
