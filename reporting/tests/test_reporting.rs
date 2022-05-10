@@ -9796,4 +9796,39 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn recursion_var_specialization_error() {
+        new_report_problem_as(
+            "recursion_var_specialization_error",
+            indoc!(
+                r#"
+                Job a : [ Job (List (Job a)) a ]
+
+                job : Job Str
+
+                when job is
+                    Job lst _ -> lst == ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                The 2nd argument to `isEq` is not what I expect:
+
+                9│          Job lst _ -> lst == ""
+                                                ^^
+
+                This argument is a string of type:
+
+                    Str
+
+                But `isEq` needs the 2nd argument to be:
+
+                    List a
+                "#
+            ),
+        )
+    }
 }
