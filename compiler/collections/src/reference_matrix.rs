@@ -59,7 +59,7 @@ impl ReferenceMatrix {
         let mut preds_map: Vec<i64> = vec![0; self.length];
 
         // this is basically summing the columns, I don't see a better way to do it
-        for row in self.bitvec.chunks(self.length) {
+        for row in self.bitvec.chunks_exact(self.length) {
             for succ in row.iter_ones() {
                 preds_map[succ] += 1;
             }
@@ -271,7 +271,7 @@ impl Sccs {
     ///
     /// It is guaranteed that a group is non-empty, and that flattening the groups gives a valid
     /// topological ordering.
-    pub fn groups(&self) -> std::iter::Take<bitvec::slice::Chunks<'_, Element, Order>> {
+    pub fn groups(&self) -> std::iter::Take<bitvec::slice::ChunksExact<'_, Element, Order>> {
         // work around a panic when requesting a chunk size of 0
         let length = if self.matrix.length == 0 {
             // the `.take(self.components)` ensures the resulting iterator will be empty
@@ -282,6 +282,9 @@ impl Sccs {
             self.matrix.length
         };
 
-        self.matrix.bitvec.chunks(length).take(self.components)
+        self.matrix
+            .bitvec
+            .chunks_exact(length)
+            .take(self.components)
     }
 }
