@@ -9821,4 +9821,89 @@ I need all branches in an `if` to have the same type!
             ),
         )
     }
+
+    #[test]
+    fn type_error_in_apply_is_circular() {
+        new_report_problem_as(
+            "type_error_in_apply_is_circular",
+            indoc!(
+                r#"
+                app "test" provides [ go ] to "./platform"
+
+                S a : { set : Set a }
+
+                go : a, S a -> Result (List a) *
+                go = \goal, model ->
+                        if goal == goal
+                        then Ok []
+                        else
+                            new = { model & set : Set.remove goal model.set }
+                            go goal new
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                The 1st argument to `remove` is not what I expect:
+
+                10│              new = { model & set : Set.remove goal model.set }
+                                                                  ^^^^
+
+                This `goal` value is a:
+
+                    a
+
+                But `remove` needs the 1st argument to be:
+
+                    Set a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `Set` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `new`:
+
+                10│              new = { model & set : Set.remove goal model.set }
+                                 ^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    { set : Set ∞ }
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `model`:
+
+                6│  go = \goal, model ->
+                                ^^^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    S (Set ∞)
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `goal`:
+
+                6│  go = \goal, model ->
+                          ^^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    Set ∞
+                "#
+            ),
+        )
+    }
 }

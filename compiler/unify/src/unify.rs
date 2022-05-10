@@ -1358,7 +1358,17 @@ fn maybe_mark_tag_union_recursive(subs: &mut Subs, tag_union_var: Variable) {
                 }
             }
 
-            panic!("recursive loop does not contain a tag union")
+            // Might not be any tag union if we only pass through `Apply`s. Otherwise, we have a bug!
+            if chain.iter().all(|&v| {
+                matches!(
+                    subs.get_content_without_compacting(v),
+                    Content::Structure(FlatType::Apply(..))
+                )
+            }) {
+                return;
+            } else {
+                internal_error!("recursive loop does not contain a tag union")
+            }
         }
     }
 }
