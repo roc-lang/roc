@@ -6384,4 +6384,25 @@ mod solve_expr {
             ],
         )
     }
+
+    #[test]
+    fn task_wildcard_wildcard() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ tforever ] to "./platform"
+
+                Effect a := {} -> a
+
+                eforever : Effect a -> Effect b
+
+                Task a err : Effect (Result a err)
+
+                tforever : Task val err -> Task * *
+                tforever = \task -> eforever task
+                "#
+            ),
+            "Task val err -> Task * *",
+        );
+    }
 }
