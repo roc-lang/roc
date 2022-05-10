@@ -59,7 +59,7 @@ pub enum ErrorTypeContext {
 
 struct ErrorTypeState {
     taken: MutSet<Lowercase>,
-    normals: u32,
+    letters_used: u32,
     problems: Vec<crate::types::Problem>,
     context: ErrorTypeContext,
 }
@@ -1866,7 +1866,7 @@ impl Subs {
 
         let mut state = ErrorTypeState {
             taken,
-            normals: 0,
+            letters_used: 0,
             problems: Vec::new(),
             context,
         };
@@ -3581,11 +3581,12 @@ fn flat_type_to_err_type(
 }
 
 fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
-    let (name, new_index) = name_type_var(state.normals, &mut state.taken.iter(), |var, str| {
-        var.as_str() == str
-    });
+    let (name, new_index) =
+        name_type_var(state.letters_used, &mut state.taken.iter(), |var, str| {
+            var.as_str() == str
+        });
 
-    state.normals = new_index;
+    state.letters_used = new_index;
 
     state.taken.insert(name.clone());
 
