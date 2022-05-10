@@ -25,7 +25,7 @@ const UNKNOWN_GENERATES_WITH: &str = "UNKNOWN GENERATES FUNCTION";
 const DUPLICATE_FIELD_NAME: &str = "DUPLICATE FIELD NAME";
 const DUPLICATE_TAG_NAME: &str = "DUPLICATE TAG NAME";
 const INVALID_UNICODE: &str = "INVALID UNICODE";
-const CIRCULAR_DEF: &str = "CIRCULAR DEFINITION";
+pub const CIRCULAR_DEF: &str = "CIRCULAR DEFINITION";
 const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const VALUE_NOT_EXPOSED: &str = "NOT EXPOSED";
 const MODULE_NOT_IMPORTED: &str = "MODULE NOT IMPORTED";
@@ -1718,7 +1718,7 @@ fn pretty_runtime_error<'b>(
     (doc, title)
 }
 
-fn to_circular_def_doc<'b>(
+pub fn to_circular_def_doc<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     entries: &[roc_problem::can::CycleEntry],

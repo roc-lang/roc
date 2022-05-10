@@ -1037,6 +1037,28 @@ pub fn new_marks(var_store: &mut VarStore) -> (RedundantMark, ExhaustiveMark) {
     )
 }
 
+/// Marks whether a recursive let-cycle was determined to be illegal during solving.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IllegalCycleMark(Variable);
+
+impl IllegalCycleMark {
+    pub fn new(var_store: &mut VarStore) -> Self {
+        Self(var_store.fresh())
+    }
+
+    pub fn variable_for_introduction(&self) -> Variable {
+        self.0
+    }
+
+    pub fn set_illegal(&self, subs: &mut Subs) {
+        subs.set_content(self.0, Content::Error);
+    }
+
+    pub fn is_illegal(&self, subs: &Subs) -> bool {
+        matches!(subs.get_content_without_compacting(self.0), Content::Error)
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Variable(u32);
 

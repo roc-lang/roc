@@ -28,7 +28,7 @@ pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
         Declaration::Declare(def) => {
             visitor.visit_def(def);
         }
-        Declaration::DeclareRec(defs) => {
+        Declaration::DeclareRec(defs, _cycle_mark) => {
             visit_list!(visitor, visit_def, defs)
         }
         Declaration::Builtin(def) => visitor.visit_def(def),
@@ -92,7 +92,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             branch_var,
             final_else,
         } => walk_if(visitor, *cond_var, branches, *branch_var, final_else),
-        Expr::LetRec(defs, body) => {
+        Expr::LetRec(defs, body, _cycle_mark) => {
             defs.iter().for_each(|def| visitor.visit_def(def));
             visitor.visit_expr(&body.value, body.region, var);
         }

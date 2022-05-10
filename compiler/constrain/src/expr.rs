@@ -11,11 +11,12 @@ use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{AccessorData, AnnotatedMark, ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
+use roc_can::traverse::symbols_introduced_from_pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::Variable;
+use roc_types::subs::{IllegalCycleMark, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
     AliasKind, AnnotationSource, Category, OptAbleType, PReason, Reason, RecordField, TypeExtension,
@@ -897,7 +898,7 @@ pub fn constrain_expr(
                 cons,
             )
         }
-        LetRec(defs, loc_ret) => {
+        LetRec(defs, loc_ret, cycle_mark) => {
             let body_con = constrain_expr(
                 constraints,
                 env,
@@ -906,7 +907,7 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            constrain_recursive_defs(constraints, env, defs, body_con)
+            constrain_recursive_defs(constraints, env, defs, body_con, *cycle_mark)
         }
         LetNonRec(def, loc_ret) => {
             let mut stack = Vec::with_capacity(1);
@@ -1285,8 +1286,9 @@ pub fn constrain_decls(
             Declaration::Declare(def) | Declaration::Builtin(def) => {
                 constraint = constrain_def(constraints, &mut env, def, constraint);
             }
-            Declaration::DeclareRec(defs) => {
-                constraint = constrain_recursive_defs(constraints, &mut env, defs, constraint);
+            Declaration::DeclareRec(defs, cycle_mark) => {
+                constraint =
+                    constrain_recursive_defs(constraints, &mut env, defs, constraint, *cycle_mark);
             }
             Declaration::InvalidCycle(_) => {
                 // invalid cycles give a canonicalization error. we skip them here.
@@ -1883,6 +1885,7 @@ fn constrain_recursive_defs(
     env: &mut Env,
     defs: &[Def],
     body_con: Constraint,
+    cycle_mark: IllegalCycleMark,
 ) -> Constraint {
     rec_defs_help(
         constraints,
@@ -1891,6 +1894,7 @@ fn constrain_recursive_defs(
         body_con,
         Info::with_capacity(defs.len()),
         Info::with_capacity(defs.len()),
+        cycle_mark,
     )
 }
 
@@ -1901,6 +1905,7 @@ pub fn rec_defs_help(
     body_con: Constraint,
     mut rigid_info: Info,
     mut flex_info: Info,
+    cycle_mark: IllegalCycleMark,
 ) -> Constraint {
     for def in defs {
         let expr_var = def.expr_var;
@@ -2130,8 +2135,21 @@ pub fn rec_defs_help(
         flex_constraints,
     );
 
+    let ((symbols, symbol_regions), expr_regions): ((Vec<_>, Vec<_>), Vec<_>) = defs
+        .iter()
+        .map(|def| {
+            symbols_introduced_from_pattern(&def.loc_pattern)
+                .map(move |loc_symbol| ((loc_symbol.value, loc_symbol.region), def.loc_expr.region))
+        })
+        .flatten()
+        .unzip();
+
+    let cycle_constraint =
+        constraints.check_cycle(symbols, symbol_regions, expr_regions, cycle_mark);
+
     let rigid_constraints = {
         let mut temp = rigid_info.constraints;
+        temp.push(cycle_constraint);
         temp.push(body_con);
 
         constraints.and_constraint(temp)

@@ -2190,7 +2190,7 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, new_outer)
             }
-            LetRec(nested_defs, nested_cont) => {
+            LetRec(nested_defs, nested_cont, cycle_mark) => {
                 use roc_can::expr::Expr::*;
                 // We must transform
                 //
@@ -2223,7 +2223,7 @@ fn from_can_let<'a>(
 
                 let new_inner = LetNonRec(Box::new(new_def), cont);
 
-                let new_outer = LetRec(nested_defs, Box::new(Loc::at_zero(new_inner)));
+                let new_outer = LetRec(nested_defs, Box::new(Loc::at_zero(new_inner)), cycle_mark);
 
                 lower_rest!(variable, new_outer)
             }
@@ -3833,7 +3833,7 @@ pub fn with_hole<'a>(
             variable,
             Some((assigned, hole)),
         ),
-        LetRec(defs, cont) => {
+        LetRec(defs, cont, _cycle_mark) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -5957,7 +5957,7 @@ pub fn from_can<'a>(
             )
         }
 
-        LetRec(defs, cont) => {
+        LetRec(defs, cont, _cycle_mark) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
