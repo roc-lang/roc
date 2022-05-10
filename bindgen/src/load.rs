@@ -74,7 +74,7 @@ pub fn load_types(
                 vec![def]
             }
             Declaration::DeclareRec(defs, cycle_mark) => {
-                if cycle_mark.is_illegal(&subs) {
+                if cycle_mark.is_illegal(subs) {
                     vec![]
                 } else {
                     defs

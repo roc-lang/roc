@@ -2137,11 +2137,10 @@ pub fn rec_defs_help(
 
     let ((symbols, symbol_regions), expr_regions): ((Vec<_>, Vec<_>), Vec<_>) = defs
         .iter()
-        .map(|def| {
+        .flat_map(|def| {
             symbols_introduced_from_pattern(&def.loc_pattern)
                 .map(move |loc_symbol| ((loc_symbol.value, loc_symbol.region), def.loc_expr.region))
         })
-        .flatten()
         .unzip();
 
     let cycle_constraint =
