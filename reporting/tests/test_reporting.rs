@@ -22,7 +22,6 @@ mod test_reporting {
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
     use roc_test_utils::assert_multiline_str_eq;
-    use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
 
@@ -122,19 +121,11 @@ mod test_reporting {
             mut can_problems,
             mut type_problems,
             interns,
-            mut solved,
-            exposed_to_host,
             ..
         } = result?;
 
         let can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
-
-        let subs = solved.inner_mut();
-
-        for var in exposed_to_host.values() {
-            name_all_type_vars(*var, subs);
-        }
 
         Ok((module_src, type_problems, can_problems, home, interns))
     }
@@ -233,7 +224,7 @@ mod test_reporting {
 
         let mut unify_problems = Vec::new();
         let mut abilities_store = AbilitiesStore::default();
-        let (_content, mut subs) = infer_expr(
+        let (_content, _subs) = infer_expr(
             subs,
             &mut unify_problems,
             &constraints,
@@ -242,8 +233,6 @@ mod test_reporting {
             &mut abilities_store,
             var,
         );
-
-        name_all_type_vars(var, &mut subs);
 
         Ok((unify_problems, can_problems, home, interns))
     }

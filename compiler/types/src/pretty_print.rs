@@ -233,11 +233,11 @@ fn find_names_needed(
     }
 }
 
-pub struct NamedResult {
+struct NamedResult {
     recursion_structs_to_expand: Vec<Variable>,
 }
 
-pub fn name_all_type_vars(variable: Variable, subs: &mut Subs) -> NamedResult {
+fn name_all_type_vars(variable: Variable, subs: &mut Subs) -> NamedResult {
     let mut roots = Vec::new();
     let mut letters_used = 0;
     let mut appearances = MutMap::default();
