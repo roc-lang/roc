@@ -82,7 +82,7 @@ getInt =
         \{ isError, value } ->
             when isError is
                 True ->
-                    #when errorCode is
+                    # when errorCode is
                     #    # A -> Task.fail InvalidCharacter
                     #    # B -> Task.fail IOError
                     #    _ ->
