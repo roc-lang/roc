@@ -59,10 +59,9 @@ use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
-use roc_types::pretty_print::name_all_type_vars;
+use roc_types::pretty_print::name_and_print_var;
 use roc_types::solved_types::Solved;
-use roc_types::subs::{Subs, Variable};
-use roc_types::{pretty_print::content_to_string, subs::VarStore};
+use roc_types::subs::{Subs, VarStore, Variable};
 use snafu::OptionExt;
 use threadpool::ThreadPool;
 use winit::event::VirtualKeyCode;
@@ -463,20 +462,10 @@ impl<'a> EdModel<'a> {
 
         let subs = solved.inner_mut();
 
-        let named_result = name_all_type_vars(var, subs);
+        let pretty_var =
+            name_and_print_var(var, subs, self.module.env.home, &self.loaded_module.interns);
 
-        let content = subs.get_content_without_compacting(var);
-
-        PoolStr::new(
-            &content_to_string(
-                content,
-                subs,
-                self.module.env.home,
-                &self.loaded_module.interns,
-                named_result,
-            ),
-            self.module.env.pool,
-        )
+        PoolStr::new(&pretty_var, self.module.env.pool)
     }
 
     fn run_solve(

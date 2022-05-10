@@ -336,7 +336,7 @@ struct Context<'a> {
     recursion_structs_to_expand: Vec<Variable>,
 }
 
-pub fn content_to_string(
+fn content_to_string(
     content: &Content,
     subs: &Subs,
     home: ModuleId,
@@ -362,6 +362,17 @@ pub fn content_to_string(
     }
 
     buf
+}
+
+pub fn name_and_print_var(
+    var: Variable,
+    subs: &mut Subs,
+    home: ModuleId,
+    interns: &Interns,
+) -> String {
+    let named_result = name_all_type_vars(var, subs);
+    let content = subs.get_content_without_compacting(var);
+    content_to_string(content, subs, home, interns, named_result)
 }
 
 pub fn get_single_arg<'a>(subs: &'a Subs, args: &'a AliasVariables) -> &'a Content {

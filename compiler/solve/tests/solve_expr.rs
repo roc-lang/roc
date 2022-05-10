@@ -19,7 +19,7 @@ mod solve_expr {
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
     use roc_solve::solve::TypeError;
-    use roc_types::pretty_print::{content_to_string, name_all_type_vars};
+    use roc_types::pretty_print::name_and_print_var;
     use std::path::PathBuf;
 
     // HELPERS
@@ -174,10 +174,7 @@ mod solve_expr {
 
         debug_assert!(exposed_to_host.len() == 1);
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
-        let named_result = name_all_type_vars(variable, subs);
-        let content = subs.get_content_without_compacting(variable);
-
-        let actual_str = content_to_string(content, subs, home, &interns, named_result);
+        let actual_str = name_and_print_var(variable, subs, home, &interns);
 
         Ok((type_problems, can_problems, actual_str))
     }
@@ -276,9 +273,7 @@ mod solve_expr {
             let var = find_type_at(region, &decls)
                 .expect(&format!("No type for {} ({:?})!", &text, region));
 
-            let named_result = name_all_type_vars(var, subs);
-            let content = subs.get_content_without_compacting(var);
-            let actual_str = content_to_string(content, subs, home, &interns, named_result);
+            let actual_str = name_and_print_var(var, subs, home, &interns);
 
             solved_queries.push(format!("{} : {}", text, actual_str));
         }
