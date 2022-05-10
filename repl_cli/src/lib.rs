@@ -227,9 +227,9 @@ fn gen_and_eval_llvm<'a>(
     let main_fn_var = *main_fn_var;
 
     // pretty-print the expr type string for later.
-    name_all_type_vars(main_fn_var, &mut subs);
+    let named_result = name_all_type_vars(main_fn_var, &mut subs);
     let content = subs.get_content_without_compacting(main_fn_var);
-    let expr_type_str = content_to_string(content, &subs, home, &interns);
+    let expr_type_str = content_to_string(content, &subs, home, &interns, named_result);
 
     let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(layout) => *layout,

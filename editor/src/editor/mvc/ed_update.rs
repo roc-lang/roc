@@ -59,6 +59,7 @@ use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
+use roc_types::pretty_print::name_all_type_vars;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, Variable};
 use roc_types::{pretty_print::content_to_string, subs::VarStore};
@@ -462,6 +463,8 @@ impl<'a> EdModel<'a> {
 
         let subs = solved.inner_mut();
 
+        let named_result = name_all_type_vars(var, subs);
+
         let content = subs.get_content_without_compacting(var);
 
         PoolStr::new(
@@ -470,6 +473,7 @@ impl<'a> EdModel<'a> {
                 subs,
                 self.module.env.home,
                 &self.loaded_module.interns,
+                named_result,
             ),
             self.module.env.pool,
         )

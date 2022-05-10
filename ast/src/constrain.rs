@@ -2051,7 +2051,7 @@ pub mod test_constrain {
                 let subs = solved.inner_mut();
 
                 // name type vars
-                name_all_type_vars(var, subs);
+                let named_result = name_all_type_vars(var, subs);
 
                 let content = subs.get_content_without_compacting(var);
 
@@ -2063,7 +2063,7 @@ pub mod test_constrain {
                     all_ident_ids: dep_idents,
                 };
 
-                let actual_str = content_to_string(content, subs, mod_id, &interns);
+                let actual_str = content_to_string(content, subs, mod_id, &interns, named_result);
 
                 assert_eq!(actual_str, expected_str);
             }

@@ -2172,23 +2172,6 @@ impl Content {
             Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _))
         )
     }
-
-    #[cfg(debug_assertions)]
-    #[allow(dead_code)]
-    pub fn dbg(self, subs: &Subs) -> Self {
-        let home = roc_module::symbol::ModuleIds::default().get_or_insert(&"#Dbg".into());
-        let interns = roc_module::symbol::Interns {
-            all_ident_ids: roc_module::symbol::IdentIds::exposed_builtins(0),
-            ..Default::default()
-        };
-
-        eprintln!(
-            "{}",
-            crate::pretty_print::content_to_string(&self, subs, home, &interns)
-        );
-
-        self
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
