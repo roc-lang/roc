@@ -380,9 +380,9 @@ fn gen_basic_def() {
     assert_evals_to!(
         indoc!(
             r#"
-                pi = 1.23
+                float = 1.23
 
-                pi
+                float
             "#
         ),
         1.23,
@@ -398,9 +398,9 @@ fn gen_multiple_defs() {
             r#"
                 answer = 42
 
-                pi = 1.23
+                float = 1.23
 
-                if pi > 3 then answer else answer
+                if float > 3 then answer else answer
             "#
         ),
         42,
@@ -412,9 +412,9 @@ fn gen_multiple_defs() {
             r#"
                 answer = 42
 
-                pi = 1.23
+                float = 1.23
 
-                if answer > 3 then pi else pi
+                if answer > 3 then float else float
             "#
         ),
         1.23,
@@ -582,10 +582,10 @@ fn top_level_constant() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            pi = 1.2315
+            float = 1.2315
 
             main =
-                pi + pi
+                float + float
                 "#
         ),
         1.2315 + 1.2315,
