@@ -591,6 +591,8 @@ fn f64_round() {
 fn f64_abs() {
     assert_evals_to!("Num.abs -4.7", 4.7, f64);
     assert_evals_to!("Num.abs 5.8", 5.8, f64);
+    assert_evals_to!("Num.abs Num.maxF64", f64::MAX, f64);
+    assert_evals_to!("Num.abs Num.minF64", f64::MAX, f64);
 }
 
 #[test]
