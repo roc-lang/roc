@@ -13,7 +13,7 @@
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
-        llvmPkgs = pkgs.llvmPackages_12;
+        llvmPkgs = pkgs.llvmPackages_13;
 
         # get current working directory
         cwd = builtins.toString ./.;
@@ -34,7 +34,7 @@
         ];
 
         # zig 0.8.1 from pkgs is broken on aarch64-darwin, hence the workaround
-        zig-toolchain = zig.packages.${system}."0.8.1";
+        zig-toolchain = zig.packages.${system}."0.9.1";
 
         sharedInputs = (with pkgs; [
           # build libraries
@@ -65,7 +65,7 @@
         devShell = pkgs.mkShell {
           buildInputs = sharedInputs ++ linuxInputs;
 
-          LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
+          LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
           NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
