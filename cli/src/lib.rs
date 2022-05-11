@@ -9,7 +9,7 @@ use roc_error_macros::user_error;
 use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{CString, OsStr};
 use std::io;
 use std::path::Path;
 use std::process;
@@ -421,7 +421,11 @@ pub fn build(
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                    roc_run(arena, &original_cwd, triple, args, &binary_path)
+                    let mut bytes = std::fs::read(&binary_path).unwrap();
+
+                    let x = roc_run(arena, &original_cwd, triple, args, &mut bytes);
+                    std::mem::forget(bytes);
+                    x
                 }
                 BuildAndRunIfNoErrors => {
                     if problems.errors == 0 {
@@ -441,7 +445,11 @@ pub fn build(
 
                         let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                        roc_run(arena, &original_cwd, triple, args, &binary_path)
+                        let mut bytes = std::fs::read(&binary_path).unwrap();
+
+                        let x = roc_run(arena, &original_cwd, triple, args, &mut bytes);
+                        std::mem::forget(bytes);
+                        x
                     } else {
                         println!(
                             "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with: \x1B[32mroc run {}\x1B[39m",
@@ -492,44 +500,45 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     cwd: &Path,
     triple: Triple,
     args: I,
-    binary_path: &Path,
+    binary_bytes: &mut [u8],
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
-            // If possible, report the generated executable name relative to the current dir.
-            let generated_filename = binary_path
-                .strip_prefix(env::current_dir().unwrap())
-                .unwrap_or(binary_path);
-
-            // No need to waste time freeing this memory,
-            // since the process is about to exit anyway.
-            std::mem::forget(arena);
-
-            if cfg!(target_family = "unix") {
-                use std::os::unix::ffi::OsStrExt;
-
-                run_with_wasmer(
-                    generated_filename,
-                    args.into_iter().map(|os_str| os_str.as_bytes()),
-                );
-            } else {
-                run_with_wasmer(
-                    generated_filename,
-                    args.into_iter().map(|os_str| {
-                        os_str.to_str().expect(
-                            "Roc does not currently support passing non-UTF8 arguments to Wasmer.",
-                        )
-                    }),
-                );
-            }
-
-            Ok(0)
+            todo!("figure out what to do with wasm");
+            //            // If possible, report the generated executable name relative to the current dir.
+            //            let generated_filename = binary_bytes
+            //                .strip_prefix(env::current_dir().unwrap())
+            //                .unwrap_or(binary_bytes);
+            //
+            //            // No need to waste time freeing this memory,
+            //            // since the process is about to exit anyway.
+            //            std::mem::forget(arena);
+            //
+            //            if cfg!(target_family = "unix") {
+            //                use std::os::unix::ffi::OsStrExt;
+            //
+            //                run_with_wasmer(
+            //                    generated_filename,
+            //                    args.into_iter().map(|os_str| os_str.as_bytes()),
+            //                );
+            //            } else {
+            //                run_with_wasmer(
+            //                    generated_filename,
+            //                    args.into_iter().map(|os_str| {
+            //                        os_str.to_str().expect(
+            //                            "Roc does not currently support passing non-UTF8 arguments to Wasmer.",
+            //                        )
+            //                    }),
+            //                );
+            //            }
+            //
+            //            Ok(0)
         }
         _ => {
             if cfg!(target_family = "unix") {
-                roc_run_unix(cwd, args, binary_path)
+                roc_run_unix(cwd, args, binary_bytes)
             } else {
-                roc_run_non_unix(arena, cwd, args, binary_path)
+                roc_run_non_unix(arena, cwd, args, binary_bytes)
             }
         }
     }
@@ -538,37 +547,40 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     cwd: &Path,
     args: I,
-    binary_path: &Path,
-) -> io::Result<i32> {
-    use std::os::unix::process::CommandExt;
+    binary_bytes: &mut [u8],
+) -> ! {
+    let protection = libc::PROT_EXEC | libc::PROT_READ;
+    unsafe {
+        let flags = 0;
+        let fd = libc::memfd_create("roc_file_descriptor\0".as_ptr().cast(), flags);
 
-    let mut cmd = std::process::Command::new(&binary_path);
+        libc::write(fd, binary_bytes.as_ptr().cast(), binary_bytes.len());
 
-    // Forward all the arguments after the .roc file argument
-    // to the new process. This way, you can do things like:
-    //
-    // roc app.roc foo bar baz
-    //
-    // ...and have it so that app.roc will receive only `foo`,
-    // `bar`, and `baz` as its arguments.
-    for arg in args {
-        cmd.arg(arg);
+        let array_with_null_pointer = &[0usize];
+        let c = libc::fexecve(
+            fd,
+            array_with_null_pointer.as_ptr().cast(),
+            array_with_null_pointer.as_ptr().cast(),
+        );
+        // Get the current value of errno
+        let e = errno::errno();
+
+        // Extract the error code as an i32
+        let code = e.0;
+
+        // Display a human-friendly error message
+        println!("Error {}: {}", code, e);
+        println!("after {:?}", c);
     }
 
-    // This is much faster than spawning a subprocess if we're on a UNIX system!
-    let err = cmd.current_dir(cwd).exec();
-
-    // If exec actually returned, it was definitely an error! (Otherwise,
-    // this process would have been replaced by the other one, and we'd
-    // never actually reach this line of code.)
-    Err(err)
+    unreachable!()
 }
 
 fn roc_run_non_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     _cwd: &Path,
     _args: I,
-    _binary_path: &Path,
+    _binary_bytes: &mut [u8],
 ) -> io::Result<i32> {
     todo!("TODO support running roc programs on non-UNIX targets");
     // let mut cmd = std::process::Command::new(&binary_path);
