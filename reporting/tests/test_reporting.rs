@@ -9812,15 +9812,20 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── SPECIALIZATION NOT ON TOP-LEVEL ─────────────────────── /code/proj/Main.roc ─
-
-                This specialization of the `default` ability member is in a nested
-                scope:
-
-                7│      default = \{} -> @A {}
-                        ^^^^^^^
-
-                Specializations can only be defined on the top-level of a module.
+                ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+                
+                The `main` name is first defined here:
+                
+                3│  main = 1
+                    ^^^^
+                
+                But then it's defined a second time here:
+                
+                5│  main = \n -> n + 2
+                    ^^^^
+                
+                Since these variables have the same name, it's easy to use the wrong
+                one on accident. Give one of them a new name.
                 "#
             ),
         )
