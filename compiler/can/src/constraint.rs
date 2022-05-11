@@ -453,7 +453,7 @@ impl Constraints {
         self.constraints.push(defs_constraint);
         self.constraints.push(ret_constraint);
 
-        let let_contraint = LetConstraint {
+        let let_constraint = LetConstraint {
             rigid_vars: self.variable_slice(rigid_vars),
             flex_vars: self.variable_slice(flex_vars),
             def_types: self.def_types_slice(def_types),
@@ -461,7 +461,7 @@ impl Constraints {
         };
 
         let let_index = Index::new(self.let_constraints.len() as _);
-        self.let_constraints.push(let_contraint);
+        self.let_constraints.push(let_constraint);
 
         Constraint::Let(let_index, Slice::default())
     }
