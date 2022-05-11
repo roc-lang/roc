@@ -21,9 +21,7 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
                     // An enumeration with one tag is a zero-sized unit type, so
                     // represent it as a zero-sized struct (e.g. "struct Foo()").
                     write_deriving(types.get(id), types, buf)?;
-                    buf.write_str("\nstruct ")?;
-                    write_type_name(id, types, buf)?;
-                    buf.write_str("();\n")?;
+                    writeln!(buf, "\nstruct {}();", type_name(id, types))?;
                 } else {
                     write_enumeration(name, types.get(id), tags.into_iter(), types, buf)?;
                 }
@@ -61,9 +59,12 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
             | RocType::RocBox(_) => {}
             RocType::TransparentWrapper { name, content } => {
                 write_deriving(types.get(id), types, buf)?;
-                write!(buf, "#[repr(transparent)]\npub struct {}(", name)?;
-                write_type_name(*content, types, buf)?;
-                buf.write_str(");\n")?;
+                writeln!(
+                    buf,
+                    "#[repr(transparent)]\npub struct {}({});",
+                    name,
+                    type_name(*content, types)
+                )?;
             }
         }
     }
@@ -125,14 +126,14 @@ fn write_tag_union(
                     // types with pointers need ManuallyDrop
                     // because rust unions don't (and can't)
                     // know how to drop them automatically!
-                    buf.write_str("std::mem::ManuallyDrop<")?;
-                    write_type_name(*payload_id, types, buf)?;
-                    buf.write_char('>')?;
+                    writeln!(
+                        buf,
+                        "std::mem::ManuallyDrop<{}>,",
+                        type_name(*payload_id, types)
+                    )?;
                 } else {
-                    write_type_name(*payload_id, types, buf)?;
-                };
-
-                buf.write_str(",\n")?;
+                    writeln!(buf, "{},", type_name(*payload_id, types))?;
+                }
             }
         }
 
@@ -180,6 +181,54 @@ fn write_tag_union(
             discriminant_name, variant_name, variant_name
         )?;
 
+        for (tag_name, opt_payload_id) in tags {
+            // Add a convenience constructor function to the impl, e.g.
+            //
+            // /// Construct a tag named Foo, with the appropriate payload
+            // pub fn Foo(payload: roc_std::RocStr) -> Self {
+            //     Self {
+            //         tag: tag_MyTagUnion::Foo,
+            //         variant: variant_MyTagUnion {
+            //             Foo: std::mem::ManuallyDrop::new(payload),
+            //         },
+            //     }
+            // }
+            if let Some(payload_id) = opt_payload_id {
+                let payload_type = types.get(*payload_id);
+
+                let payload_name = if payload_type.has_pointer(types) {
+                    "std::mem::ManuallyDrop::new(payload)"
+                } else {
+                    "payload"
+                };
+
+                let payload_type_name = type_name(*payload_id, types);
+
+                writeln!(
+                    buf,
+                    // Don't use indoc because this must be indented once!
+                    r#"
+    /// Construct a tag named {}, with the appropriate payload
+    pub fn {}(payload: {}) -> Self {{
+        Self {{
+            tag: {}::{},
+            variant: {} {{
+                {}: {}
+            }},
+        }}
+    }}"#,
+                    tag_name,
+                    tag_name,
+                    payload_type_name,
+                    discriminant_name,
+                    tag_name,
+                    variant_name,
+                    tag_name,
+                    payload_name
+                )?;
+            }
+        }
+
         buf.write_str("}\n")?;
     }
 
@@ -223,59 +272,49 @@ fn write_struct(
     writeln!(buf, "#[repr(C)]\npub struct {} {{", name)?;
 
     for (label, field_id) in fields {
-        write!(buf, "{}{}: ", INDENT, label.as_str())?;
-        write_type_name(*field_id, types, buf)?;
-        buf.write_str(",\n")?;
+        writeln!(
+            buf,
+            "{}{}: {},",
+            INDENT,
+            label.as_str(),
+            type_name(*field_id, types)
+        )?;
     }
 
     buf.write_str("}\n")
 }
 
-fn write_type_name(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
+fn type_name(id: TypeId, types: &Types) -> String {
     match types.get(id) {
-        RocType::U8 => buf.write_str("u8"),
-        RocType::U16 => buf.write_str("u16"),
-        RocType::U32 => buf.write_str("u32"),
-        RocType::U64 => buf.write_str("u64"),
-        RocType::U128 => buf.write_str("u128"),
-        RocType::I8 => buf.write_str("i8"),
-        RocType::I16 => buf.write_str("i16"),
-        RocType::I32 => buf.write_str("i32"),
-        RocType::I64 => buf.write_str("i64"),
-        RocType::I128 => buf.write_str("i128"),
-        RocType::F32 => buf.write_str("f32"),
-        RocType::F64 => buf.write_str("f64"),
-        RocType::F128 => buf.write_str("f128"),
-        RocType::Bool => buf.write_str("bool"),
-        RocType::RocDec => buf.write_str("roc_std::RocDec"),
-        RocType::RocStr => buf.write_str("roc_std::RocStr"),
-        RocType::RocDict(key_id, val_id) => {
-            buf.write_str("roc_std::RocDict<")?;
-            write_type_name(*key_id, types, buf)?;
-            buf.write_str(", ")?;
-            write_type_name(*val_id, types, buf)?;
-            buf.write_char('>')
-        }
-        RocType::RocSet(elem_id) => {
-            buf.write_str("roc_std::RocSet<")?;
-            write_type_name(*elem_id, types, buf)?;
-            buf.write_char('>')
-        }
-        RocType::RocList(elem_id) => {
-            buf.write_str("roc_std::RocList<")?;
-            write_type_name(*elem_id, types, buf)?;
-            buf.write_char('>')
-        }
-        RocType::RocBox(elem_id) => {
-            buf.write_str("roc_std::RocBox<")?;
-            write_type_name(*elem_id, types, buf)?;
-            buf.write_char('>')
-        }
+        RocType::U8 => "u8".to_string(),
+        RocType::U16 => "u16".to_string(),
+        RocType::U32 => "u32".to_string(),
+        RocType::U64 => "u64".to_string(),
+        RocType::U128 => "u128".to_string(),
+        RocType::I8 => "i8".to_string(),
+        RocType::I16 => "i16".to_string(),
+        RocType::I32 => "i32".to_string(),
+        RocType::I64 => "i64".to_string(),
+        RocType::I128 => "i128".to_string(),
+        RocType::F32 => "f32".to_string(),
+        RocType::F64 => "f64".to_string(),
+        RocType::F128 => "f128".to_string(),
+        RocType::Bool => "bool".to_string(),
+        RocType::RocDec => "roc_std::RocDec".to_string(),
+        RocType::RocStr => "roc_std::RocStr".to_string(),
+        RocType::RocDict(key_id, val_id) => format!(
+            "roc_std::RocDict<{}, {}>",
+            type_name(*key_id, types),
+            type_name(*val_id, types)
+        ),
+        RocType::RocSet(elem_id) => format!("roc_std::RocSet<{}>", type_name(*elem_id, types)),
+        RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
+        RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
         RocType::Struct { name, .. }
         | RocType::TagUnion { name, .. }
         | RocType::TransparentWrapper { name, .. }
         | RocType::Enumeration { name, .. }
-        | RocType::RecursiveTagUnion { name, .. } => buf.write_str(name),
+        | RocType::RecursiveTagUnion { name, .. } => name.clone(),
     }
 }
 

@@ -220,6 +220,36 @@ fn tag_union_aliased() {
                     pub fn into_variant(self) -> variant_MyTagUnion {
                         self.variant
                     }
+
+                    /// Construct a tag named Bar, with the appropriate payload
+                    pub fn Bar(payload: u128) -> Self {
+                        Self {
+                            tag: tag_MyTagUnion::Bar,
+                            variant: variant_MyTagUnion {
+                                Bar: payload
+                            },
+                        }
+                    }
+
+                    /// Construct a tag named Blah, with the appropriate payload
+                    pub fn Blah(payload: i32) -> Self {
+                        Self {
+                            tag: tag_MyTagUnion::Blah,
+                            variant: variant_MyTagUnion {
+                                Blah: payload
+                            },
+                        }
+                    }
+
+                    /// Construct a tag named Foo, with the appropriate payload
+                    pub fn Foo(payload: roc_std::RocStr) -> Self {
+                        Self {
+                            tag: tag_MyTagUnion::Foo,
+                            variant: variant_MyTagUnion {
+                                Foo: std::mem::ManuallyDrop::new(payload)
+                            },
+                        }
+                    }
                 }
             "#
         )
