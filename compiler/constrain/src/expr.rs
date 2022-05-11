@@ -12,7 +12,6 @@ use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{AccessorData, AnnotatedMark, ClosureData, Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
-use roc_collections::KnownSizeIterator;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -1684,10 +1683,10 @@ fn attach_resolution_constraints(
     constraint: Constraint,
 ) -> Constraint {
     let resolution_constrs = env.resolutions_to_make.drain(..).map(Constraint::Resolve);
-    constraints.and_constraint(KnownSizeIterator::from_2(
-        std::iter::once(constraint),
-        resolution_constrs,
-    ))
+    let all_constrs: Vec<_> = std::iter::once(constraint)
+        .chain(resolution_constrs)
+        .collect();
+    constraints.and_constraint(all_constrs)
 }
 
 fn constrain_def(
