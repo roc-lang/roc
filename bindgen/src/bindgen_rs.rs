@@ -441,6 +441,72 @@ fn write_tag_union(
         )?;
     }
 
+    // The Clone impl for the tag union
+    {
+        write!(
+            buf,
+            indoc!(
+                r#"
+                    impl Clone for {} {{
+                        fn clone(&self) -> Self {{
+                            match self.tag {{
+                "#
+            ),
+            name
+        )?;
+
+        write_impl_tags(
+            3,
+            tags.iter(),
+            &discriminant_name,
+            buf,
+            |tag_name, opt_payload_id| {
+                if opt_payload_id.is_some() {
+                    format!(
+                        r#"Self {{
+                tag: {}::{},
+                variant: {} {{
+                    {}: unsafe {{ self.variant.{}.clone() }},
+                }},
+            }},"#,
+                        discriminant_name, tag_name, variant_name, tag_name, tag_name
+                    )
+                } else {
+                    // when there's no payload, we set the clone's `variant` field to
+                    // garbage memory
+                    format!(
+                        r#"Self {{
+                tag: {}::{},
+                variant: unsafe {{
+                    core::mem::transmute::<
+                        core::mem::MaybeUninit<{}>,
+                        {},
+                    >(core::mem::MaybeUninit::uninit())
+                }},
+            }},"#,
+                        discriminant_name, tag_name, variant_name, variant_name
+                    )
+                }
+            },
+        )?;
+
+        writeln!(
+            buf,
+            // Don't use indoc because this must be indented once!
+            indoc!(
+                r#"
+                            }}
+                        }}
+                    }}
+                "#
+            ),
+        )?;
+    }
+
+    if !typ.has_pointer(types) {
+        writeln!(buf, "impl Copy for {} {{}}\n", name)?;
+    }
+
     Ok(())
 }
 
