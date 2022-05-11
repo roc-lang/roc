@@ -1,15 +1,17 @@
+use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 use roc_builtins::std::StdLib;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
 use roc_can::expected::Expected;
+use roc_can::pattern::Pattern;
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::{FreeVars, SolvedType};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Category, Type};
+use roc_types::types::{AnnotationSource, Category, Type};
 
 /// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
@@ -94,13 +96,15 @@ pub enum ExposedModuleTypes {
 
 pub fn constrain_module(
     constraints: &mut Constraints,
+    symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     abilities_store: &AbilitiesStore,
     declarations: &[Declaration],
     home: ModuleId,
 ) -> Constraint {
     let constraint = crate::expr::constrain_decls(constraints, home, declarations);
-
-    let constraint = frontload_ability_constraints(constraints, abilities_store, constraint);
+    let constraint =
+        constrain_symbols_from_requires(constraints, symbols_from_requires, home, constraint);
+    let constraint = frontload_ability_constraints(constraints, abilities_store, home, constraint);
 
     // The module constraint should always save the environment at the end.
     debug_assert!(constraints.contains_save_the_environment(&constraint));
@@ -108,42 +112,101 @@ pub fn constrain_module(
     constraint
 }
 
+fn constrain_symbols_from_requires(
+    constraints: &mut Constraints,
+    symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
+    home: ModuleId,
+    constraint: Constraint,
+) -> Constraint {
+    symbols_from_requires
+        .into_iter()
+        .fold(constraint, |constraint, (loc_symbol, loc_type)| {
+            if loc_symbol.value.module_id() == home {
+                // 1. Required symbols can only be specified in package modules
+                // 2. Required symbols come from app modules
+                // But, if we are running e.g. `roc check` on a package module, there is no app
+                // module, and we will have instead put the required symbols in the package module
+                // namespace. If this is the case, we want to introduce the symbols as if they had
+                // the types they are annotated with.
+                let rigids = Default::default();
+                let env = Env { home, rigids };
+                let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(loc_symbol.value));
+
+                let def_pattern_state =
+                    constrain_def_pattern(constraints, &env, &pattern, loc_type.value);
+
+                constrain_def_make_constraint(
+                    constraints,
+                    // No new rigids or flex vars because they are represented in the type
+                    // annotation.
+                    std::iter::empty(),
+                    std::iter::empty(),
+                    Constraint::True,
+                    constraint,
+                    def_pattern_state,
+                )
+            } else {
+                // Otherwise, this symbol comes from an app module - we want to check that the type
+                // provided by the app is in fact what the package module requires.
+                let arity = loc_type.value.arity();
+                let provided_eq_requires_constr = constraints.lookup(
+                    loc_symbol.value,
+                    Expected::FromAnnotation(
+                        loc_symbol.map(|&s| Pattern::Identifier(s)),
+                        arity,
+                        AnnotationSource::RequiredSymbol {
+                            region: loc_type.region,
+                        },
+                        loc_type.value,
+                    ),
+                    loc_type.region,
+                );
+                constraints.and_constraint([provided_eq_requires_constr, constraint])
+            }
+        })
+}
+
 pub fn frontload_ability_constraints(
     constraints: &mut Constraints,
     abilities_store: &AbilitiesStore,
+    home: ModuleId,
     mut constraint: Constraint,
 ) -> Constraint {
     for (member_name, member_data) in abilities_store.root_ability_members().iter() {
-        // 1. Attach the type of member signature to the reserved signature_var. This is
-        //    infallible.
-        let unify_with_signature_var = constraints.equal_types_var(
-            member_data.signature_var,
-            Expected::NoExpectation(member_data.signature.clone()),
-            Category::Storage(std::file!(), std::column!()),
-            Region::zero(),
+        let rigids = Default::default();
+        let env = Env { home, rigids };
+        let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(*member_name));
+
+        let mut def_pattern_state = constrain_def_pattern(
+            constraints,
+            &env,
+            &pattern,
+            Type::Variable(member_data.signature_var),
         );
 
-        // 2. Store the member signature on the member symbol. This makes sure we generalize it on
-        //    the toplevel, as appropriate.
-        let vars = &member_data.variables;
-        let rigids = (vars.rigid_vars.iter())
-            // For our purposes, in the let constraint, able vars are treated like rigids.
-            .chain(vars.able_vars.iter())
-            .copied();
-        let flex = vars.flex_vars.iter().copied();
+        def_pattern_state.vars.push(member_data.signature_var);
 
-        let let_constr = constraints.let_constraint(
-            rigids,
-            flex,
-            [(
-                *member_name,
-                Loc::at_zero(Type::Variable(member_data.signature_var)),
-            )],
+        let vars = &member_data.variables;
+        let rigid_variables = vars.rigid_vars.iter().chain(vars.able_vars.iter()).copied();
+        let infer_variables = vars.flex_vars.iter().copied();
+
+        def_pattern_state
+            .constraints
+            .push(constraints.equal_types_var(
+                member_data.signature_var,
+                Expected::NoExpectation(member_data.signature.clone()),
+                Category::Storage(file!(), line!()),
+                Region::zero(),
+            ));
+
+        constraint = constrain_def_make_constraint(
+            constraints,
+            rigid_variables,
+            infer_variables,
             Constraint::True,
             constraint,
+            def_pattern_state,
         );
-
-        constraint = constraints.and_constraint([unify_with_signature_var, let_constr]);
     }
     constraint
 }

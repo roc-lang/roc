@@ -116,7 +116,7 @@ fn find_names_needed(
     }
 
     match &subs.get_content_without_compacting(variable).clone() {
-        RecursionVar { opt_name: None, .. } | FlexVar(None) | FlexAbleVar(None, _) => {
+        RecursionVar { opt_name: None, .. } | FlexVar(None) => {
             let root = subs.get_root_key_without_compacting(variable);
 
             // If this var is *not* its own root, then the
@@ -134,6 +134,15 @@ fn find_names_needed(
                     root_appearances.insert(root, Appearances::Single);
                 }
             }
+        }
+        FlexAbleVar(None, _) => {
+            let root = subs.get_root_key_without_compacting(variable);
+            if !root_appearances.contains_key(&root) {
+                roots.push(root);
+            }
+            // Able vars are always printed at least twice (in the signature, and in the "has"
+            // clause set).
+            root_appearances.insert(root, Appearances::Multiple);
         }
         RecursionVar {
             opt_name: Some(name_index),
@@ -224,7 +233,11 @@ fn find_names_needed(
     }
 }
 
-pub fn name_all_type_vars(variable: Variable, subs: &mut Subs) {
+struct NamedResult {
+    recursion_structs_to_expand: Vec<Variable>,
+}
+
+fn name_all_type_vars(variable: Variable, subs: &mut Subs) -> NamedResult {
     let mut roots = Vec::new();
     let mut letters_used = 0;
     let mut appearances = MutMap::default();
@@ -233,12 +246,29 @@ pub fn name_all_type_vars(variable: Variable, subs: &mut Subs) {
     // Populate names_needed
     find_names_needed(variable, subs, &mut roots, &mut appearances, &mut taken);
 
+    let mut recursion_structs_to_expand = vec![];
+
     for root in roots {
         // show the type variable number instead of `*`. useful for debugging
         // set_root_name(root, (format!("<{:?}>", root).into()), subs);
-        if let Some(Appearances::Multiple) = appearances.get(&root) {
-            letters_used = name_root(letters_used, root, subs, &mut taken);
+        match appearances.get(&root) {
+            Some(Appearances::Multiple) => {
+                letters_used = name_root(letters_used, root, subs, &mut taken);
+            }
+            Some(Appearances::Single) => {
+                if let Content::RecursionVar { structure, .. } =
+                    subs.get_content_without_compacting(root)
+                {
+                    recursion_structs_to_expand.push(*structure);
+                    letters_used = name_root(letters_used, root, subs, &mut taken);
+                }
+            }
+            _ => {}
         }
+    }
+
+    NamedResult {
+        recursion_structs_to_expand,
     }
 }
 
@@ -271,6 +301,11 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
             let content = FlexVar(Some(name_index));
             subs.set_content(root, content);
         }
+        &FlexAbleVar(None, ability) => {
+            let name_index = SubsIndex::push_new(&mut subs.field_names, name);
+            let content = FlexAbleVar(Some(name_index), ability);
+            subs.set_content(root, content);
+        }
         RecursionVar {
             opt_name: None,
             structure,
@@ -298,17 +333,22 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
 #[derive(Default)]
 struct Context<'a> {
     able_variables: Vec<(&'a str, Symbol)>,
+    recursion_structs_to_expand: Vec<Variable>,
 }
 
-pub fn content_to_string(
+fn content_to_string(
     content: &Content,
     subs: &Subs,
     home: ModuleId,
     interns: &Interns,
+    named_result: NamedResult,
 ) -> String {
     let mut buf = String::new();
     let env = Env { home, interns };
-    let mut ctx = Context::default();
+    let mut ctx = Context {
+        able_variables: vec![],
+        recursion_structs_to_expand: named_result.recursion_structs_to_expand,
+    };
 
     write_content(&env, &mut ctx, content, subs, &mut buf, Parens::Unnecessary);
 
@@ -322,6 +362,17 @@ pub fn content_to_string(
     }
 
     buf
+}
+
+pub fn name_and_print_var(
+    var: Variable,
+    subs: &mut Subs,
+    home: ModuleId,
+    interns: &Interns,
+) -> String {
+    let named_result = name_all_type_vars(var, subs);
+    let content = subs.get_content_without_compacting(var);
+    content_to_string(content, subs, home, interns, named_result)
 }
 
 pub fn get_single_arg<'a>(subs: &'a Subs, args: &'a AliasVariables) -> &'a Content {
@@ -367,12 +418,34 @@ fn write_content<'a>(
             ctx.able_variables.push((name, *ability));
             buf.push_str(name);
         }
-        RecursionVar { opt_name, .. } => match opt_name {
+        RecursionVar {
+            opt_name,
+            structure,
+        } => match opt_name {
             Some(name_index) => {
-                let name = &subs.field_names[name_index.index as usize];
-                buf.push_str(name.as_str())
+                if let Some(idx) = ctx
+                    .recursion_structs_to_expand
+                    .iter()
+                    .position(|v| v == structure)
+                {
+                    ctx.recursion_structs_to_expand.swap_remove(idx);
+
+                    write_content(
+                        env,
+                        ctx,
+                        subs.get_content_without_compacting(*structure),
+                        subs,
+                        buf,
+                        parens,
+                    );
+                } else {
+                    let name = &subs.field_names[name_index.index as usize];
+                    buf.push_str(name.as_str())
+                }
             }
-            None => buf.push_str(WILDCARD),
+            None => {
+                unreachable!("This should always be filled in!")
+            }
         },
         Structure(flat_type) => write_flat_type(env, ctx, flat_type, subs, buf, parens),
         Alias(symbol, args, _actual, _kind) => {
@@ -423,7 +496,7 @@ fn write_content<'a>(
                     write_integer(env, ctx, content, subs, buf, parens, write_parens)
                 }
 
-                Symbol::NUM_FLOAT => write_float(
+                Symbol::NUM_FRAC => write_float(
                     env,
                     ctx,
                     get_single_arg(subs, args),
@@ -449,13 +522,12 @@ fn write_content<'a>(
                         );
                     }
 
-                    // useful for debugging
-                    if false {
+                    roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRETTY_PRINT_ALIAS_CONTENTS, {
                         buf.push_str("[[ but really ");
                         let content = subs.get_content_without_compacting(*_actual);
                         write_content(env, ctx, content, subs, buf, parens);
                         buf.push_str("]]");
-                    }
+                    });
                 }),
             }
         }
@@ -992,7 +1064,7 @@ fn write_fn<'a>(
 
 fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
     let interns = &env.interns;
-    let ident = symbol.ident_str(interns);
+    let ident_str = symbol.as_str(interns);
     let module_id = symbol.module_id();
 
     // Don't qualify the symbol if it's in our home module,
@@ -1002,5 +1074,5 @@ fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
         buf.push('.');
     }
 
-    buf.push_str(ident.as_str());
+    buf.push_str(ident_str);
 }

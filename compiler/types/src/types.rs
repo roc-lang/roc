@@ -120,13 +120,15 @@ impl RecordField<Type> {
         }
     }
 
-    pub fn instantiate_aliases(
+    pub fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         introduced: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         use RecordField::*;
 
         match self {
@@ -168,13 +170,15 @@ impl LambdaSet {
         &mut self.0
     }
 
-    fn instantiate_aliases(
+    fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         introduced: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         self.0
             .instantiate_aliases(region, aliases, var_store, introduced)
     }
@@ -183,8 +187,38 @@ impl LambdaSet {
 #[derive(PartialEq, Eq, Clone)]
 pub struct AliasCommon {
     pub symbol: Symbol,
-    pub type_arguments: Vec<(Lowercase, Type)>,
+    pub type_arguments: Vec<Type>,
     pub lambda_set_variables: Vec<LambdaSet>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct OptAbleVar {
+    pub var: Variable,
+    pub opt_ability: Option<Symbol>,
+}
+
+impl OptAbleVar {
+    pub fn unbound(var: Variable) -> Self {
+        Self {
+            var,
+            opt_ability: None,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub struct OptAbleType {
+    pub typ: Type,
+    pub opt_ability: Option<Symbol>,
+}
+
+impl OptAbleType {
+    pub fn unbound(typ: Type) -> Self {
+        Self {
+            typ,
+            opt_ability: None,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -204,14 +238,14 @@ pub enum Type {
     DelayedAlias(AliasCommon),
     Alias {
         symbol: Symbol,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<OptAbleType>,
         lambda_set_variables: Vec<LambdaSet>,
         actual: Box<Type>,
         kind: AliasKind,
     },
     HostExposedAlias {
         name: Symbol,
-        type_arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<Type>,
         lambda_set_variables: Vec<LambdaSet>,
         actual_var: Variable,
         actual: Box<Type>,
@@ -292,6 +326,16 @@ impl Clone for Type {
             Self::Variable(arg0) => Self::Variable(*arg0),
             Self::RangedNumber(arg0, arg1) => Self::RangedNumber(arg0.clone(), arg1.clone()),
             Self::Erroneous(arg0) => Self::Erroneous(arg0.clone()),
+        }
+    }
+}
+
+impl Clone for OptAbleType {
+    fn clone(&self) -> Self {
+        // This passes through `Type`, so defer to that to bump the clone counter.
+        Self {
+            typ: self.typ.clone(),
+            opt_ability: self.opt_ability,
         }
     }
 }
@@ -381,7 +425,7 @@ impl fmt::Debug for Type {
             }) => {
                 write!(f, "(DelayedAlias {:?}", symbol)?;
 
-                for (_, arg) in type_arguments {
+                for arg in type_arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -405,8 +449,11 @@ impl fmt::Debug for Type {
             } => {
                 write!(f, "(Alias {:?}", symbol)?;
 
-                for (_, arg) in type_arguments {
-                    write!(f, " {:?}", arg)?;
+                for arg in type_arguments {
+                    write!(f, " {:?}", &arg.typ)?;
+                    if let Some(ab) = arg.opt_ability {
+                        write!(f, ":{:?}", ab)?;
+                    }
                 }
 
                 for (lambda_set, greek_letter) in
@@ -429,7 +476,7 @@ impl fmt::Debug for Type {
             } => {
                 write!(f, "HostExposedAlias {:?}", name)?;
 
-                for (_, arg) in arguments {
+                for arg in arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
@@ -690,7 +737,7 @@ impl Type {
                     lambda_set_variables,
                     ..
                 }) => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -704,8 +751,8 @@ impl Type {
                     actual,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
-                        stack.push(value);
+                    for value in type_arguments.iter_mut() {
+                        stack.push(&mut value.typ);
                     }
 
                     for lambda_set in lambda_set_variables.iter_mut() {
@@ -720,7 +767,7 @@ impl Type {
                     actual: actual_type,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -799,7 +846,7 @@ impl Type {
                     lambda_set_variables,
                     ..
                 }) => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -813,8 +860,8 @@ impl Type {
                     actual,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
-                        stack.push(value);
+                    for value in type_arguments.iter_mut() {
+                        stack.push(&mut value.typ);
                     }
                     for lambda_set in lambda_set_variables.iter_mut() {
                         stack.push(lambda_set.as_inner_mut());
@@ -828,7 +875,7 @@ impl Type {
                     actual: actual_type,
                     ..
                 } => {
-                    for (_, value) in type_arguments.iter_mut() {
+                    for value in type_arguments.iter_mut() {
                         stack.push(value);
                     }
 
@@ -899,7 +946,7 @@ impl Type {
                 lambda_set_variables: _no_aliases_in_lambda_sets,
                 ..
             }) => {
-                for (_, ta) in type_arguments {
+                for ta in type_arguments {
                     ta.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
 
@@ -910,8 +957,8 @@ impl Type {
                 actual: alias_actual,
                 ..
             } => {
-                for (_, ta) in type_arguments {
-                    ta.substitute_alias(rep_symbol, rep_args, actual)?;
+                for ta in type_arguments {
+                    ta.typ.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
                 alias_actual.substitute_alias(rep_symbol, rep_args, actual)
             }
@@ -981,9 +1028,7 @@ impl Type {
                 ..
             }) => {
                 symbol == &rep_symbol
-                    || type_arguments
-                        .iter()
-                        .any(|v| v.1.contains_symbol(rep_symbol))
+                    || type_arguments.iter().any(|v| v.contains_symbol(rep_symbol))
                     || lambda_set_variables
                         .iter()
                         .any(|v| v.0.contains_symbol(rep_symbol))
@@ -1064,13 +1109,28 @@ impl Type {
         result
     }
 
-    pub fn instantiate_aliases(
+    pub fn shallow_structural_dealias(&self) -> &Self {
+        let mut result = self;
+        while let Type::Alias {
+            actual,
+            kind: AliasKind::Structural,
+            ..
+        } = result
+        {
+            result = actual;
+        }
+        result
+    }
+
+    pub fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &ImMap<Symbol, Alias>,
+        aliases: &'a F,
         var_store: &mut VarStore,
         new_lambda_set_variables: &mut ImSet<Variable>,
-    ) {
+    ) where
+        F: Fn(Symbol) -> Option<&'a Alias>,
+    {
         use Type::*;
 
         match self {
@@ -1106,24 +1166,52 @@ impl Type {
                     ext.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
                 }
             }
-            DelayedAlias(AliasCommon { .. }) => {
-                // do nothing, yay
+            DelayedAlias(AliasCommon {
+                type_arguments,
+                lambda_set_variables,
+                symbol: _,
+            }) => {
+                debug_assert!(lambda_set_variables
+                    .iter()
+                    .all(|lambda_set| matches!(lambda_set.0, Type::Variable(..))));
+                type_arguments.iter_mut().for_each(|t| {
+                    t.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables)
+                });
             }
             HostExposedAlias {
                 type_arguments: type_args,
                 lambda_set_variables,
                 actual: actual_type,
                 ..
+            } => {
+                for arg in type_args {
+                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                }
+
+                for arg in lambda_set_variables {
+                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                }
+
+                actual_type.instantiate_aliases(
+                    region,
+                    aliases,
+                    var_store,
+                    new_lambda_set_variables,
+                );
             }
-            | Alias {
+            Alias {
                 type_arguments: type_args,
                 lambda_set_variables,
                 actual: actual_type,
                 ..
             } => {
                 for arg in type_args {
-                    arg.1
-                        .instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    arg.typ.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                    );
                 }
 
                 for arg in lambda_set_variables {
@@ -1138,16 +1226,14 @@ impl Type {
                 );
             }
             Apply(symbol, args, _) => {
-                if let Some(alias) = aliases.get(symbol) {
+                if let Some(alias) = aliases(*symbol) {
                     // TODO switch to this, but we still need to check for recursion with the
                     // `else` branch
                     if false {
                         let mut type_var_to_arg = Vec::new();
 
-                        for (loc_var, arg_ann) in alias.type_variables.iter().zip(args) {
-                            let name = loc_var.value.0.clone();
-
-                            type_var_to_arg.push((name, arg_ann.clone()));
+                        for (_, arg_ann) in alias.type_variables.iter().zip(args) {
+                            type_var_to_arg.push(arg_ann.clone());
                         }
 
                         let mut lambda_set_variables =
@@ -1187,7 +1273,12 @@ impl Type {
                         // TODO substitute further in args
                         for (
                             Loc {
-                                value: (lowercase, placeholder),
+                                value:
+                                    AliasVar {
+                                        var: placeholder,
+                                        opt_bound_ability,
+                                        ..
+                                    },
                                 ..
                             },
                             filler,
@@ -1200,7 +1291,10 @@ impl Type {
                                 var_store,
                                 new_lambda_set_variables,
                             );
-                            named_args.push((lowercase.clone(), filler.clone()));
+                            named_args.push(OptAbleType {
+                                typ: filler.clone(),
+                                opt_ability: *opt_bound_ability,
+                            });
                             substitution.insert(*placeholder, filler);
                         }
 
@@ -1364,7 +1458,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 ..
             }) => {
                 output.push(*symbol);
-                stack.extend(type_arguments.iter().map(|v| &v.1));
+                stack.extend(type_arguments);
             }
             Alias {
                 symbol: alias_symbol,
@@ -1472,7 +1566,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             lambda_set_variables,
             ..
         }) => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help(arg, accum);
             }
 
@@ -1485,8 +1579,8 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             actual,
             ..
         } => {
-            for (_, arg) in type_arguments {
-                variables_help(arg, accum);
+            for arg in type_arguments {
+                variables_help(&arg.typ, accum);
             }
             variables_help(actual, accum);
         }
@@ -1495,7 +1589,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             actual,
             ..
         } => {
-            for (_, arg) in arguments {
+            for arg in arguments {
                 variables_help(arg, accum);
             }
             variables_help(actual, accum);
@@ -1604,7 +1698,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             lambda_set_variables,
             ..
         }) => {
-            for (_, arg) in type_arguments {
+            for arg in type_arguments {
                 variables_help_detailed(arg, accum);
             }
 
@@ -1621,8 +1715,8 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             actual,
             ..
         } => {
-            for (_, arg) in type_arguments {
-                variables_help_detailed(arg, accum);
+            for arg in type_arguments {
+                variables_help_detailed(&arg.typ, accum);
             }
             variables_help_detailed(actual, accum);
         }
@@ -1631,7 +1725,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             actual,
             ..
         } => {
-            for (_, arg) in arguments {
+            for arg in arguments {
                 variables_help_detailed(arg, accum);
             }
             variables_help_detailed(actual, accum);
@@ -1670,6 +1764,7 @@ pub enum PReason {
     },
     WhenMatch {
         index: HumanIndex,
+        sub_pattern: HumanIndex,
     },
     TagArg {
         tag_name: TagName,
@@ -1693,6 +1788,9 @@ pub enum AnnotationSource {
     TypedBody {
         region: Region,
     },
+    RequiredSymbol {
+        region: Region,
+    },
 }
 
 impl AnnotationSource {
@@ -1701,6 +1799,7 @@ impl AnnotationSource {
             &Self::TypedIfBranch { region, .. }
             | &Self::TypedWhenBranch { region, .. }
             | &Self::TypedBody { region, .. } => region,
+            &Self::RequiredSymbol { region, .. } => region,
         }
     }
 }
@@ -1708,6 +1807,10 @@ impl AnnotationSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
     FnArg {
+        name: Option<Symbol>,
+        arg_index: HumanIndex,
+    },
+    TypedArg {
         name: Option<Symbol>,
         arg_index: HumanIndex,
     },
@@ -1727,6 +1830,7 @@ pub enum Reason {
     IntLiteral,
     NumLiteral,
     StrInterpolation,
+    WhenBranches,
     WhenBranch {
         index: HumanIndex,
     },
@@ -1794,6 +1898,9 @@ pub enum Category {
     DefaultValue(Lowercase), // for setting optional fields
 
     AbilityMemberSpecialization(Symbol),
+
+    Expect,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1827,9 +1934,36 @@ pub enum AliasKind {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct AliasVar {
+    pub name: Lowercase,
+    pub var: Variable,
+    /// `Some` if this variable is bound to an ability; `None` otherwise.
+    pub opt_bound_ability: Option<Symbol>,
+}
+
+impl AliasVar {
+    pub fn unbound(name: Lowercase, var: Variable) -> AliasVar {
+        Self {
+            name,
+            var,
+            opt_bound_ability: None,
+        }
+    }
+}
+
+impl From<&AliasVar> for OptAbleVar {
+    fn from(av: &AliasVar) -> OptAbleVar {
+        OptAbleVar {
+            var: av.var,
+            opt_ability: av.opt_bound_ability,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Alias {
     pub region: Region,
-    pub type_variables: Vec<Loc<(Lowercase, Variable)>>,
+    pub type_variables: Vec<Loc<AliasVar>>,
 
     /// lambda set variables, e.g. the one annotating the arrow in
     /// a |c|-> b
@@ -1990,7 +2124,7 @@ fn write_error_type_help(
             if write_parens {
                 buf.push('(');
             }
-            buf.push_str(symbol.ident_str(interns).as_str());
+            buf.push_str(symbol.as_str(interns));
 
             for arg in arguments {
                 buf.push(' ');
@@ -2484,7 +2618,10 @@ pub fn gather_tags_unsorted_iter(
             // TODO investigate this likely can happen when there is a type error
             RigidVar(_) => break,
 
-            other => unreachable!("something weird ended up in a tag union type: {:?}", other),
+            other => unreachable!(
+                "something weird ended up in a tag union type: {:?} at {:?}",
+                other, var
+            ),
         }
     }
 

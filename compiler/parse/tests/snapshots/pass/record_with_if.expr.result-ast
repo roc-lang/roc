@@ -6,7 +6,7 @@ Record(
             @5-26 If(
                 [
                     (
-                        @8-12 GlobalTag(
+                        @8-12 Tag(
                             "True",
                         ),
                         @18-19 Num(

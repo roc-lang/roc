@@ -1,6 +1,5 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_module::ident::Ident;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
@@ -84,7 +83,7 @@ pub struct CodeGenHelp<'a> {
 
 impl<'a> CodeGenHelp<'a> {
     pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
-        let layout_isize = Layout::usize(target_info);
+        let layout_isize = Layout::isize(target_info);
 
         // Refcount is a boxed isize. TODO: use the new Box layout when dev backends support it
         let union_refcount = UnionLayout::NonNullableUnwrapped(arena.alloc([layout_isize]));
@@ -396,7 +395,7 @@ impl<'a> CodeGenHelp<'a> {
     }
 
     fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
-        let ident_id = ident_ids.add(Ident::from(debug_name));
+        let ident_id = ident_ids.add_str(debug_name);
         Symbol::new(self.home, ident_id)
     }
 

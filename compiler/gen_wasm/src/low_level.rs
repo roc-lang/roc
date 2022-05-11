@@ -22,7 +22,7 @@ use crate::TARGET_INFO;
 /// the smallest integer supported in the Wasm instruction set.
 /// We may choose different instructions for signed and unsigned integers,
 /// but they share the same Wasm value type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum CodeGenNumType {
     I32,     // Supported in Wasm instruction set
     I64,     // Supported in Wasm instruction set
@@ -116,6 +116,13 @@ impl From<&StoredValue> for CodeGenNumType {
     }
 }
 
+fn integer_symbol_is_signed(backend: &WasmBackend<'_>, symbol: Symbol) -> bool {
+    return match backend.storage.symbol_layouts[&symbol] {
+        Layout::Builtin(Builtin::Int(int_width)) => int_width.is_signed(),
+        x => internal_error!("Expected integer, found {:?}", x),
+    };
+}
+
 pub struct LowLevelCall<'a> {
     pub lowlevel: LowLevel,
     pub arguments: &'a [Symbol],
@@ -129,7 +136,7 @@ impl<'a> LowLevelCall<'a> {
     /// For numerical ops, this just pushes the arguments to the Wasm VM's value stack
     /// It implements the calling convention used by Zig for both numbers and structs
     /// Result is the type signature of the call
-    fn load_args(&self, backend: &mut WasmBackend<'a>) -> (Vec<'a, ValueType>, Option<ValueType>) {
+    fn load_args(&self, backend: &mut WasmBackend<'a>) -> (usize, bool, bool) {
         backend.storage.load_symbols_for_call(
             backend.env.arena,
             &mut backend.code_builder,
@@ -141,8 +148,29 @@ impl<'a> LowLevelCall<'a> {
     }
 
     fn load_args_and_call_zig(&self, backend: &mut WasmBackend<'a>, name: &'a str) {
-        let (param_types, ret_type) = self.load_args(backend);
-        backend.call_zig_builtin_after_loading_args(name, param_types.len(), ret_type.is_some());
+        let (num_wasm_args, has_return_val, ret_zig_packed_struct) = self.load_args(backend);
+        backend.call_zig_builtin_after_loading_args(name, num_wasm_args, has_return_val);
+
+        if ret_zig_packed_struct {
+            match self.ret_storage {
+                StoredValue::StackMemory {
+                    size,
+                    alignment_bytes,
+                    ..
+                } => {
+                    // The address of the return value was already loaded before the call
+                    let align = Align::from(alignment_bytes);
+                    if size > 4 {
+                        backend.code_builder.i64_store(align, 0);
+                    } else {
+                        backend.code_builder.i32_store(align, 0);
+                    }
+                }
+                _ => {
+                    internal_error!("Zig packed struct should always be stored to StackMemory")
+                }
+            }
+        }
     }
 
     /// Wrap an integer whose Wasm representation is i32
@@ -270,6 +298,8 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
+            ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
+
             ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
             | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
             | ListAny | ListAll | ListFindUnsafe | DictWalk => {
@@ -377,8 +407,20 @@ impl<'a> LowLevelCall<'a> {
             NumGt => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_gt_s(),
-                    I64 => backend.code_builder.i64_gt_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_gt_s()
+                        } else {
+                            backend.code_builder.i32_gt_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_gt_s()
+                        } else {
+                            backend.code_builder.i64_gt_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_gt(),
                     F64 => backend.code_builder.f64_gt(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
@@ -387,8 +429,20 @@ impl<'a> LowLevelCall<'a> {
             NumGte => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_ge_s(),
-                    I64 => backend.code_builder.i64_ge_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_ge_s()
+                        } else {
+                            backend.code_builder.i32_ge_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_ge_s()
+                        } else {
+                            backend.code_builder.i64_ge_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_ge(),
                     F64 => backend.code_builder.f64_ge(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
@@ -397,8 +451,20 @@ impl<'a> LowLevelCall<'a> {
             NumLt => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_lt_s(),
-                    I64 => backend.code_builder.i64_lt_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_lt_s()
+                        } else {
+                            backend.code_builder.i32_lt_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_lt_s()
+                        } else {
+                            backend.code_builder.i64_lt_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_lt(),
                     F64 => backend.code_builder.f64_lt(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
@@ -407,8 +473,20 @@ impl<'a> LowLevelCall<'a> {
             NumLte => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_le_s(),
-                    I64 => backend.code_builder.i64_le_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_le_s()
+                        } else {
+                            backend.code_builder.i32_le_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_le_s()
+                        } else {
+                            backend.code_builder.i64_le_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_le(),
                     F64 => backend.code_builder.f64_le(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
@@ -504,19 +582,7 @@ impl<'a> LowLevelCall<'a> {
             NumCos => todo!("{:?}", self.lowlevel),
             NumSqrtUnchecked => todo!("{:?}", self.lowlevel),
             NumLogUnchecked => todo!("{:?}", self.lowlevel),
-            NumRound => {
-                self.load_args(backend);
-                match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    F32 => {
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND[FloatWidth::F32])
-                    }
-                    F64 => {
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND[FloatWidth::F64])
-                    }
-                    _ => todo!("{:?} for {:?}", self.lowlevel, self.ret_layout),
-                }
-            }
-            NumToFloat => {
+            NumToFrac => {
                 self.load_args(backend);
                 let ret_type = CodeGenNumType::from(self.ret_layout);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
@@ -535,35 +601,72 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumPow => todo!("{:?}", self.lowlevel),
-            NumCeiling => {
+            NumRound => {
                 self.load_args(backend);
-                match CodeGenNumType::from(self.ret_layout) {
-                    I32 => {
+                let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
+                let ret_type = CodeGenNumType::from(self.ret_layout);
+
+                let width = match ret_type {
+                    CodeGenNumType::I32 => IntWidth::I32,
+                    CodeGenNumType::I64 => IntWidth::I64,
+                    CodeGenNumType::I128 => todo!("{:?} for I128", self.lowlevel),
+                    _ => internal_error!("Invalid return type for round: {:?}", ret_type),
+                };
+
+                match arg_type {
+                    F32 => self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F32[width]),
+                    F64 => self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F64[width]),
+                    _ => internal_error!("Invalid argument type for round: {:?}", arg_type),
+                }
+            }
+            NumCeiling | NumFloor => {
+                self.load_args(backend);
+                let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
+                let ret_type = CodeGenNumType::from(self.ret_layout);
+                match (arg_type, self.lowlevel) {
+                    (F32, NumCeiling) => {
                         backend.code_builder.f32_ceil();
-                        backend.code_builder.i32_trunc_s_f32()
                     }
-                    I64 => {
+                    (F64, NumCeiling) => {
                         backend.code_builder.f64_ceil();
-                        backend.code_builder.i64_trunc_s_f64()
                     }
-                    _ => panic_ret_type(),
-                }
-            }
-            NumPowInt => todo!("{:?}", self.lowlevel),
-            NumFloor => {
-                self.load_args(backend);
-                match CodeGenNumType::from(self.ret_layout) {
-                    I32 => {
+                    (F32, NumFloor) => {
                         backend.code_builder.f32_floor();
-                        backend.code_builder.i32_trunc_s_f32()
                     }
-                    I64 => {
+                    (F64, NumFloor) => {
                         backend.code_builder.f64_floor();
-                        backend.code_builder.i64_trunc_s_f64()
                     }
+                    _ => internal_error!("Invalid argument type for ceiling: {:?}", arg_type),
+                }
+                match (ret_type, arg_type) {
+                    // TODO: unsigned truncation
+                    (I32, F32) => backend.code_builder.i32_trunc_s_f32(),
+                    (I32, F64) => backend.code_builder.i32_trunc_s_f64(),
+                    (I64, F32) => backend.code_builder.i64_trunc_s_f32(),
+                    (I64, F64) => backend.code_builder.i64_trunc_s_f64(),
+                    (I128, _) => todo!("{:?} for I128", self.lowlevel),
                     _ => panic_ret_type(),
                 }
             }
+            NumPowInt => {
+                self.load_args(backend);
+                let base_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
+                let exponent_type = CodeGenNumType::for_symbol(backend, self.arguments[1]);
+                let ret_type = CodeGenNumType::from(self.ret_layout);
+
+                debug_assert!(base_type == exponent_type);
+                debug_assert!(exponent_type == ret_type);
+
+                let width = match ret_type {
+                    CodeGenNumType::I32 => IntWidth::I32,
+                    CodeGenNumType::I64 => IntWidth::I64,
+                    CodeGenNumType::I128 => todo!("{:?} for I128", self.lowlevel),
+                    _ => internal_error!("Invalid return type for pow: {:?}", ret_type),
+                };
+
+                self.load_args_and_call_zig(backend, &bitcode::NUM_POW_INT[width])
+            }
+
             NumIsFinite => num_is_finite(backend, self.arguments[0]),
 
             NumAtan => match self.ret_layout {

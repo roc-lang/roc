@@ -145,6 +145,7 @@ impl IdentStr {
         }
     }
 
+    #[inline(always)]
     pub fn as_slice(&self) -> &[u8] {
         use core::slice::from_raw_parts;
 
@@ -157,6 +158,7 @@ impl IdentStr {
         }
     }
 
+    #[inline(always)]
     pub fn as_str(&self) -> &str {
         let slice = self.as_slice();
 

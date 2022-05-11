@@ -1326,7 +1326,6 @@ pub fn listFindUnsafe(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
     element_width: usize,
     inc: Inc,
     dec: Dec,
@@ -1354,4 +1353,10 @@ pub fn listFindUnsafe(
     } else {
         return .{ .value = null, .found = false };
     }
+}
+
+pub fn listIsUnique(
+    list: RocList,
+) callconv(.C) bool {
+    return list.isEmpty() or list.isUnique();
 }

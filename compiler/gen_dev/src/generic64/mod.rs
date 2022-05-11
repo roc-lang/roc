@@ -803,7 +803,7 @@ impl<
         }
     }
 
-    fn build_num_to_float(
+    fn build_num_to_frac(
         &mut self,
         dst: &Symbol,
         src: &Symbol,
@@ -854,7 +854,7 @@ impl<
                 let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
             }
-            (a, r) => todo!("NumToFloat: layout, arg {:?}, ret {:?}", a, r),
+            (a, r) => todo!("NumToFrac: layout, arg {:?}, ret {:?}", a, r),
         }
     }
 

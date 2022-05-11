@@ -5,6 +5,8 @@ use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Constraints, LetConstraint};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
+use roc_debug_flags::{dbg_do, ROC_VERIFY_RIGID_LET_GENERALIZED};
+use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -15,8 +17,8 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, PatternCategory,
-    Reason, TypeExtension,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, OptAbleType,
+    OptAbleVar, PatternCategory, Reason, TypeExtension,
 };
 use roc_unify::unify::{unify, Mode, Unified::*};
 
@@ -99,6 +101,7 @@ pub enum TypeError {
         ErrorType,
         Vec<IncompleteAbilityImplementation>,
     ),
+    Exhaustive(roc_exhaustive::Error),
 }
 
 use roc_types::types::Alias;
@@ -112,7 +115,7 @@ struct DelayedAliasVariables {
 }
 
 impl DelayedAliasVariables {
-    fn recursion_variables(self, variables: &mut [Variable]) -> &mut [Variable] {
+    fn recursion_variables(self, variables: &mut [OptAbleVar]) -> &mut [OptAbleVar] {
         let start = self.start as usize
             + (self.type_variables_len + self.lambda_set_variables_len) as usize;
         let length = self.recursion_variables_len as usize;
@@ -120,14 +123,14 @@ impl DelayedAliasVariables {
         &mut variables[start..][..length]
     }
 
-    fn lambda_set_variables(self, variables: &mut [Variable]) -> &mut [Variable] {
+    fn lambda_set_variables(self, variables: &mut [OptAbleVar]) -> &mut [OptAbleVar] {
         let start = self.start as usize + self.type_variables_len as usize;
         let length = self.lambda_set_variables_len as usize;
 
         &mut variables[start..][..length]
     }
 
-    fn type_variables(self, variables: &mut [Variable]) -> &mut [Variable] {
+    fn type_variables(self, variables: &mut [OptAbleVar]) -> &mut [OptAbleVar] {
         let start = self.start as usize;
         let length = self.type_variables_len as usize;
 
@@ -137,30 +140,38 @@ impl DelayedAliasVariables {
 
 #[derive(Debug, Default)]
 pub struct Aliases {
-    aliases: Vec<(Symbol, Type, DelayedAliasVariables)>,
-    variables: Vec<Variable>,
+    aliases: Vec<(Symbol, Type, DelayedAliasVariables, AliasKind)>,
+    variables: Vec<OptAbleVar>,
 }
 
 impl Aliases {
     pub fn insert(&mut self, symbol: Symbol, alias: Alias) {
-        // debug_assert!(self.get(&symbol).is_none());
-
         let alias_variables =
             {
                 let start = self.variables.len() as _;
 
-                self.variables
-                    .extend(alias.type_variables.iter().map(|x| x.value.1));
+                self.variables.extend(
+                    alias
+                        .type_variables
+                        .iter()
+                        .map(|x| OptAbleVar::from(&x.value)),
+                );
 
                 self.variables.extend(alias.lambda_set_variables.iter().map(
                     |x| match x.as_inner() {
-                        Type::Variable(v) => *v,
+                        Type::Variable(v) => OptAbleVar::unbound(*v),
                         _ => unreachable!("lambda set type is not a variable"),
                     },
                 ));
 
                 let recursion_variables_len = alias.recursion_variables.len() as _;
-                self.variables.extend(alias.recursion_variables);
+                self.variables.extend(
+                    alias
+                        .recursion_variables
+                        .iter()
+                        .copied()
+                        .map(OptAbleVar::unbound),
+                );
 
                 DelayedAliasVariables {
                     start,
@@ -170,7 +181,8 @@ impl Aliases {
                 }
             };
 
-        self.aliases.push((symbol, alias.typ, alias_variables));
+        self.aliases
+            .push((symbol, alias.typ, alias_variables, alias.kind));
     }
 
     fn instantiate_result_result(
@@ -195,164 +207,84 @@ impl Aliases {
         register(subs, rank, pools, content)
     }
 
-    /// Instantiate an alias of the form `Foo a : [ @Foo a ]`
-    fn instantiate_num_at_alias(
+    /// Build an alias of the form `Num range := range`
+    fn build_num_opaque(
         subs: &mut Subs,
         rank: Rank,
         pools: &mut Pools,
-        tag_name_slice: SubsSlice<TagName>,
-        range_slice: SubsSlice<Variable>,
+        symbol: Symbol,
+        range_var: Variable,
     ) -> Variable {
-        let variable_slices = SubsSlice::extend_new(&mut subs.variable_slices, [range_slice]);
-
-        let union_tags = UnionTags::from_slices(tag_name_slice, variable_slices);
-        let ext_var = Variable::EMPTY_TAG_UNION;
-        let flat_type = FlatType::TagUnion(union_tags, ext_var);
-        let content = Content::Structure(flat_type);
+        let content = Content::Alias(
+            symbol,
+            AliasVariables::insert_into_subs(subs, [range_var], []),
+            range_var,
+            AliasKind::Opaque,
+        );
 
         register(subs, rank, pools, content)
     }
 
-    fn instantiate_builtin_aliases(
+    fn instantiate_builtin_aliases_real_var(
         &mut self,
         subs: &mut Subs,
         rank: Rank,
         pools: &mut Pools,
         symbol: Symbol,
         alias_variables: AliasVariables,
-    ) -> Option<Variable> {
+    ) -> Option<(Variable, AliasKind)> {
         match symbol {
             Symbol::RESULT_RESULT => {
                 let var = Self::instantiate_result_result(subs, rank, pools, alias_variables);
 
-                Some(var)
+                Some((var, AliasKind::Structural))
             }
-            Symbol::NUM_NUM => {
-                let var = Self::instantiate_num_at_alias(
-                    subs,
-                    rank,
-                    pools,
-                    Subs::NUM_AT_NUM,
-                    SubsSlice::new(alias_variables.variables_start, 1),
-                );
-
-                Some(var)
-            }
-            Symbol::NUM_FLOATINGPOINT => {
-                let var = Self::instantiate_num_at_alias(
-                    subs,
-                    rank,
-                    pools,
-                    Subs::NUM_AT_FLOATINGPOINT,
-                    SubsSlice::new(alias_variables.variables_start, 1),
-                );
-
-                Some(var)
-            }
-            Symbol::NUM_INTEGER => {
-                let var = Self::instantiate_num_at_alias(
-                    subs,
-                    rank,
-                    pools,
-                    Subs::NUM_AT_INTEGER,
-                    SubsSlice::new(alias_variables.variables_start, 1),
-                );
-
-                Some(var)
+            Symbol::NUM_NUM | Symbol::NUM_INTEGER | Symbol::NUM_FLOATINGPOINT => {
+                // Num range := range | Integer range := range | FloatingPoint range := range
+                let range_var = subs.variables[alias_variables.variables_start as usize];
+                Some((range_var, AliasKind::Opaque))
             }
             Symbol::NUM_INT => {
-                // [ @Integer range ]
-                let integer_content_var = Self::instantiate_builtin_aliases(
-                    self,
+                // Int range : Num (Integer range)
+                //
+                // build `Integer range := range`
+                let integer_content_var = Self::build_num_opaque(
                     subs,
                     rank,
                     pools,
                     Symbol::NUM_INTEGER,
-                    alias_variables,
-                )
-                .unwrap();
-
-                // Integer range (alias variable is the same as `Int range`)
-                let integer_alias_variables = alias_variables;
-                let integer_content = Content::Alias(
-                    Symbol::NUM_INTEGER,
-                    integer_alias_variables,
-                    integer_content_var,
-                    AliasKind::Structural,
-                );
-                let integer_alias_var = register(subs, rank, pools, integer_content);
-
-                // [ @Num (Integer range) ]
-                let num_alias_variables =
-                    AliasVariables::insert_into_subs(subs, [integer_alias_var], []);
-                let num_content_var = Self::instantiate_builtin_aliases(
-                    self,
-                    subs,
-                    rank,
-                    pools,
-                    Symbol::NUM_NUM,
-                    num_alias_variables,
-                )
-                .unwrap();
-
-                let num_content = Content::Alias(
-                    Symbol::NUM_NUM,
-                    num_alias_variables,
-                    num_content_var,
-                    AliasKind::Structural,
+                    subs.variables[alias_variables.variables_start as usize],
                 );
 
-                Some(register(subs, rank, pools, num_content))
+                // build `Num (Integer range) := Integer range`
+                let num_content_var =
+                    Self::build_num_opaque(subs, rank, pools, Symbol::NUM_NUM, integer_content_var);
+
+                Some((num_content_var, AliasKind::Structural))
             }
-            Symbol::NUM_FLOAT => {
-                // [ @FloatingPoint range ]
-                let fpoint_content_var = Self::instantiate_builtin_aliases(
-                    self,
+            Symbol::NUM_FRAC => {
+                // Frac range : Num (FloatingPoint range)
+                //
+                // build `FloatingPoint range := range`
+                let fpoint_content_var = Self::build_num_opaque(
                     subs,
                     rank,
                     pools,
                     Symbol::NUM_FLOATINGPOINT,
-                    alias_variables,
-                )
-                .unwrap();
-
-                // FloatingPoint range (alias variable is the same as `Float range`)
-                let fpoint_alias_variables = alias_variables;
-                let fpoint_content = Content::Alias(
-                    Symbol::NUM_FLOATINGPOINT,
-                    fpoint_alias_variables,
-                    fpoint_content_var,
-                    AliasKind::Structural,
-                );
-                let fpoint_alias_var = register(subs, rank, pools, fpoint_content);
-
-                // [ @Num (FloatingPoint range) ]
-                let num_alias_variables =
-                    AliasVariables::insert_into_subs(subs, [fpoint_alias_var], []);
-                let num_content_var = Self::instantiate_builtin_aliases(
-                    self,
-                    subs,
-                    rank,
-                    pools,
-                    Symbol::NUM_NUM,
-                    num_alias_variables,
-                )
-                .unwrap();
-
-                let num_content = Content::Alias(
-                    Symbol::NUM_NUM,
-                    num_alias_variables,
-                    num_content_var,
-                    AliasKind::Structural,
+                    subs.variables[alias_variables.variables_start as usize],
                 );
 
-                Some(register(subs, rank, pools, num_content))
+                // build `Num (FloatingPoint range) := FloatingPoint range`
+                let num_content_var =
+                    Self::build_num_opaque(subs, rank, pools, Symbol::NUM_NUM, fpoint_content_var);
+
+                Some((num_content_var, AliasKind::Structural))
             }
             _ => None,
         }
     }
 
-    fn instantiate(
+    fn instantiate_real_var(
         &mut self,
         subs: &mut Subs,
         rank: Rank,
@@ -360,26 +292,35 @@ impl Aliases {
         arena: &bumpalo::Bump,
         symbol: Symbol,
         alias_variables: AliasVariables,
-    ) -> Result<Variable, ()> {
+    ) -> Result<(Variable, AliasKind), ()> {
         // hardcoded instantiations for builtin aliases
-        if let Some(var) =
-            Self::instantiate_builtin_aliases(self, subs, rank, pools, symbol, alias_variables)
-        {
-            return Ok(var);
+        if let Some((var, kind)) = Self::instantiate_builtin_aliases_real_var(
+            self,
+            subs,
+            rank,
+            pools,
+            symbol,
+            alias_variables,
+        ) {
+            return Ok((var, kind));
         }
 
-        let (typ, delayed_variables) = match self.aliases.iter_mut().find(|(s, _, _)| *s == symbol)
-        {
-            None => return Err(()),
-            Some((_, typ, delayed_variables)) => (typ, delayed_variables),
-        };
+        let (typ, delayed_variables, &mut kind) =
+            match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
+                None => return Err(()),
+                Some((_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),
+            };
 
         let mut substitutions: MutMap<_, _> = Default::default();
 
-        for rec_var in delayed_variables
+        for OptAbleVar {
+            var: rec_var,
+            opt_ability,
+        } in delayed_variables
             .recursion_variables(&mut self.variables)
             .iter_mut()
         {
+            debug_assert!(opt_ability.is_none());
             let new_var = subs.fresh_unnamed_flex_var();
             substitutions.insert(*rec_var, new_var);
             *rec_var = new_var;
@@ -391,10 +332,10 @@ impl Aliases {
         for (old, new) in old_type_variables.iter_mut().zip(new_type_variables) {
             // if constraint gen duplicated a type these variables could be the same
             // (happens very often in practice)
-            if *old != *new {
-                substitutions.insert(*old, *new);
+            if old.var != *new {
+                substitutions.insert(old.var, *new);
 
-                *old = *new;
+                old.var = *new;
             }
         }
 
@@ -406,9 +347,10 @@ impl Aliases {
             .iter_mut()
             .zip(new_lambda_set_variables)
         {
-            if *old != *new {
-                substitutions.insert(*old, *new);
-                *old = *new;
+            debug_assert!(old.opt_ability.is_none());
+            if old.var != *new {
+                substitutions.insert(old.var, *new);
+                old.var = *new;
             }
         }
 
@@ -416,25 +358,26 @@ impl Aliases {
             typ.substitute_variables(&substitutions);
         }
 
-        // assumption: an alias does not (transitively) syntactically contain itself
-        // (if it did it would have to be a recursive tag union)
         let mut t = Type::EmptyRec;
 
         std::mem::swap(typ, &mut t);
 
+        // assumption: an alias does not (transitively) syntactically contain itself
+        // (if it did it would have to be a recursive tag union, which we should have fixed up
+        // during canonicalization)
         let alias_variable = type_to_variable(subs, rank, pools, arena, self, &t);
 
         {
-            match self.aliases.iter_mut().find(|(s, _, _)| *s == symbol) {
+            match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
                 None => unreachable!(),
-                Some((_, typ, _)) => {
+                Some((_, typ, _, _)) => {
                     // swap typ back
                     std::mem::swap(typ, &mut t);
                 }
             }
         }
 
-        Ok(alias_variable)
+        Ok((alias_variable, kind))
     }
 }
 
@@ -513,10 +456,13 @@ impl Pools {
         self.0.iter()
     }
 
-    pub fn split_last(&self) -> (&Vec<Variable>, &[Vec<Variable>]) {
-        self.0
-            .split_last()
-            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"))
+    pub fn split_last(mut self) -> (Vec<Variable>, Vec<Vec<Variable>>) {
+        let last = self
+            .0
+            .pop()
+            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"));
+
+        (last, self.0)
     }
 
     pub fn extend_to(&mut self, n: usize) {
@@ -534,7 +480,6 @@ struct State {
 
 pub fn run(
     constraints: &Constraints,
-    env: &Env,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
     aliases: &mut Aliases,
@@ -543,7 +488,6 @@ pub fn run(
 ) -> (Solved<Subs>, Env) {
     let env = run_in_place(
         constraints,
-        env,
         problems,
         &mut subs,
         aliases,
@@ -555,9 +499,8 @@ pub fn run(
 }
 
 /// Modify an existing subs in-place instead
-pub fn run_in_place(
+fn run_in_place(
     constraints: &Constraints,
-    env: &Env,
     problems: &mut Vec<TypeError>,
     subs: &mut Subs,
     aliases: &mut Aliases,
@@ -567,11 +510,10 @@ pub fn run_in_place(
     let mut pools = Pools::default();
 
     let state = State {
-        env: env.clone(),
+        env: Env::default(),
         mark: Mark::NONE.next(),
     };
     let rank = Rank::toplevel();
-
     let arena = Bump::new();
 
     let mut deferred_must_implement_abilities = DeferredMustImplementAbility::default();
@@ -579,7 +521,6 @@ pub fn run_in_place(
     let state = solve(
         &arena,
         constraints,
-        env,
         state,
         rank,
         &mut pools,
@@ -638,7 +579,6 @@ enum Work<'a> {
 fn solve(
     arena: &Bump,
     constraints: &Constraints,
-    env: &Env,
     mut state: State,
     rank: Rank,
     pools: &mut Pools,
@@ -650,7 +590,7 @@ fn solve(
     deferred_must_implement_abilities: &mut DeferredMustImplementAbility,
 ) -> State {
     let initial = Work::Constraint {
-        env,
+        env: &Env::default(),
         rank,
         constraint,
     };
@@ -756,6 +696,8 @@ fn solve(
                 pools.get_mut(next_rank).extend(pool_variables);
 
                 debug_assert_eq!(
+                    // Check that no variable ended up in a higher rank than the next rank.. that
+                    // would mean we generalized one level more than we need to!
                     {
                         let offenders = pools
                             .get(next_rank)
@@ -778,11 +720,10 @@ fn solve(
 
                 // pop pool
                 generalize(subs, young_mark, visit_mark, next_rank, pools);
-
-                pools.get_mut(next_rank).clear();
+                debug_assert!(pools.get(next_rank).is_empty());
 
                 // check that things went well
-                debug_assert!({
+                dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
                     let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
 
                     // NOTE the `subs.redundant` check does not come from elm.
@@ -798,11 +739,7 @@ fn solve(
                         let failing: Vec<_> = it.collect();
                         println!("Rigids {:?}", &rigid_vars);
                         println!("Failing {:?}", failing);
-
-                        // nicer error message
-                        failing.is_empty()
-                    } else {
-                        true
+                        debug_assert!(false);
                     }
                 });
 
@@ -854,7 +791,7 @@ fn solve(
 
                 copy
             }
-            Eq(type_index, expectation_index, category_index, region) => {
+            Eq(roc_can::constraint::Eq(type_index, expectation_index, category_index, region)) => {
                 let category = &constraints.categories[category_index.index()];
 
                 let actual =
@@ -1183,26 +1120,9 @@ fn solve(
                 let actual =
                     either_type_index_to_var(constraints, subs, rank, pools, aliases, *type_index);
 
-                let mut new_desc = subs.get(actual);
-                match new_desc.content {
-                    Content::Structure(FlatType::TagUnion(tags, _)) => {
-                        let new_ext = subs.fresh_unnamed_flex_var();
-                        subs.set_rank(new_ext, new_desc.rank);
-                        let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
-                        new_desc.content = new_union;
-                        subs.set(actual, new_desc);
-                        state
-                    }
-                    _ => {
-                        // Today, an "open" constraint doesn't affect any types
-                        // other than tag unions. Recursive tag unions are constructed
-                        // at a later time (during occurs checks after tag unions are
-                        // resolved), so that's not handled here either.
-                        // NB: Handle record types here if we add presence constraints
-                        // to their type inference as well.
-                        state
-                    }
-                }
+                open_tag_union(subs, actual);
+
+                state
             }
             IncludesTag(index) => {
                 let includes_tag = &constraints.includes_tags[index.index()];
@@ -1267,10 +1187,215 @@ fn solve(
                     }
                 }
             }
+            &Exhaustive(eq, sketched_rows, context, exhaustive_mark) => {
+                // A few cases:
+                //  1. Either condition or branch types already have a type error. In this case just
+                //     propagate it.
+                //  2. Types are correct, but there are redundancies. In this case we want
+                //     exhaustiveness checking to pull those out.
+                //  3. Condition and branch types are "almost equal", that is one or the other is
+                //     only missing a few more tags. In this case we want to run
+                //     exhaustiveness checking both ways, to see which one is missing tags.
+                //  4. Condition and branch types aren't "almost equal", this is just a normal type
+                //     error.
+
+                let (real_var, real_region, expected_type, category_and_expected) = match eq {
+                    Ok(eq) => {
+                        let roc_can::constraint::Eq(real_var, expected, category, real_region) =
+                            constraints.eq[eq.index()];
+                        let expected = &constraints.expectations[expected.index()];
+                        (
+                            real_var,
+                            real_region,
+                            expected.get_type_ref(),
+                            Ok((category, expected)),
+                        )
+                    }
+                    Err(peq) => {
+                        let roc_can::constraint::PatternEq(
+                            real_var,
+                            expected,
+                            category,
+                            real_region,
+                        ) = constraints.pattern_eq[peq.index()];
+                        let expected = &constraints.pattern_expectations[expected.index()];
+                        (
+                            real_var,
+                            real_region,
+                            expected.get_type_ref(),
+                            Err((category, expected)),
+                        )
+                    }
+                };
+
+                let real_var =
+                    either_type_index_to_var(constraints, subs, rank, pools, aliases, real_var);
+
+                let branches_var = type_to_var(subs, rank, pools, aliases, expected_type);
+
+                let real_content = subs.get_content_without_compacting(real_var);
+                let branches_content = subs.get_content_without_compacting(branches_var);
+                let already_have_error = matches!(
+                    (real_content, branches_content),
+                    (
+                        Content::Error | Content::Structure(FlatType::Erroneous(_)),
+                        _
+                    ) | (
+                        _,
+                        Content::Error | Content::Structure(FlatType::Erroneous(_))
+                    )
+                );
+
+                let snapshot = subs.snapshot();
+                let outcome = unify(subs, real_var, branches_var, Mode::EQ);
+
+                let should_check_exhaustiveness;
+                match outcome {
+                    Success {
+                        vars,
+                        must_implement_ability,
+                    } => {
+                        subs.commit_snapshot(snapshot);
+
+                        introduce(subs, rank, pools, &vars);
+                        if !must_implement_ability.is_empty() {
+                            internal_error!("Didn't expect ability vars to land here");
+                        }
+
+                        // Case 1: unify error types, but don't check exhaustiveness.
+                        // Case 2: run exhaustiveness to check for redundant branches.
+                        should_check_exhaustiveness = !already_have_error;
+                    }
+                    Failure(..) => {
+                        // Rollback and check for almost-equality.
+                        subs.rollback_to(snapshot);
+
+                        let almost_eq_snapshot = subs.snapshot();
+                        // TODO: turn this on for bidirectional exhaustiveness checking
+                        // open_tag_union(subs, real_var);
+                        open_tag_union(subs, branches_var);
+                        let almost_eq = matches!(
+                            unify(subs, real_var, branches_var, Mode::EQ),
+                            Success { .. }
+                        );
+
+                        subs.rollback_to(almost_eq_snapshot);
+
+                        if almost_eq {
+                            // Case 3: almost equal, check exhaustiveness.
+                            should_check_exhaustiveness = true;
+                        } else {
+                            // Case 4: incompatible types, report type error.
+                            // Re-run first failed unification to get the type diff.
+                            match unify(subs, real_var, branches_var, Mode::EQ) {
+                                Failure(vars, actual_type, expected_type, _bad_impls) => {
+                                    introduce(subs, rank, pools, &vars);
+
+                                    // Figure out the problem - it might be pattern or value
+                                    // related.
+                                    let problem = match category_and_expected {
+                                        Ok((category, expected)) => {
+                                            let real_category =
+                                                constraints.categories[category.index()].clone();
+                                            TypeError::BadExpr(
+                                                real_region,
+                                                real_category,
+                                                actual_type,
+                                                expected.replace_ref(expected_type),
+                                            )
+                                        }
+
+                                        Err((category, expected)) => {
+                                            let real_category = constraints.pattern_categories
+                                                [category.index()]
+                                            .clone();
+                                            TypeError::BadPattern(
+                                                real_region,
+                                                real_category,
+                                                expected_type,
+                                                expected.replace_ref(actual_type),
+                                            )
+                                        }
+                                    };
+
+                                    problems.push(problem);
+                                    should_check_exhaustiveness = false;
+                                }
+                                _ => internal_error!("Must be failure"),
+                            }
+                        }
+                    }
+                    BadType(vars, problem) => {
+                        subs.commit_snapshot(snapshot);
+
+                        introduce(subs, rank, pools, &vars);
+
+                        problems.push(TypeError::BadType(problem));
+
+                        should_check_exhaustiveness = false;
+                    }
+                }
+
+                let sketched_rows = constraints.sketched_rows[sketched_rows.index()].clone();
+
+                if should_check_exhaustiveness {
+                    use roc_can::exhaustive::{check, ExhaustiveSummary};
+
+                    let ExhaustiveSummary {
+                        errors,
+                        exhaustive,
+                        redundancies,
+                    } = check(subs, sketched_rows, context);
+
+                    // Store information about whether the "when" is exhaustive, and
+                    // which (if any) of its branches are redundant. Codegen may use
+                    // this for branch-fixing and redundant elimination.
+                    if !exhaustive {
+                        exhaustive_mark.set_non_exhaustive(subs);
+                    }
+                    for redundant_mark in redundancies {
+                        redundant_mark.set_redundant(subs);
+                    }
+
+                    // Store the errors.
+                    problems.extend(errors.into_iter().map(TypeError::Exhaustive));
+                }
+
+                state
+            }
         };
     }
 
     state
+}
+
+fn open_tag_union(subs: &mut Subs, var: Variable) {
+    let mut stack = vec![var];
+    while let Some(var) = stack.pop() {
+        use {Content::*, FlatType::*};
+
+        let mut desc = subs.get(var);
+        if let Structure(TagUnion(tags, ext)) = desc.content {
+            if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
+                let new_ext = subs.fresh_unnamed_flex_var();
+                subs.set_rank(new_ext, desc.rank);
+                let new_union = Structure(TagUnion(tags, new_ext));
+                desc.content = new_union;
+                subs.set(var, desc);
+            }
+
+            // Also open up all nested tag unions.
+            let all_vars = tags.variables().into_iter();
+            stack.extend(all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]));
+        }
+
+        // Today, an "open" constraint doesn't affect any types
+        // other than tag unions. Recursive tag unions are constructed
+        // at a later time (during occurs checks after tag unions are
+        // resolved), so that's not handled here either.
+        // NB: Handle record types here if we add presence constraints
+        // to their type inference as well.
+    }
 }
 
 /// If a symbol claims to specialize an ability member, check that its solved type in fact
@@ -1774,15 +1899,11 @@ fn type_to_variable<'a>(
                 type_arguments,
                 lambda_set_variables,
             }) => {
-                let kind = AliasKind::Structural;
-
                 let alias_variables = {
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, (_, arg_type)) in
-                        (new_variables.indices()).zip(type_arguments)
-                    {
+                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
                     }
@@ -1801,13 +1922,17 @@ fn type_to_variable<'a>(
                     }
                 };
 
-                let instantiated =
-                    aliases.instantiate(subs, rank, pools, arena, *symbol, alias_variables);
+                let instantiated = aliases.instantiate_real_var(
+                    subs,
+                    rank,
+                    pools,
+                    arena,
+                    *symbol,
+                    alias_variables,
+                );
 
-                let alias_variable = match instantiated {
-                    Err(_) => unreachable!("Alias {:?} is not available", symbol),
-                    Ok(alias_variable) => alias_variable,
-                };
+                let (alias_variable, kind) = instantiated
+                    .unwrap_or_else(|_| unreachable!("Alias {:?} is not available", symbol));
 
                 let content = Content::Alias(*symbol, alias_variables, alias_variable, kind);
 
@@ -1827,10 +1952,39 @@ fn type_to_variable<'a>(
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, (_, arg_type)) in
+                    for (target_index, OptAbleType { typ, opt_ability }) in
                         (new_variables.indices()).zip(type_arguments)
                     {
-                        let copy_var = helper!(arg_type);
+                        let copy_var = match opt_ability {
+                            None => helper!(typ),
+                            Some(ability) => {
+                                // If this type argument is marked as being bound to an ability, we must
+                                // now correctly instantiate it as so.
+                                match RegisterVariable::from_type(subs, rank, pools, arena, typ) {
+                                    RegisterVariable::Direct(var) => {
+                                        use Content::*;
+                                        match *subs.get_content_without_compacting(var) {
+                                            FlexVar(opt_name) => subs
+                                                .set_content(var, FlexAbleVar(opt_name, *ability)),
+                                            RigidVar(..) => internal_error!("Rigid var in type arg for {:?} - this is a bug in the solver, or our understanding", actual),
+                                            RigidAbleVar(..) | FlexAbleVar(..) => internal_error!("Able var in type arg for {:?} - this is a bug in the solver, or our understanding", actual),
+                                            _ => {
+                                                // TODO associate the type to the bound ability, and check
+                                                // that it correctly implements the ability.
+                                            }
+                                        }
+                                        var
+                                    }
+                                    RegisterVariable::Deferred => {
+                                        // TODO associate the type to the bound ability, and check
+                                        // that it correctly implements the ability.
+                                        let var = subs.fresh_unnamed_flex_var();
+                                        stack.push(TypeToVar::Defer(typ, var));
+                                        var
+                                    }
+                                }
+                            }
+                        };
                         subs.variables[target_index] = copy_var;
                     }
 
@@ -1869,9 +2023,7 @@ fn type_to_variable<'a>(
                     let length = type_arguments.len() + lambda_set_variables.len();
                     let new_variables = VariableSubsSlice::reserve_into_subs(subs, length);
 
-                    for (target_index, (_, arg_type)) in
-                        (new_variables.indices()).zip(type_arguments)
-                    {
+                    for (target_index, arg_type) in (new_variables.indices()).zip(type_arguments) {
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
                     }
@@ -2100,7 +2252,8 @@ fn register_tag_arguments<'a>(
         VariableSubsSlice::default()
     } else {
         let new_variables = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-        let it = (new_variables.indices()).zip(arguments);
+        let it = new_variables.indices().zip(arguments);
+
         for (target_index, argument) in it {
             let var = RegisterVariable::with_stack(subs, rank, pools, arena, argument, stack);
             subs.variables[target_index] = var;
@@ -2119,7 +2272,7 @@ fn insert_tags_fast_path<'a>(
     tags: &'a [(TagName, Vec<Type>)],
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
-    if let [(TagName::Global(tag_name), arguments)] = tags {
+    if let [(TagName::Tag(tag_name), arguments)] = tags {
         let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, arguments);
         let new_variable_slices =
             SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
@@ -2289,7 +2442,7 @@ fn generalize(
     young_rank: Rank,
     pools: &mut Pools,
 ) {
-    let young_vars = pools.get(young_rank);
+    let young_vars = std::mem::take(pools.get_mut(young_rank));
     let rank_table = pool_to_rank_table(subs, young_mark, young_rank, young_vars);
 
     // Get the ranks right for each entry.
@@ -2300,12 +2453,12 @@ fn generalize(
         }
     }
 
-    let (last_pool, all_but_last_pool) = rank_table.split_last();
+    let (mut last_pool, all_but_last_pool) = rank_table.split_last();
 
     // For variables that have rank lowerer than young_rank, register them in
     // the appropriate old pool if they are not redundant.
     for vars in all_but_last_pool {
-        for &var in vars {
+        for var in vars {
             if !subs.redundant(var) {
                 let rank = subs.get_rank(var);
 
@@ -2316,7 +2469,7 @@ fn generalize(
 
     // For variables with rank young_rank, if rank < young_rank: register in old pool,
     // otherwise generalize
-    for &var in last_pool {
+    for var in last_pool.drain(..) {
         if !subs.redundant(var) {
             let desc_rank = subs.get_rank(var);
 
@@ -2327,32 +2480,38 @@ fn generalize(
             }
         }
     }
+
+    // re-use the last_vector (which likely has a good capacity for future runs
+    *pools.get_mut(young_rank) = last_pool;
 }
 
 /// Sort the variables into buckets by rank.
+#[inline]
 fn pool_to_rank_table(
     subs: &mut Subs,
     young_mark: Mark,
     young_rank: Rank,
-    young_vars: &[Variable],
+    mut young_vars: Vec<Variable>,
 ) -> Pools {
     let mut pools = Pools::new(young_rank.into_usize() + 1);
 
     // the vast majority of young variables have young_rank
-    // using `retain` here prevents many `pools.get_mut(young_rank)` lookups
-    let mut young_vars = young_vars.to_vec();
-    young_vars.retain(|var| {
-        let rank = subs.get_rank_set_mark(*var, young_mark);
+    let mut i = 0;
+    while i < young_vars.len() {
+        let var = young_vars[i];
+        let rank = subs.get_rank_set_mark(var, young_mark);
 
         if rank != young_rank {
             debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
 
-            pools.get_mut(rank).push(*var);
-            false
+            pools.get_mut(rank).push(var);
+
+            // swap an element in; don't increment i
+            young_vars.swap_remove(i);
         } else {
-            true
+            i += 1;
         }
-    });
+    }
 
     std::mem::swap(pools.get_mut(young_rank), &mut young_vars);
 
@@ -2527,19 +2686,49 @@ fn adjust_rank_content(
                         }
                     }
 
-                    // THEORY: the recursion var has the same rank as the tag union itself
+                    // The recursion var may have a higher rank than the tag union itself, if it is
+                    // erroneous and escapes into a region where it is let-generalized before it is
+                    // constrained back down to the rank it originated from.
+                    //
+                    // For example, see the `recursion_var_specialization_error` reporting test -
+                    // there, we have
+                    //
+                    //      Job a : [ Job (List (Job a)) a ]
+                    //
+                    //      job : Job Str
+                    //
+                    //      when job is
+                    //          Job lst _ -> lst == ""
+                    //
+                    // In this case, `lst` is generalized and has a higher rank for the type
+                    // `(List (Job a)) as a` - notice that only the recursion var `a` is active
+                    // here, not the entire recursive tag union. In the body of this branch, `lst`
+                    // becomes a type error, but the nested recursion var `a` is left untouched,
+                    // because it is nested under the of `lst`, not the surface type that becomes
+                    // an error.
+                    //
+                    // Had this not become a type error, `lst` would then be constrained against
+                    // `job`, and its rank would get pulled back down. So, this can only happen in
+                    // the presence of type errors.
+                    //
+                    // In all other cases, the recursion var has the same rank as the tag union itself
                     // all types it uses are also in the tags already, so it cannot influence the
-                    // rank
-
-                    if cfg!(debug_assertions) {
+                    // rank.
+                    if cfg!(debug_assertions)
+                        && !matches!(
+                            subs.get_content_without_compacting(*rec_var),
+                            Content::Error | Content::FlexVar(..)
+                        )
+                    {
                         let rec_var_rank =
                             adjust_rank(subs, young_mark, visit_mark, group_rank, *rec_var);
 
                         debug_assert!(
                             rank >= rec_var_rank,
-                            "rank was {:?} but recursion var {:?} has higher rank {:?}",
+                            "rank was {:?} but recursion var <{:?}>{:?} has higher rank {:?}",
                             rank,
                             rec_var,
+                            subs.get_content_without_compacting(*rec_var),
                             rec_var_rank
                         );
                     }

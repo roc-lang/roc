@@ -1,17 +1,21 @@
 use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
+use crate::annotation::find_type_def_symbols;
 use crate::annotation::IntroducedVariables;
+use crate::annotation::OwnedNamedOrAble;
 use crate::env::Env;
+use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
 use crate::expr::Expr::{self, *};
 use crate::expr::{canonicalize_expr, Output, Recursive};
-use crate::pattern::{bindings_from_patterns, canonicalize_def_header_pattern, Pattern};
+use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
-use crate::reference_matrix::ReferenceMatrix;
-use crate::reference_matrix::TopologicalSort;
 use crate::scope::create_alias;
 use crate::scope::Scope;
-use roc_collections::{default_hasher, ImEntry, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::ReferenceMatrix;
+use roc_collections::VecMap;
+use roc_collections::{ImSet, MutMap, SendMap};
+use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::IdentId;
 use roc_module::symbol::ModuleId;
@@ -26,11 +30,10 @@ use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AliasKind;
+use roc_types::types::AliasVar;
 use roc_types::types::LambdaSet;
 use roc_types::types::{Alias, Type};
-use std::collections::HashMap;
 use std::fmt::Debug;
-use ven_graph::topological_sort;
 
 #[derive(Clone, Debug)]
 pub struct Def {
@@ -50,10 +53,11 @@ pub struct Annotation {
 }
 
 #[derive(Debug)]
-pub struct CanDefs {
-    pub refs_by_symbol: MutMap<Symbol, (Region, References)>,
-    pub can_defs_by_symbol: MutMap<Symbol, Def>,
-    pub aliases: SendMap<Symbol, Alias>,
+pub(crate) struct CanDefs {
+    defs: Vec<Option<Def>>,
+    def_ordering: DefOrdering,
+    pub(crate) abilities_in_scope: Vec<Symbol>,
+    aliases: VecMap<Symbol, Alias>,
 }
 
 /// A Def that has had patterns and type annnotations canonicalized,
@@ -82,6 +86,16 @@ enum PendingValueDef<'a> {
     ),
 }
 
+impl PendingValueDef<'_> {
+    fn loc_pattern(&self) -> &Loc<Pattern> {
+        match self {
+            PendingValueDef::AnnotationOnly(_, loc_pattern, _) => loc_pattern,
+            PendingValueDef::Body(_, loc_pattern, _) => loc_pattern,
+            PendingValueDef::TypedBody(_, loc_pattern, _, _) => loc_pattern,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum PendingTypeDef<'a> {
     /// A structural or opaque type alias, e.g. `Ints : List Int` or `Age := U32` respectively.
@@ -98,14 +112,45 @@ enum PendingTypeDef<'a> {
     },
 
     /// An invalid alias, that is ignored in the rest of the pipeline
-    /// e.g. a shadowed alias, or a definition like `MyAlias 1 : Int`
+    /// e.g. a definition like `MyAlias 1 : Int`
     /// with an incorrect pattern
-    #[allow(dead_code)]
-    InvalidAlias { kind: AliasKind },
+    InvalidAlias {
+        #[allow(dead_code)]
+        kind: AliasKind,
+        symbol: Symbol,
+        region: Region,
+    },
+
+    /// An alias with a name that shadows another symbol
+    ShadowedAlias,
 
     /// An invalid ability, that is ignored in the rest of the pipeline.
     /// E.g. a shadowed ability, or with a bad definition.
-    InvalidAbility,
+    InvalidAbility {
+        symbol: Symbol,
+        region: Region,
+    },
+
+    AbilityNotOnToplevel,
+    AbilityShadows,
+}
+
+impl PendingTypeDef<'_> {
+    fn introduction(&self) -> Option<(Symbol, Region)> {
+        match self {
+            PendingTypeDef::Alias { name, ann, .. } => {
+                let region = Region::span_across(&name.region, &ann.region);
+
+                Some((name.value, region))
+            }
+            PendingTypeDef::Ability { name, .. } => Some((name.value, name.region)),
+            PendingTypeDef::InvalidAlias { symbol, region, .. } => Some((*symbol, *region)),
+            PendingTypeDef::ShadowedAlias { .. } => None,
+            PendingTypeDef::InvalidAbility { symbol, region } => Some((*symbol, *region)),
+            PendingTypeDef::AbilityNotOnToplevel => None,
+            PendingTypeDef::AbilityShadows => None,
+        }
+    }
 }
 
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
@@ -132,77 +177,40 @@ impl Declaration {
 
 /// Returns a topologically sorted sequence of alias/opaque names
 fn sort_type_defs_before_introduction(
-    mut referenced_symbols: MutMap<Symbol, Vec<Symbol>>,
+    referenced_symbols: VecMap<Symbol, Vec<Symbol>>,
 ) -> Vec<Symbol> {
-    let defined_symbols: Vec<Symbol> = referenced_symbols.keys().copied().collect();
+    let capacity = referenced_symbols.len();
+    let mut matrix = ReferenceMatrix::new(capacity);
 
-    // find the strongly connected components and their relations
-    let sccs = {
-        // only retain symbols from the current set of defined symbols; the rest come from other modules
-        for v in referenced_symbols.iter_mut() {
-            v.1.retain(|x| defined_symbols.iter().any(|s| s == x));
-        }
+    let (symbols, referenced) = referenced_symbols.unzip();
 
-        let all_successors_with_self = |symbol: &Symbol| referenced_symbols[symbol].iter().copied();
-
-        ven_graph::strongly_connected_components(&defined_symbols, all_successors_with_self)
-    };
-
-    // then sort the strongly connected components
-    let groups: Vec<_> = (0..sccs.len()).collect();
-    let mut group_symbols: Vec<Vec<Symbol>> = vec![Vec::new(); groups.len()];
-
-    let mut symbol_to_group_index = MutMap::default();
-    let mut group_to_groups = vec![Vec::new(); groups.len()];
-
-    for (index, group) in sccs.iter().enumerate() {
-        for s in group {
-            symbol_to_group_index.insert(*s, index);
-        }
-    }
-
-    for (index, group) in sccs.iter().enumerate() {
-        for s in group {
-            let reachable = &referenced_symbols[s];
-            for r in reachable {
-                let new_index = symbol_to_group_index[r];
-
-                if new_index != index {
-                    group_to_groups[index].push(new_index);
-                }
+    for (index, references) in referenced.iter().enumerate() {
+        for referenced in references {
+            match symbols.iter().position(|k| k == referenced) {
+                None => { /* not defined in this scope */ }
+                Some(ref_index) => matrix.set_row_col(index, ref_index, true),
             }
         }
     }
 
-    for v in group_symbols.iter_mut() {
-        v.sort();
-        v.dedup();
-    }
-
-    let all_successors_with_self = |group: &usize| group_to_groups[*group].iter().copied();
-
-    // split into self-recursive and mutually recursive
-    match topological_sort(&groups, all_successors_with_self) {
-        Ok(result) => result
-            .iter()
-            .rev()
-            .flat_map(|group_index| sccs[*group_index].iter())
-            .copied()
-            .collect(),
-
-        Err(_loop_detected) => unreachable!("the groups cannot recurse"),
-    }
+    // find the strongly connected components and their relations
+    matrix
+        .strongly_connected_components_all()
+        .groups()
+        .flat_map(|group| group.iter_ones())
+        .map(|index| symbols[index])
+        .collect()
 }
 
 #[inline(always)]
-pub fn canonicalize_defs<'a>(
+pub(crate) fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
     var_store: &mut VarStore,
-    original_scope: &Scope,
+    scope: &mut Scope,
     loc_defs: &'a [&'a Loc<ast::Def<'a>>],
     pattern_type: PatternType,
-) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
+) -> (CanDefs, Output, MutMap<Symbol, Region>) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
     // 1. Go through each of the patterns.
@@ -220,41 +228,21 @@ pub fn canonicalize_defs<'a>(
     // This naturally handles recursion too, because a given expr which refers
     // to itself won't be processed until after its def has been added to scope.
 
-    // Record both the original and final idents from the scope,
-    // so we can diff them while detecting unused defs.
-    let mut scope = original_scope.clone();
     let num_defs = loc_defs.len();
-    let mut refs_by_symbol = MutMap::default();
-    let mut can_defs_by_symbol = HashMap::with_capacity_and_hasher(num_defs, default_hasher());
-
-    let mut type_defs = Vec::with_capacity(num_defs);
+    let mut pending_type_defs = Vec::with_capacity(num_defs);
     let mut value_defs = Vec::with_capacity(num_defs);
 
     for loc_def in loc_defs {
         match loc_def.value.unroll_def() {
-            Ok(type_def) => type_defs.push(Loc::at(loc_def.region, type_def)),
+            Ok(type_def) => {
+                pending_type_defs.push(to_pending_type_def(env, type_def, scope, pattern_type))
+            }
             Err(value_def) => value_defs.push(Loc::at(loc_def.region, value_def)),
         }
     }
 
-    // We need to canonicalize all the type defs first.
-    // Clippy is wrong - we do need the collect, otherwise "env" and "scope" are captured for
-    // longer than we'd like.
-    #[allow(clippy::needless_collect)]
-    let pending_type_defs = type_defs
-        .into_iter()
-        .filter_map(|loc_def| {
-            to_pending_type_def(env, loc_def.value, &mut scope, pattern_type).map(
-                |(new_output, pending_def)| {
-                    output.union(new_output);
-                    pending_def
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-
     if cfg!(debug_assertions) {
-        env.home.register_debug_idents(&env.ident_ids);
+        scope.register_debug_idents();
     }
 
     enum TypeDef<'a> {
@@ -270,9 +258,16 @@ pub fn canonicalize_defs<'a>(
     let mut type_defs = MutMap::default();
     let mut abilities_in_scope = Vec::new();
 
-    let mut referenced_type_symbols = MutMap::default();
+    let mut referenced_type_symbols = VecMap::default();
+
+    // Determine which idents we introduced in the course of this process.
+    let mut symbols_introduced = MutMap::default();
 
     for pending_def in pending_type_defs.into_iter() {
+        if let Some((symbol, region)) = pending_def.introduction() {
+            symbols_introduced.insert(symbol, region);
+        }
+
         match pending_def {
             PendingTypeDef::Alias {
                 name,
@@ -280,11 +275,7 @@ pub fn canonicalize_defs<'a>(
                 ann,
                 kind,
             } => {
-                let referenced_symbols = crate::annotation::find_type_def_symbols(
-                    env.home,
-                    &mut env.ident_ids,
-                    &ann.value,
-                );
+                let referenced_symbols = find_type_def_symbols(scope, &ann.value);
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
 
@@ -297,24 +288,23 @@ pub fn canonicalize_defs<'a>(
                     // Add the referenced type symbols of each member function. We need to make
                     // sure those are processed first before we resolve the whole ability
                     // definition.
-                    referenced_symbols.extend(crate::annotation::find_type_def_symbols(
-                        env.home,
-                        &mut env.ident_ids,
-                        &member.typ.value,
-                    ));
+                    referenced_symbols.extend(find_type_def_symbols(scope, &member.typ.value));
                 }
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
                 type_defs.insert(name.value, TypeDef::Ability(name, members));
                 abilities_in_scope.push(name.value);
             }
-            PendingTypeDef::InvalidAlias { .. } | PendingTypeDef::InvalidAbility { .. } => { /* ignore */
-            }
+            PendingTypeDef::InvalidAlias { .. }
+            | PendingTypeDef::InvalidAbility { .. }
+            | PendingTypeDef::AbilityShadows
+            | PendingTypeDef::ShadowedAlias { .. }
+            | PendingTypeDef::AbilityNotOnToplevel => { /* ignore */ }
         }
     }
 
     let sorted = sort_type_defs_before_introduction(referenced_type_symbols);
-    let mut aliases = SendMap::default();
+    let mut aliases = VecMap::default();
     let mut abilities = MutMap::default();
 
     for type_name in sorted {
@@ -323,45 +313,50 @@ pub fn canonicalize_defs<'a>(
                 let symbol = name.value;
                 let can_ann = canonicalize_annotation(
                     env,
-                    &mut scope,
+                    scope,
                     &ann.value,
                     ann.region,
                     var_store,
                     &abilities_in_scope,
                 );
 
-                // Does this alias reference any abilities? For now, we don't permit that.
-                let ability_references = can_ann
-                    .references
-                    .iter()
-                    .filter_map(|&ty_ref| abilities_in_scope.iter().find(|&&name| name == ty_ref))
-                    .collect::<Vec<_>>();
-
-                if let Some(one_ability_ref) = ability_references.first() {
-                    env.problem(Problem::AliasUsesAbility {
-                        loc_name: name,
-                        ability: **one_ability_ref,
-                    });
-                }
-
                 // Record all the annotation's references in output.references.lookups
                 for symbol in can_ann.references {
                     output.references.insert_type_lookup(symbol);
                 }
 
-                let mut can_vars: Vec<Loc<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
+                let mut can_vars: Vec<Loc<AliasVar>> = Vec::with_capacity(vars.len());
                 let mut is_phantom = false;
 
-                let mut named = can_ann.introduced_variables.named;
+                let IntroducedVariables {
+                    named,
+                    able,
+                    wildcards,
+                    inferred,
+                    ..
+                } = can_ann.introduced_variables;
+
+                let mut named: Vec<_> = (named.into_iter().map(OwnedNamedOrAble::Named))
+                    .chain(able.into_iter().map(OwnedNamedOrAble::Able))
+                    .collect();
                 for loc_lowercase in vars.iter() {
-                    let opt_index = named.iter().position(|nv| nv.name == loc_lowercase.value);
+                    let opt_index = named
+                        .iter()
+                        .position(|nv| nv.ref_name() == &loc_lowercase.value);
                     match opt_index {
                         Some(index) => {
                             // This is a valid lowercase rigid var for the type def.
                             let named_variable = named.swap_remove(index);
+                            let var = named_variable.variable();
+                            let opt_bound_ability = named_variable.opt_ability();
+                            let name = named_variable.name();
 
                             can_vars.push(Loc {
-                                value: (named_variable.name, named_variable.variable),
+                                value: AliasVar {
+                                    name,
+                                    var,
+                                    opt_bound_ability,
+                                },
                                 region: loc_lowercase.region,
                             });
                         }
@@ -382,16 +377,11 @@ pub fn canonicalize_defs<'a>(
                     continue;
                 }
 
-                let IntroducedVariables {
-                    wildcards,
-                    inferred,
-                    ..
-                } = can_ann.introduced_variables;
                 let num_unbound = named.len() + wildcards.len() + inferred.len();
                 if num_unbound > 0 {
                     let one_occurrence = named
                         .iter()
-                        .map(|nv| Loc::at(nv.first_seen, nv.variable))
+                        .map(|nv| Loc::at(nv.first_seen(), nv.variable()))
                         .chain(wildcards)
                         .chain(inferred)
                         .next()
@@ -416,7 +406,8 @@ pub fn canonicalize_defs<'a>(
                     can_ann.typ.clone(),
                     kind,
                 );
-                aliases.insert(symbol, alias.clone());
+
+                aliases.insert(symbol, alias);
             }
 
             TypeDef::Ability(name, members) => {
@@ -430,6 +421,7 @@ pub fn canonicalize_defs<'a>(
     // Now that we know the alias dependency graph, we can try to insert recursion variables
     // where aliases are recursive tag unions, or detect illegal recursions.
     let mut aliases = correct_mutual_recursive_type_alias(env, aliases, var_store);
+
     for (symbol, alias) in aliases.iter() {
         scope.add_alias(
             *symbol,
@@ -440,18 +432,126 @@ pub fn canonicalize_defs<'a>(
         );
     }
 
-    // Now we can go through and resolve all pending abilities, to add them to scope.
+    // Resolve all pending abilities, to add them to scope.
+    resolve_abilities(
+        env,
+        &mut output,
+        var_store,
+        scope,
+        abilities,
+        &abilities_in_scope,
+        pattern_type,
+    );
+
+    // Now that we have the scope completely assembled, and shadowing resolved,
+    // we're ready to canonicalize any body exprs.
+
+    // Canonicalize all the patterns, record shadowing problems, and store
+    // the ast::Expr values in pending_exprs for further canonicalization
+    // once we've finished assembling the entire scope.
+    let mut pending_value_defs = Vec::with_capacity(value_defs.len());
+    for loc_def in value_defs.into_iter() {
+        let mut new_output = Output::default();
+        match to_pending_value_def(
+            env,
+            var_store,
+            loc_def.value,
+            scope,
+            &mut new_output,
+            pattern_type,
+        ) {
+            None => { /* skip */ }
+            Some(pending_def) => {
+                // Record the ast::Expr for later. We'll do another pass through these
+                // once we have the entire scope assembled. If we were to canonicalize
+                // the exprs right now, they wouldn't have symbols in scope from defs
+                // that get would have gotten added later in the defs list!
+                pending_value_defs.push(pending_def);
+                output.union(new_output);
+            }
+        }
+    }
+
+    let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
+
+    for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
+        for (s, r) in BindingsFromPattern::new(pending_def.loc_pattern()) {
+            // store the top-level defs, used to ensure that closures won't capture them
+            if let PatternType::TopLevelDef = pattern_type {
+                env.top_level_symbols.insert(s);
+            }
+
+            symbols_introduced.insert(s, r);
+
+            debug_assert_eq!(env.home, s.module_id());
+            debug_assert!(
+                !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
+                "{:?}",
+                s
+            );
+
+            symbol_to_index.push((s.ident_id(), def_index as u32));
+        }
+    }
+
+    let capacity = pending_value_defs.len();
+    let mut defs = Vec::with_capacity(capacity);
+    let mut def_ordering = DefOrdering::from_symbol_to_id(env.home, symbol_to_index, capacity);
+
+    for (def_id, pending_def) in pending_value_defs.into_iter().enumerate() {
+        let temp_output = canonicalize_pending_value_def(
+            env,
+            pending_def,
+            output,
+            scope,
+            var_store,
+            pattern_type,
+            &mut aliases,
+            &abilities_in_scope,
+        );
+
+        output = temp_output.output;
+
+        defs.push(Some(temp_output.def));
+
+        def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
+    }
+
+    (
+        CanDefs {
+            defs,
+            def_ordering,
+            abilities_in_scope,
+            // The result needs a thread-safe `SendMap`
+            aliases,
+        },
+        output,
+        symbols_introduced,
+    )
+}
+
+/// Resolve all pending abilities, to add them to scope.
+#[allow(clippy::too_many_arguments)]
+fn resolve_abilities<'a>(
+    env: &mut Env<'a>,
+    output: &mut Output,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    abilities: MutMap<Symbol, (Loc<Symbol>, &[AbilityMember])>,
+    abilities_in_scope: &[Symbol],
+    pattern_type: PatternType,
+) {
     for (loc_ability_name, members) in abilities.into_values() {
         let mut can_members = Vec::with_capacity(members.len());
 
         for member in members {
             let member_annot = canonicalize_annotation(
                 env,
-                &mut scope,
+                scope,
                 &member.typ.value,
                 member.typ.region,
                 var_store,
-                &abilities_in_scope,
+                abilities_in_scope,
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -462,12 +562,7 @@ pub fn canonicalize_defs<'a>(
             let name_region = member.name.region;
             let member_name = member.name.extract_spaces().item;
 
-            let member_sym = match scope.introduce(
-                member_name.into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                name_region,
-            ) {
+            let member_sym = match scope.introduce(member_name.into(), name_region) {
                 Ok(sym) => sym,
                 Err((original_region, shadow, _new_symbol)) => {
                     env.problem(roc_problem::can::Problem::Shadowing {
@@ -486,12 +581,14 @@ pub fn canonicalize_defs<'a>(
 
             // What variables in the annotation are bound to the parent ability, and what variables
             // are bound to some other ability?
-            let (variables_bound_to_ability, variables_bound_to_other_abilities): (Vec<_>, Vec<_>) =
-                member_annot
-                    .introduced_variables
-                    .able
-                    .iter()
-                    .partition(|av| av.ability == loc_ability_name.value);
+            let (variables_bound_to_ability, _variables_bound_to_other_abilities): (
+                Vec<_>,
+                Vec<_>,
+            ) = member_annot
+                .introduced_variables
+                .able
+                .iter()
+                .partition(|av| av.ability == loc_ability_name.value);
 
             let mut bad_has_clauses = false;
 
@@ -523,18 +620,6 @@ pub fn canonicalize_defs<'a>(
                     span_has_clauses,
                     bound_var_names,
                 });
-                bad_has_clauses = true;
-            }
-
-            if !variables_bound_to_other_abilities.is_empty() {
-                // Disallow variables bound to other abilities, for now.
-                for bad_variable in variables_bound_to_other_abilities.iter() {
-                    env.problem(Problem::AbilityMemberBindsExternalAbility {
-                        member: member_sym,
-                        ability: loc_ability_name.value,
-                        region: bad_variable.first_seen,
-                    });
-                }
                 bad_has_clauses = true;
             }
 
@@ -570,97 +655,6 @@ pub fn canonicalize_defs<'a>(
             .abilities_store
             .register_ability(loc_ability_name.value, can_members);
     }
-
-    // Now that we have the scope completely assembled, and shadowing resolved,
-    // we're ready to canonicalize any body exprs.
-
-    // Canonicalize all the patterns, record shadowing problems, and store
-    // the ast::Expr values in pending_exprs for further canonicalization
-    // once we've finished assembling the entire scope.
-    let mut pending_value_defs = Vec::with_capacity(value_defs.len());
-    for loc_def in value_defs.into_iter() {
-        let mut new_output = Output::default();
-        match to_pending_value_def(
-            env,
-            var_store,
-            loc_def.value,
-            &mut scope,
-            &mut new_output,
-            pattern_type,
-        ) {
-            None => { /* skip */ }
-            Some(pending_def) => {
-                // store the top-level defs, used to ensure that closures won't capture them
-                if let PatternType::TopLevelDef = pattern_type {
-                    match &pending_def {
-                        PendingValueDef::AnnotationOnly(_, loc_can_pattern, _)
-                        | PendingValueDef::Body(_, loc_can_pattern, _)
-                        | PendingValueDef::TypedBody(_, loc_can_pattern, _, _) => {
-                            env.top_level_symbols.extend(
-                                bindings_from_patterns(std::iter::once(loc_can_pattern))
-                                    .iter()
-                                    .map(|t| t.0),
-                            )
-                        }
-                    }
-                }
-                // Record the ast::Expr for later. We'll do another pass through these
-                // once we have the entire scope assembled. If we were to canonicalize
-                // the exprs right now, they wouldn't have symbols in scope from defs
-                // that get would have gotten added later in the defs list!
-                pending_value_defs.push(pending_def);
-                output.union(new_output);
-            }
-        }
-    }
-
-    for pending_def in pending_value_defs.into_iter() {
-        output = canonicalize_pending_value_def(
-            env,
-            pending_def,
-            output,
-            &mut scope,
-            &mut can_defs_by_symbol,
-            var_store,
-            &mut refs_by_symbol,
-            &mut aliases,
-            &abilities_in_scope,
-        );
-
-        // TODO we should do something with these references; they include
-        // things like type annotations.
-    }
-
-    // Determine which idents we introduced in the course of this process.
-    let mut symbols_introduced = MutMap::default();
-
-    for (symbol, region) in scope.symbols() {
-        if !original_scope.contains_symbol(*symbol) {
-            symbols_introduced.insert(*symbol, *region);
-        }
-    }
-
-    // This returns both the defs info as well as the new scope.
-    //
-    // We have to return the new scope because we added defs to it
-    // (and those lookups shouldn't fail later, e.g. when canonicalizing
-    // the return expr), but we didn't want to mutate the original scope
-    // directly because we wanted to keep a clone of it around to diff
-    // when looking for unused idents.
-    //
-    // We have to return the scope separately from the defs, because the
-    // defs need to get moved later.
-    (
-        CanDefs {
-            refs_by_symbol,
-            can_defs_by_symbol,
-            // The result needs a thread-safe `SendMap`
-            aliases: aliases.into_iter().collect(),
-        },
-        scope,
-        output,
-        symbols_introduced,
-    )
 }
 
 #[derive(Debug)]
@@ -674,59 +668,54 @@ struct DefOrdering {
     // references without looking into closure bodies.
     // Used to spot definitely-wrong recursion
     direct_references: ReferenceMatrix,
-
-    length: u32,
 }
 
 impl DefOrdering {
-    fn with_capacity(home: ModuleId, capacity: usize) -> Self {
+    fn from_symbol_to_id(
+        home: ModuleId,
+        symbol_to_id: Vec<(IdentId, u32)>,
+        capacity: usize,
+    ) -> Self {
+        // NOTE: because of `Pair a b = someDef` patterns, we can have more symbols than defs
+        // but because `_ = someDef` we can also have more defs than symbols
+
         Self {
             home,
-            symbol_to_id: Vec::with_capacity(capacity),
+            symbol_to_id,
             references: ReferenceMatrix::new(capacity),
             direct_references: ReferenceMatrix::new(capacity),
-            length: capacity as u32,
         }
     }
 
-    fn from_defs_by_symbol(
-        env: &Env,
-        can_defs_by_symbol: &MutMap<Symbol, Def>,
-        refs_by_symbol: &MutMap<Symbol, (Region, References)>,
-    ) -> Self {
-        let mut this = Self::with_capacity(env.home, can_defs_by_symbol.len());
+    fn insert_symbol_references(&mut self, def_id: u32, def_references: &DefReferences) {
+        match def_references {
+            DefReferences::Value(references) => {
+                let it = references.value_lookups().chain(references.calls());
 
-        for (i, symbol) in can_defs_by_symbol.keys().enumerate() {
-            debug_assert_eq!(env.home, symbol.module_id());
+                for referenced in it {
+                    if let Some(ref_id) = self.get_id(*referenced) {
+                        self.references
+                            .set_row_col(def_id as usize, ref_id as usize, true);
 
-            this.symbol_to_id.push((symbol.ident_id(), i as u32));
-        }
-
-        for (symbol, (_, references)) in refs_by_symbol.iter() {
-            let def_id = this.get_id(*symbol).unwrap();
-
-            for referenced in references.value_lookups() {
-                this.register_reference(def_id, *referenced);
-                this.register_direct_reference(def_id, *referenced);
-            }
-
-            for referenced in references.calls() {
-                this.register_reference(def_id, *referenced);
-                this.register_direct_reference(def_id, *referenced);
-            }
-
-            if let Some(references) = env.closures.get(symbol) {
-                for referenced in references.value_lookups() {
-                    this.register_reference(def_id, *referenced);
-                }
-
-                for referenced in references.calls() {
-                    this.register_reference(def_id, *referenced);
+                        self.direct_references
+                            .set_row_col(def_id as usize, ref_id as usize, true);
+                    }
                 }
             }
-        }
+            DefReferences::Function(references) => {
+                let it = references.value_lookups().chain(references.calls());
 
-        this
+                for referenced in it {
+                    if let Some(ref_id) = self.get_id(*referenced) {
+                        self.references
+                            .set_row_col(def_id as usize, ref_id as usize, true);
+                    }
+                }
+            }
+            DefReferences::AnnotationWithoutBody => {
+                // annotatations without bodies don't reference any other definitions
+            }
+        }
     }
 
     fn get_id(&self, symbol: Symbol) -> Option<u32> {
@@ -745,322 +734,146 @@ impl DefOrdering {
         None
     }
 
-    fn get_symbol(&self, id: u32) -> Option<Symbol> {
+    fn get_symbol(&self, id: usize) -> Option<Symbol> {
         for (ident_id, def_id) in self.symbol_to_id.iter() {
-            if id == *def_id {
+            if id as u32 == *def_id {
                 return Some(Symbol::new(self.home, *ident_id));
             }
         }
 
         None
     }
-
-    fn register_direct_reference(&mut self, id: u32, referenced: Symbol) {
-        if let Some(ref_id) = self.get_id(referenced) {
-            self.direct_references
-                .set_row_col(id as usize, ref_id as usize, true);
-        }
-    }
-
-    fn register_reference(&mut self, id: u32, referenced: Symbol) {
-        if let Some(ref_id) = self.get_id(referenced) {
-            self.references
-                .set_row_col(id as usize, ref_id as usize, true);
-        }
-    }
-
-    fn is_self_recursive(&self, id: u32) -> bool {
-        debug_assert!(id < self.length);
-
-        // id'th row, id'th column
-        let index = (id * self.length) + id;
-
-        self.references.get(index as usize)
-    }
-
-    #[inline(always)]
-    fn successors(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
-        self.references
-            .references_for(id as usize)
-            .map(|x| x as u32)
-    }
-
-    #[inline(always)]
-    fn successors_without_self(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
-        self.successors(id).filter(move |x| *x != id)
-    }
 }
 
 #[inline(always)]
-pub fn sort_can_defs(
+pub(crate) fn sort_can_defs(
     env: &mut Env<'_>,
     defs: CanDefs,
     mut output: Output,
-) -> (Result<Vec<Declaration>, RuntimeError>, Output) {
-    let def_ids =
-        DefOrdering::from_defs_by_symbol(env, &defs.can_defs_by_symbol, &defs.refs_by_symbol);
-
+) -> (Vec<Declaration>, Output) {
     let CanDefs {
-        refs_by_symbol,
-        mut can_defs_by_symbol,
+        mut defs,
+        def_ordering,
         aliases,
+        abilities_in_scope,
     } = defs;
+
+    output.abilities_in_scope = abilities_in_scope;
 
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
     }
 
-    // TODO also do the same `addDirects` check elm/compiler does, so we can
-    // report an error if a recursive definition can't possibly terminate!
-    match def_ids.references.topological_sort_into_groups() {
-        TopologicalSort::Groups { groups } => {
-            let mut declarations = Vec::new();
+    macro_rules! take_def {
+        ($index:expr) => {
+            match defs[$index].take() {
+                Some(def) => def,
+                None => {
+                    // NOTE: a `_ = someDef` can mean we don't have a symbol here
+                    let symbol = def_ordering.get_symbol($index);
 
-            // groups are in reversed order
-            for group in groups.into_iter().rev() {
-                group_to_declaration(
-                    &def_ids,
-                    &group,
-                    &env.closures,
-                    &mut can_defs_by_symbol,
-                    &mut declarations,
-                );
-            }
-
-            (Ok(declarations), output)
-        }
-        TopologicalSort::HasCycles {
-            mut groups,
-            nodes_in_cycle,
-        } => {
-            let mut declarations = Vec::new();
-            let mut problems = Vec::new();
-
-            // nodes_in_cycle are symbols that form a syntactic cycle. That isn't always a problem,
-            // and in general it's impossible to decide whether it is. So we use a crude heuristic:
-            //
-            // Definitions where the cycle occurs behind a lambda are OK
-            //
-            // boom = \_ -> boom {}
-            //
-            // But otherwise we report an error, e.g.
-            //
-            // foo = if b then foo else bar
-
-            let sccs = def_ids
-                .references
-                .strongly_connected_components(&nodes_in_cycle);
-
-            for cycle in sccs {
-                // check whether the cycle is faulty, which is when it has
-                // a direct successor in the current cycle. This catches things like:
-                //
-                // x = x
-                //
-                // or
-                //
-                // p = q
-                // q = p
-                let is_invalid_cycle = match cycle.get(0) {
-                    Some(def_id) => def_ids
-                        .direct_references
-                        .references_for(*def_id as usize)
-                        .any(|key| cycle.contains(&(key as u32))),
-                    None => false,
-                };
-
-                if is_invalid_cycle {
-                    // We want to show the entire cycle in the error message, so expand it out.
-                    let mut entries = Vec::new();
-
-                    for def_id in &cycle {
-                        let symbol = def_ids.get_symbol(*def_id).unwrap();
-                        match refs_by_symbol.get(&symbol) {
-                            None => unreachable!(
-                                r#"Symbol `{:?}` not found in refs_by_symbol! refs_by_symbol was: {:?}"#,
-                                symbol, refs_by_symbol
-                            ),
-                            Some((region, _)) => {
-                                let expr_region =
-                                    can_defs_by_symbol.get(&symbol).unwrap().loc_expr.region;
-
-                                let entry = CycleEntry {
-                                    symbol,
-                                    symbol_region: *region,
-                                    expr_region,
-                                };
-
-                                entries.push(entry);
-                            }
-                        }
-                    }
-
-                    // Sort them by line number to make the report more helpful.
-                    entries.sort_by_key(|entry| entry.symbol_region);
-
-                    problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
-                        entries.clone(),
-                    )));
-
-                    declarations.push(Declaration::InvalidCycle(entries));
+                    roc_error_macros::internal_error!("def not available {:?}", symbol)
                 }
-
-                // if it's an invalid cycle, other groups may depend on the
-                // symbols defined here, so also push this cycle onto the groups
-                //
-                // if it's not an invalid cycle, this is slightly inefficient,
-                // because we know this becomes exactly one DeclareRec already
-                groups.push(cycle);
             }
+        };
+    }
 
-            // now we have a collection of groups whose dependencies are not cyclic.
-            // They are however not yet topologically sorted. Here we have to get a bit
-            // creative to get all the definitions in the correct sorted order.
+    // We first perform SCC based on any reference, both variable usage and calls
+    // considering both value definitions and function bodies. This will spot any
+    // recursive relations between any 2 definitions.
+    let sccs = def_ordering.references.strongly_connected_components_all();
 
-            let mut group_ids = Vec::with_capacity(groups.len());
-            let mut symbol_to_group_index = MutMap::default();
-            for (i, group) in groups.iter().enumerate() {
-                for symbol in group {
-                    symbol_to_group_index.insert(*symbol, i);
-                }
+    let mut declarations = Vec::new();
 
-                group_ids.push(i);
-            }
+    for group in sccs.groups() {
+        if group.count_ones() == 1 {
+            // a group with a single Def, nice and simple
+            let index = group.iter_ones().next().unwrap();
 
-            let successors_of_group = |group_id: &usize| {
-                let mut result = MutSet::default();
+            let def = take_def!(index);
 
-                // for each symbol in this group
-                for symbol in &groups[*group_id] {
-                    // find its successors
-                    for succ in def_ids.successors_without_self(*symbol) {
-                        // and add its group to the result
-                        match symbol_to_group_index.get(&succ) {
-                            Some(index) => {
-                                result.insert(*index);
-                            }
-                            None => unreachable!("no index for symbol {:?}", succ),
-                        }
-                    }
-                }
+            let declaration = if def_ordering.direct_references.get_row_col(index, index) {
+                // a definition like `x = x + 1`, which is invalid in roc
+                let symbol = def_ordering.get_symbol(index).unwrap();
 
-                // don't introduce any cycles to self
-                result.remove(group_id);
+                let entries = vec![make_cycle_entry(symbol, &def)];
 
-                result
+                let problem = Problem::RuntimeError(RuntimeError::CircularDef(entries.clone()));
+                env.problem(problem);
+
+                Declaration::InvalidCycle(entries)
+            } else if def_ordering.references.get_row_col(index, index) {
+                // this function calls itself, and must be typechecked as a recursive def
+                Declaration::DeclareRec(vec![mark_def_recursive(def)])
+            } else {
+                Declaration::Declare(def)
             };
 
-            match ven_graph::topological_sort_into_groups(&group_ids, successors_of_group) {
-                Ok(sorted_group_ids) => {
-                    for sorted_group in sorted_group_ids.iter().rev() {
-                        for group_id in sorted_group.iter().rev() {
-                            let group = &groups[*group_id];
+            declarations.push(declaration);
+        } else {
+            // There is something recursive going on between the Defs of this group.
+            // Now we use the direct_references to see if it is clearly invalid recursion, e.g.
+            //
+            // x = y
+            // y = x
+            //
+            // We allow indirect recursion (behind a lambda), e.g.
+            //
+            // boom = \{} -> boom {}
+            //
+            // In general we cannot spot faulty recursion (halting problem) so this is our best attempt
+            let direct_sccs = def_ordering
+                .direct_references
+                .strongly_connected_components_subset(group);
 
-                            group_to_declaration(
-                                &def_ids,
-                                group,
-                                &env.closures,
-                                &mut can_defs_by_symbol,
-                                &mut declarations,
-                            );
-                        }
-                    }
+            let declaration = if direct_sccs.groups().count() == 1 {
+                // all defs are part of the same direct cycle, that is invalid!
+                let mut entries = Vec::with_capacity(group.count_ones());
+
+                for index in group.iter_ones() {
+                    let def = take_def!(index);
+                    let symbol = def_ordering.get_symbol(index).unwrap();
+
+                    entries.push(make_cycle_entry(symbol, &def))
                 }
-                Err(_) => unreachable!("there should be no cycles now!"),
-            }
 
-            for problem in problems {
+                let problem = Problem::RuntimeError(RuntimeError::CircularDef(entries.clone()));
                 env.problem(problem);
-            }
 
-            (Ok(declarations), output)
+                Declaration::InvalidCycle(entries)
+            } else {
+                let rec_defs = group
+                    .iter_ones()
+                    .map(|index| mark_def_recursive(take_def!(index)))
+                    .collect();
+
+                Declaration::DeclareRec(rec_defs)
+            };
+
+            declarations.push(declaration);
         }
     }
+
+    (declarations, output)
 }
 
-fn group_to_declaration(
-    def_ids: &DefOrdering,
-    group: &[u32],
-    closures: &MutMap<Symbol, References>,
-    can_defs_by_symbol: &mut MutMap<Symbol, Def>,
-    declarations: &mut Vec<Declaration>,
-) {
-    use Declaration::*;
+fn mark_def_recursive(mut def: Def) -> Def {
+    if let Closure(ClosureData {
+        recursive: recursive @ Recursive::NotRecursive,
+        ..
+    }) = &mut def.loc_expr.value
+    {
+        *recursive = Recursive::Recursive
+    }
 
-    // Patterns like
-    //
-    // { x, y } = someDef
-    //
-    // Can bind multiple symbols. When not incorrectly recursive (which is guaranteed in this function),
-    // normally `someDef` would be inserted twice. We use the region of the pattern as a unique key
-    // for a definition, so every definition is only inserted (thus typechecked and emitted) once
-    let mut seen_pattern_regions: Vec<Region> = Vec::with_capacity(2);
+    def
+}
 
-    let sccs = def_ids.references.strongly_connected_components(group);
-
-    for cycle in sccs {
-        if cycle.len() == 1 {
-            let def_id = cycle[0];
-            let symbol = def_ids.get_symbol(def_id).unwrap();
-
-            match can_defs_by_symbol.remove(&symbol) {
-                Some(mut new_def) => {
-                    // there is only one definition in this cycle, so we only have
-                    // to check whether it recurses with itself; there is nobody else
-                    // to recurse with, or they would also be in this cycle.
-                    let is_self_recursive = def_ids.is_self_recursive(def_id);
-
-                    if let Closure(ClosureData {
-                        recursive: recursive @ Recursive::NotRecursive,
-                        ..
-                    }) = &mut new_def.loc_expr.value
-                    {
-                        if is_self_recursive {
-                            *recursive = Recursive::Recursive
-                        }
-                    }
-
-                    if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
-                        seen_pattern_regions.push(new_def.loc_pattern.region);
-
-                        if is_self_recursive {
-                            declarations.push(DeclareRec(vec![new_def]));
-                        } else {
-                            declarations.push(Declare(new_def));
-                        }
-                    }
-                }
-                None => roc_error_macros::internal_error!("def not available {:?}", symbol),
-            }
-        } else {
-            let mut can_defs = Vec::new();
-
-            // Topological sort gives us the reverse of the sorting we want!
-            for def_id in cycle.into_iter().rev() {
-                let symbol = def_ids.get_symbol(def_id).unwrap();
-                match can_defs_by_symbol.remove(&symbol) {
-                    Some(mut new_def) => {
-                        // Determine recursivity of closures that are not tail-recursive
-                        if let Closure(ClosureData {
-                            recursive: recursive @ Recursive::NotRecursive,
-                            ..
-                        }) = &mut new_def.loc_expr.value
-                        {
-                            *recursive = closure_recursivity(symbol, closures);
-                        }
-
-                        if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
-                            seen_pattern_regions.push(new_def.loc_pattern.region);
-
-                            can_defs.push(new_def);
-                        }
-                    }
-                    None => roc_error_macros::internal_error!("def not available {:?}", symbol),
-                }
-            }
-
-            declarations.push(DeclareRec(can_defs));
-        }
+fn make_cycle_entry(symbol: Symbol, def: &Def) -> CycleEntry {
+    CycleEntry {
+        symbol,
+        symbol_region: def.loc_pattern.region,
+        expr_region: def.loc_expr.region,
     }
 }
 
@@ -1140,20 +953,24 @@ fn single_can_def(
     }
 }
 
-fn add_annotation_aliases(
-    type_annotation: &crate::annotation::Annotation,
-    aliases: &mut ImMap<Symbol, Alias>,
-) {
-    for (name, alias) in type_annotation.aliases.iter() {
-        match aliases.entry(*name) {
-            ImEntry::Occupied(_) => {
-                // do nothing
-            }
-            ImEntry::Vacant(vacant) => {
-                vacant.insert(alias.clone());
-            }
-        }
-    }
+// Functions' references don't count in defs.
+// See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
+// parent commit for the bug this fixed!
+enum DefReferences {
+    /// A value may not reference itself
+    Value(References),
+
+    /// If the def is a function, different rules apply (it can call itself)
+    Function(References),
+
+    /// An annotation without a body references no other defs
+    AnnotationWithoutBody,
+}
+
+struct DefOutput {
+    output: Output,
+    def: Def,
+    references: DefReferences,
 }
 
 // TODO trim down these arguments!
@@ -1164,20 +981,19 @@ fn canonicalize_pending_value_def<'a>(
     pending_def: PendingValueDef<'a>,
     mut output: Output,
     scope: &mut Scope,
-    can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     var_store: &mut VarStore,
-    refs_by_symbol: &mut MutMap<Symbol, (Region, References)>,
-    aliases: &mut ImMap<Symbol, Alias>,
+    pattern_type: PatternType,
+    aliases: &mut VecMap<Symbol, Alias>,
     abilities_in_scope: &[Symbol],
-) -> Output {
+) -> DefOutput {
     use PendingValueDef::*;
 
-    // Make types for the body expr, even if we won't end up having a body.
-    let expr_var = var_store.fresh();
-    let mut vars_by_symbol = SendMap::default();
-
-    match pending_def {
+    let output = match pending_def {
         AnnotationOnly(_, loc_can_pattern, loc_ann) => {
+            // Make types for the body expr, even if we won't end up having a body.
+            let expr_var = var_store.fresh();
+            let mut vars_by_symbol = SendMap::default();
+
             // annotation sans body cannot introduce new rigids that are visible in other annotations
             // but the rigids can show up in type error messages, so still register them
             let type_annotation = canonicalize_annotation(
@@ -1190,16 +1006,11 @@ fn canonicalize_pending_value_def<'a>(
             );
 
             // Record all the annotation's references in output.references.lookups
-
-            for symbol in type_annotation.references.iter() {
-                output.references.insert_type_lookup(*symbol);
-            }
-
-            add_annotation_aliases(&type_annotation, aliases);
-
-            output
-                .introduced_variables
-                .union(&type_annotation.introduced_variables);
+            type_annotation.add_to(
+                aliases,
+                &mut output.references,
+                &mut output.introduced_variables,
+            );
 
             pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
 
@@ -1226,7 +1037,7 @@ fn canonicalize_pending_value_def<'a>(
                     region: loc_ann.region,
                 }
             } else {
-                let symbol = env.gen_unique_symbol();
+                let symbol = scope.gen_unique_symbol();
 
                 // generate a fake pattern for each argument. this makes signatures
                 // that are functions only crash when they are applied.
@@ -1238,7 +1049,11 @@ fn canonicalize_pending_value_def<'a>(
                         region: Region::zero(),
                     };
 
-                    underscores.push((var_store.fresh(), underscore));
+                    underscores.push((
+                        var_store.fresh(),
+                        AnnotatedMark::known_exhaustive(),
+                        underscore,
+                    ));
                 }
 
                 let body_expr = Loc {
@@ -1262,46 +1077,18 @@ fn canonicalize_pending_value_def<'a>(
                 }
             };
 
-            if let Pattern::Identifier(symbol)
-            | Pattern::AbilityMemberSpecialization { ident: symbol, .. } = loc_can_pattern.value
-            {
-                let def = single_can_def(
-                    loc_can_pattern,
-                    loc_can_expr,
-                    expr_var,
-                    Some(Loc::at(loc_ann.region, type_annotation)),
-                    vars_by_symbol.clone(),
-                );
-                can_defs_by_symbol.insert(symbol, def);
-            } else {
-                for (_, (symbol, _)) in scope.idents() {
-                    if !vars_by_symbol.contains_key(symbol) {
-                        continue;
-                    }
+            let def = single_can_def(
+                loc_can_pattern,
+                loc_can_expr,
+                expr_var,
+                Some(Loc::at(loc_ann.region, type_annotation)),
+                vars_by_symbol.clone(),
+            );
 
-                    // We could potentially avoid some clones here by using Rc strategically,
-                    // but the total amount of cloning going on here should typically be minimal.
-                    can_defs_by_symbol.insert(
-                        *symbol,
-                        Def {
-                            expr_var,
-                            // TODO try to remove this .clone()!
-                            loc_pattern: loc_can_pattern.clone(),
-                            loc_expr: Loc {
-                                region: loc_can_expr.region,
-                                // TODO try to remove this .clone()!
-                                value: loc_can_expr.value.clone(),
-                            },
-                            pattern_vars: vars_by_symbol.clone(),
-                            annotation: Some(Annotation {
-                                signature: type_annotation.typ.clone(),
-                                introduced_variables: output.introduced_variables.clone(),
-                                aliases: type_annotation.aliases.clone(),
-                                region: loc_ann.region,
-                            }),
-                        },
-                    );
-                }
+            DefOutput {
+                output,
+                references: DefReferences::AnnotationWithoutBody,
+                def,
             }
         }
 
@@ -1316,304 +1103,157 @@ fn canonicalize_pending_value_def<'a>(
             );
 
             // Record all the annotation's references in output.references.lookups
-            for symbol in type_annotation.references.iter() {
-                output.references.insert_type_lookup(*symbol);
-            }
+            type_annotation.add_to(
+                aliases,
+                &mut output.references,
+                &mut output.introduced_variables,
+            );
 
-            add_annotation_aliases(&type_annotation, aliases);
-
-            output
-                .introduced_variables
-                .union(&type_annotation.introduced_variables);
-
-            // bookkeeping for tail-call detection. If we're assigning to an
-            // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
-            let outer_identifier = env.tailcallable_symbol;
-
-            if let Pattern::Identifier(ref defined_symbol) = &loc_can_pattern.value {
-                env.tailcallable_symbol = Some(*defined_symbol);
-            };
-
-            // register the name of this closure, to make sure the closure won't capture it's own name
-            if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
-                (&loc_can_pattern.value, &loc_expr.value)
-            {
-                env.closure_name_symbol = Some(*defined_symbol);
-            };
-
-            pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
-
-            let (mut loc_can_expr, can_output) =
-                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
-
-            output.references.union_mut(&can_output.references);
-
-            // reset the tailcallable_symbol
-            env.tailcallable_symbol = outer_identifier;
-
-            // First, make sure we are actually assigning an identifier instead of (for example) a tag.
-            //
-            // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
-            // which also implies it's not a self tail call!
-            //
-            // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let Pattern::Identifier(symbol)
-            | Pattern::AbilityMemberSpecialization { ident: symbol, .. } = loc_can_pattern.value
-            {
-                if let Closure(ClosureData {
-                    function_type,
-                    closure_type,
-                    closure_ext_var,
-                    return_type,
-                    name: ref closure_name,
-                    ref arguments,
-                    loc_body: ref body,
-                    ref captured_symbols,
-                    ..
-                }) = loc_can_expr.value
-                {
-                    // Since everywhere in the code it'll be referred to by its defined name,
-                    // remove its generated name from the closure map. (We'll re-insert it later.)
-                    let references = env.closures.remove(closure_name).unwrap_or_else(|| {
-                        panic!(
-                            "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                            closure_name, env.closures
-                        )
-                    });
-
-                    // Re-insert the closure into the map, under its defined name.
-                    // closures don't have a name, and therefore pick a fresh symbol. But in this
-                    // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
-                    // and we want to reference it by that name.
-                    env.closures.insert(symbol, references);
-
-                    // The closure is self tail recursive iff it tail calls itself (by defined name).
-                    let is_recursive = match can_output.tail_call {
-                        Some(tail_symbol) if tail_symbol == symbol => Recursive::TailRecursive,
-                        _ => Recursive::NotRecursive,
-                    };
-
-                    // Recursion doesn't count as referencing. (If it did, all recursive functions
-                    // would result in circular def errors!)
-                    refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
-                        refs.remove_value_lookup(&symbol);
-                    });
-
-                    // renamed_closure_def = Some(&symbol);
-                    loc_can_expr.value = Closure(ClosureData {
-                        function_type,
-                        closure_type,
-                        closure_ext_var,
-                        return_type,
-                        name: symbol,
-                        captured_symbols: captured_symbols.clone(),
-                        recursive: is_recursive,
-                        arguments: arguments.clone(),
-                        loc_body: body.clone(),
-                    });
-
-                    // Functions' references don't count in defs.
-                    // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
-                    // parent commit for the bug this fixed!
-                    let refs = References::new();
-
-                    refs_by_symbol.insert(symbol, (loc_can_pattern.region, refs));
-                } else {
-                    let refs = can_output.references;
-                    refs_by_symbol.insert(symbol, (loc_ann.region, refs));
-                }
-
-                let def = single_can_def(
-                    loc_can_pattern,
-                    loc_can_expr,
-                    expr_var,
-                    Some(Loc::at(loc_ann.region, type_annotation)),
-                    vars_by_symbol.clone(),
-                );
-                can_defs_by_symbol.insert(symbol, def);
-            } else {
-                for (_, (symbol, region)) in scope.idents() {
-                    if !vars_by_symbol.contains_key(symbol) {
-                        continue;
-                    }
-
-                    let refs = can_output.references.clone();
-
-                    refs_by_symbol.insert(*symbol, (*region, refs));
-
-                    can_defs_by_symbol.insert(
-                        *symbol,
-                        Def {
-                            expr_var,
-                            // TODO try to remove this .clone()!
-                            loc_pattern: loc_can_pattern.clone(),
-                            loc_expr: Loc {
-                                region: loc_can_expr.region,
-                                // TODO try to remove this .clone()!
-                                value: loc_can_expr.value.clone(),
-                            },
-                            pattern_vars: vars_by_symbol.clone(),
-                            annotation: Some(Annotation {
-                                signature: type_annotation.typ.clone(),
-                                introduced_variables: type_annotation.introduced_variables.clone(),
-                                aliases: type_annotation.aliases.clone(),
-                                region: loc_ann.region,
-                            }),
-                        },
-                    );
-                }
-            }
+            canonicalize_pending_body(
+                env,
+                output,
+                scope,
+                var_store,
+                loc_can_pattern,
+                loc_expr,
+                Some(Loc::at(loc_ann.region, type_annotation)),
+            )
         }
-        // If we have a pattern, then the def has a body (that is, it's not a
-        // standalone annotation), so we need to canonicalize the pattern and expr.
-        Body(loc_pattern, loc_can_pattern, loc_expr) => {
-            // bookkeeping for tail-call detection. If we're assigning to an
-            // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
-            let outer_identifier = env.tailcallable_symbol;
-
-            if let (&ast::Pattern::Identifier(_name), &Pattern::Identifier(ref defined_symbol)) =
-                (&loc_pattern.value, &loc_can_pattern.value)
-            {
-                env.tailcallable_symbol = Some(*defined_symbol);
-
-                // TODO isn't types_by_symbol enough? Do we need vars_by_symbol too?
-                vars_by_symbol.insert(*defined_symbol, expr_var);
-            };
-
-            // register the name of this closure, to make sure the closure won't capture it's own name
-            if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
-                (&loc_can_pattern.value, &loc_expr.value)
-            {
-                env.closure_name_symbol = Some(*defined_symbol);
-            };
-
-            let (mut loc_can_expr, can_output) =
-                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
-
-            // reset the tailcallable_symbol
-            env.tailcallable_symbol = outer_identifier;
-
-            // First, make sure we are actually assigning an identifier instead of (for example) a tag.
+        Body(_loc_pattern, loc_can_pattern, loc_expr) => {
             //
-            // If we're assigning (UserId userId) = ... then this is certainly not a closure declaration,
-            // which also implies it's not a self tail call!
-            //
-            // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
-            if let Pattern::Identifier(symbol) = loc_can_pattern.value {
-                if let Closure(ClosureData {
-                    function_type,
-                    closure_type,
-                    closure_ext_var,
-                    return_type,
-                    name: ref closure_name,
-                    ref arguments,
-                    loc_body: ref body,
-                    ref captured_symbols,
-                    ..
-                }) = loc_can_expr.value
-                {
-                    // Since everywhere in the code it'll be referred to by its defined name,
-                    // remove its generated name from the closure map. (We'll re-insert it later.)
-                    let references = env.closures.remove(closure_name).unwrap_or_else(|| {
-                        panic!(
-                            "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
-                            closure_name, env.closures
-                        )
-                    });
-
-                    // Re-insert the closure into the map, under its defined name.
-                    // closures don't have a name, and therefore pick a fresh symbol. But in this
-                    // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
-                    // and we want to reference it by that name.
-                    env.closures.insert(symbol, references);
-
-                    // The closure is self tail recursive iff it tail calls itself (by defined name).
-                    let is_recursive = match can_output.tail_call {
-                        Some(tail_symbol) if tail_symbol == symbol => Recursive::TailRecursive,
-                        _ => Recursive::NotRecursive,
-                    };
-
-                    // Recursion doesn't count as referencing. (If it did, all recursive functions
-                    // would result in circular def errors!)
-                    refs_by_symbol.entry(symbol).and_modify(|(_, refs)| {
-                        refs.remove_value_lookup(&symbol);
-                    });
-
-                    loc_can_expr.value = Closure(ClosureData {
-                        function_type,
-                        closure_type,
-                        closure_ext_var,
-                        return_type,
-                        name: symbol,
-                        captured_symbols: captured_symbols.clone(),
-                        recursive: is_recursive,
-                        arguments: arguments.clone(),
-                        loc_body: body.clone(),
-                    });
-
-                    // Functions' references don't count in defs.
-                    // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
-                    // parent commit for the bug this fixed!
-                    let refs = References::new();
-                    refs_by_symbol.insert(symbol, (loc_pattern.region, refs));
-                } else {
-                    let refs = can_output.references.clone();
-                    refs_by_symbol.insert(symbol, (loc_pattern.region, refs));
-                }
-
-                let def = single_can_def(
-                    loc_can_pattern,
-                    loc_can_expr,
-                    expr_var,
-                    None,
-                    vars_by_symbol.clone(),
-                );
-                can_defs_by_symbol.insert(symbol, def);
-            } else {
-                // Store the referenced locals in the refs_by_symbol map, so we can later figure out
-                // which defined names reference each other.
-                for (symbol, region) in bindings_from_patterns(std::iter::once(&loc_can_pattern)) {
-                    let refs = can_output.references.clone();
-                    refs_by_symbol.insert(symbol, (region, refs));
-
-                    can_defs_by_symbol.insert(
-                        symbol,
-                        Def {
-                            expr_var,
-                            // TODO try to remove this .clone()!
-                            loc_pattern: loc_can_pattern.clone(),
-                            loc_expr: Loc {
-                                // TODO try to remove this .clone()!
-                                region: loc_can_expr.region,
-                                value: loc_can_expr.value.clone(),
-                            },
-                            pattern_vars: vars_by_symbol.clone(),
-                            annotation: None,
-                        },
-                    );
-                }
-            }
-
-            output.union(can_output);
+            canonicalize_pending_body(
+                env,
+                output,
+                scope,
+                var_store,
+                loc_can_pattern,
+                loc_expr,
+                None,
+            )
         }
     };
 
+    // Disallow ability specializations that aren't on the toplevel (note: we might loosen this
+    // restriction later on).
+    if pattern_type != PatternType::TopLevelDef {
+        if let Loc {
+            value: Pattern::AbilityMemberSpecialization { specializes, .. },
+            region,
+        } = output.def.loc_pattern
+        {
+            env.problem(Problem::NestedSpecialization(specializes, region));
+        }
+    }
+
     output
+}
+
+// TODO trim down these arguments!
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::cognitive_complexity)]
+fn canonicalize_pending_body<'a>(
+    env: &mut Env<'a>,
+    mut output: Output,
+    scope: &mut Scope,
+    var_store: &mut VarStore,
+
+    loc_can_pattern: Loc<Pattern>,
+    loc_expr: &'a Loc<ast::Expr>,
+
+    opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
+) -> DefOutput {
+    // We treat closure definitions `foo = \a, b -> ...` differently from other body expressions,
+    // because they need more bookkeeping (for tail calls, closure captures, etc.)
+    //
+    // Only defs of the form `foo = ...` can be closure declarations or self tail calls.
+    let (loc_can_expr, def_references) = {
+        match (&loc_can_pattern.value, &loc_expr.value) {
+            (
+                Pattern::Identifier(defined_symbol)
+                | Pattern::AbilityMemberSpecialization {
+                    ident: defined_symbol,
+                    ..
+                },
+                ast::Expr::Closure(arguments, body),
+            ) => {
+                // bookkeeping for tail-call detection.
+                let outer_tailcallable = env.tailcallable_symbol;
+                env.tailcallable_symbol = Some(*defined_symbol);
+
+                let (mut closure_data, can_output) = crate::expr::canonicalize_closure(
+                    env,
+                    var_store,
+                    scope,
+                    arguments,
+                    body,
+                    Some(*defined_symbol),
+                );
+
+                // reset the tailcallable_symbol
+                env.tailcallable_symbol = outer_tailcallable;
+
+                // The closure is self tail recursive iff it tail calls itself (by defined name).
+                let is_recursive = match can_output.tail_call {
+                    Some(tail_symbol) if tail_symbol == *defined_symbol => Recursive::TailRecursive,
+                    _ => Recursive::NotRecursive,
+                };
+
+                closure_data.recursive = is_recursive;
+                closure_data.name = *defined_symbol;
+
+                let loc_can_expr = Loc::at(loc_expr.region, Expr::Closure(closure_data));
+
+                let def_references = DefReferences::Function(can_output.references.clone());
+                output.union(can_output);
+
+                (loc_can_expr, def_references)
+            }
+
+            _ => {
+                let (loc_can_expr, can_output) =
+                    canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+
+                let def_references = DefReferences::Value(can_output.references.clone());
+                output.union(can_output);
+
+                (loc_can_expr, def_references)
+            }
+        }
+    };
+
+    let expr_var = var_store.fresh();
+    let mut vars_by_symbol = SendMap::default();
+
+    pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
+
+    let def = single_can_def(
+        loc_can_pattern,
+        loc_can_expr,
+        expr_var,
+        opt_loc_annotation,
+        vars_by_symbol,
+    );
+
+    DefOutput {
+        output,
+        references: def_references,
+        def,
+    }
 }
 
 #[inline(always)]
 pub fn can_defs_with_return<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
-    scope: Scope,
+    scope: &mut Scope,
     loc_defs: &'a [&'a Loc<ast::Def<'a>>],
     loc_ret: &'a Loc<ast::Expr<'a>>,
 ) -> (Expr, Output) {
-    let (unsorted, mut scope, defs_output, symbols_introduced) = canonicalize_defs(
+    let (unsorted, defs_output, symbols_introduced) = canonicalize_defs(
         env,
         Output::default(),
         var_store,
-        &scope,
+        scope,
         loc_defs,
         PatternType::DefExpr,
     );
@@ -1621,7 +1261,7 @@ pub fn can_defs_with_return<'a>(
     // The def as a whole is a tail call iff its return expression is a tail call.
     // Use its output as a starting point because its tail_call already has the right answer!
     let (ret_expr, mut output) =
-        canonicalize_expr(env, var_store, &mut scope, loc_ret.region, &loc_ret.value);
+        canonicalize_expr(env, var_store, scope, loc_ret.region, &loc_ret.value);
 
     output
         .introduced_variables
@@ -1638,31 +1278,24 @@ pub fn can_defs_with_return<'a>(
         }
     }
 
-    let (can_defs, output) = sort_can_defs(env, unsorted, output);
+    let (declarations, output) = sort_can_defs(env, unsorted, output);
 
-    match can_defs {
-        Ok(decls) => {
-            let mut loc_expr: Loc<Expr> = ret_expr;
+    let mut loc_expr: Loc<Expr> = ret_expr;
 
-            for declaration in decls.into_iter().rev() {
-                loc_expr = Loc {
-                    region: Region::zero(),
-                    value: decl_to_let(var_store, declaration, loc_expr),
-                };
-            }
-
-            (loc_expr.value, output)
-        }
-        Err(err) => (RuntimeError(err), output),
+    for declaration in declarations.into_iter().rev() {
+        loc_expr = Loc {
+            region: Region::zero(),
+            value: decl_to_let(declaration, loc_expr),
+        };
     }
+
+    (loc_expr.value, output)
 }
 
-fn decl_to_let(var_store: &mut VarStore, decl: Declaration, loc_ret: Loc<Expr>) -> Expr {
+fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Expr {
     match decl {
-        Declaration::Declare(def) => {
-            Expr::LetNonRec(Box::new(def), Box::new(loc_ret), var_store.fresh())
-        }
-        Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret), var_store.fresh()),
+        Declaration::Declare(def) => Expr::LetNonRec(Box::new(def), Box::new(loc_ret)),
+        Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret)),
         Declaration::InvalidCycle(entries) => {
             Expr::RuntimeError(RuntimeError::CircularDef(entries))
         }
@@ -1673,46 +1306,12 @@ fn decl_to_let(var_store: &mut VarStore, decl: Declaration, loc_ret: Loc<Expr>) 
     }
 }
 
-fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) -> Recursive {
-    let mut visited = MutSet::default();
-
-    let mut stack = Vec::new();
-
-    if let Some(references) = closures.get(&symbol) {
-        for v in references.calls() {
-            stack.push(*v);
-        }
-
-        // while there are symbols left to visit
-        while let Some(nested_symbol) = stack.pop() {
-            if nested_symbol == symbol {
-                return Recursive::Recursive;
-            }
-
-            // if the called symbol not yet in the graph
-            if !visited.contains(&nested_symbol) {
-                // add it to the visited set
-                // if it calls any functions
-                if let Some(nested_references) = closures.get(&nested_symbol) {
-                    // add its called to the stack
-                    for v in nested_references.calls() {
-                        stack.push(*v);
-                    }
-                }
-                visited.insert(nested_symbol);
-            }
-        }
-    }
-
-    Recursive::NotRecursive
-}
-
 fn to_pending_type_def<'a>(
     env: &mut Env<'a>,
     def: &'a ast::TypeDef<'a>,
     scope: &mut Scope,
     pattern_type: PatternType,
-) -> Option<(Output, PendingTypeDef<'a>)> {
+) -> PendingTypeDef<'a> {
     use ast::TypeDef::*;
 
     match def {
@@ -1732,12 +1331,7 @@ fn to_pending_type_def<'a>(
 
             let region = Region::span_across(&name.region, &ann.region);
 
-            match scope.introduce(
-                name.value.into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                region,
-            ) {
+            match scope.introduce_without_shadow_symbol(&Ident::from(name.value), region) {
                 Ok(symbol) => {
                     let mut can_rigids: Vec<Loc<Lowercase>> = Vec::with_capacity(vars.len());
 
@@ -1760,10 +1354,11 @@ fn to_pending_type_def<'a>(
                                 };
                                 env.problems.push(problem);
 
-                                return Some((
-                                    Output::default(),
-                                    PendingTypeDef::InvalidAlias { kind },
-                                ));
+                                return PendingTypeDef::InvalidAlias {
+                                    kind,
+                                    symbol,
+                                    region,
+                                };
                             }
                         }
                     }
@@ -1773,24 +1368,22 @@ fn to_pending_type_def<'a>(
                         value: symbol,
                     };
 
-                    let pending_def = PendingTypeDef::Alias {
+                    PendingTypeDef::Alias {
                         name,
                         vars: can_rigids,
                         ann,
                         kind,
-                    };
-
-                    Some((Output::default(), pending_def))
+                    }
                 }
 
-                Err((original_region, loc_shadowed_symbol, _new_symbol)) => {
+                Err((original_region, loc_shadowed_symbol)) => {
                     env.problem(Problem::Shadowing {
                         original_region,
                         shadow: loc_shadowed_symbol,
                         kind: shadow_kind,
                     });
 
-                    Some((Output::default(), PendingTypeDef::InvalidAlias { kind }))
+                    PendingTypeDef::ShadowedAlias
                 }
             }
         }
@@ -1805,7 +1398,7 @@ fn to_pending_type_def<'a>(
             );
             env.problem(Problem::AbilityNotOnToplevel { region });
 
-            Some((Output::default(), PendingTypeDef::InvalidAbility))
+            PendingTypeDef::AbilityNotOnToplevel
         }
 
         Ability {
@@ -1813,12 +1406,9 @@ fn to_pending_type_def<'a>(
             members,
             loc_has: _,
         } => {
-            let name = match scope.introduce_without_shadow_symbol(
-                name.value.into(),
-                &env.exposed_ident_ids,
-                &mut env.ident_ids,
-                name.region,
-            ) {
+            let name = match scope
+                .introduce_without_shadow_symbol(&Ident::from(name.value), name.region)
+            {
                 Ok(symbol) => Loc::at(name.region, symbol),
                 Err((original_region, shadowed_symbol)) => {
                     env.problem(Problem::Shadowing {
@@ -1826,7 +1416,7 @@ fn to_pending_type_def<'a>(
                         shadow: shadowed_symbol,
                         kind: ShadowKind::Ability,
                     });
-                    return Some((Output::default(), PendingTypeDef::InvalidAbility));
+                    return PendingTypeDef::AbilityShadows;
                 }
             };
 
@@ -1838,16 +1428,17 @@ fn to_pending_type_def<'a>(
                     name: name.value,
                     variables_region,
                 });
-                return Some((Output::default(), PendingTypeDef::InvalidAbility));
+                return PendingTypeDef::InvalidAbility {
+                    symbol: name.value,
+                    region: name.region,
+                };
             }
 
-            let pending_ability = PendingTypeDef::Ability {
+            PendingTypeDef::Ability {
                 name,
                 // We'll handle adding the member symbols later on when we do all value defs.
                 members,
-            };
-
-            Some((Output::default(), pending_ability))
+            }
         }
     }
 }
@@ -1952,75 +1543,146 @@ fn to_pending_value_def<'a>(
 /// Make aliases recursive
 fn correct_mutual_recursive_type_alias<'a>(
     env: &mut Env<'a>,
-    mut original_aliases: SendMap<Symbol, Alias>,
+    original_aliases: VecMap<Symbol, Alias>,
     var_store: &mut VarStore,
-) -> ImMap<Symbol, Alias> {
-    let symbols_introduced: Vec<Symbol> = original_aliases.keys().copied().collect();
+) -> VecMap<Symbol, Alias> {
+    let capacity = original_aliases.len();
+    let mut matrix = ReferenceMatrix::new(capacity);
 
-    let all_successors_with_self = |symbol: &Symbol| -> Vec<Symbol> {
-        match original_aliases.get(symbol) {
-            Some(alias) => {
-                let mut loc_succ = alias.typ.symbols();
-                // remove anything that is not defined in the current block
-                loc_succ.retain(|key| symbols_introduced.contains(key));
+    let (symbols_introduced, mut aliases) = original_aliases.unzip();
 
-                loc_succ
+    for (index, alias) in aliases.iter().enumerate() {
+        for referenced in alias.typ.symbols() {
+            match symbols_introduced.iter().position(|k| referenced == *k) {
+                None => { /* ignore */ }
+                Some(ref_id) => matrix.set_row_col(index, ref_id, true),
             }
-            None => vec![],
         }
-    };
+    }
 
-    // TODO investigate should this be in a loop?
-    let defined_symbols: Vec<Symbol> = original_aliases.keys().copied().collect();
+    let mut solved_aliases = bitvec::vec::BitVec::<usize>::repeat(false, capacity);
 
-    let cycles =
-        ven_graph::strongly_connected_components(&defined_symbols, all_successors_with_self);
-    let mut solved_aliases = ImMap::default();
+    let sccs = matrix.strongly_connected_components_all();
 
-    for cycle in cycles {
-        debug_assert!(!cycle.is_empty());
+    // scratchpad to store aliases that are modified in the current iteration.
+    // Only used when there is are more than one alias in a group. See below why
+    // this is needed.
+    let scratchpad_capacity = sccs
+        .groups()
+        .map(|r| r.count_ones())
+        .max()
+        .unwrap_or_default();
+    let mut scratchpad = Vec::with_capacity(scratchpad_capacity);
 
-        let mut pending_aliases: ImMap<_, _> = cycle
-            .iter()
-            .map(|&sym| (sym, original_aliases.remove(&sym).unwrap()))
-            .collect();
+    for cycle in sccs.groups() {
+        debug_assert!(cycle.count_ones() > 0);
+
+        // We need to instantiate the alias with any symbols in the currrent module it
+        // depends on.
+        //
+        // the `strongly_connected_components` returns SCCs in a topologically sorted order:
+        // SCC_0 has those aliases that don't rely on any other, SCC_1 has only those that rely on SCC_1, etc.
+        //
+        // Hence, we only need to worry about symbols in the current SCC or any prior one.
+        // It cannot be using any of the others, and we've already instantiated aliases coming from other modules.
+        let mut to_instantiate = solved_aliases | cycle;
 
         // Make sure we report only one error for the cycle, not an error for every
         // alias in the cycle.
         let mut can_still_report_error = true;
 
-        // We need to instantiate the alias with any symbols in the currrent module it
-        // depends on.
-        // We only need to worry about symbols in this SCC or any prior one, since the SCCs
-        // were sorted topologically, and we've already instantiated aliases coming from other
-        // modules.
-        // NB: ImMap::clone is O(1): https://docs.rs/im/latest/src/im/hash/map.rs.html#1527-1544
-        let mut to_instantiate = solved_aliases.clone().union(pending_aliases.clone());
+        for index in cycle.iter_ones() {
+            // Don't try to instantiate the alias itself in its own definition.
+            to_instantiate.set(index, false);
 
-        for &rec in cycle.iter() {
-            let alias = pending_aliases.get_mut(&rec).unwrap();
-            // Don't try to instantiate the alias itself in its definition.
-            let original_alias_def = to_instantiate.remove(&rec).unwrap();
+            // Within a recursive group, we must instantiate all aliases like how they came to the
+            // loop. e.g. given
+            //
+            // A : [ ConsA B, NilA ]
+            // B : [ ConsB A, NilB ]
+            //
+            // Our goal is
+            //
+            // A : [ ConsA [ ConsB A, NilB ], NilA ]
+            // B : [ ConsB [ ConsA B, NilA ], NilB ]
+            //
+            // But if we would first instantiate B into A, then use the updated A to instantiate B,
+            // we get
+            //
+            // A : [ ConsA [ ConsB A, NilB ], NilA ]
+            // B : [ ConsB [ ConsA [ ConsB A, NilB ], NilA ], NilB ]
+            //
+            // Which is incorrect. We do need the instantiated version however.
+            // e.g. if in a next group we have:
+            //
+            // C : A
+            //
+            // Then we must use the instantiated version
+            //
+            // C : [ ConsA [ ConsB A, NilB ], NilA ]
+            //
+            // So, we cannot replace the original version of A with its instantiated version
+            // while we process A's group. We have to store the instantiated version until the
+            // current group is done, then move it to the `aliases` array. That is what the scratchpad is for.
+            let alias = if cycle.count_ones() == 1 {
+                // an optimization: we can modify the alias in the `aliases` list directly
+                // because it is the only alias in the group.
+                &mut aliases[index]
+            } else {
+                scratchpad.push((index, aliases[index].clone()));
+
+                &mut scratchpad.last_mut().unwrap().1
+            };
+
+            // Now, `alias` is possibly a mutable borrow from the `aliases` vector. But we also want
+            // to immutably borrow other elements from that vector to instantiate them into `alias`.
+            // The borrow checker disallows that.
+            //
+            // So we get creative: we swap out the element we want to modify with a dummy. We can
+            // then freely modify the type we moved out, and the `to_instantiate` mask
+            // makes sure that our dummy is not used.
+
+            let alias_region = alias.region;
+            let mut alias_type = Type::EmptyRec;
+
+            std::mem::swap(&mut alias_type, &mut alias.typ);
+
+            let can_instantiate_symbol = |s| match symbols_introduced.iter().position(|i| *i == s) {
+                Some(s_index) if to_instantiate[s_index] => aliases.get(s_index),
+                _ => None,
+            };
 
             let mut new_lambda_sets = ImSet::default();
-            alias.typ.instantiate_aliases(
-                alias.region,
-                &to_instantiate,
+            alias_type.instantiate_aliases(
+                alias_region,
+                &can_instantiate_symbol,
                 var_store,
                 &mut new_lambda_sets,
             );
 
-            for lambda_set_var in new_lambda_sets {
-                alias
-                    .lambda_set_variables
-                    .push(LambdaSet(Type::Variable(lambda_set_var)));
-            }
+            let alias = if cycle.count_ones() > 1 {
+                &mut scratchpad.last_mut().unwrap().1
+            } else {
+                &mut aliases[index]
+            };
 
-            to_instantiate.insert(rec, original_alias_def);
+            // swap the type back
+            std::mem::swap(&mut alias_type, &mut alias.typ);
+
+            // We can instantiate this alias in future iterations
+            to_instantiate.set(index, true);
+
+            // add any lambda sets that the instantiation created to the current alias
+            alias.lambda_set_variables.extend(
+                new_lambda_sets
+                    .iter()
+                    .map(|var| LambdaSet(Type::Variable(*var))),
+            );
 
             // Now mark the alias recursive, if it needs to be.
-            let is_self_recursive = alias.typ.contains_symbol(rec);
-            let is_mutually_recursive = cycle.len() > 1;
+            let rec = symbols_introduced[index];
+            let is_self_recursive = cycle.count_ones() == 1 && matrix.get_row_col(index, index);
+            let is_mutually_recursive = cycle.count_ones() > 1;
 
             if is_self_recursive || is_mutually_recursive {
                 let _made_recursive = make_tag_union_of_alias_recursive(
@@ -2034,20 +1696,28 @@ fn correct_mutual_recursive_type_alias<'a>(
             }
         }
 
+        // the current group has instantiated. Now we can move the updated aliases to the `aliases` vector
+        for (index, alias) in scratchpad.drain(..) {
+            aliases[index] = alias;
+        }
+
         // The cycle we just instantiated and marked recursive may still be an illegal cycle, if
         // all the types in the cycle are narrow newtypes. We can't figure this out until now,
         // because we need all the types to be deeply instantiated.
-        let all_are_narrow = cycle.iter().all(|sym| {
-            let typ = &pending_aliases.get(sym).unwrap().typ;
+        let all_are_narrow = cycle.iter_ones().all(|index| {
+            let typ = &aliases[index].typ;
             matches!(typ, Type::RecursiveTagUnion(..)) && typ.is_narrow()
         });
 
         if all_are_narrow {
             // This cycle is illegal!
-            let mut rest = cycle;
-            let alias_name = rest.pop().unwrap();
+            let mut indices = cycle.iter_ones();
+            let first_index = indices.next().unwrap();
 
-            let alias = pending_aliases.get_mut(&alias_name).unwrap();
+            let rest: Vec<Symbol> = indices.map(|i| symbols_introduced[i]).collect();
+
+            let alias_name = symbols_introduced[first_index];
+            let alias = aliases.get_mut(first_index).unwrap();
 
             mark_cyclic_alias(
                 env,
@@ -2059,11 +1729,12 @@ fn correct_mutual_recursive_type_alias<'a>(
             )
         }
 
-        // Now, promote all resolved aliases in this cycle as solved.
-        solved_aliases.extend(pending_aliases);
+        // We've instantiated all we could, so all instantiatable aliases are solved now
+        solved_aliases = to_instantiate;
     }
 
-    solved_aliases
+    // Safety: both vectors are equal length and there are no duplicates
+    unsafe { VecMap::zip(symbols_introduced, aliases) }
 }
 
 fn make_tag_union_of_alias_recursive<'a>(
@@ -2072,22 +1743,25 @@ fn make_tag_union_of_alias_recursive<'a>(
     alias: &mut Alias,
     others: Vec<Symbol>,
     var_store: &mut VarStore,
-    can_report_error: &mut bool,
+    can_report_cyclic_error: &mut bool,
 ) -> Result<(), ()> {
     let alias_args = alias
         .type_variables
         .iter()
-        .map(|l| (l.value.0.clone(), Type::Variable(l.value.1)))
+        .map(|l| (l.value.name.clone(), Type::Variable(l.value.var)))
         .collect::<Vec<_>>();
 
     let made_recursive = make_tag_union_recursive_help(
         env,
-        Loc::at(alias.header_region(), (alias_name, &alias_args)),
+        Loc::at(
+            alias.header_region(),
+            (alias_name, alias_args.iter().map(|ta| &ta.1)),
+        ),
         alias.region,
         others,
         &mut alias.typ,
         var_store,
-        can_report_error,
+        can_report_cyclic_error,
     );
 
     match made_recursive {
@@ -2129,29 +1803,32 @@ enum MakeTagUnionRecursive {
 /// ```
 ///
 /// When `Err` is returned, a problem will be added to `env`.
-fn make_tag_union_recursive_help<'a>(
+fn make_tag_union_recursive_help<'a, 'b>(
     env: &mut Env<'a>,
-    recursive_alias: Loc<(Symbol, &[(Lowercase, Type)])>,
+    recursive_alias: Loc<(Symbol, impl Iterator<Item = &'b Type>)>,
     region: Region,
     others: Vec<Symbol>,
-    typ: &mut Type,
+    typ: &'b mut Type,
     var_store: &mut VarStore,
-    can_report_error: &mut bool,
+    can_report_cyclic_error: &mut bool,
 ) -> MakeTagUnionRecursive {
     use MakeTagUnionRecursive::*;
 
-    let Loc {
-        value: (symbol, args),
-        region: alias_region,
-    } = recursive_alias;
-    let vars = args.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
+    let (symbol, args) = recursive_alias.value;
+    let alias_region = recursive_alias.region;
+
     match typ {
         Type::TagUnion(tags, ext) => {
             let recursion_variable = var_store.fresh();
+            let type_arguments: Vec<_> = args.into_iter().cloned().collect();
+
             let mut pending_typ =
                 Type::RecursiveTagUnion(recursion_variable, tags.to_vec(), ext.clone());
-            let substitution_result =
-                pending_typ.substitute_alias(symbol, &vars, &Type::Variable(recursion_variable));
+            let substitution_result = pending_typ.substitute_alias(
+                symbol,
+                &type_arguments,
+                &Type::Variable(recursion_variable),
+            );
             match substitution_result {
                 Ok(()) => {
                     // We can substitute the alias presence for the variable exactly.
@@ -2177,18 +1854,29 @@ fn make_tag_union_recursive_help<'a>(
             actual,
             type_arguments,
             ..
-        } => make_tag_union_recursive_help(
-            env,
-            Loc::at_zero((symbol, type_arguments)),
-            region,
-            others,
-            actual,
-            var_store,
-            can_report_error,
-        ),
+        } => {
+            // NB: We need to collect the type arguments to shut off rustc's closure type
+            // instantiator. Otherwise we get unfortunate errors like
+            //   reached the recursion limit while instantiating `make_tag_union_recursive_help::<...n/src/def.rs:1879:65: 1879:77]>>`
+            #[allow(clippy::needless_collect)]
+            let type_arguments: Vec<&Type> = type_arguments.iter().map(|ta| &ta.typ).collect();
+            let recursive_alias = Loc::at_zero((symbol, type_arguments.into_iter()));
+
+            // try to make `actual` recursive
+            make_tag_union_recursive_help(
+                env,
+                recursive_alias,
+                region,
+                others,
+                actual,
+                var_store,
+                can_report_cyclic_error,
+            )
+        }
         _ => {
-            mark_cyclic_alias(env, typ, symbol, region, others, *can_report_error);
-            *can_report_error = false;
+            // take care to report a cyclic alias only once (not once for each alias in the cycle)
+            mark_cyclic_alias(env, typ, symbol, region, others, *can_report_cyclic_error);
+            *can_report_cyclic_error = false;
 
             Cyclic
         }

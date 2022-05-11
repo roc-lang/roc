@@ -1,18 +1,18 @@
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Test.6 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Test.6;
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.273 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.273;
 
 procedure Test.0 ():
-    let Test.11 : I64 = 41i64;
-    let Test.1 : [C I64, C ] = Just Test.11;
-    let Test.8 : U8 = 0i64;
-    let Test.9 : U8 = GetTagId Test.1;
-    let Test.10 : Int1 = lowlevel Eq Test.8 Test.9;
-    if Test.10 then
+    let Test.10 : I64 = 41i64;
+    let Test.1 : [C I64, C ] = Just Test.10;
+    let Test.7 : U8 = 0i64;
+    let Test.8 : U8 = GetTagId Test.1;
+    let Test.9 : Int1 = lowlevel Eq Test.7 Test.8;
+    if Test.9 then
         let Test.3 : I64 = UnionAtIndex (Id 0) (Index 0) Test.1;
         let Test.5 : I64 = 1i64;
-        let Test.4 : I64 = CallByName Num.22 Test.3 Test.5;
+        let Test.4 : I64 = CallByName Num.19 Test.3 Test.5;
         ret Test.4;
     else
-        let Test.7 : I64 = 1i64;
-        ret Test.7;
+        let Test.6 : I64 = 1i64;
+        ret Test.6;

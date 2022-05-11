@@ -18,7 +18,7 @@ use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
-use super::build::load_roc_value;
+use super::build::{load_roc_value, FunctionSpec};
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 
 pub struct PointerToRefcount<'ctx> {
@@ -143,11 +143,11 @@ impl<'ctx> PointerToRefcount<'ctx> {
                 );
 
                 let function_value = add_func(
+                    env.context,
                     env.module,
                     fn_name,
-                    fn_type,
+                    FunctionSpec::known_fastcc(fn_type),
                     Linkage::Internal,
-                    FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
                 );
 
                 let subprogram = env.new_subprogram(fn_name);
@@ -1138,11 +1138,11 @@ pub fn build_header_help<'a, 'ctx, 'env>(
     };
 
     let fn_val = add_func(
+        env.context,
         env.module,
         fn_name,
-        fn_type,
+        FunctionSpec::known_fastcc(fn_type),
         Linkage::Private,
-        FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
     );
 
     let subprogram = env.new_subprogram(fn_name);
@@ -1809,7 +1809,39 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
-                panic!("non-recursive tag unions cannot contain naked recursion pointers!");
+                let recursive_union_layout = match when_recursive {
+                    WhenRecursive::Unreachable => {
+                        panic!("non-recursive tag unions cannot contain naked recursion pointers!");
+                    }
+                    WhenRecursive::Loop(recursive_union_layout) => recursive_union_layout,
+                };
+
+                // This field is a pointer to the recursive pointer.
+                let field_ptr = env
+                    .builder
+                    .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
+                    .unwrap();
+
+                // This is the actual pointer to the recursive data.
+                let field_value = env.builder.build_load(field_ptr, "load_recursive_pointer");
+
+                debug_assert!(field_value.is_pointer_value());
+
+                // therefore we must cast it to our desired type
+                let union_type =
+                    basic_type_from_layout(env, &Layout::Union(*recursive_union_layout));
+                let recursive_ptr_field_value =
+                    cast_basic_basic(env.builder, field_value, union_type);
+
+                modify_refcount_layout_help(
+                    env,
+                    parent,
+                    layout_ids,
+                    mode.to_call_mode(fn_val),
+                    when_recursive,
+                    recursive_ptr_field_value,
+                    &Layout::RecursivePointer,
+                )
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder

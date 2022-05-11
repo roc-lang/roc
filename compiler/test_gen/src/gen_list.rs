@@ -800,7 +800,7 @@ fn list_walk_until_sum() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn list_walk_imlements_position() {
+fn list_walk_implements_position() {
     assert_evals_to!(
         r#"
         Option a : [ Some a, None ]
@@ -2534,7 +2534,7 @@ fn list_keep_oks() {
         RocList<i64>
     );
     assert_evals_to!(
-        "List.keepOks [1,2] (\\x -> x % 2)",
+        "List.keepOks [1,2] (\\x -> Num.remChecked x 2)",
         RocList::from_slice(&[1, 0]),
         RocList<i64>
     );
@@ -2561,7 +2561,7 @@ fn list_keep_errs() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.keepErrs [0,1,2] (\x -> x % 0 |> Result.mapErr (\_ -> 32))
+            List.keepErrs [0,1,2] (\x -> Num.remChecked x 0 |> Result.mapErr (\_ -> 32))
             "#
         ),
         RocList::from_slice(&[32, 32, 32]),

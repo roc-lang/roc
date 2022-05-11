@@ -26,10 +26,12 @@ members = [
     "compiler/arena_pool",
     "compiler/test_gen",
     "compiler/roc_target",
+    "compiler/debug_flags",
     "vendor/ena",
     "vendor/inkwell",
     "vendor/pathfinding",
     "vendor/pretty",
+    "bindgen",
     "editor",
     "ast",
     "cli",
@@ -44,7 +46,9 @@ members = [
     "test_utils",
     "utils",
     "docs",
+    "docs_cli",
     "linker",
+    "wasi-libc-sys",
 ]
 exclude = [
     "ci/bench-runner",
@@ -52,7 +56,7 @@ exclude = [
     # The tests will still correctly build them.
     "cli_utils",
     "compiler/test_mono_macros",
-    # `cargo build` would cause roc_std to be built with default features which errors on windows 
+    # `cargo build` would cause roc_std to be built with default features which errors on windows
     "roc_std",
 ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -

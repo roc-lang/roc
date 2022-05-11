@@ -150,8 +150,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | MalformedIdent(_, _)
         | MalformedClosure
         | PrecedenceConflict { .. }
-        | GlobalTag(_)
-        | PrivateTag(_)
+        | Tag(_)
         | OpaqueRef(_) => loc_expr,
 
         Access(sub_expr, paths) => {
@@ -425,7 +424,6 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         Slash => (ModuleName::NUM, "div"),
         DoubleSlash => (ModuleName::NUM, "divTrunc"),
         Percent => (ModuleName::NUM, "rem"),
-        DoublePercent => (ModuleName::NUM, "mod"),
         Plus => (ModuleName::NUM, "add"),
         Minus => (ModuleName::NUM, "sub"),
         Equals => (ModuleName::BOOL, "isEq"),

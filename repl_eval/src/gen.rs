@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use roc_load::Threading;
 use roc_reporting::report::Palette;
 use std::path::{Path, PathBuf};
 
@@ -7,7 +8,7 @@ use roc_fmt::annotation::{Newlines, Parens};
 use roc_load::{LoadingProblem, MonomorphizedModule};
 use roc_parse::ast::Expr;
 use roc_region::all::LineInfo;
-use roc_reporting::report::{can_problem, mono_problem, type_problem, RocDocAllocator};
+use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
 use roc_target::TargetInfo;
 
 use crate::eval::ToAstProblem;
@@ -61,6 +62,7 @@ pub fn compile_to_mono<'a>(
         exposed_types,
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
+        Threading::Single,
     );
 
     let mut loaded = match loaded {
@@ -78,7 +80,6 @@ pub fn compile_to_mono<'a>(
         sources,
         can_problems,
         type_problems,
-        mono_problems,
         ..
     } = &mut loaded;
 
@@ -87,9 +88,8 @@ pub fn compile_to_mono<'a>(
     for (home, (module_path, src)) in sources.iter() {
         let can_probs = can_problems.remove(home).unwrap_or_default();
         let type_probs = type_problems.remove(home).unwrap_or_default();
-        let mono_probs = mono_problems.remove(home).unwrap_or_default();
 
-        let error_count = can_probs.len() + type_probs.len() + mono_probs.len();
+        let error_count = can_probs.len() + type_probs.len();
 
         if error_count == 0 {
             continue;
@@ -118,15 +118,6 @@ pub fn compile_to_mono<'a>(
 
                 lines.push(buf);
             }
-        }
-
-        for problem in mono_probs {
-            let report = mono_problem(&alloc, &line_info, module_path.clone(), problem);
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            lines.push(buf);
         }
     }
 

@@ -81,7 +81,7 @@ The core Roc language and standard library include no I/O operations, which give
 
 ## Project Goals
 
-Roc is in relatively early stages of development. It's currently possible to build both platforms and applications (see the [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) folder for some examples that aren't particularly organized at the moment), although [documentation](https://github.com/rtfeldman/roc/tree/trunk/compiler/builtins/docs) is in even earlier stages than the compiler itself.
+Roc is in relatively early stages of development. It's currently possible to build both platforms and applications (see the [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) folder for some examples that aren't particularly organized at the moment), although [documentation](https://github.com/rtfeldman/roc/tree/trunk/compiler/builtins/roc) is in even earlier stages than the compiler itself.
 
 Besides the above language design, a separate goal is for Roc to ship with an ambitiously boundary-pushing graphical editor. Not like "an IDE," but rather something that makes people say "I have never seen anything remotely like this outside of Bret Victor demos."
 

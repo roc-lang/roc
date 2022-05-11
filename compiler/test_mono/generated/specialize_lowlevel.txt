@@ -1,24 +1,24 @@
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Test.24 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Test.24;
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.274 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.274;
 
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Test.21 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Test.21;
+procedure Num.21 (#Attr.2, #Attr.3):
+    let Num.273 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.273;
 
 procedure Test.6 (Test.8, #Attr.12):
     let Test.4 : I64 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let Test.23 : I64 = CallByName Num.22 Test.8 Test.4;
-    ret Test.23;
+    let Test.22 : I64 = CallByName Num.19 Test.8 Test.4;
+    ret Test.22;
 
 procedure Test.7 (Test.9, #Attr.12):
     let Test.5 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    let Test.20 : I64 = CallByName Num.24 Test.9 Test.5;
+    let Test.20 : I64 = CallByName Num.21 Test.9 Test.5;
     ret Test.20;
 
 procedure Test.0 ():
-    let Test.5 : I64 = 2i64;
     let Test.4 : I64 = 1i64;
+    let Test.5 : I64 = 2i64;
     let Test.12 : I64 = 42i64;
     joinpoint Test.19 Test.13:
         let Test.14 : U8 = GetTagId Test.13;
@@ -35,8 +35,8 @@ procedure Test.0 ():
                 jump Test.15 Test.17;
         
     in
-    let Test.22 : Int1 = true;
-    if Test.22 then
+    let Test.21 : Int1 = true;
+    if Test.21 then
         let Test.6 : [C I64, C I64] = ClosureTag(Test.6) Test.4;
         jump Test.19 Test.6;
     else

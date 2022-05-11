@@ -10,8 +10,8 @@ Defs(
                 members: [
                     AbilityMember {
                         name: @8-11 "ab1",
-                        typ: @19-33 Where(
-                            @19-21 Function(
+                        typ: @14-33 Where(
+                            @14-21 Function(
                                 [
                                     @14-15 BoundVariable(
                                         "a",
@@ -47,8 +47,8 @@ Defs(
                 members: [
                     AbilityMember {
                         name: @43-46 "ab2",
-                        typ: @54-68 Where(
-                            @54-56 Function(
+                        typ: @49-68 Where(
+                            @49-56 Function(
                                 [
                                     @49-50 BoundVariable(
                                         "a",

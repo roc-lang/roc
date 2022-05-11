@@ -6,9 +6,6 @@
 #![allow(clippy::float_cmp)]
 
 #[macro_use]
-extern crate pretty_assertions;
-
-#[macro_use]
 extern crate indoc;
 
 /// Used in the with_larger_debug_stack() function, for tests that otherwise
@@ -19,9 +16,9 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 use test_mono_macros::*;
 
 use roc_collections::all::MutMap;
+use roc_load::Threading;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
-
 use roc_mono::ir::ProcLayout;
 
 const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
@@ -102,6 +99,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         Default::default(),
         TARGET_INFO,
         roc_reporting::report::RenderTarget::Generic,
+        Threading::Single,
     );
 
     let mut loaded = match loaded {
@@ -123,14 +121,12 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
     let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();
-    let mono_problems = loaded.mono_problems.remove(&home).unwrap_or_default();
 
     if !can_problems.is_empty() {
         println!("Ignoring {} canonicalization problems", can_problems.len());
     }
 
     assert!(type_problems.is_empty());
-    assert_eq!(mono_problems, Vec::new());
 
     debug_assert_eq!(exposed_to_host.values.len(), 1);
 
@@ -1233,6 +1229,7 @@ fn monomorphized_applied_tag() {
 }
 
 #[mono_test]
+#[ignore = "Cannot compile polymorphic closures yet"]
 fn aliased_polymorphic_closure() {
     indoc!(
         r#"
@@ -1284,6 +1281,23 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
 }
 
 #[mono_test]
+fn issue_2810() {
+    indoc!(
+        r#"
+        Command : [ Command Tool ]
+
+        Job : [ Job Command ]
+
+        Tool : [ SystemTool, FromJob Job ]
+
+        a : Job
+        a = Job (Command (FromJob (Job (Command SystemTool))))
+        a
+        "#
+    )
+}
+
+#[mono_test]
 fn issue_2811() {
     indoc!(
         r#"
@@ -1306,9 +1320,58 @@ fn specialize_ability_call() {
         Id := U64
 
         hash : Id -> U64
-        hash = \$Id n -> n
+        hash = \@Id n -> n
 
-        main = hash ($Id 1234)
+        main = hash (@Id 1234)
+        "#
+    )
+}
+
+#[mono_test]
+fn opaque_assign_to_symbol() {
+    indoc!(
+        r#"
+        app "test" provides [ out ] to "./platform"
+
+        Variable := U8
+
+        fromUtf8 : U8 -> Result Variable [ InvalidVariableUtf8 ]
+        fromUtf8 = \char ->
+            Ok (@Variable char)
+
+        out = fromUtf8 98
+        "#
+    )
+}
+
+#[mono_test]
+fn encode() {
+    indoc!(
+        r#"
+        app "test" provides [ myU8Bytes ] to "./platform"
+
+        Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+
+        Encoding has
+          toEncoder : val -> Encoder fmt | val has Encoding, fmt has Format
+
+        Format has
+          u8 : U8 -> Encoder fmt | fmt has Format
+
+
+        Linear := {}
+
+        # impl Format for Linear
+        u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
+
+        MyU8 := U8
+
+        # impl Encoding for MyU8
+        toEncoder = \@MyU8 n -> u8 n
+
+        myU8Bytes =
+            when toEncoder (@MyU8 15) is
+                @Encoder doEncode -> doEncode [] (@Linear {})
         "#
     )
 }
@@ -1331,3 +1394,50 @@ fn specialize_ability_call() {
 //         "#
 //     )
 // }
+
+#[mono_test]
+fn list_map_closure_borrows() {
+    indoc!(
+        r#"
+        app "test" provides [ out ] to "./platform"
+
+        list = [ Str.concat "lllllllllllllllllllllooooooooooong" "g" ]
+
+        example1 = List.map list \string -> Str.repeat string 2
+
+        out =
+            when List.get example1 0 is
+                Ok s -> s
+                Err _ -> "Hello, World!\n"
+        "#
+    )
+}
+
+#[mono_test]
+fn list_map_closure_owns() {
+    indoc!(
+        r#"
+        app "test" provides [ out ] to "./platform"
+
+        list = [ Str.concat "lllllllllllllllllllllooooooooooong" "g" ]
+
+        example2 = List.map list \string -> Str.concat string "!"
+
+        out =
+            when List.get example2 0 is
+                Ok s -> s
+                Err _ -> "Hello, World!\n"
+        "#
+    )
+}
+
+#[mono_test]
+fn list_sort_asc() {
+    indoc!(
+        r#"
+        app "test" provides [ out ] to "./platform"
+
+        out = List.sortAsc [ 4,3,2,1 ]
+        "#
+    )
+}

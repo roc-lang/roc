@@ -10,7 +10,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{
-    AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type, TypeExtension,
+    AliasKind, Category, OptAbleType, PReason, PatternCategory, Reason, RecordField, Type,
+    TypeExtension,
 };
 
 #[derive(Default)]
@@ -18,6 +19,7 @@ pub struct PatternState {
     pub headers: SendMap<Symbol, Loc<Type>>,
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
+    pub delayed_is_open_constraints: Vec<Constraint>,
 }
 
 /// If there is a type annotation, the pattern state headers can be optimized by putting the
@@ -180,7 +182,7 @@ pub fn constrain_pattern(
             // so, we know that "x" (in this case, a tag union) must be open.
             if could_be_a_tag_union(expected.get_type_ref()) {
                 state
-                    .constraints
+                    .delayed_is_open_constraints
                     .push(constraints.is_open_type(expected.get_type()));
             }
         }
@@ -191,7 +193,7 @@ pub fn constrain_pattern(
         Identifier(symbol) | Shadowed(_, _, symbol) => {
             if could_be_a_tag_union(expected.get_type_ref()) {
                 state
-                    .constraints
+                    .delayed_is_open_constraints
                     .push(constraints.is_open_type(expected.get_type_ref().clone()));
             }
 
@@ -494,6 +496,9 @@ pub fn constrain_pattern(
             state.vars.push(*ext_var);
             state.constraints.push(whole_con);
             state.constraints.push(tag_con);
+            state
+                .constraints
+                .append(&mut state.delayed_is_open_constraints);
         }
 
         UnwrappedOpaque {
@@ -510,7 +515,13 @@ pub fn constrain_pattern(
 
             let opaque_type = Type::Alias {
                 symbol: *opaque,
-                type_arguments: type_arguments.clone(),
+                type_arguments: type_arguments
+                    .iter()
+                    .map(|v| OptAbleType {
+                        typ: Type::Variable(v.var),
+                        opt_ability: v.opt_ability,
+                    })
+                    .collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: Box::new(arg_pattern_type.clone()),
                 kind: AliasKind::Opaque,
@@ -567,9 +578,7 @@ pub fn constrain_pattern(
                 .vars
                 .extend_from_slice(&[*arg_pattern_var, *whole_var]);
             // Also add the fresh variables we created for the type argument and lambda sets
-            state.vars.extend(type_arguments.iter().map(|(_, t)| {
-                t.expect_variable("all type arguments should be fresh variables here")
-            }));
+            state.vars.extend(type_arguments.iter().map(|v| v.var));
             state.vars.extend(lambda_set_variables.iter().map(|v| {
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));

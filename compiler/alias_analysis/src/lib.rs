@@ -26,8 +26,16 @@ pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), &proc.ret_layout)
 }
 
-const DEBUG: bool = false;
-const SIZE: usize = if DEBUG { 50 } else { 16 };
+#[inline(always)]
+fn debug() -> bool {
+    use roc_debug_flags::{dbg_do, ROC_DEBUG_ALIAS_ANALYSIS};
+    dbg_do!(ROC_DEBUG_ALIAS_ANALYSIS, {
+        return true;
+    });
+    false
+}
+
+const SIZE: usize = 16;
 
 #[derive(Debug, Clone, Copy, Hash)]
 struct TagUnionId(u64);
@@ -87,7 +95,7 @@ where
         *target = *source;
     }
 
-    if DEBUG {
+    if debug() {
         for (i, c) in (format!("{:?}", symbol)).chars().take(25).enumerate() {
             name_bytes[25 + i] = c as u8;
         }
@@ -175,7 +183,7 @@ where
                 }
             }
 
-            if DEBUG {
+            if debug() {
                 eprintln!(
                     "{:?}: {:?} with {:?} args",
                     proc.name,
@@ -239,7 +247,7 @@ where
         p.build()?
     };
 
-    if DEBUG {
+    if debug() {
         eprintln!("{}", program.to_source_string());
     }
 
@@ -279,7 +287,8 @@ fn build_entry_point(
         let block = builder.add_block();
 
         // to the modelling language, the arguments appear out of thin air
-        let argument_type = build_tuple_type(&mut builder, layout.arguments)?;
+        let argument_type =
+            build_tuple_type(&mut builder, layout.arguments, &WhenRecursive::Unreachable)?;
 
         // does not make any assumptions about the input
         // let argument = builder.add_unknown_with(block, &[], argument_type)?;
@@ -308,7 +317,11 @@ fn build_entry_point(
 
         let block = builder.add_block();
 
-        let type_id = layout_spec(&mut builder, &Layout::struct_no_name_order(layouts))?;
+        let type_id = layout_spec(
+            &mut builder,
+            &Layout::struct_no_name_order(layouts),
+            &WhenRecursive::Unreachable,
+        )?;
 
         let argument = builder.add_unknown_with(block, &[], type_id)?;
 
@@ -352,8 +365,9 @@ fn proc_spec<'a>(proc: &Proc<'a>) -> Result<(FuncDef, MutSet<UnionLayout<'a>>)> 
     let arg_type_id = layout_spec(
         &mut builder,
         &Layout::struct_no_name_order(&argument_layouts),
+        &WhenRecursive::Unreachable,
     )?;
-    let ret_type_id = layout_spec(&mut builder, &proc.ret_layout)?;
+    let ret_type_id = layout_spec(&mut builder, &proc.ret_layout, &WhenRecursive::Unreachable)?;
 
     let spec = builder.build(arg_type_id, ret_type_id, root)?;
 
@@ -457,10 +471,14 @@ fn stmt_spec<'a>(
             let mut type_ids = Vec::new();
 
             for p in parameters.iter() {
-                type_ids.push(layout_spec(builder, &p.layout)?);
+                type_ids.push(layout_spec(
+                    builder,
+                    &p.layout,
+                    &WhenRecursive::Unreachable,
+                )?);
             }
 
-            let ret_type_id = layout_spec(builder, layout)?;
+            let ret_type_id = layout_spec(builder, layout, &WhenRecursive::Unreachable)?;
 
             let jp_arg_type_id = builder.add_tuple_type(&type_ids)?;
 
@@ -500,14 +518,14 @@ fn stmt_spec<'a>(
             builder.add_sub_block(block, BlockExpr(cont_block, cont_value_id))
         }
         Jump(id, symbols) => {
-            let ret_type_id = layout_spec(builder, layout)?;
+            let ret_type_id = layout_spec(builder, layout, &WhenRecursive::Unreachable)?;
             let argument = build_tuple_value(builder, env, block, symbols)?;
 
             let jpid = env.join_points[id];
             builder.add_jump(block, jpid, argument, ret_type_id)
         }
         RuntimeError(_) => {
-            let type_id = layout_spec(builder, layout)?;
+            let type_id = layout_spec(builder, layout, &WhenRecursive::Unreachable)?;
 
             builder.add_terminate(block, type_id)
         }
@@ -556,11 +574,15 @@ fn build_recursive_tuple_type(
     builder.add_tuple_type(&field_types)
 }
 
-fn build_tuple_type(builder: &mut impl TypeContext, layouts: &[Layout]) -> Result<TypeId> {
+fn build_tuple_type(
+    builder: &mut impl TypeContext,
+    layouts: &[Layout],
+    when_recursive: &WhenRecursive,
+) -> Result<TypeId> {
     let mut field_types = Vec::new();
 
     for field in layouts.iter() {
-        field_types.push(layout_spec(builder, field)?);
+        field_types.push(layout_spec(builder, field, when_recursive)?);
     }
 
     builder.add_tuple_type(&field_types)
@@ -691,7 +713,7 @@ fn call_spec(
                 .map(|symbol| env.symbols[symbol])
                 .collect();
 
-            let result_type = layout_spec(builder, ret_layout)?;
+            let result_type = layout_spec(builder, ret_layout, &WhenRecursive::Unreachable)?;
 
             builder.add_unknown_with(block, &arguments, result_type)
         }
@@ -761,7 +783,8 @@ fn call_spec(
                     };
 
                     let state_layout = argument_layouts[0];
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
                     let init_state = state;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
@@ -782,7 +805,8 @@ fn call_spec(
                     };
 
                     let state_layout = argument_layouts[0];
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
                     let init_state = state;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
@@ -806,7 +830,8 @@ fn call_spec(
                     };
 
                     let state_layout = argument_layouts[0];
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
                     let init_state = state;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
@@ -828,10 +853,12 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, return_layout)?;
+                    let output_element_type =
+                        layout_spec(builder, return_layout, &WhenRecursive::Unreachable)?;
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
 
@@ -851,10 +878,12 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, return_layout)?;
+                    let output_element_type =
+                        layout_spec(builder, return_layout, &WhenRecursive::Unreachable)?;
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
 
@@ -879,7 +908,8 @@ fn call_spec(
                     };
 
                     let state_layout = Layout::Builtin(Builtin::List(&argument_layouts[0]));
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
                     let init_state = list;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
@@ -903,10 +933,12 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, return_layout)?;
+                    let output_element_type =
+                        layout_spec(builder, return_layout, &WhenRecursive::Unreachable)?;
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
 
@@ -936,10 +968,12 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, return_layout)?;
+                    let output_element_type =
+                        layout_spec(builder, return_layout, &WhenRecursive::Unreachable)?;
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
 
@@ -975,10 +1009,12 @@ fn call_spec(
                         list_append(builder, block, update_mode_var, state, new_element)
                     };
 
-                    let output_element_type = layout_spec(builder, return_layout)?;
+                    let output_element_type =
+                        layout_spec(builder, return_layout, &WhenRecursive::Unreachable)?;
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
 
@@ -1010,7 +1046,8 @@ fn call_spec(
                     };
 
                     let state_layout = Layout::Builtin(Builtin::List(&argument_layouts[0]));
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
                     let init_state = list;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
@@ -1087,11 +1124,13 @@ fn call_spec(
                         )
                     };
 
-                    let output_element_type = layout_spec(builder, &output_element_layout)?;
+                    let output_element_type =
+                        layout_spec(builder, &output_element_layout, &WhenRecursive::Unreachable)?;
                     let init_state = new_list(builder, block, output_element_type)?;
 
                     let state_layout = Layout::Builtin(Builtin::List(&output_element_layout));
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
@@ -1108,7 +1147,8 @@ fn call_spec(
                     };
 
                     let state_layout = Layout::Builtin(Builtin::Bool);
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
 
                     let init_state = new_num(builder, block)?;
 
@@ -1127,7 +1167,8 @@ fn call_spec(
                     };
 
                     let state_layout = Layout::Builtin(Builtin::Bool);
-                    let state_type = layout_spec(builder, &state_layout)?;
+                    let state_type =
+                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
 
                     let init_state = new_num(builder, block)?;
 
@@ -1139,7 +1180,8 @@ fn call_spec(
                     // ListFindUnsafe returns { value: v, found: Bool=Int1 }
                     let output_layouts = vec![argument_layouts[0], Layout::Builtin(Builtin::Bool)];
                     let output_layout = Layout::struct_no_name_order(&output_layouts);
-                    let output_type = layout_spec(builder, &output_layout)?;
+                    let output_type =
+                        layout_spec(builder, &output_layout, &WhenRecursive::Unreachable)?;
 
                     let loop_body = |builder: &mut FuncDefBuilder, block, output| {
                         let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
@@ -1201,7 +1243,7 @@ fn lowlevel_spec(
 ) -> Result<ValueId> {
     use LowLevel::*;
 
-    let type_id = layout_spec(builder, layout)?;
+    let type_id = layout_spec(builder, layout, &WhenRecursive::Unreachable)?;
     let mode = update_mode.to_bytes();
     let update_mode_var = UpdateModeVar(&mode);
 
@@ -1230,7 +1272,7 @@ fn lowlevel_spec(
 
             builder.add_sub_block(block, sub_block)
         }
-        NumToFloat => {
+        NumToFrac => {
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
         }
@@ -1323,8 +1365,8 @@ fn lowlevel_spec(
         }
         DictEmpty => match layout {
             Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                let key_id = layout_spec(builder, key_layout)?;
-                let value_id = layout_spec(builder, value_layout)?;
+                let key_id = layout_spec(builder, key_layout, &WhenRecursive::Unreachable)?;
+                let value_id = layout_spec(builder, value_layout, &WhenRecursive::Unreachable)?;
                 new_dict(builder, block, key_id, value_id)
             }
             _ => unreachable!("empty array does not have a list layout"),
@@ -1367,7 +1409,7 @@ fn lowlevel_spec(
             // TODO overly pessimstic
             let arguments: Vec<_> = arguments.iter().map(|symbol| env.symbols[symbol]).collect();
 
-            let result_type = layout_spec(builder, layout)?;
+            let result_type = layout_spec(builder, layout, &WhenRecursive::Unreachable)?;
 
             builder.add_unknown_with(block, &arguments, result_type)
         }
@@ -1478,7 +1520,8 @@ fn expr_spec<'a>(
 
             let value_id = match tag_layout {
                 UnionLayout::NonRecursive(tags) => {
-                    let variant_types = non_recursive_variant_types(builder, tags)?;
+                    let variant_types =
+                        non_recursive_variant_types(builder, tags, &WhenRecursive::Unreachable)?;
                     let value_id = build_tuple_value(builder, env, block, arguments)?;
                     return builder.add_make_union(block, &variant_types, *tag_id as u32, value_id);
                 }
@@ -1592,7 +1635,7 @@ fn expr_spec<'a>(
             builder.add_get_tuple_field(block, value_id, *index as u32)
         }
         Array { elem_layout, elems } => {
-            let type_id = layout_spec(builder, elem_layout)?;
+            let type_id = layout_spec(builder, elem_layout, &WhenRecursive::Unreachable)?;
 
             let list = new_list(builder, block, type_id)?;
 
@@ -1619,19 +1662,19 @@ fn expr_spec<'a>(
 
         EmptyArray => match layout {
             Layout::Builtin(Builtin::List(element_layout)) => {
-                let type_id = layout_spec(builder, element_layout)?;
+                let type_id = layout_spec(builder, element_layout, &WhenRecursive::Unreachable)?;
                 new_list(builder, block, type_id)
             }
             _ => unreachable!("empty array does not have a list layout"),
         },
         Reset { symbol, .. } => {
-            let type_id = layout_spec(builder, layout)?;
+            let type_id = layout_spec(builder, layout, &WhenRecursive::Unreachable)?;
             let value_id = env.symbols[symbol];
 
             builder.add_unknown_with(block, &[value_id], type_id)
         }
         RuntimeErrorFunction(_) => {
-            let type_id = layout_spec(builder, layout)?;
+            let type_id = layout_spec(builder, layout, &WhenRecursive::Unreachable)?;
 
             builder.add_terminate(block, type_id)
         }
@@ -1658,18 +1701,24 @@ fn literal_spec(
     }
 }
 
-fn layout_spec(builder: &mut impl TypeContext, layout: &Layout) -> Result<TypeId> {
-    layout_spec_help(builder, layout, &WhenRecursive::Unreachable)
+fn layout_spec(
+    builder: &mut impl TypeContext,
+    layout: &Layout,
+    when_recursive: &WhenRecursive,
+) -> Result<TypeId> {
+    layout_spec_help(builder, layout, when_recursive)
 }
 
 fn non_recursive_variant_types(
     builder: &mut impl TypeContext,
     tags: &[&[Layout]],
+    // If there is a recursive pointer latent within this layout, coming from a containing layout.
+    when_recursive: &WhenRecursive,
 ) -> Result<Vec<TypeId>> {
     let mut result = Vec::with_capacity(tags.len());
 
     for tag in tags.iter() {
-        result.push(build_tuple_type(builder, tag)?);
+        result.push(build_tuple_type(builder, tag, when_recursive)?);
     }
 
     Ok(result)
@@ -1701,7 +1750,7 @@ fn layout_spec_help(
                     builder.add_tuple_type(&[])
                 }
                 UnionLayout::NonRecursive(tags) => {
-                    let variant_types = non_recursive_variant_types(builder, tags)?;
+                    let variant_types = non_recursive_variant_types(builder, tags, when_recursive)?;
                     builder.add_union_type(&variant_types)
                 }
                 UnionLayout::Recursive(_)

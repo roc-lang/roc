@@ -154,7 +154,7 @@ mod test_can {
         let region = Region::zero();
 
         assert_can_runtime_error(
-            string.clone(),
+            string,
             RuntimeError::InvalidFloat(FloatErrorKind::Error, region, string.into()),
         );
     }
@@ -373,11 +373,9 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
+        assert_eq!(problems.len(), 1);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            // Due to one of the shadows
-            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -396,11 +394,9 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
+        assert_eq!(problems.len(), 1);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            // Due to one of the shadows
-            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -419,12 +415,10 @@ mod test_can {
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
+        assert_eq!(problems.len(), 1);
         println!("{:#?}", problems);
         assert!(problems.iter().all(|problem| match problem {
             Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
-            // Due to one of the shadows
-            Problem::UnusedDef(..) => true,
             _ => false,
         }));
     }
@@ -654,34 +648,32 @@ mod test_can {
             _ => false,
         }));
 
-        assert!(match loc_expr.value {
-            Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue { .. }) => true,
-            _ => false,
-        });
+        assert!(matches!(
+            loc_expr.value,
+            Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue { .. })
+        ));
     }
 
     // TAIL CALLS
     fn get_closure(expr: &Expr, i: usize) -> roc_can::expr::Recursive {
         match expr {
-            LetRec(assignments, body, _) => {
-                match &assignments.get(i).map(|def| &def.loc_expr.value) {
-                    Some(Closure(ClosureData {
-                        recursive: recursion,
-                        ..
-                    })) => recursion.clone(),
-                    Some(other) => {
-                        panic!("assignment at {} is not a closure, but a {:?}", i, other)
-                    }
-                    None => {
-                        if i > 0 {
-                            get_closure(&body.value, i - 1)
-                        } else {
-                            panic!("Looking for assignment at {} but the list is too short", i)
-                        }
+            LetRec(assignments, body) => match &assignments.get(i).map(|def| &def.loc_expr.value) {
+                Some(Closure(ClosureData {
+                    recursive: recursion,
+                    ..
+                })) => *recursion,
+                Some(other) => {
+                    panic!("assignment at {} is not a closure, but a {:?}", i, other)
+                }
+                None => {
+                    if i > 0 {
+                        get_closure(&body.value, i - 1)
+                    } else {
+                        panic!("Looking for assignment at {} but the list is too short", i)
                     }
                 }
-            }
-            LetNonRec(def, body, _) => {
+            },
+            LetNonRec(def, body) => {
                 if i > 0 {
                     // recurse in the body (not the def!)
                     get_closure(&body.value, i - 1)
@@ -690,7 +682,7 @@ mod test_can {
                         Closure(ClosureData {
                             recursive: recursion,
                             ..
-                        }) => recursion.clone(),
+                        }) => *recursion,
                         other => {
                             panic!("assignment at {} is not a closure, but a {:?}", i, other)
                         }
@@ -741,10 +733,9 @@ mod test_can {
         } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems, Vec::new());
-        assert!(problems.iter().all(|problem| match problem {
-            Problem::UnusedDef(_, _) => true,
-            _ => false,
-        }));
+        assert!(problems
+            .iter()
+            .all(|problem| matches!(problem, Problem::UnusedDef(_, _))));
 
         let actual = loc_expr.value;
 
@@ -918,11 +909,7 @@ mod test_can {
 
         assert_eq!(problems, Vec::new());
 
-        let is_circular_def = if let RuntimeError(RuntimeError::CircularDef(_)) = loc_expr.value {
-            true
-        } else {
-            false
-        };
+        let is_circular_def = matches!(loc_expr.value, RuntimeError(RuntimeError::CircularDef(_)));
 
         assert_eq!(is_circular_def, false);
     }
@@ -946,11 +933,7 @@ mod test_can {
             ..
         } = can_expr_with(&arena, home, src);
 
-        let is_circular_def = if let RuntimeError(RuntimeError::CircularDef(_)) = loc_expr.value {
-            true
-        } else {
-            false
-        };
+        let is_circular_def = matches!(loc_expr.value, RuntimeError(RuntimeError::CircularDef(_)));
 
         let problem = Problem::RuntimeError(RuntimeError::CircularDef(vec![CycleEntry {
             symbol: interns.symbol(home, "x".into()),

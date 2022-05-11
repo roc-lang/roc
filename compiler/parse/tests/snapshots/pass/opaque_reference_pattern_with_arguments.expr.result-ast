@@ -9,7 +9,7 @@ When(
                 @12-20 SpaceBefore(
                     Apply(
                         @12-16 OpaqueRef(
-                            "$Add",
+                            "@Add",
                         ),
                         [
                             @17-18 Identifier(

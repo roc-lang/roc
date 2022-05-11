@@ -8,11 +8,13 @@ edition = "2018"
 [dependencies]
 roc_collections = { path = "../collections" }
 roc_error_macros = { path = "../../error_macros" }
+roc_exhaustive = { path = "../exhaustive" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_unify = { path = "../unify" }
+roc_debug_flags = { path = "../debug_flags" }
 arrayvec = "0.7.2"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 
@@ -28,3 +30,5 @@ pretty_assertions = "1.0.0"
 indoc = "1.0.3"
 tempfile = "3.2.0"
 bumpalo = { version = "3.8.0", features = ["collections"] }
+regex = "1.5.5"
+lazy_static = "1.4.0"

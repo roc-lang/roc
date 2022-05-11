@@ -1,9 +1,7 @@
 use crate::target::{arch_str, target_zig_str};
-#[cfg(feature = "llvm")]
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
-// #[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
 use std::env;
@@ -72,16 +70,12 @@ fn find_zig_str_path() -> PathBuf {
 }
 
 fn find_wasi_libc_path() -> PathBuf {
-    let wasi_libc_path = PathBuf::from("compiler/builtins/bitcode/wasi-libc.a");
+    use wasi_libc_sys::WASI_LIBC_PATH;
 
-    if std::path::Path::exists(&wasi_libc_path) {
-        return wasi_libc_path;
-    }
-
-    // when running the tests, we start in the /cli directory
-    let wasi_libc_path = PathBuf::from("../compiler/builtins/bitcode/wasi-libc.a");
-    if std::path::Path::exists(&wasi_libc_path) {
-        return wasi_libc_path;
+    // Environment variable defined in wasi-libc-sys/build.rs
+    let wasi_libc_pathbuf = PathBuf::from(WASI_LIBC_PATH);
+    if std::path::Path::exists(&wasi_libc_pathbuf) {
+        return wasi_libc_pathbuf;
     }
 
     panic!("cannot find `wasi-libc.a`")
@@ -1065,14 +1059,13 @@ fn link_windows(
     todo!("Add windows support to the surgical linker. See issue #2608.")
 }
 
-#[cfg(feature = "llvm")]
 pub fn module_to_dylib(
     module: &inkwell::module::Module,
     target: &Triple,
     opt_level: OptLevel,
 ) -> Result<Library, Error> {
     use crate::target::{self, convert_opt_level};
-    use inkwell::targets::{CodeModel, FileType, RelocMode};
+    use inkwell::targets::{FileType, RelocMode};
 
     let dir = tempfile::tempdir().unwrap();
     let filename = PathBuf::from("Test.roc");
@@ -1083,9 +1076,8 @@ pub fn module_to_dylib(
 
     // Emit the .o file using position-independent code (PIC) - needed for dylibs
     let reloc = RelocMode::PIC;
-    let model = CodeModel::Default;
     let target_machine =
-        target::target_machine(target, convert_opt_level(opt_level), reloc, model).unwrap();
+        target::target_machine(target, convert_opt_level(opt_level), reloc).unwrap();
 
     target_machine
         .write_to_file(module, FileType::Object, &app_o_file)
@@ -1104,6 +1096,21 @@ pub fn module_to_dylib(
 
     // Load the dylib
     let path = dylib_path.as_path().to_str().unwrap();
+
+    if matches!(target.architecture, Architecture::Aarch64(_)) {
+        // On AArch64 darwin machines, calling `ldopen` on Roc-generated libs from multiple threads
+        // sometimes fails with
+        //   cannot dlopen until fork() handlers have completed
+        // This may be due to codesigning. In any case, spinning until we are able to dlopen seems
+        // to be okay.
+        loop {
+            match unsafe { Library::new(path) } {
+                Ok(lib) => return Ok(lib),
+                Err(Error::DlOpen { .. }) => continue,
+                Err(other) => return Err(other),
+            }
+        }
+    }
 
     unsafe { Library::new(path) }
 }

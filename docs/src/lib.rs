@@ -6,13 +6,12 @@ use html::mark_node_to_html;
 use roc_can::scope::Scope;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::slow_pool::SlowPool;
-use roc_collections::all::MutMap;
 use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::DocEntry::DocDef;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
-use roc_load::{LoadedModule, LoadingProblem};
-use roc_module::symbol::{IdentIds, Interns, ModuleId};
+use roc_load::{LoadedModule, LoadingProblem, Threading};
+use roc_module::symbol::{IdentIdsByModule, Interns, ModuleId};
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::state::State;
 use roc_region::all::Region;
@@ -22,11 +21,13 @@ use std::path::{Path, PathBuf};
 mod docs_error;
 mod html;
 
-pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
+const BUILD_DIR: &str = "./generated-docs";
+
+pub fn generate_docs_html(filenames: Vec<PathBuf>) {
+    let build_dir = Path::new(BUILD_DIR);
     let loaded_modules = load_modules_for_files(filenames);
 
-    //
-    // TODO: get info from a file like "elm.json"
+    // TODO: get info from a package module; this is all hardcoded for now.
     let mut package = roc_load::docs::Documentation {
         name: "roc/builtins".to_string(),
         version: "1.0.0".to_string(),
@@ -58,49 +59,61 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>, build_dir: &Path) {
     .expect("TODO gracefully handle failing to make the favicon");
 
     let template_html = include_str!("./static/index.html")
-        .replace("<!-- search.js -->", &format!("{}search.js", base_url()))
-        .replace("<!-- styles.css -->", &format!("{}styles.css", base_url()))
-        .replace(
-            "<!-- favicon.svg -->",
-            &format!("{}favicon.svg", base_url()),
-        )
+        .replace("<!-- search.js -->", "/search.js")
+        .replace("<!-- styles.css -->", "/styles.css")
+        .replace("<!-- favicon.svg -->", "/favicon.svg")
         .replace(
             "<!-- Module links -->",
             render_sidebar(package.modules.iter().flat_map(|loaded_module| {
-                loaded_module.documentation.values().map(move |d| {
-                    let exposed_values = loaded_module
-                        .exposed_values
-                        .iter()
-                        .map(|symbol| symbol.ident_str(&loaded_module.interns).to_string())
-                        .collect::<Vec<String>>();
+                loaded_module
+                    .documentation
+                    .iter()
+                    .filter_map(move |(module_id, module)| {
+                        // TODO it seems this `documentation` dictionary has entries for
+                        // every module, but only the current module has any info in it.
+                        // We disregard the others, but probably this shouldn't bother
+                        // being a hash map in the first place if only one of its entries
+                        // actually has interesting information in it?
+                        if *module_id == loaded_module.module_id {
+                            let exposed_values = loaded_module
+                                .exposed_values
+                                .iter()
+                                .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
+                                .collect::<Vec<String>>();
 
-                    (exposed_values, d)
-                })
+                            Some((module, exposed_values))
+                        } else {
+                            None
+                        }
+                    })
             }))
             .as_str(),
         );
 
     // Write each package's module docs html file
     for loaded_module in package.modules.iter_mut() {
-        for module_docs in loaded_module.documentation.values() {
-            let module_dir = build_dir.join(module_docs.name.replace('.', "/").as_str());
+        for (module_id, module_docs) in loaded_module.documentation.iter() {
+            if *module_id == loaded_module.module_id {
+                let module_dir = build_dir.join(module_docs.name.replace('.', "/").as_str());
 
-            fs::create_dir_all(&module_dir)
-                .expect("TODO gracefully handle not being able to create the module dir");
+                fs::create_dir_all(&module_dir)
+                    .expect("TODO gracefully handle not being able to create the module dir");
 
-            let rendered_module = template_html
-                .replace(
-                    "<!-- Package Name and Version -->",
-                    render_name_and_version(package.name.as_str(), package.version.as_str())
-                        .as_str(),
-                )
-                .replace(
-                    "<!-- Module Docs -->",
-                    render_module_documentation(module_docs, loaded_module).as_str(),
+                let rendered_module = template_html
+                    .replace(
+                        "<!-- Package Name and Version -->",
+                        render_name_and_version(package.name.as_str(), package.version.as_str())
+                            .as_str(),
+                    )
+                    .replace(
+                        "<!-- Module Docs -->",
+                        render_module_documentation(module_docs, loaded_module).as_str(),
+                    );
+
+                fs::write(module_dir.join("index.html"), rendered_module).expect(
+                    "TODO gracefully handle failing to write index.html inside module's dir",
                 );
-
-            fs::write(module_dir.join("index.html"), rendered_module)
-                .expect("TODO gracefully handle failing to write html");
+            }
         }
     }
 
@@ -336,12 +349,12 @@ fn render_name_and_version(name: &str, version: &str) -> String {
     buf
 }
 
-fn render_sidebar<'a, I: Iterator<Item = (Vec<String>, &'a ModuleDocumentation)>>(
+fn render_sidebar<'a, I: Iterator<Item = (&'a ModuleDocumentation, Vec<String>)>>(
     modules: I,
 ) -> String {
     let mut buf = String::new();
 
-    for (exposed_values, module) in modules {
+    for (module, exposed_values) in modules {
         let mut sidebar_entry_content = String::new();
 
         let name = module.name.as_str();
@@ -412,7 +425,7 @@ fn render_sidebar<'a, I: Iterator<Item = (Vec<String>, &'a ModuleDocumentation)>
 
 pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
     let arena = Bump::new();
-    let mut modules = vec![];
+    let mut modules = Vec::with_capacity(filenames.len());
 
     for filename in filenames {
         let mut src_dir = filename.clone();
@@ -425,11 +438,12 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
             Default::default(),
             roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
             roc_reporting::report::RenderTarget::ColorTerminal,
+            Threading::AllAvailable,
         ) {
             Ok(loaded) => modules.push(loaded),
             Err(LoadingProblem::FormattedReport(report)) => {
-                println!("{}", report);
-                panic!();
+                eprintln!("{}", report);
+                std::process::exit(1);
             }
             Err(e) => panic!("{:?}", e),
         }
@@ -711,7 +725,7 @@ struct DocUrl {
 fn doc_url<'a>(
     home: ModuleId,
     exposed_values: &[&str],
-    dep_idents: &MutMap<ModuleId, IdentIds>,
+    dep_idents: &IdentIdsByModule,
     scope: &Scope,
     interns: &'a Interns,
     mut module_name: &'a str,
@@ -844,8 +858,8 @@ fn markdown_to_html(
                             }
                         }
                     }
-                    Ok((_, Ident::GlobalTag(type_name), _)) => {
-                        // This looks like a global tag name, but it could
+                    Ok((_, Ident::Tag(type_name), _)) => {
+                        // This looks like a tag name, but it could
                         // be a type alias that's in scope, e.g. [I64]
                         let DocUrl { url, title } = doc_url(
                             loaded_module.module_id,

@@ -5,8 +5,6 @@ license = "UPL-1.0"
 authors = ["The Roc Contributors"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 pulldown-cmark = { version = "0.8.0", default-features = false }
 roc_ast = { path = "../ast" }
@@ -28,6 +26,3 @@ peg = "0.8.0"
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"
-tempfile = "3.2.0"
-uuid = { version = "0.8.2", features = ["v4"] }
-indoc = "1.0.3"

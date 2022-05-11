@@ -328,7 +328,7 @@ fn return_unnamed_fn() {
         indoc!(
             r#"
             wrapper = \{} ->
-                alwaysFloatIdentity : Int * -> (Float a -> Float a)
+                alwaysFloatIdentity : Int * -> (Frac a -> Frac a)
                 alwaysFloatIdentity = \_ ->
                     (\a -> a)
 
@@ -590,6 +590,27 @@ fn top_level_constant() {
         ),
         3.1415 + 3.1415,
         f64
+    );
+}
+
+#[test]
+#[ignore]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn top_level_destructure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            {a, b} = { a: 1, b: 2 }
+
+            main =
+
+                a + b
+                "#
+        ),
+        3,
+        i64
     );
 }
 
@@ -1113,7 +1134,7 @@ fn io_poc_effect() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             succeed : a -> Effect a
             succeed = \x -> @Effect \{} -> x
@@ -1172,7 +1193,7 @@ fn return_wrapped_function_pointer() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             foo : Effect {}
             foo = @Effect \{} -> {}
@@ -1217,7 +1238,7 @@ fn return_wrapped_closure() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             foo : Effect {}
             foo =
@@ -1799,7 +1820,7 @@ fn unified_empty_closure_bool() {
                     A -> (\_ -> 3.14)
                     B -> (\_ -> 3.14)
 
-            main : Float *
+            main : Frac *
             main =
                 (foo {}) 0
             "#
@@ -1825,7 +1846,7 @@ fn unified_empty_closure_byte() {
                     B -> (\_ -> 3.14)
                     C -> (\_ -> 3.14)
 
-            main : Float *
+            main : Frac *
             main =
                 (foo {}) 0
             "#
@@ -1843,7 +1864,7 @@ fn task_always_twice() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             effectAlways : a -> Effect a
             effectAlways = \x ->
@@ -1869,7 +1890,7 @@ fn task_always_twice() {
                         Ok x -> transform x
                         Err e -> fail e
 
-            main : Task {} (Float *)
+            main : Task {} (Frac *)
             main = after (always "foo") (\_ -> always {})
 
             "#
@@ -1888,7 +1909,7 @@ fn wildcard_rigid() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             Task a err : Effect (Result a err)
 
@@ -1900,7 +1921,7 @@ fn wildcard_rigid() {
                 @Effect inner
 
 
-            main : Task {} (Float *)
+            main : Task {} (Frac *)
             main = always {}
             "#
         ),
@@ -1918,7 +1939,7 @@ fn alias_of_alias_with_type_arguments() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect a ]
+            Effect a := a
 
             Task a err : Effect (Result a err)
 
@@ -1929,7 +1950,7 @@ fn alias_of_alias_with_type_arguments() {
                 @Effect inner
 
 
-            main : Task {} (Float *)
+            main : Task {} (Frac *)
             main = always {}
             "#
         ),
@@ -1948,7 +1969,7 @@ fn todo_bad_error_message() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            Effect a : [ @Effect ({} -> a) ]
+            Effect a := {} -> a
 
             effectAlways : a -> Effect a
             effectAlways = \x ->
@@ -1961,7 +1982,7 @@ fn todo_bad_error_message() {
 
             Task a err : Effect (Result a err)
 
-            always : a -> Task a (Float *)
+            always : a -> Task a (Frac *)
             always = \x -> effectAlways (Ok x)
 
             # the problem is that this restricts to `Task {} *`
@@ -1976,7 +1997,7 @@ fn todo_bad_error_message() {
                         # but here it must be `forall b. Task b {}`
                         Err e -> fail e
 
-            main : Task {} (Float *)
+            main : Task {} (Frac *)
             main =
                 after (always "foo") (\_ -> always {})
             "#
@@ -2482,7 +2503,7 @@ fn backpassing_result() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = "Shadowing { original_region: @57-58, shadow: @74-75 Ident")]
 fn function_malformed_pattern() {
     assert_evals_to!(
@@ -2972,6 +2993,7 @@ fn mix_function_and_closure_level_of_indirection() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+#[cfg_attr(debug_assertions, ignore)] // this test stack-overflows the compiler in debug mode
 fn do_pass_bool_byte_closure_layout() {
     // see https://github.com/rtfeldman/roc/pull/1706
     // the distinction is actually important, dropping that info means some functions just get
@@ -3079,7 +3101,7 @@ fn nested_rigid_alias() {
             r#"
                 app "test" provides [ main ] to "./platform"
 
-                Identity a : [ @Identity a ]
+                Identity a := a
 
                 foo : Identity a -> Identity a
                 foo = \list ->
@@ -3106,15 +3128,15 @@ fn nested_rigid_tag_union() {
             r#"
                 app "test" provides [ main ] to "./platform"
 
-                foo : [ @Identity a ] -> [ @Identity a ]
+                foo : [ Identity a ] -> [ Identity a ]
                 foo = \list ->
-                    p2 : [ @Identity a ]
+                    p2 : [ Identity a ]
                     p2 = list
 
                     p2
 
                 main =
-                    when foo (@Identity "foo") is
+                    when foo (Identity "foo") is
                         _ -> "hello world"
             "#
         ),
@@ -3200,7 +3222,7 @@ fn recursively_build_effect() {
                         always {} |> after \_ -> nestHelp (m - 1)
 
 
-            XEffect a : [ @XEffect ({} -> a) ]
+            XEffect a := {} -> a
 
             always : a -> XEffect a
             always = \x -> @XEffect (\{} -> x)
@@ -3320,5 +3342,154 @@ fn box_and_unbox_tag_union() {
         ),
         (27, 1),
         (u8, u8)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn closure_called_in_its_defining_scope() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main : Str
+            main =
+                g : Str
+                g = "hello world"
+
+                getG : {} -> Str
+                getG = \{} -> g
+
+                getG {}
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
+    )
+}
+
+#[test]
+#[ignore]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_2894() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main : U32
+            main =
+                g : { x : U32 }
+                g = { x: 1u32 }
+
+                getG : {} -> { x : U32 }
+                getG = \{} -> g
+
+                h : {} -> U32
+                h = \{} -> (getG {}).x
+
+                h {}
+            "#
+        ),
+        1u32,
+        u32
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymorphic_def_used_in_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            a : I64 -> _
+            a = \g ->
+                f = { r: g, h: 32 }
+            
+                h1 : U64
+                h1 = (\{} -> f.h) {}
+                h1
+            a 1
+            "#
+        ),
+        32,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymorphic_lambda_set_usage() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            id1 = \x -> x
+            id2 = \y -> y
+            id = if True then id1 else id2
+
+            id 9u8
+            "#
+        ),
+        9,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymorphic_lambda_set_multiple_specializations() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            id1 = \x -> x
+            id2 = \y -> y
+            id = if True then id1 else id2
+
+            (id 9u8) + Num.toU8 (id 16u16)
+            "#
+        ),
+        25,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_map2_conslist() {
+    // this had an RC problem, https://github.com/rtfeldman/roc/issues/2968
+    assert_evals_to!(
+        indoc!(
+            r#"
+            ConsList a : [ Nil, Cons a (ConsList a) ]
+
+            x : List (ConsList Str)
+            x = List.map2 [ ] [ Nil ] Cons
+
+            when List.first x is
+                _ -> ""
+            "#
+        ),
+        RocStr::default(),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymorphic_lambda_captures_polymorphic_value() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = 2
+
+            f1 = \_ -> x
+
+            f = if True then f1 else f1
+            f {}
+            "#
+        ),
+        2,
+        u64
     )
 }

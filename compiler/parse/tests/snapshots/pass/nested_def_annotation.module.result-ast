@@ -14,7 +14,7 @@
                                         ann_pattern: @11-23 Identifier(
                                             "wrappedNotEq",
                                         ),
-                                        ann_type: @34-38 Function(
+                                        ann_type: @26-38 Function(
                                             [
                                                 @26-27 BoundVariable(
                                                     "a",

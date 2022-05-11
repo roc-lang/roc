@@ -3,7 +3,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
-    bool_type, box_type, dec_type, dict_type, f32_type, f64_type, float_type, i128_type, i16_type,
+    bool_type, box_type, dec_type, dict_type, f32_type, f64_type, frac_type, i128_type, i16_type,
     i32_type, i64_type, i8_type, int_type, list_type, nat_type, num_type, ordering_type,
     result_type, set_type, str_type, str_utf8_byte_problem_type, u128_type, u16_type, u32_type,
     u64_type, u8_type,
@@ -131,7 +131,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     fn overflow() -> SolvedType {
         SolvedType::TagUnion(
-            vec![(TagName::Global("Overflow".into()), vec![])],
+            vec![(TagName::Tag("Overflow".into()), vec![])],
             Box::new(SolvedType::Wildcard),
         )
     }
@@ -269,11 +269,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(ordering_type()),
     );
 
-    // toFloat : Num * -> Float *
+    // toFrac : Num * -> Frac *
     add_top_level_function_type!(
-        Symbol::NUM_TO_FLOAT,
+        Symbol::NUM_TO_FRAC,
         vec![num_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR2))),
+        Box::new(frac_type(flex(TVAR2))),
     );
 
     // isNegative : Num a -> Bool
@@ -312,7 +312,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     let div_by_zero = SolvedType::TagUnion(
-        vec![(TagName::Global("DivByZero".into()), vec![])],
+        vec![(TagName::Tag("DivByZero".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -393,16 +393,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(int_type(flex(TVAR2)))
     );
 
-    // rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // rem : Int a, Int a -> Int a
     add_top_level_function_type!(
         Symbol::NUM_REM,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
-        Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
+        Box::new(int_type(flex(TVAR1))),
     );
 
-    // mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
+    // remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
     add_top_level_function_type!(
-        Symbol::NUM_MOD_INT,
+        Symbol::NUM_REM_CHECKED,
         vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
         Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
@@ -476,7 +476,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     let out_of_bounds = SolvedType::TagUnion(
-        vec![(TagName::Global("OutOfBounds".into()), vec![])],
+        vec![(TagName::Tag("OutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -551,7 +551,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     let out_of_bounds = SolvedType::TagUnion(
-        vec![(TagName::Global("OutOfBounds".into()), vec![])],
+        vec![(TagName::Tag("OutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -667,98 +667,99 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(str_type())
     );
 
-    // Float module
+    // Frac module
 
-    // div : Float a, Float a -> Float a
+    // div : Frac a, Frac a -> Frac a
     add_top_level_function_type!(
-        Symbol::NUM_DIV_FLOAT,
-        vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1)))
+        Symbol::NUM_DIV_FRAC,
+        vec![frac_type(flex(TVAR1)), frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1)))
     );
 
-    // divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
+    // divChecked : Frac a, Frac a -> Result (Frac a) [ DivByZero ]*
     add_top_level_function_type!(
-        Symbol::NUM_DIV_FLOAT_CHECKED,
-        vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
-        Box::new(result_type(float_type(flex(TVAR1)), div_by_zero.clone())),
+        Symbol::NUM_DIV_FRAC_CHECKED,
+        vec![frac_type(flex(TVAR1)), frac_type(flex(TVAR1))],
+        Box::new(result_type(frac_type(flex(TVAR1)), div_by_zero)),
     );
 
-    // mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
-    add_top_level_function_type!(
-        Symbol::NUM_MOD_FLOAT,
-        vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
-        Box::new(result_type(float_type(flex(TVAR1)), div_by_zero)),
-    );
-
-    // sqrt : Float a -> Float a
-    let sqrt_of_negative = SolvedType::TagUnion(
-        vec![(TagName::Global("SqrtOfNegative".into()), vec![])],
-        Box::new(SolvedType::Wildcard),
-    );
-
+    // sqrt : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_SQRT,
-        vec![float_type(flex(TVAR1))],
-        Box::new(result_type(float_type(flex(TVAR1)), sqrt_of_negative)),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // log : Float a -> Float a
-    let log_needs_positive = SolvedType::TagUnion(
-        vec![(TagName::Global("LogNeedsPositive".into()), vec![])],
+    // sqrtChecked : Frac a -> Result (Frac a) [ SqrtOfNegative ]*
+    let sqrt_of_negative = SolvedType::TagUnion(
+        vec![(TagName::Tag("SqrtOfNegative".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
     add_top_level_function_type!(
-        Symbol::NUM_LOG,
-        vec![float_type(flex(TVAR1))],
-        Box::new(result_type(float_type(flex(TVAR1)), log_needs_positive)),
+        Symbol::NUM_SQRT_CHECKED,
+        vec![frac_type(flex(TVAR1))],
+        Box::new(result_type(frac_type(flex(TVAR1)), sqrt_of_negative)),
     );
 
-    // round : Float a -> Int b
+    // log : Frac a -> Frac a
+    add_top_level_function_type!(
+        Symbol::NUM_LOG,
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
+    );
+
+    // logChecked : Frac a -> Result (Frac a) [ LogNeedsPositive ]*
+    let log_needs_positive = SolvedType::TagUnion(
+        vec![(TagName::Tag("LogNeedsPositive".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    add_top_level_function_type!(
+        Symbol::NUM_LOG_CHECKED,
+        vec![frac_type(flex(TVAR1))],
+        Box::new(result_type(frac_type(flex(TVAR1)), log_needs_positive)),
+    );
+
+    // round : Frac a -> Int b
     add_top_level_function_type!(
         Symbol::NUM_ROUND,
-        vec![float_type(flex(TVAR1))],
+        vec![frac_type(flex(TVAR1))],
         Box::new(int_type(flex(TVAR2))),
     );
 
-    // sin : Float a -> Float a
+    // sin : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_SIN,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // cos : Float a -> Float a
+    // cos : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_COS,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // tan : Float a -> Float a
+    // tan : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_TAN,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // maxFloat : Float a
-    add_type!(Symbol::NUM_MAX_FLOAT, float_type(flex(TVAR1)));
-
-    // minFloat : Float a
-    add_type!(Symbol::NUM_MIN_FLOAT, float_type(flex(TVAR1)));
-
-    // pow : Float a, Float a -> Float a
+    // pow : Frac a, Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_POW,
-        vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1)), frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // ceiling : Float a -> Int b
+    // ceiling : Frac a -> Int b
     add_top_level_function_type!(
         Symbol::NUM_CEILING,
-        vec![float_type(flex(TVAR1))],
+        vec![frac_type(flex(TVAR1))],
         Box::new(int_type(flex(TVAR2))),
     );
 
@@ -769,38 +770,38 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(int_type(flex(TVAR1))),
     );
 
-    // floor : Float a -> Int b
+    // floor : Frac a -> Int b
     add_top_level_function_type!(
         Symbol::NUM_FLOOR,
-        vec![float_type(flex(TVAR1))],
+        vec![frac_type(flex(TVAR1))],
         Box::new(int_type(flex(TVAR2))),
     );
 
-    // atan : Float a -> Float a
+    // atan : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_ATAN,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // acos : Float a -> Float a
+    // acos : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_ACOS,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // asin : Float a -> Float a
+    // asin : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_ASIN,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
     // bytesToU16 : List U8, Nat -> Result U16 [ OutOfBounds ]
     {
         let position_out_of_bounds = SolvedType::TagUnion(
-            vec![(TagName::Global("OutOfBounds".into()), vec![])],
+            vec![(TagName::Tag("OutOfBounds".into()), vec![])],
             Box::new(SolvedType::Wildcard),
         );
         add_top_level_function_type!(
@@ -813,7 +814,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // bytesToU32 : List U8, Nat -> Result U32 [ OutOfBounds ]
     {
         let position_out_of_bounds = SolvedType::TagUnion(
-            vec![(TagName::Global("OutOfBounds".into()), vec![])],
+            vec![(TagName::Tag("OutOfBounds".into()), vec![])],
             Box::new(SolvedType::Wildcard),
         );
         add_top_level_function_type!(
@@ -935,7 +936,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     {
         let bad_utf8 = SolvedType::TagUnion(
             vec![(
-                TagName::Global("BadUtf8".into()),
+                TagName::Tag("BadUtf8".into()),
                 vec![str_utf8_byte_problem_type(), nat_type()],
             )],
             Box::new(SolvedType::Wildcard),
@@ -953,10 +954,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         let bad_utf8 = SolvedType::TagUnion(
             vec![
                 (
-                    TagName::Global("BadUtf8".into()),
+                    TagName::Tag("BadUtf8".into()),
                     vec![str_utf8_byte_problem_type(), nat_type()],
                 ),
-                (TagName::Global("OutOfBounds".into()), vec![]),
+                (TagName::Tag("OutOfBounds".into()), vec![]),
             ],
             Box::new(SolvedType::Wildcard),
         );
@@ -992,7 +993,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // `str_to_num` in can `builtins.rs`
     let invalid_str = || {
         SolvedType::TagUnion(
-            vec![(TagName::Global("InvalidNumStr".into()), vec![])],
+            vec![(TagName::Tag("InvalidNumStr".into()), vec![])],
             Box::new(SolvedType::Wildcard),
         )
     };
@@ -1099,7 +1100,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // get : List elem, Nat -> Result elem [ OutOfBounds ]*
     let index_out_of_bounds = SolvedType::TagUnion(
-        vec![(TagName::Global("OutOfBounds".into()), vec![])],
+        vec![(TagName::Tag("OutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -1111,7 +1112,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // first : List elem -> Result elem [ ListWasEmpty ]*
     let list_was_empty = SolvedType::TagUnion(
-        vec![(TagName::Global("ListWasEmpty".into()), vec![])],
+        vec![(TagName::Tag("ListWasEmpty".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -1216,8 +1217,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         // [ LT, EQ, GT ]
         SolvedType::TagUnion(
             vec![
-                (TagName::Global("Continue".into()), vec![content.clone()]),
-                (TagName::Global("Stop".into()), vec![content]),
+                (TagName::Tag("Continue".into()), vec![content.clone()]),
+                (TagName::Tag("Stop".into()), vec![content]),
             ],
             Box::new(SolvedType::EmptyTagUnion),
         )
@@ -1578,7 +1579,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
     {
         let not_found = SolvedType::TagUnion(
-            vec![(TagName::Global("NotFound".into()), vec![])],
+            vec![(TagName::Tag("NotFound".into()), vec![])],
             Box::new(SolvedType::Wildcard),
         );
         let (elem, cvar) = (TVAR1, TVAR2);
@@ -1620,7 +1621,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // get : Dict k v, k -> Result v [ KeyNotFound ]*
     let key_not_found = SolvedType::TagUnion(
-        vec![(TagName::Global("KeyNotFound".into()), vec![])],
+        vec![(TagName::Tag("KeyNotFound".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 

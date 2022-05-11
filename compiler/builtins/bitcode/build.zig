@@ -5,7 +5,7 @@ const CrossTarget = std.zig.CrossTarget;
 const Arch = std.Target.Cpu.Arch;
 
 pub fn build(b: *Builder) void {
-    // b.setPreferredReleaseMode(builtin.Mode.Debug
+    // b.setPreferredReleaseMode(.Debug);
     b.setPreferredReleaseMode(.ReleaseFast);
     const mode = b.standardReleaseOptions();
 
@@ -57,8 +57,9 @@ fn generateLlvmIrFile(
     const obj = b.addObject(object_name, main_path);
     obj.setBuildMode(mode);
     obj.strip = true;
-    obj.emit_llvm_ir = true;
-    obj.emit_bin = false;
+    obj.emit_llvm_ir = .emit;
+    obj.emit_llvm_bc = .emit;
+    obj.emit_bin = .no_emit;
     obj.target = target;
 
     const ir = b.step(step_name, "Build LLVM ir");

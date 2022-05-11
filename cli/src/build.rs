@@ -4,7 +4,7 @@ use roc_build::{
     program::{self, Problems},
 };
 use roc_builtins::bitcode;
-use roc_load::LoadingProblem;
+use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
@@ -40,6 +40,7 @@ pub fn build_file<'a>(
     surgically_link: bool,
     precompiled: bool,
     target_valgrind: bool,
+    threading: Threading,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = SystemTime::now();
     let target_info = TargetInfo::from(target);
@@ -55,6 +56,7 @@ pub fn build_file<'a>(
         target_info,
         // TODO: expose this from CLI?
         RenderTarget::ColorTerminal,
+        threading,
     )?;
 
     use target_lexicon::Architecture;
@@ -348,6 +350,7 @@ pub fn check_file(
     src_dir: PathBuf,
     roc_file_path: PathBuf,
     emit_timings: bool,
+    threading: Threading,
 ) -> Result<(program::Problems, Duration), LoadingProblem> {
     let compilation_start = SystemTime::now();
 
@@ -366,6 +369,7 @@ pub fn check_file(
         target_info,
         // TODO: expose this from CLI?
         RenderTarget::ColorTerminal,
+        threading,
     )?;
 
     let buf = &mut String::with_capacity(1024);

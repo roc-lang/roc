@@ -1,6 +1,6 @@
 Closure(
     [
-        @1-6 GlobalTag(
+        @1-6 Tag(
             "Thing",
         ),
     ],

@@ -1,5 +1,5 @@
 use crate::def::Def;
-use crate::expr::{self, ClosureData, Expr::*, IntValue};
+use crate::expr::{self, AnnotatedMark, ClosureData, Expr::*, IntValue};
 use crate::expr::{Expr, Field, Recursive};
 use crate::num::{FloatBound, IntBound, IntWidth, NumericBound};
 use crate::pattern::Pattern;
@@ -9,7 +9,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
 
 macro_rules! macro_magic {
     (@single $($x:tt)*) => (());
@@ -150,6 +150,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_ANY => list_any,
         LIST_ALL => list_all,
         LIST_FIND => list_find,
+        LIST_IS_UNIQUE => list_is_unique,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
         DICT_SINGLE => dict_single,
@@ -195,8 +196,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SIN => num_sin,
         NUM_COS => num_cos,
         NUM_TAN => num_tan,
-        NUM_DIV_FLOAT => num_div_float,
-        NUM_DIV_FLOAT_CHECKED => num_div_float_checked,
+        NUM_DIV_FRAC => num_div_frac,
+        NUM_DIV_FRAC_CHECKED => num_div_frac_checked,
         NUM_DIV_TRUNC => num_div_trunc,
         NUM_DIV_TRUNC_CHECKED => num_div_trunc_checked,
         NUM_DIV_CEIL => num_div_ceil,
@@ -204,16 +205,19 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ABS => num_abs,
         NUM_NEG => num_neg,
         NUM_REM => num_rem,
+        NUM_REM_CHECKED => num_rem_checked,
         NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         NUM_SQRT => num_sqrt,
+        NUM_SQRT_CHECKED => num_sqrt_checked,
         NUM_LOG => num_log,
+        NUM_LOG_CHECKED => num_log_checked,
         NUM_ROUND => num_round,
         NUM_IS_ODD => num_is_odd,
         NUM_IS_EVEN => num_is_even,
         NUM_IS_ZERO => num_is_zero,
         NUM_IS_POSITIVE => num_is_positive,
         NUM_IS_NEGATIVE => num_is_negative,
-        NUM_TO_FLOAT => num_to_float,
+        NUM_TO_FRAC => num_to_frac,
         NUM_POW => num_pow,
         NUM_CEILING => num_ceiling,
         NUM_POW_INT => num_pow_int,
@@ -557,7 +561,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
         annotation: None,
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)));
 
     defn(
         symbol,
@@ -713,6 +717,23 @@ fn bool_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+fn num_unaryop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
+    let num_var = var_store.fresh();
+    let body = RunLowLevel {
+        op,
+        args: vec![(num_var, Var(Symbol::ARG_1))],
+        ret_var: num_var,
+    };
+
+    defn(
+        symbol,
+        vec![(num_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        num_var,
+    )
+}
+
 /// Num a, Num a -> Num a
 fn num_binop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
     let num_var = var_store.fresh();
@@ -837,7 +858,7 @@ fn num_overflow_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowL
         annotation: None,
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)));
 
     defn(
         symbol,
@@ -918,74 +939,74 @@ fn num_compare(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_num_other_binop(symbol, var_store, LowLevel::NumCompare)
 }
 
-/// Num.sin : Float -> Float
+/// Num.sin : Frac -> Frac
 fn num_sin(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NumSin,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
-        ret_var: float_var,
+        args: vec![(frac_var, Var(Symbol::ARG_1))],
+        ret_var: frac_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        float_var,
+        frac_var,
     )
 }
 
-/// Num.cos : Float -> Float
+/// Num.cos : Frac -> Frac
 fn num_cos(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NumCos,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
-        ret_var: float_var,
+        args: vec![(frac_var, Var(Symbol::ARG_1))],
+        ret_var: frac_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        float_var,
+        frac_var,
     )
 }
 
-/// Num.tan : Float -> Float
+/// Num.tan : Frac -> Frac
 fn num_tan(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NumDivUnchecked,
         args: vec![
             (
-                float_var,
+                frac_var,
                 RunLowLevel {
                     op: LowLevel::NumSin,
-                    args: vec![(float_var, Var(Symbol::ARG_1))],
-                    ret_var: float_var,
+                    args: vec![(frac_var, Var(Symbol::ARG_1))],
+                    ret_var: frac_var,
                 },
             ),
             (
-                float_var,
+                frac_var,
                 RunLowLevel {
                     op: LowLevel::NumCos,
-                    args: vec![(float_var, Var(Symbol::ARG_1))],
-                    ret_var: float_var,
+                    args: vec![(frac_var, Var(Symbol::ARG_1))],
+                    ret_var: frac_var,
                 },
             ),
         ],
-        ret_var: float_var,
+        ret_var: frac_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        float_var,
+        frac_var,
     )
 }
 
@@ -1132,15 +1153,15 @@ fn num_is_even(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.toFloat : Num * -> Float
-fn num_to_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Num.toFrac : Num * -> Frac
+fn num_to_frac(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_var = var_store.fresh();
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
 
     let body = RunLowLevel {
-        op: LowLevel::NumToFloat,
+        op: LowLevel::NumToFrac,
         args: vec![(arg_var, Var(Symbol::ARG_1))],
-        ret_var: float_var,
+        ret_var: frac_var,
     };
 
     defn(
@@ -1148,14 +1169,19 @@ fn num_to_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
         vec![(arg_var, Symbol::ARG_1)],
         var_store,
         body,
-        float_var,
+        frac_var,
     )
 }
 
-/// Num.sqrt : Float -> Result Float [ SqrtOfNegative ]*
+/// Num.sqrt : Frac a -> Frac a
 fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_unaryop(symbol, var_store, LowLevel::NumSqrtUnchecked)
+}
+
+/// Num.sqrtChecked : Frac a -> Result (Frac a) [ SqrtOfNegative ]*
+fn num_sqrt_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
     let precision_var = var_store.fresh();
     let ret_var = var_store.fresh();
@@ -1167,10 +1193,10 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
             no_region(RunLowLevel {
                 op: LowLevel::NumGte,
                 args: vec![
-                    (float_var, Var(Symbol::ARG_1)),
+                    (frac_var, Var(Symbol::ARG_1)),
                     (
-                        float_var,
-                        float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
+                        frac_var,
+                        frac(unbound_zero_var, precision_var, 0.0, float_no_bound()),
                     ),
                 ],
                 ret_var: bool_var,
@@ -1179,8 +1205,8 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 "Ok",
                 vec![RunLowLevel {
                     op: LowLevel::NumSqrtUnchecked,
-                    args: vec![(float_var, Var(Symbol::ARG_1))],
-                    ret_var: float_var,
+                    args: vec![(frac_var, Var(Symbol::ARG_1))],
+                    ret_var: frac_var,
                 }],
                 var_store,
             )),
@@ -1194,17 +1220,22 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
         ret_var,
     )
 }
 
-/// Num.log : Float -> Result Float [ LogNeedsPositive ]*
+/// Num.log : Frac a -> Frac a
 fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_unaryop(symbol, var_store, LowLevel::NumLogUnchecked)
+}
+
+/// Num.logChecked : Frac a -> Result (Frac a) [ LogNeedsPositive ]*
+fn num_log_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
     let precision_var = var_store.fresh();
     let ret_var = var_store.fresh();
@@ -1216,10 +1247,10 @@ fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
             no_region(RunLowLevel {
                 op: LowLevel::NumGt,
                 args: vec![
-                    (float_var, Var(Symbol::ARG_1)),
+                    (frac_var, Var(Symbol::ARG_1)),
                     (
-                        float_var,
-                        float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
+                        frac_var,
+                        frac(unbound_zero_var, precision_var, 0.0, float_no_bound()),
                     ),
                 ],
                 ret_var: bool_var,
@@ -1228,8 +1259,8 @@ fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 "Ok",
                 vec![RunLowLevel {
                     op: LowLevel::NumLogUnchecked,
-                    args: vec![(float_var, Var(Symbol::ARG_1))],
-                    ret_var: float_var,
+                    args: vec![(frac_var, Var(Symbol::ARG_1))],
+                    ret_var: frac_var,
                 }],
                 var_store,
             )),
@@ -1243,69 +1274,69 @@ fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
         ret_var,
     )
 }
 
-/// Num.round : Float -> Int
+/// Num.round : Frac -> Int
 fn num_round(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let int_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumRound,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
+        args: vec![(frac_var, Var(Symbol::ARG_1))],
         ret_var: int_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
         int_var,
     )
 }
 
-/// Num.pow : Float, Float -> Float
+/// Num.pow : Frac, Frac -> Frac
 fn num_pow(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumPow,
         args: vec![
-            (float_var, Var(Symbol::ARG_1)),
-            (float_var, Var(Symbol::ARG_2)),
+            (frac_var, Var(Symbol::ARG_1)),
+            (frac_var, Var(Symbol::ARG_2)),
         ],
-        ret_var: float_var,
+        ret_var: frac_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1), (float_var, Symbol::ARG_2)],
+        vec![(frac_var, Symbol::ARG_1), (frac_var, Symbol::ARG_2)],
         var_store,
         body,
-        float_var,
+        frac_var,
     )
 }
 
-/// Num.ceiling : Float -> Int
+/// Num.ceiling : Frac -> Int
 fn num_ceiling(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let int_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumCeiling,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
+        args: vec![(frac_var, Var(Symbol::ARG_1))],
         ret_var: int_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
         int_var,
@@ -1331,83 +1362,83 @@ fn num_pow_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.floor : Float -> Int
+/// Num.floor : Frac -> Int
 fn num_floor(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let float_var = var_store.fresh();
+    let frac_var = var_store.fresh();
     let int_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumFloor,
-        args: vec![(float_var, Var(Symbol::ARG_1))],
+        args: vec![(frac_var, Var(Symbol::ARG_1))],
         ret_var: int_var,
     };
 
     defn(
         symbol,
-        vec![(float_var, Symbol::ARG_1)],
+        vec![(frac_var, Symbol::ARG_1)],
         var_store,
         body,
         int_var,
     )
 }
 
-/// Num.atan : Float -> Float
+/// Num.atan : Frac -> Frac
 fn num_atan(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_float_var = var_store.fresh();
-    let ret_float_var = var_store.fresh();
+    let arg_frac_var = var_store.fresh();
+    let ret_frac_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumAtan,
-        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
-        ret_var: ret_float_var,
+        args: vec![(arg_frac_var, Var(Symbol::ARG_1))],
+        ret_var: ret_frac_var,
     };
 
     defn(
         symbol,
-        vec![(arg_float_var, Symbol::ARG_1)],
+        vec![(arg_frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        ret_float_var,
+        ret_frac_var,
     )
 }
 
-/// Num.acos : Float -> Float
+/// Num.acos : Frac -> Frac
 fn num_acos(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_float_var = var_store.fresh();
-    let ret_float_var = var_store.fresh();
+    let arg_frac_var = var_store.fresh();
+    let ret_frac_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumAcos,
-        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
-        ret_var: ret_float_var,
+        args: vec![(arg_frac_var, Var(Symbol::ARG_1))],
+        ret_var: ret_frac_var,
     };
 
     defn(
         symbol,
-        vec![(arg_float_var, Symbol::ARG_1)],
+        vec![(arg_frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        ret_float_var,
+        ret_frac_var,
     )
 }
 
-/// Num.asin : Float -> Float
+/// Num.asin : Frac -> Frac
 fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_float_var = var_store.fresh();
-    let ret_float_var = var_store.fresh();
+    let arg_frac_var = var_store.fresh();
+    let ret_frac_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumAsin,
-        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
-        ret_var: ret_float_var,
+        args: vec![(arg_frac_var, Var(Symbol::ARG_1))],
+        ret_var: ret_frac_var,
     };
 
     defn(
         symbol,
-        vec![(arg_float_var, Symbol::ARG_1)],
+        vec![(arg_frac_var, Symbol::ARG_1)],
         var_store,
         body,
-        ret_float_var,
+        ret_frac_var,
     )
 }
 
@@ -1631,7 +1662,7 @@ fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
         annotation: None,
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)));
 
     defn(
         symbol,
@@ -1867,7 +1898,7 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ),
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)));
 
     defn(
         symbol,
@@ -1972,7 +2003,7 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ),
     };
 
-    let roc_result = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let roc_result = LetNonRec(Box::new(def), Box::new(no_region(cont)));
 
     // Only do the business with the let if we're in bounds!
 
@@ -2476,7 +2507,10 @@ fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let get_sub = RunLowLevel {
         op: LowLevel::NumSubWrap,
-        args: vec![(len_var, get_list_len), (len_var, Var(Symbol::ARG_2))],
+        args: vec![
+            (len_var, get_list_len.clone()),
+            (len_var, Var(Symbol::ARG_2)),
+        ],
         ret_var: len_var,
     };
 
@@ -2486,7 +2520,7 @@ fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
         branches: vec![(
             no_region(RunLowLevel {
                 op: LowLevel::NumGt,
-                args: vec![(len_var, get_sub.clone()), (len_var, zero.clone())],
+                args: vec![(len_var, get_list_len), (len_var, Var(Symbol::ARG_2))],
                 ret_var: bool_var,
             }),
             no_region(get_sub),
@@ -2592,8 +2626,16 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(sep_sym, sep_var)],
         arguments: vec![
-            (clos_acc_var, no_region(Pattern::Identifier(clos_acc_sym))),
-            (sep_var, no_region(Pattern::Identifier(clos_elem_sym))),
+            (
+                clos_acc_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(clos_acc_sym)),
+            ),
+            (
+                sep_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(clos_elem_sym)),
+            ),
         ],
         loc_body: {
             let append_sep = RunLowLevel {
@@ -2678,9 +2720,14 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
         arguments: vec![
             (
                 clos_start_var,
+                AnnotatedMark::new(var_store),
                 no_region(Pattern::Identifier(clos_start_sym)),
             ),
-            (clos_len_var, no_region(Pattern::Identifier(clos_len_sym))),
+            (
+                clos_len_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(clos_len_sym)),
+            ),
         ],
         loc_body: {
             Box::new(no_region(RunLowLevel {
@@ -2864,7 +2911,11 @@ fn list_drop_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
         name: Symbol::LIST_DROP_IF_PREDICATE,
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(sym_predicate, t_predicate)],
-        arguments: vec![(t_elem, no_region(Pattern::Identifier(Symbol::ARG_3)))],
+        arguments: vec![(
+            t_elem,
+            AnnotatedMark::new(var_store),
+            no_region(Pattern::Identifier(Symbol::ARG_3)),
+        )],
         loc_body: {
             let should_drop = Call(
                 Box::new((
@@ -3048,8 +3099,16 @@ fn list_join_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(Symbol::ARG_2, before2list_after)],
         arguments: vec![
-            (list_after, no_region(Pattern::Identifier(Symbol::ARG_3))),
-            (before, no_region(Pattern::Identifier(Symbol::ARG_4))),
+            (
+                list_after,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_3)),
+            ),
+            (
+                before,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_4)),
+            ),
         ],
         loc_body: {
             let mapper = Box::new((
@@ -3579,8 +3638,16 @@ fn list_sort_desc(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![],
         arguments: vec![
-            (num_var, no_region(Pattern::Identifier(Symbol::ARG_2))),
-            (num_var, no_region(Pattern::Identifier(Symbol::ARG_3))),
+            (
+                num_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_2)),
+            ),
+            (
+                num_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_3)),
+            ),
         ],
         loc_body: {
             Box::new(no_region(RunLowLevel {
@@ -3692,11 +3759,7 @@ fn list_find(symbol: Symbol, var_store: &mut VarStore) -> Def {
         final_else: Box::new(no_region(make_err)),
     };
 
-    let body = LetNonRec(
-        Box::new(find_result_def),
-        Box::new(no_region(inspect)),
-        t_ret,
-    );
+    let body = LetNonRec(Box::new(find_result_def), Box::new(no_region(inspect)));
 
     defn(
         symbol,
@@ -3705,6 +3768,11 @@ fn list_find(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         t_ret,
     )
+}
+
+/// List.isUnique : List * -> Bool
+fn list_is_unique(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::ListIsUnique, var_store)
 }
 
 /// Dict.len : Dict * * -> Nat
@@ -3861,7 +3929,7 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
         final_else: Box::new(no_region(make_err)),
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(inspect)), ret_var);
+    let body = LetNonRec(Box::new(def), Box::new(no_region(inspect)));
 
     defn(
         symbol,
@@ -4054,9 +4122,21 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
         recursive: Recursive::NotRecursive,
         captured_symbols: vec![(Symbol::ARG_3, func_var)],
         arguments: vec![
-            (accum_var, no_region(Pattern::Identifier(Symbol::ARG_5))),
-            (key_var, no_region(Pattern::Identifier(Symbol::ARG_6))),
-            (Variable::EMPTY_RECORD, no_region(Pattern::Underscore)),
+            (
+                accum_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_5)),
+            ),
+            (
+                key_var,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Identifier(Symbol::ARG_6)),
+            ),
+            (
+                Variable::EMPTY_RECORD,
+                AnnotatedMark::new(var_store),
+                no_region(Pattern::Underscore),
+            ),
         ],
         loc_body: Box::new(no_region(call_func)),
     });
@@ -4084,8 +4164,13 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
+/// Num.rem : Int a, Int a -> Int a
 fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumRemUnchecked)
+}
+
+/// Num.remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+fn num_rem_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -4186,13 +4271,13 @@ fn num_abs(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.div : Float, Float -> Float
-fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Num.div : Frac, Frac -> Frac
+fn num_div_frac(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumDivUnchecked)
 }
 
-/// Num.divChecked : Float, Float -> Result Float [ DivByZero ]*
-fn num_div_float_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Num.divChecked : Frac, Frac -> Result Frac [ DivByZero ]*
+fn num_div_frac_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
@@ -4212,7 +4297,7 @@ fn num_div_float_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         (num_var, Var(Symbol::ARG_2)),
                         (
                             num_var,
-                            float(unbound_zero_var, precision_var, 0.0, float_no_bound()),
+                            frac(unbound_zero_var, precision_var, 0.0, float_no_bound()),
                         ),
                     ],
                     ret_var: bool_var,
@@ -4220,7 +4305,7 @@ fn num_div_float_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
             ),
             // denominator was not zero
             no_region(
-                // Ok (Float.#divUnchecked numerator denominator)
+                // Ok (Frac.#divUnchecked numerator denominator)
                 tag(
                     "Ok",
                     vec![
@@ -4627,7 +4712,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         // ok branch
         let ok = Tag {
@@ -4651,6 +4736,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4658,7 +4744,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -4681,6 +4767,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4692,6 +4779,8 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -4724,7 +4813,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         // ok branch
         let ok = Tag {
@@ -4748,6 +4837,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4755,7 +4845,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -4778,6 +4868,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4789,6 +4880,8 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -4808,7 +4901,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4821,6 +4914,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_3)),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4828,7 +4922,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4841,6 +4935,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(Var(Symbol::ARG_2)),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4852,6 +4947,8 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -4871,7 +4968,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4883,7 +4980,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let false_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("False".into()),
+            name: TagName::Tag("False".into()),
             arguments: vec![],
         };
 
@@ -4891,6 +4988,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4898,7 +4996,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4910,7 +5008,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let true_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("True".into()),
+            name: TagName::Tag("True".into()),
             arguments: vec![],
         };
 
@@ -4918,6 +5016,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4929,6 +5028,8 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -4948,7 +5049,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4960,7 +5061,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let true_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("True".into()),
+            name: TagName::Tag("True".into()),
             arguments: vec![],
         };
 
@@ -4968,6 +5069,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(true_expr),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -4975,7 +5077,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4987,7 +5089,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let false_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Global("False".into()),
+            name: TagName::Tag("False".into()),
             arguments: vec![],
         };
 
@@ -4995,6 +5097,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(false_expr),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -5006,6 +5109,8 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -5038,7 +5143,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Global("Ok".into());
+        let tag_name = TagName::Tag("Ok".into());
 
         // ok branch
         let ok = call_func;
@@ -5057,6 +5162,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(ok),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -5064,7 +5170,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Global("Err".into());
+        let tag_name = TagName::Tag("Err".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -5087,6 +5193,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             patterns: vec![no_region(pattern)],
             value: no_region(err),
             guard: None,
+            redundant: RedundantMark::new(var_store),
         };
 
         branches.push(branch);
@@ -5098,6 +5205,8 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
         region: Region::zero(),
         loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
         branches,
+        branches_cond_var: var_store.fresh(),
+        exhaustive: ExhaustiveMark::new(var_store),
     };
 
     defn(
@@ -5122,7 +5231,7 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
     Expr::Tag {
         variant_var: var_store.fresh(),
         ext_var: var_store.fresh(),
-        name: TagName::Global(name.into()),
+        name: TagName::Tag(name.into()),
         arguments: args
             .into_iter()
             .map(|expr| (var_store.fresh(), no_region(expr)))
@@ -5283,7 +5392,13 @@ fn defn_help(
 
     let closure_args = args
         .into_iter()
-        .map(|(var, symbol)| (var, no_region(Identifier(symbol))))
+        .map(|(var, symbol)| {
+            (
+                var,
+                AnnotatedMark::new(var_store),
+                no_region(Identifier(symbol)),
+            )
+        })
         .collect();
 
     Closure(ClosureData {
@@ -5327,7 +5442,7 @@ where
 }
 
 #[inline(always)]
-fn float(num_var: Variable, precision_var: Variable, f: f64, bound: FloatBound) -> Expr {
+fn frac(num_var: Variable, precision_var: Variable, f: f64, bound: FloatBound) -> Expr {
     Float(
         num_var,
         precision_var,

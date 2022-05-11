@@ -2,13 +2,12 @@ use arrayvec::ArrayVec;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::Expected::{self, *};
 use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumericBound, SignDemand};
-use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{AliasKind, Category};
-use roc_types::types::{Reason, TypeExtension};
+use roc_types::types::{OptAbleType, Reason};
 
 #[must_use]
 #[inline(always)]
@@ -161,117 +160,106 @@ pub fn str_type() -> Type {
 #[inline(always)]
 fn builtin_alias(
     symbol: Symbol,
-    type_arguments: Vec<(Lowercase, Type)>,
+    type_arguments: Vec<OptAbleType>,
     actual: Box<Type>,
+    kind: AliasKind,
 ) -> Type {
     Type::Alias {
         symbol,
         type_arguments,
         actual,
         lambda_set_variables: vec![],
-        // TODO(opaques): revisit later
-        kind: AliasKind::Structural,
+        kind,
     }
 }
 
 #[inline(always)]
 pub fn num_float(range: Type) -> Type {
     builtin_alias(
-        Symbol::NUM_FLOAT,
-        vec![("range".into(), range.clone())],
+        Symbol::NUM_FRAC,
+        vec![OptAbleType::unbound(range.clone())],
         Box::new(num_num(num_floatingpoint(range))),
+        AliasKind::Structural,
     )
 }
 
 #[inline(always)]
 pub fn num_floatingpoint(range: Type) -> Type {
-    let alias_content = Type::TagUnion(
-        vec![(
-            TagName::Private(Symbol::NUM_AT_FLOATINGPOINT),
-            vec![range.clone()],
-        )],
-        TypeExtension::Closed,
-    );
-
     builtin_alias(
         Symbol::NUM_FLOATINGPOINT,
-        vec![("range".into(), range)],
-        Box::new(alias_content),
+        vec![OptAbleType::unbound(range.clone())],
+        Box::new(range),
+        AliasKind::Opaque,
     )
 }
 
 #[inline(always)]
 pub fn num_u32() -> Type {
-    builtin_alias(Symbol::NUM_U32, vec![], Box::new(num_int(num_unsigned32())))
+    builtin_alias(
+        Symbol::NUM_U32,
+        vec![],
+        Box::new(num_int(num_unsigned32())),
+        AliasKind::Structural,
+    )
 }
 
 #[inline(always)]
 fn num_unsigned32() -> Type {
-    let alias_content = Type::TagUnion(
-        vec![(TagName::Private(Symbol::NUM_AT_UNSIGNED32), vec![])],
-        TypeExtension::Closed,
-    );
-
-    builtin_alias(Symbol::NUM_UNSIGNED32, vec![], Box::new(alias_content))
+    builtin_alias(
+        Symbol::NUM_UNSIGNED32,
+        vec![],
+        Box::new(Type::EmptyTagUnion),
+        AliasKind::Opaque,
+    )
 }
 
 #[inline(always)]
 pub fn num_binary64() -> Type {
-    let alias_content = Type::TagUnion(
-        vec![(TagName::Private(Symbol::NUM_AT_BINARY64), vec![])],
-        TypeExtension::Closed,
-    );
-
-    builtin_alias(Symbol::NUM_BINARY64, vec![], Box::new(alias_content))
+    builtin_alias(
+        Symbol::NUM_BINARY64,
+        vec![],
+        Box::new(Type::EmptyTagUnion),
+        AliasKind::Opaque,
+    )
 }
 
 #[inline(always)]
 pub fn num_int(range: Type) -> Type {
     builtin_alias(
         Symbol::NUM_INT,
-        vec![("range".into(), range.clone())],
+        vec![OptAbleType::unbound(range.clone())],
         Box::new(num_num(num_integer(range))),
+        AliasKind::Structural,
     )
 }
 
 #[inline(always)]
 pub fn num_signed64() -> Type {
-    let alias_content = Type::TagUnion(
-        vec![(TagName::Private(Symbol::NUM_AT_SIGNED64), vec![])],
-        TypeExtension::Closed,
-    );
-
-    builtin_alias(Symbol::NUM_SIGNED64, vec![], Box::new(alias_content))
+    builtin_alias(
+        Symbol::NUM_SIGNED64,
+        vec![],
+        Box::new(Type::EmptyTagUnion),
+        AliasKind::Opaque,
+    )
 }
 
 #[inline(always)]
 pub fn num_integer(range: Type) -> Type {
-    let alias_content = Type::TagUnion(
-        vec![(
-            TagName::Private(Symbol::NUM_AT_INTEGER),
-            vec![range.clone()],
-        )],
-        TypeExtension::Closed,
-    );
-
     builtin_alias(
         Symbol::NUM_INTEGER,
-        vec![("range".into(), range)],
-        Box::new(alias_content),
+        vec![OptAbleType::unbound(range.clone())],
+        Box::new(range),
+        AliasKind::Opaque,
     )
 }
 
 #[inline(always)]
 pub fn num_num(typ: Type) -> Type {
-    let alias_content = Type::TagUnion(
-        vec![(TagName::Private(Symbol::NUM_AT_NUM), vec![typ.clone()])],
-        TypeExtension::Closed,
-    );
-
     builtin_alias(
         Symbol::NUM_NUM,
-        vec![("range".into(), typ)],
-        Box::new(alias_content),
+        vec![OptAbleType::unbound(typ.clone())],
+        Box::new(typ),
+        AliasKind::Opaque,
     )
 }
 

@@ -188,11 +188,9 @@ pub enum Expr<'a> {
     Underscore(&'a str),
 
     // Tags
-    GlobalTag(&'a str),
-    PrivateTag(&'a str),
+    Tag(&'a str),
 
-    // Reference to an opaque type, e.g. $Opaq
-    // TODO(opaques): $->@ in the above comment
+    // Reference to an opaque type, e.g. @Opaq
     OpaqueRef(&'a str),
 
     // Pattern Matching
@@ -441,12 +439,7 @@ pub enum TypeAnnotation<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tag<'a> {
-    Global {
-        name: Loc<&'a str>,
-        args: &'a [Loc<TypeAnnotation<'a>>],
-    },
-
-    Private {
+    Apply {
         name: Loc<&'a str>,
         args: &'a [Loc<TypeAnnotation<'a>>],
     },
@@ -522,8 +515,7 @@ pub enum Pattern<'a> {
     // Identifier
     Identifier(&'a str),
 
-    GlobalTag(&'a str),
-    PrivateTag(&'a str),
+    Tag(&'a str),
 
     OpaqueRef(&'a str),
 
@@ -578,8 +570,7 @@ pub enum Base {
 impl<'a> Pattern<'a> {
     pub fn from_ident(arena: &'a Bump, ident: Ident<'a>) -> Pattern<'a> {
         match ident {
-            Ident::GlobalTag(string) => Pattern::GlobalTag(string),
-            Ident::PrivateTag(string) => Pattern::PrivateTag(string),
+            Ident::Tag(string) => Pattern::Tag(string),
             Ident::OpaqueRef(string) => Pattern::OpaqueRef(string),
             Ident::Access { module_name, parts } => {
                 if parts.len() == 1 {
@@ -628,8 +619,7 @@ impl<'a> Pattern<'a> {
 
         match (self, other) {
             (Identifier(x), Identifier(y)) => x == y,
-            (GlobalTag(x), GlobalTag(y)) => x == y,
-            (PrivateTag(x), PrivateTag(y)) => x == y,
+            (Tag(x), Tag(y)) => x == y,
             (Apply(constructor_x, args_x), Apply(constructor_y, args_y)) => {
                 let equivalent_args = args_x
                     .iter()
@@ -927,7 +917,7 @@ impl<'a> Expr<'a> {
     }
 
     pub fn is_tag(&self) -> bool {
-        matches!(self, Expr::GlobalTag(_) | Expr::PrivateTag(_))
+        matches!(self, Expr::Tag(_))
     }
 }
 

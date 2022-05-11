@@ -1,18 +1,18 @@
-procedure Test.2 (Test.3):
-    let Test.12 : Int1 = 1i64;
-    let Test.13 : Int1 = GetTagId Test.3;
-    let Test.14 : Int1 = lowlevel Eq Test.12 Test.13;
-    if Test.14 then
-        let Test.10 : Int1 = true;
-        ret Test.10;
-    else
-        let Test.11 : Int1 = false;
+procedure Test.3 (Test.4):
+    let Test.13 : Int1 = 1i64;
+    let Test.14 : Int1 = GetTagId Test.4;
+    let Test.15 : Int1 = lowlevel Eq Test.13 Test.14;
+    if Test.15 then
+        let Test.11 : Int1 = true;
         ret Test.11;
+    else
+        let Test.12 : Int1 = false;
+        ret Test.12;
 
 procedure Test.0 ():
-    let Test.15 : I64 = 2i64;
-    let Test.16 : TODO = Nil ;
-    let Test.9 : TODO = Cons Test.15 Test.16;
-    let Test.8 : Int1 = CallByName Test.2 Test.9;
-    dec Test.9;
-    ret Test.8;
+    let Test.16 : I64 = 2i64;
+    let Test.17 : [<rnu><null>, C I64 *self] = Nil ;
+    let Test.10 : [<rnu><null>, C I64 *self] = Cons Test.16 Test.17;
+    let Test.9 : Int1 = CallByName Test.3 Test.10;
+    dec Test.10;
+    ret Test.9;

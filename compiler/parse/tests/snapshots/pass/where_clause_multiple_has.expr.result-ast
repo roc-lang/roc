@@ -5,14 +5,14 @@ Defs(
                 @0-1 Identifier(
                     "f",
                 ),
-                @15-48 Where(
-                    @15-16 Function(
+                @4-48 Where(
+                    @4-16 Function(
                         [
                             @4-5 BoundVariable(
                                 "a",
                             ),
                         ],
-                        @15-16 Function(
+                        @10-16 Function(
                             [
                                 @10-11 BoundVariable(
                                     "b",
