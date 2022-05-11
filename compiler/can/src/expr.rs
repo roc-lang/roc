@@ -2047,6 +2047,34 @@ impl Declarations {
         index
     }
 
+    /// Any def with a weird pattern
+    pub fn push_destructure_def(
+        &mut self,
+        loc_pattern: Loc<Pattern>,
+        loc_expr: Loc<Expr>,
+        expr_var: Variable,
+        annotation: Option<Annotation>,
+        pattern_vars: VecMap<Symbol, Variable>,
+    ) -> usize {
+        let index = self.declarations.len();
+
+        let destruct_def = DestructureDef {
+            loc_pattern,
+            pattern_vars,
+        };
+
+        let destructure_def_index = Index::push_new(&mut self.destructs, destruct_def);
+
+        self.declarations.push(DeclarationTag::Destructure(destructure_def_index));
+        self.variables.push(expr_var);
+        self.symbols.push(Loc::at_zero(Symbol::ATTR_ATTR));
+        self.annotations.push(annotation);
+
+        self.expressions.push(loc_expr);
+
+        index
+    }
+
     pub fn push_def(&mut self, def: Def) {
         match def.loc_pattern.value {
             Pattern::Identifier(symbol) => match def.loc_expr.value {

@@ -873,7 +873,15 @@ pub(crate) fn sort_can_defs_new(
                                 );
                             }
                         },
-                        _ => todo!("{:?}", &def.loc_pattern.value),
+                        _ => {
+                            declarations.push_destructure_def(
+                                def.loc_pattern,
+                                def.loc_expr,
+                                def.expr_var,
+                                def.annotation,
+                                def.pattern_vars.into_iter().collect(),
+                            );
+                        }
                     }
                 }
             }

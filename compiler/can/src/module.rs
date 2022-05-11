@@ -5,7 +5,7 @@ use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{ClosureData, Declarations, Expr, Output};
 use crate::operator::desugar_def;
-use crate::pattern::Pattern;
+use crate::pattern::{BindingsFromPattern, Pattern};
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::{MutMap, SendMap, VecSet};
@@ -526,7 +526,13 @@ pub fn canonicalize_module_defs<'a>(
 
                 index += 1;
             }
-            Destructure(_) => todo!(),
+            Destructure(d_index) => {
+                let destruct_def = &declarations.destructs[d_index.index()];
+
+                for (symbol, _) in BindingsFromPattern::new(&destruct_def.loc_pattern) {
+                    exposed_but_not_defined.remove(&symbol);
+                }
+            }
             MutualRecursion(_) => todo!(),
         }
     }
