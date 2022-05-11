@@ -186,7 +186,7 @@ fn tag_union_aliased() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
+                #[derive(Clone, PartialEq, PartialOrd, Copy, Eq, Ord, Hash, Debug)]
                 #[repr(u8)]
                 pub enum tag_MyTagUnion {
                     Bar,

@@ -561,7 +561,7 @@ fn write_deriving(typ: &RocType, types: &Types, buf: &mut String) -> fmt::Result
         buf.write_str("Copy, ")?;
     }
 
-    if !typ.has_tag_union(types) {
+    if !typ.has_enumeration(types) {
         buf.write_str("Default, ")?;
     }
 

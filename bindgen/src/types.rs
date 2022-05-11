@@ -212,9 +212,11 @@ impl RocType {
     }
 
     /// Useful when determining whether to derive Default in a Rust type.
-    pub fn has_tag_union(&self, types: &Types) -> bool {
+    pub fn has_enumeration(&self, types: &Types) -> bool {
         match self {
-            RocType::RecursiveTagUnion { .. } | RocType::TagUnion { .. } => true,
+            RocType::RecursiveTagUnion { .. }
+            | RocType::TagUnion { .. }
+            | RocType::Enumeration { .. } => true,
             RocType::RocStr
             | RocType::Bool
             | RocType::I8
@@ -230,18 +232,20 @@ impl RocType {
             | RocType::F32
             | RocType::F64
             | RocType::F128
-            | RocType::RocDec
-            | RocType::Enumeration { .. } => false,
+            | RocType::RocDec => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get(*id).has_tag_union(types)
+                types.get(*id).has_enumeration(types)
             }
             RocType::RocDict(key_id, val_id) => {
-                types.get(*key_id).has_tag_union(types) || types.get(*val_id).has_tag_union(types)
+                types.get(*key_id).has_enumeration(types)
+                    || types.get(*val_id).has_enumeration(types)
             }
             RocType::Struct { fields, .. } => fields
                 .iter()
-                .any(|(_, id)| types.get(*id).has_tag_union(types)),
-            RocType::TransparentWrapper { content, .. } => types.get(*content).has_tag_union(types),
+                .any(|(_, id)| types.get(*id).has_enumeration(types)),
+            RocType::TransparentWrapper { content, .. } => {
+                types.get(*content).has_enumeration(types)
+            }
         }
     }
 
