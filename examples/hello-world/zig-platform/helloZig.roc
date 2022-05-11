@@ -3,9 +3,6 @@ app "helloZig"
     imports []
     provides [ main ] to pf
 
-Id a := a
+main = "Hello, World!\n"
 
-f : Id a -> a 
-f = \@Id x -> x 
-
-main = f (@Id "Hello, World!\n")
+main = \{} -> "foo"

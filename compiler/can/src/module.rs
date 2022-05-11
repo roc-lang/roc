@@ -532,6 +532,8 @@ pub fn canonicalize_module_defs<'a>(
                 for (symbol, _) in BindingsFromPattern::new(&destruct_def.loc_pattern) {
                     exposed_but_not_defined.remove(&symbol);
                 }
+
+                index += 1;
             }
             MutualRecursion(_) => todo!(),
         }
@@ -644,7 +646,14 @@ pub fn canonicalize_module_defs<'a>(
 
                 fix_values_captured_in_closure_expr(&mut loc_expr.value, &mut no_capture_symbols);
             }
-            Destructure(_) => todo!(),
+            Destructure(d_index) => {
+                let destruct_def = &mut declarations.destructs[d_index.index()];
+                let loc_pat = &mut destruct_def.loc_pattern;
+                let loc_expr = &mut declarations.expressions[index];
+
+                fix_values_captured_in_closure_pattern(&mut loc_pat.value, &mut VecSet::default());
+                fix_values_captured_in_closure_expr(&mut loc_expr.value, &mut VecSet::default());
+            }
             MutualRecursion(_) => todo!(),
         }
     }
