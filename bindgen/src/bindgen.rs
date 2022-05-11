@@ -1,5 +1,3 @@
-use std::convert::TryInto;
-
 use crate::structs::Structs;
 use crate::types::{TypeId, Types};
 use crate::{enums::Enums, types::RocType};
@@ -299,7 +297,7 @@ fn add_tag_union(
     // Sort tags alphabetically by tag name
     tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
-    let tags = tags
+    let tags: Vec<_> = tags
         .into_iter()
         .map(|(tag_name, payload_vars)| {
             let payloads = payload_vars
@@ -316,12 +314,59 @@ fn add_tag_union(
             // a single-tag union with multiple payload values, e.g. [ Foo Str Str ]
             unreachable!()
         }
-        Layout::Union(_) => todo!(),
+        Layout::Union(union_layout) => {
+            use roc_mono::layout::UnionLayout::*;
+
+            match union_layout {
+                // A non-recursive tag union
+                // e.g. `Result a e : [ Ok a, Err e ]`
+                NonRecursive(_) => {
+                    let discriminant = {
+                        let tags = tags.iter().cloned().map(|(tag_name, _)| tag_name).collect();
+
+                        types.add(RocType::Enumeration {
+                            name: name.clone(),
+                            tags,
+                        })
+                    };
+
+                    RocType::TagUnion {
+                        discriminant,
+                        name,
+                        tags,
+                    }
+                }
+                // A recursive tag union (general case)
+                // e.g. `Expr : [ Sym Str, Add Expr Expr ]`
+                Recursive(_) => {
+                    todo!()
+                }
+                // A recursive tag union with just one constructor
+                // Optimization: No need to store a tag ID (the payload is "unwrapped")
+                // e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
+                NonNullableUnwrapped(_) => {
+                    todo!()
+                }
+                // A recursive tag union that has an empty variant
+                // Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
+                // It has more than one other variant, so they need tag IDs (payloads are "wrapped")
+                // e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
+                // see also: https://youtu.be/ip92VMpf_-A?t=164
+                NullableWrapped { .. } => {
+                    todo!()
+                }
+                // A recursive tag union with only two variants, where one is empty.
+                // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
+                // e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
+                NullableUnwrapped { .. } => {
+                    todo!()
+                }
+            }
+        }
         Layout::Builtin(builtin) => match builtin {
-            Builtin::Int(int_width) => RocType::TagUnion {
-                tag_bytes: int_width.stack_size().try_into().unwrap(),
+            Builtin::Int(_) => RocType::Enumeration {
                 name,
-                tags,
+                tags: tags.into_iter().map(|(tag_name, _)| tag_name).collect(),
             },
             Builtin::Bool => RocType::Bool,
             Builtin::Float(_)

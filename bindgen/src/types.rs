@@ -1,8 +1,10 @@
 use core::mem::align_of;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::VecMap;
+use roc_mono::layout::UnionLayout;
 use roc_std::RocDec;
 use roc_target::TargetInfo;
+use std::convert::TryInto;
 use ven_graph::topological_sort;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -120,8 +122,12 @@ pub enum RocType {
         name: String,
         tags: Vec<(String, Vec<TypeId>)>,
     },
+    Enumeration {
+        name: String,
+        tags: Vec<String>,
+    },
     TagUnion {
-        tag_bytes: u8,
+        discriminant: TypeId,
         name: String,
         tags: Vec<(String, Vec<TypeId>)>,
     },
@@ -154,6 +160,7 @@ impl RocType {
             | RocType::F32
             | RocType::F64
             | RocType::F128
+            | RocType::Enumeration { .. }
             | RocType::RocDec => false,
             RocType::RocStr
             | RocType::RocList(_)
@@ -187,7 +194,8 @@ impl RocType {
             | RocType::U64
             | RocType::I128
             | RocType::U128
-            | RocType::RocDec => false,
+            | RocType::RocDec
+            | RocType::Enumeration { .. } => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
                 types.get(*id).has_float(types)
             }
@@ -223,7 +231,8 @@ impl RocType {
             | RocType::F32
             | RocType::F64
             | RocType::F128
-            | RocType::RocDec => false,
+            | RocType::RocDec
+            | RocType::Enumeration { .. } => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
                 types.get(*id).has_tag_union(types)
             }
@@ -294,6 +303,10 @@ impl RocType {
             RocType::TransparentWrapper { content, .. } => {
                 types.get(*content).alignment(types, target_info)
             }
+            RocType::Enumeration { tags, .. } => UnionLayout::discriminant_size(tags.len())
+                .stack_size()
+                .try_into()
+                .unwrap(),
         }
     }
 }
