@@ -195,7 +195,6 @@ fn tag_union_aliased() {
                 }
 
                 #[repr(C)]
-                #[allow(clippy::non_snake_case)]
                 pub union variant_MyTagUnion {
                     Bar: u128,
                     Blah: i32,

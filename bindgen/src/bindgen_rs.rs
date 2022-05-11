@@ -112,11 +112,7 @@ fn write_tag_union(
     {
         // No deriving for unions; we have to add the impls ourselves!
 
-        writeln!(
-            buf,
-            "\n#[repr(C)]\n#[allow(clippy::non_snake_case)]\npub union {} {{",
-            variant_name
-        )?;
+        writeln!(buf, "\n#[repr(C)]\npub union {} {{", variant_name)?;
 
         for (tag_name, opt_payload_id) in tags {
             // If there's no payload, we don't need a variant for it.
