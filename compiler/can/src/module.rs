@@ -476,6 +476,54 @@ pub fn canonicalize_module_defs<'a>(
                 // corresponding defs.
                 exposed_but_not_defined.remove(symbol);
 
+                // Temporary hack: we don't know exactly what symbols are hosted symbols,
+                // and which are meant to be normal definitions without a body. So for now
+                // we just assume they are hosted functions (meant to be provided by the platform)
+                if has_no_implementation(&declarations.expressions[index].value) {
+                    match generated_info {
+                        GeneratedInfo::Builtin => {
+                            match crate::builtins::builtin_defs_map(*symbol, var_store) {
+                                None => {
+                                    panic!("A builtin module contains a signature without implementation for {:?}", symbol)
+                                }
+                                Some(replacement_def) => {
+                                    declarations.update_builtin_def(index, replacement_def);
+                                }
+                            }
+                        }
+                        GeneratedInfo::Hosted { effect_symbol, .. } => {
+                            let ident_id = symbol.ident_id();
+                            let ident = scope
+                                .locals
+                                .ident_ids
+                                .get_name(ident_id)
+                                .unwrap()
+                                .to_string();
+
+                            let def_annotation = declarations.annotations[index].clone().unwrap();
+
+                            let annotation = crate::annotation::Annotation {
+                                typ: def_annotation.signature,
+                                introduced_variables: def_annotation.introduced_variables,
+                                references: Default::default(),
+                                aliases: Default::default(),
+                            };
+
+                            let hosted_def = crate::effect_module::build_host_exposed_def(
+                                &mut scope,
+                                *symbol,
+                                &ident,
+                                effect_symbol,
+                                var_store,
+                                annotation,
+                            );
+
+                            declarations.update_builtin_def(index, hosted_def);
+                        }
+                        _ => (),
+                    }
+                }
+
                 index += 1;
             }
             Destructure(_) => todo!(),
