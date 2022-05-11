@@ -196,7 +196,7 @@ fn tag_union_aliased() {
                 }
 
                 #[repr(C)]
-                pub union variant_MyTagUnion {
+                pub union union_MyTagUnion {
                     Bar: u128,
                     Blah: i32,
                     Foo: std::mem::ManuallyDrop<roc_std::RocStr>,
@@ -205,7 +205,7 @@ fn tag_union_aliased() {
                 #[repr(C)]
                 pub struct MyTagUnion {
                     tag: tag_MyTagUnion,
-                    variant: variant_MyTagUnion
+                    variant: union_MyTagUnion
                 }
 
                 impl MyTagUnion {
@@ -213,19 +213,15 @@ fn tag_union_aliased() {
                         self.tag
                     }
 
-                    pub fn variant(&self) -> &variant_MyTagUnion {
-                        self.variant
-                    }
-
-                    pub fn into_variant(self) -> variant_MyTagUnion {
-                        self.variant
+                    pub fn variant(&self) -> &union_MyTagUnion {
+                        &self.variant
                     }
 
                     /// Construct a tag named Bar, with the appropriate payload
                     pub fn Bar(payload: u128) -> Self {
                         Self {
                             tag: tag_MyTagUnion::Bar,
-                            variant: variant_MyTagUnion {
+                            variant: union_MyTagUnion {
                                 Bar: payload
                             },
                         }
@@ -235,7 +231,7 @@ fn tag_union_aliased() {
                     pub fn Blah(payload: i32) -> Self {
                         Self {
                             tag: tag_MyTagUnion::Blah,
-                            variant: variant_MyTagUnion {
+                            variant: union_MyTagUnion {
                                 Blah: payload
                             },
                         }
@@ -245,7 +241,7 @@ fn tag_union_aliased() {
                     pub fn Foo(payload: roc_std::RocStr) -> Self {
                         Self {
                             tag: tag_MyTagUnion::Foo,
-                            variant: variant_MyTagUnion {
+                            variant: union_MyTagUnion {
                                 Foo: std::mem::ManuallyDrop::new(payload)
                             },
                         }
@@ -292,7 +288,7 @@ fn tag_union_aliased() {
                         unsafe {
                             match self.tag {
                                 tag_MyTagUnion::Bar => self.variant.Bar.partial_cmp(&other.variant.Bar),
-                                tag_MyTagUnion::Baz => core::cmp::Ordering::Equal,
+                                tag_MyTagUnion::Baz => Some(core::cmp::Ordering::Equal),
                                 tag_MyTagUnion::Blah => self.variant.Blah.partial_cmp(&other.variant.Blah),
                                 tag_MyTagUnion::Foo => self.variant.Foo.partial_cmp(&other.variant.Foo),
                             }
@@ -302,7 +298,7 @@ fn tag_union_aliased() {
 
                 impl Ord for MyTagUnion {
                     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                        match self.tag.partial_cmp(&other.tag) {
+                        match self.tag.cmp(&other.tag) {
                             core::cmp::Ordering::Equal => {}
                             not_eq => return not_eq,
                         }

@@ -105,11 +105,11 @@ fn write_tag_union(
     // The tag union's variant union, e.g.
     //
     // #[repr(C)]
-    // union variant_MyTagUnion {
+    // union union_MyTagUnion {
     //     Bar: u128,
     //     Foo: std::mem::ManuallyDrop<roc_std::RocStr>,
     // }
-    let variant_name = format!("variant_{}", name);
+    let variant_name = format!("union_{}", name);
 
     {
         // No deriving for unions; we have to add the impls ourselves!
@@ -172,15 +172,11 @@ fn write_tag_union(
                         }}
 
                         pub fn variant(&self) -> &{} {{
-                            self.variant
-                        }}
-
-                        pub fn into_variant(self) -> {} {{
-                            self.variant
+                            &self.variant
                         }}
                 "#
             ),
-            discriminant_name, variant_name, variant_name
+            discriminant_name, variant_name
         )?;
 
         for (tag_name, opt_payload_id) in tags {
@@ -372,7 +368,7 @@ fn write_tag_union(
                     // if the tags themselves had been unequal, we already would have
                     // early-returned, so this means the tags were equal and there's
                     // no payload; return Equal!
-                    "core::cmp::Ordering::Equal,".to_string()
+                    "Some(core::cmp::Ordering::Equal),".to_string()
                 }
             },
         )?;
@@ -399,7 +395,7 @@ fn write_tag_union(
                 r#"
                     impl Ord for {} {{
                         fn cmp(&self, other: &Self) -> std::cmp::Ordering {{
-                            match self.tag.partial_cmp(&other.tag) {{
+                            match self.tag.cmp(&other.tag) {{
                                 core::cmp::Ordering::Equal => {{}}
                                 not_eq => return not_eq,
                             }}
