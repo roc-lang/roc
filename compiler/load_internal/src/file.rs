@@ -447,7 +447,7 @@ fn start_phase<'a>(
                 // ability specializations our dependencies have. But we also need to know what
                 // ability specializations our dependents have, because those might be used by the
                 // specializations we've been asked to make.
-                for (module_id, exposed_types) in state.exposed_types.iter_all() {
+                for (_module_id, exposed_types) in state.exposed_types.iter_all() {
                     if let ExposedModuleTypes::Valid {
                         solved_specializations,
                         ..
