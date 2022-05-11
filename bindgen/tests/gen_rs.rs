@@ -252,6 +252,18 @@ fn tag_union_aliased() {
                         }
                     }
                 }
+
+                impl Drop for MyTagUnion {
+                    fn drop(&mut self) {
+                        match self.tag {
+                            tag_MyTagUnion::Bar => {}
+                            tag_MyTagUnion::Baz => {}
+                            tag_MyTagUnion::Blah => {}
+                            tag_MyTagUnion::Foo => unsafe { std::mem::ManuallyDrop::drop(&mut self.variant.Foo) },
+                        }
+                    }
+                }
+
             "#
         )
     );

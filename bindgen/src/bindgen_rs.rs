@@ -232,6 +232,67 @@ fn write_tag_union(
         buf.write_str("}\n")?;
     }
 
+    // The Drop impl for the tag union
+    //
+    // impl Drop for MyTagUnion {
+    //     fn drop(&mut self) {
+    //         match self.tag {
+    //             tag_MyTagUnion::Bar => {}
+    //             tag_MyTagUnion::Foo => unsafe { std::mem::ManuallyDrop::drop(&mut self.variant.Foo) },
+    //         }
+    //     }
+    // }
+    {
+        write!(
+            buf,
+            // Don't use indoc because this must be indented once!
+            indoc!(
+                r#"
+
+                    impl Drop for {} {{
+                        fn drop(&mut self) {{
+                            match self.tag {{
+                "#
+            ),
+            name
+        )?;
+
+        for (tag_name, opt_payload_id) in tags {
+            write!(
+                buf,
+                "{}{}{}{}::{} => ",
+                INDENT, INDENT, INDENT, discriminant_name, tag_name
+            )?;
+
+            match opt_payload_id {
+                Some(payload_id) if types.get(*payload_id).has_pointer(types) => {
+                    writeln!(
+                        buf,
+                        "unsafe {{ std::mem::ManuallyDrop::drop(&mut self.variant.{}) }},",
+                        tag_name
+                    )?;
+                }
+                _ => {
+                    // If it had no payload, or if the payload had no pointers,
+                    // there's nothing to clean up, so do `=> {}` for the branch.
+                    buf.write_str("{}\n")?;
+                }
+            }
+        }
+
+        writeln!(
+            buf,
+            // Don't use indoc because this must be indented once!
+            indoc!(
+                r#"
+                            }}
+                        }}
+                    }}
+                "#
+            ),
+        )?;
+    }
+
     Ok(())
 }
 
