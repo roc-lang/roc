@@ -99,25 +99,11 @@ nix-shell
 nixVulkanNvidia-460.91.03 cargo run edit
 ```
 
-#### Integrated Intel Graphics
+##### Integrated Intel Graphics
 
-:exclamation: ** Our Nix setup currently cannot run the editor with integrated intel graphics, see #1856 ** :exclamation:
+nix-shell does not work here, use the flake instead; check the section "Integrated Intel Graphics" under "from nix flake".
 
-Outside of a nix shell, run:
-
-```bash
-git clone https://github.com/guibou/nixGL
-cd nixGL
-nix-env -f ./ -iA nixVulkanIntel
-```
-
-cd to the roc repo, and run (without --pure):
-```
-nix-shell
-nixVulkanIntel cargo run edit
-```
-
-#### Other configs
+##### Other configs
 
 Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations.
 
