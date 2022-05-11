@@ -9,8 +9,42 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
     for id in types.sorted_ids() {
         match types.get(id) {
             RocType::Struct { name, fields } => write_struct(name, fields, id, types, buf)?,
-            RocType::TagUnion { .. } => {
-                todo!();
+            RocType::TagUnion {
+                tags,
+                name,
+                tag_bytes,
+            } => {
+                let is_enumeration = tags.iter().all(|(_, payloads)| payloads.is_empty());
+
+                match tags.len() {
+                    0 => {
+                        // Empty tag unions can never come up at runtime,
+                        // and so don't need declared types.
+                    }
+                    1 => {
+                        if is_enumeration {
+                            // A tag union with one tag is a zero-sized unit type, so
+                            // represent it as a zero-sized struct (e.g. "struct Foo()").
+                            write_deriving(id, types, buf)?;
+                            buf.write_str("\nstruct ")?;
+                            write_type_name(id, types, buf)?;
+                            buf.write_str("();\n")?;
+                        } else {
+                            // if it wasn't an enumeration
+                            // this is a newtype wrapper around something,
+                            // so write an alias for its contents
+                            todo!();
+                        }
+                    }
+                    _ => {
+                        if is_enumeration {
+                            write_deriving(id, types, buf)?;
+                            write_enum(name, tags.iter().map(|(name, _)| name), *tag_bytes, buf)?;
+                        } else {
+                            todo!();
+                        }
+                    }
+                }
             }
             RocType::RecursiveTagUnion { .. } => {
                 todo!();
@@ -36,10 +70,32 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
             | RocType::RocSet(_)
             | RocType::RocList(_)
             | RocType::RocBox(_) => {}
+            RocType::TransparentWrapper { name, content } => {
+                write_deriving(id, types, buf)?;
+                write!(buf, "#[repr(transparent)]\npub struct {}(", name)?;
+                write_type_name(*content, types, buf)?;
+                buf.write_str(");\n")?;
+            }
         }
     }
 
     Ok(())
+}
+
+fn write_enum<I: IntoIterator<Item = S>, S: AsRef<str>>(
+    name: &str,
+    tags: I,
+    tag_bytes: u8,
+    buf: &mut String,
+) -> fmt::Result {
+    // e.g. "#[repr(u8)]\npub enum Foo {\n"
+    writeln!(buf, "#[repr(u{})]\npub enum {} {{", tag_bytes * 8, name)?;
+
+    for name in tags {
+        writeln!(buf, "{}{},", INDENT, name.as_ref())?;
+    }
+
+    buf.write_str("}\n")
 }
 
 fn write_struct(
@@ -51,14 +107,10 @@ fn write_struct(
 ) -> fmt::Result {
     write_deriving(struct_id, types, buf)?;
 
-    buf.write_str("#[repr(C)]\npub struct ")?;
-    buf.write_str(name)?;
-    buf.write_str(" {\n")?;
+    writeln!(buf, "#[repr(C)]\npub struct {} {{", name)?;
 
     for (label, field_id) in fields {
-        buf.write_str(INDENT)?;
-        buf.write_str(label.as_str())?;
-        buf.write_str(": ")?;
+        write!(buf, "{}{}: ", INDENT, label.as_str())?;
         write_type_name(*field_id, types, buf)?;
         buf.write_str(",\n")?;
     }
@@ -108,6 +160,7 @@ fn write_type_name(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
         }
         RocType::Struct { name, .. }
         | RocType::TagUnion { name, .. }
+        | RocType::TransparentWrapper { name, .. }
         | RocType::RecursiveTagUnion { name, .. } => buf.write_str(name),
     }
 }

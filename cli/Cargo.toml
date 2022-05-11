@@ -15,13 +15,10 @@ test = false
 bench = false
 
 [features]
-default = ["target-aarch64", "target-x86_64", "target-wasm32", "editor", "llvm"]
+default = ["target-aarch64", "target-x86_64", "target-wasm32", "editor"]
 
 wasm32-cli-run = ["target-wasm32", "run-wasm32"]
 i386-cli-run = ["target-x86"]
-
-# TODO: change to roc_repl_cli/llvm once roc_repl can run without llvm.
-llvm = ["roc_build/llvm", "roc_repl_cli"]
 
 editor = ["roc_editor"]
 

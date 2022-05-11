@@ -1,9 +1,7 @@
-#[cfg(feature = "llvm")]
 use inkwell::{
     targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple},
     OptimizationLevel,
 };
-#[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
 use target_lexicon::{Architecture, Environment, OperatingSystem, Triple};
 
@@ -98,7 +96,6 @@ pub fn target_zig_str(target: &Triple) -> &'static str {
     }
 }
 
-#[cfg(feature = "llvm")]
 pub fn init_arch(target: &Triple) {
     match target.architecture {
         Architecture::X86_64 | Architecture::X86_32(_)
@@ -142,7 +139,6 @@ pub fn arch_str(target: &Triple) -> &'static str {
     }
 }
 
-#[cfg(feature = "llvm")]
 pub fn target_machine(
     target: &Triple,
     opt: OptimizationLevel,
@@ -172,7 +168,6 @@ pub fn target_machine(
     )
 }
 
-#[cfg(feature = "llvm")]
 pub fn convert_opt_level(level: OptLevel) -> OptimizationLevel {
     match level {
         OptLevel::Development | OptLevel::Normal => OptimizationLevel::None,

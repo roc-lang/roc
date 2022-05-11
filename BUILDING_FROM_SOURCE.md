@@ -185,9 +185,9 @@ If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 If you encounter:
 ```
 error: No suitable version of LLVM was found system-wide or pointed
-       to by LLVM_SYS_120_PREFIX.
+       to by LLVM_SYS_130_PREFIX.
 ```
-Add `export LLVM_SYS_120_PREFIX=/usr/lib/llvm-12` to your `~/.bashrc` or equivalent file for your shell.
+Add `export LLVM_SYS_130_PREFIX=/usr/lib/llvm-13` to your `~/.bashrc` or equivalent file for your shell.
 
 ### LLVM installation on macOS
 
@@ -206,14 +206,14 @@ export CPPFLAGS="-I/usr/local/opt/llvm/include"
 Installing LLVM's prebuilt binaries doesn't seem to be enough for the `llvm-sys` crate that Roc depends on, so I had to follow the steps below:
 
 1. I downloaded and installed [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16) (a full Visual Studio install should work too; the Build Tools are just the CLI tools, which is all I wanted)
-1. Download the custom LLVM 7z archive [here](https://github.com/PLC-lang/llvm-package-windows/releases/tag/v12.0.1).
+1. Download the custom LLVM 7z archive [here](https://github.com/PLC-lang/llvm-package-windows/releases/tag/v13.0.1).
 1. [Download 7-zip](https://www.7-zip.org/) to be able to extract this archive.
 1. Extract the 7z file to where you want to permanently keep the folder.
-1. In powershell, set the `LLVM_SYS_120_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-changes-to-environment-variables) to make this a permanent environment variable):
+1. In powershell, set the `LLVM_SYS_130_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-changes-to-environment-variables) to make this a permanent environment variable):
 ```
 [Environment]::SetEnvironmentVariable(
    "Path",
-   [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\anton\Downloads\LLVM-12.0.1-win64\bin",
+   [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\anton\Downloads\LLVM-13.0.1-win64\bin",
    "User"
 )
 ```
@@ -240,8 +240,8 @@ Create `~/.cargo/config.toml` if it does not exist and add this to it:
 rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "target-cpu=native"]
 ```
 
-Then install `lld` version 12 (e.g. with `$ sudo apt-get install lld-12`)
+Then install `lld` version 13 (e.g. with `$ sudo apt-get install lld-13`)
 and add make sure there's a `ld.lld` executable on your `PATH` which
-is symlinked to `lld-12`.
+is symlinked to `lld-13`.
 
 That's it! Enjoy the faster builds.

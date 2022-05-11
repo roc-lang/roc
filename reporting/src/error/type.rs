@@ -1441,7 +1441,7 @@ fn format_category<'b>(
             alloc.text(" of type:"),
         ),
         Float => (
-            alloc.concat([this_is, alloc.text(" a float")]),
+            alloc.concat([this_is, alloc.text(" a frac")]),
             alloc.text(" of type:"),
         ),
         Str => (
@@ -2428,8 +2428,8 @@ fn to_diff<'b>(
                 _ => false,
             };
             let is_float = |t: &ErrorType| match t {
-                ErrorType::Type(Symbol::NUM_FLOAT, _) => true,
-                ErrorType::Alias(Symbol::NUM_FLOAT, _, _, _) => true,
+                ErrorType::Type(Symbol::NUM_FRAC, _) => true,
+                ErrorType::Alias(Symbol::NUM_FRAC, _, _, _) => true,
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
                     matches!(
@@ -3344,9 +3344,9 @@ fn type_problem_to_pretty<'b>(
             alloc.reflow("You can convert between "),
             alloc.type_str("Int"),
             alloc.reflow(" and "),
-            alloc.type_str("Float"),
+            alloc.type_str("Frac"),
             alloc.reflow(" using functions like "),
-            alloc.symbol_qualified(Symbol::NUM_TO_FLOAT),
+            alloc.symbol_qualified(Symbol::NUM_TO_FRAC),
             alloc.reflow(" and "),
             alloc.symbol_qualified(Symbol::NUM_ROUND),
             alloc.reflow("."),

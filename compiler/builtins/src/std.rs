@@ -3,7 +3,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
-    bool_type, box_type, dec_type, dict_type, f32_type, f64_type, float_type, i128_type, i16_type,
+    bool_type, box_type, dec_type, dict_type, f32_type, f64_type, frac_type, i128_type, i16_type,
     i32_type, i64_type, i8_type, int_type, list_type, nat_type, num_type, ordering_type,
     result_type, set_type, str_type, str_utf8_byte_problem_type, u128_type, u16_type, u32_type,
     u64_type, u8_type,
@@ -269,11 +269,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(ordering_type()),
     );
 
-    // toFloat : Num * -> Float *
+    // toFrac : Num * -> Frac *
     add_top_level_function_type!(
-        Symbol::NUM_TO_FLOAT,
+        Symbol::NUM_TO_FRAC,
         vec![num_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR2))),
+        Box::new(frac_type(flex(TVAR2))),
     );
 
     // isNegative : Num a -> Bool
@@ -667,30 +667,30 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(str_type())
     );
 
-    // Float module
+    // Frac module
 
-    // div : Float a, Float a -> Float a
+    // div : Frac a, Frac a -> Frac a
     add_top_level_function_type!(
-        Symbol::NUM_DIV_FLOAT,
-        vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1)))
+        Symbol::NUM_DIV_FRAC,
+        vec![frac_type(flex(TVAR1)), frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1)))
     );
 
-    // divChecked : Float a, Float a -> Result (Float a) [ DivByZero ]*
+    // divChecked : Frac a, Frac a -> Result (Frac a) [ DivByZero ]*
     add_top_level_function_type!(
-        Symbol::NUM_DIV_FLOAT_CHECKED,
-        vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
-        Box::new(result_type(float_type(flex(TVAR1)), div_by_zero)),
+        Symbol::NUM_DIV_FRAC_CHECKED,
+        vec![frac_type(flex(TVAR1)), frac_type(flex(TVAR1))],
+        Box::new(result_type(frac_type(flex(TVAR1)), div_by_zero)),
     );
 
-    // sqrt : Float a -> Float a
+    // sqrt : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_SQRT,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // sqrtChecked : Float a -> Result (Float a) [ SqrtOfNegative ]*
+    // sqrtChecked : Frac a -> Result (Frac a) [ SqrtOfNegative ]*
     let sqrt_of_negative = SolvedType::TagUnion(
         vec![(TagName::Tag("SqrtOfNegative".into()), vec![])],
         Box::new(SolvedType::Wildcard),
@@ -698,18 +698,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     add_top_level_function_type!(
         Symbol::NUM_SQRT_CHECKED,
-        vec![float_type(flex(TVAR1))],
-        Box::new(result_type(float_type(flex(TVAR1)), sqrt_of_negative)),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(result_type(frac_type(flex(TVAR1)), sqrt_of_negative)),
     );
 
-    // log : Float a -> Float a
+    // log : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_LOG,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // logChecked : Float a -> Result (Float a) [ LogNeedsPositive ]*
+    // logChecked : Frac a -> Result (Frac a) [ LogNeedsPositive ]*
     let log_needs_positive = SolvedType::TagUnion(
         vec![(TagName::Tag("LogNeedsPositive".into()), vec![])],
         Box::new(SolvedType::Wildcard),
@@ -717,55 +717,49 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     add_top_level_function_type!(
         Symbol::NUM_LOG_CHECKED,
-        vec![float_type(flex(TVAR1))],
-        Box::new(result_type(float_type(flex(TVAR1)), log_needs_positive)),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(result_type(frac_type(flex(TVAR1)), log_needs_positive)),
     );
 
-    // round : Float a -> Int b
+    // round : Frac a -> Int b
     add_top_level_function_type!(
         Symbol::NUM_ROUND,
-        vec![float_type(flex(TVAR1))],
+        vec![frac_type(flex(TVAR1))],
         Box::new(int_type(flex(TVAR2))),
     );
 
-    // sin : Float a -> Float a
+    // sin : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_SIN,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // cos : Float a -> Float a
+    // cos : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_COS,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // tan : Float a -> Float a
+    // tan : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_TAN,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // maxFloat : Float a
-    add_type!(Symbol::NUM_MAX_FLOAT, float_type(flex(TVAR1)));
-
-    // minFloat : Float a
-    add_type!(Symbol::NUM_MIN_FLOAT, float_type(flex(TVAR1)));
-
-    // pow : Float a, Float a -> Float a
+    // pow : Frac a, Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_POW,
-        vec![float_type(flex(TVAR1)), float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1)), frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // ceiling : Float a -> Int b
+    // ceiling : Frac a -> Int b
     add_top_level_function_type!(
         Symbol::NUM_CEILING,
-        vec![float_type(flex(TVAR1))],
+        vec![frac_type(flex(TVAR1))],
         Box::new(int_type(flex(TVAR2))),
     );
 
@@ -776,32 +770,32 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(int_type(flex(TVAR1))),
     );
 
-    // floor : Float a -> Int b
+    // floor : Frac a -> Int b
     add_top_level_function_type!(
         Symbol::NUM_FLOOR,
-        vec![float_type(flex(TVAR1))],
+        vec![frac_type(flex(TVAR1))],
         Box::new(int_type(flex(TVAR2))),
     );
 
-    // atan : Float a -> Float a
+    // atan : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_ATAN,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // acos : Float a -> Float a
+    // acos : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_ACOS,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
-    // asin : Float a -> Float a
+    // asin : Frac a -> Frac a
     add_top_level_function_type!(
         Symbol::NUM_ASIN,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![frac_type(flex(TVAR1))],
+        Box::new(frac_type(flex(TVAR1))),
     );
 
     // bytesToU16 : List U8, Nat -> Result U16 [ OutOfBounds ]

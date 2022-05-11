@@ -5709,7 +5709,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
-        | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin
+        | NumCeiling | NumFloor | NumToFrac | NumIsFinite | NumAtan | NumAcos | NumAsin
         | NumToIntChecked => {
             debug_assert_eq!(args.len(), 1);
 
@@ -7236,7 +7236,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             // integer abs overflows when applied to the minimum value of a signed type
             int_abs_raise_on_overflow(env, arg, arg_int_type)
         }
-        NumToFloat => {
+        NumToFrac => {
             // This is an Int, so we need to convert it.
 
             let target_float_type = match return_layout {
@@ -7458,7 +7458,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumAbs => env.call_intrinsic(&LLVM_FABS[float_width], &[arg.into()]),
         NumSqrtUnchecked => env.call_intrinsic(&LLVM_SQRT[float_width], &[arg.into()]),
         NumLogUnchecked => env.call_intrinsic(&LLVM_LOG[float_width], &[arg.into()]),
-        NumToFloat => {
+        NumToFrac => {
             let return_width = match layout {
                 Layout::Builtin(Builtin::Float(return_width)) => *return_width,
                 _ => internal_error!("Layout for returning is not Float : {:?}", layout),
@@ -7480,10 +7480,10 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
                 (FloatWidth::F64, FloatWidth::F64) => arg.into(),
                 (FloatWidth::F128, FloatWidth::F128) => arg.into(),
                 (FloatWidth::F128, _) => {
-                    unimplemented!("I cannot handle F128 with Num.toFloat yet")
+                    unimplemented!("I cannot handle F128 with Num.toFrac yet")
                 }
                 (_, FloatWidth::F128) => {
-                    unimplemented!("I cannot handle F128 with Num.toFloat yet")
+                    unimplemented!("I cannot handle F128 with Num.toFrac yet")
                 }
             }
         }

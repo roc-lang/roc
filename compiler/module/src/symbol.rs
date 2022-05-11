@@ -1020,8 +1020,8 @@ define_builtins! {
         12 NUM_F64: "F64"  // the Num.F64 type alias
         13 NUM_F32: "F32"  // the Num.F32 type alias
         14 NUM_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
-        15 NUM_MAX_FLOAT: "maxFloat"
-        16 NUM_MIN_FLOAT: "minFloat"
+        15 NUM_MAX_F32: "maxF32"
+        16 NUM_MIN_F32: "minF32"
         17 NUM_ABS: "abs"
         18 NUM_NEG: "neg"
         19 NUM_ADD: "add"
@@ -1031,7 +1031,7 @@ define_builtins! {
         23 NUM_LTE: "isLte"
         24 NUM_GT: "isGt"
         25 NUM_GTE: "isGte"
-        26 NUM_TO_FLOAT: "toFloat"
+        26 NUM_TO_FRAC: "toFrac"
         27 NUM_SIN: "sin"
         28 NUM_COS: "cos"
         29 NUM_TAN: "tan"
@@ -1042,8 +1042,8 @@ define_builtins! {
         34 NUM_IS_NEGATIVE: "isNegative"
         35 NUM_REM: "rem"
         36 NUM_REM_CHECKED: "remChecked"
-        37 NUM_DIV_FLOAT: "div"
-        38 NUM_DIV_FLOAT_CHECKED: "divChecked"
+        37 NUM_DIV_FRAC: "div"
+        38 NUM_DIV_FRAC_CHECKED: "divChecked"
         39 NUM_DIV_TRUNC: "divTrunc"
         40 NUM_DIV_TRUNC_CHECKED: "divTruncChecked"
         41 NUM_SQRT: "sqrt"
@@ -1086,7 +1086,7 @@ define_builtins! {
         78 NUM_MUL_WRAP: "mulWrap"
         79 NUM_MUL_CHECKED: "mulChecked"
         80 NUM_INT: "Int"
-        81 NUM_FLOAT: "Float"
+        81 NUM_FRAC: "Frac"
         82 NUM_NATURAL: "Natural"
         83 NUM_NAT: "Nat"
         84 NUM_INT_CAST: "intCast"
@@ -1143,6 +1143,8 @@ define_builtins! {
         135 NUM_TO_F32_CHECKED: "toF32Checked"
         136 NUM_TO_F64: "toF64"
         137 NUM_TO_F64_CHECKED: "toF64Checked"
+        138 NUM_MAX_F64: "maxF64"
+        139 NUM_MIN_F64: "minF64"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias

@@ -39,13 +39,13 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // Float range : Num (FloatingPoint range)
+    // Frac range : Num (FloatingPoint range)
     add_alias(
-        Symbol::NUM_FLOAT,
+        Symbol::NUM_FRAC,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![Loc::at(Region::zero(), "range".into())],
-            typ: float_alias_content(flex(TVAR1)),
+            typ: frac_alias_content(flex(TVAR1)),
             kind: AliasKind::Structural,
         },
     );
@@ -303,7 +303,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // Dec : Float Decimal
+    // Dec : Frac Decimal
     add_alias(
         Symbol::NUM_DEC,
         BuiltinAlias {
@@ -314,7 +314,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // F64 : Float Binary64
+    // F64 : Frac Binary64
     add_alias(
         Symbol::NUM_F64,
         BuiltinAlias {
@@ -325,7 +325,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // F32 : Float Binary32
+    // F32 : Frac Binary32
     add_alias(
         Symbol::NUM_F32,
         BuiltinAlias {
@@ -411,21 +411,21 @@ fn floatingpoint_alias_content(range: SolvedType) -> SolvedType {
     range
 }
 
-// FLOAT
+// FRAC
 
 #[inline(always)]
-pub fn float_type(range: SolvedType) -> SolvedType {
+pub fn frac_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
-        Symbol::NUM_FLOAT,
+        Symbol::NUM_FRAC,
         vec![(range.clone())],
         vec![],
-        Box::new(float_alias_content(range)),
+        Box::new(frac_alias_content(range)),
         AliasKind::Structural,
     )
 }
 
 #[inline(always)]
-fn float_alias_content(range: SolvedType) -> SolvedType {
+fn frac_alias_content(range: SolvedType) -> SolvedType {
     num_type(floatingpoint_type(range))
 }
 
@@ -444,7 +444,7 @@ pub fn f64_type() -> SolvedType {
 
 #[inline(always)]
 fn f64_alias_content() -> SolvedType {
-    float_alias_content(binary64_type())
+    frac_alias_content(binary64_type())
 }
 
 // F32
@@ -462,7 +462,7 @@ pub fn f32_type() -> SolvedType {
 
 #[inline(always)]
 fn f32_alias_content() -> SolvedType {
-    float_alias_content(binary32_type())
+    frac_alias_content(binary32_type())
 }
 
 // Nat
@@ -927,7 +927,7 @@ pub fn dec_type() -> SolvedType {
 
 #[inline(always)]
 fn dec_alias_content() -> SolvedType {
-    float_alias_content(decimal_type())
+    frac_alias_content(decimal_type())
 }
 
 #[inline(always)]
