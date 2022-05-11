@@ -1677,16 +1677,15 @@ fn constrain_typed_function_arguments(
     }
 }
 
+#[inline(always)]
 fn attach_resolution_constraints(
     constraints: &mut Constraints,
     env: &mut Env,
     constraint: Constraint,
 ) -> Constraint {
-    let resolution_constrs = env.resolutions_to_make.drain(..).map(Constraint::Resolve);
-    let all_constrs: Vec<_> = std::iter::once(constraint)
-        .chain(resolution_constrs)
-        .collect();
-    constraints.and_constraint(all_constrs)
+    let resolution_constrs =
+        constraints.and_constraint(env.resolutions_to_make.drain(..).map(Constraint::Resolve));
+    constraints.and_constraint([constraint, resolution_constrs])
 }
 
 fn constrain_def(
