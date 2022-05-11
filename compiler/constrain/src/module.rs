@@ -1,6 +1,6 @@
 use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 use roc_builtins::std::StdLib;
-use roc_can::abilities::{AbilitiesStore, MemberTypeInfo};
+use roc_can::abilities::{AbilitiesStore, MemberTypeInfo, SolvedSpecializations};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
 use roc_can::expected::Expected;
@@ -89,6 +89,7 @@ impl ExposedForModule {
 pub struct ExposedModuleTypes {
     pub stored_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub storage_subs: roc_types::subs::StorageSubs,
+    pub solved_specializations: SolvedSpecializations,
 }
 
 pub fn constrain_module(

@@ -12,6 +12,7 @@ pub fn module_source(module_id: ModuleId) -> &'static str {
         ModuleId::BOX => BOX,
         ModuleId::BOOL => BOOL,
         ModuleId::ENCODE => ENCODE,
+        ModuleId::JSON => JSON,
         _ => panic!(
             "ModuleId {:?} is not part of the standard library",
             module_id
@@ -28,3 +29,4 @@ const SET: &str = include_str!("../roc/Set.roc");
 const BOX: &str = include_str!("../roc/Box.roc");
 const BOOL: &str = include_str!("../roc/Bool.roc");
 const ENCODE: &str = include_str!("../roc/Encode.roc");
+const JSON: &str = include_str!("../roc/Json.roc");

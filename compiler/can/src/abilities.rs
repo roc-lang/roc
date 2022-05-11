@@ -1,4 +1,4 @@
-use roc_collections::{all::MutMap, VecSet};
+use roc_collections::{all::MutMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
@@ -46,6 +46,8 @@ impl AbilityMemberData {
     }
 }
 
+pub type SolvedSpecializations = VecMap<(Symbol, Symbol), MemberSpecialization>;
+
 /// A particular specialization of an ability member.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemberSpecialization {
@@ -88,7 +90,7 @@ pub struct AbilitiesStore {
 
     /// Maps a tuple (member, type) specifying that `type` declares an implementation of an ability
     /// member `member`, to the exact symbol that implements the ability.
-    declared_specializations: MutMap<(Symbol, Symbol), MemberSpecialization>,
+    declared_specializations: SolvedSpecializations,
 
     next_specialization_id: u32,
 

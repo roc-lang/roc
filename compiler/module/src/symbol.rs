@@ -1313,6 +1313,9 @@ define_builtins! {
     9 ENCODE: "Encode" => {
         0 ENCODE_ENCODE: "Encode"
     }
+    10 JSON: "Json" => {
+        0 JSON_JSON: "Json"
+    }
 
-    num_modules: 10 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 11 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

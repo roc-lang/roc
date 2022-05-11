@@ -6,11 +6,11 @@ use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_builtins::std::borrow_stdlib;
-use roc_can::abilities::AbilitiesStore;
+use roc_can::abilities::{AbilitiesStore, SolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecSet};
+use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::{
     constrain_builtin_imports, constrain_module, ExposedByModule, ExposedForModule,
     ExposedModuleTypes,
@@ -166,6 +166,7 @@ impl Default for ModuleCache<'_> {
             NUM,
             BOX,
             ENCODE,
+            JSON,
         }
 
         Self {
@@ -376,7 +377,7 @@ fn start_phase<'a>(
                     constraint,
                     var_store,
                     imported_modules,
-                    &mut state.exposed_types,
+                    &state.exposed_types,
                     dep_idents,
                     declarations,
                     state.cached_subs.clone(),
@@ -2132,6 +2133,7 @@ fn update<'a>(
                     ExposedModuleTypes {
                         stored_vars_by_symbol: solved_module.stored_vars_by_symbol,
                         storage_subs: solved_module.storage_subs,
+                        solved_specializations: solved_module.solved_specializations,
                     },
                 );
 
@@ -2687,6 +2689,7 @@ fn load_module<'a>(
         "Bool", ModuleId::BOOL
         "Box", ModuleId::BOX
         "Encode", ModuleId::ENCODE
+        "Json", ModuleId::JSON
     }
 
     let (filename, opt_shorthand) = module_name_to_path(src_dir, module_name, arc_shorthands);
@@ -3486,19 +3489,41 @@ impl<'a> BuildTask<'a> {
     // TODO trim down these arguments - possibly by moving Constraint into Module
     #[allow(clippy::too_many_arguments)]
     fn solve_module(
-        module: Module,
+        mut module: Module,
         ident_ids: IdentIds,
         module_timing: ModuleTiming,
         constraints: Constraints,
         constraint: ConstraintSoa,
         var_store: VarStore,
         imported_modules: MutMap<ModuleId, Region>,
-        exposed_types: &mut ExposedByModule,
+        exposed_types: &ExposedByModule,
         dep_idents: IdentIdsByModule,
         declarations: Vec<Declaration>,
         cached_subs: CachedSubs,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
+
+        let abilities_store = &mut module.abilities_store;
+
+        for module in imported_modules.keys() {
+            let exposed = exposed_by_module
+                .get(module)
+                .unwrap_or_else(|| internal_error!("No exposed types for {:?}", module));
+            if let ExposedModuleTypes::Valid {
+                solved_specializations,
+                ..
+            } = exposed
+            {
+                for ((member, typ), specialization) in solved_specializations.iter() {
+                    abilities_store.register_specialization_for_type(
+                        *member,
+                        *typ,
+                        *specialization,
+                    );
+                }
+            }
+        }
+
         let exposed_for_module =
             ExposedForModule::new(module.referenced_values.iter(), exposed_by_module);
 
@@ -3594,6 +3619,7 @@ fn run_solve_solve(
     module: Module,
 ) -> (
     Solved<Subs>,
+    SolvedSpecializations,
     Vec<(Symbol, Variable)>,
     Vec<solve::TypeError>,
     AbilitiesStore,
@@ -3610,6 +3636,19 @@ fn run_solve_solve(
         constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
 
     let mut subs = Subs::new_from_varstore(var_store);
+
+    // We don't know what types we're about to solve for in our module, so we need to include the
+    // solved abilities across all dependencies.
+    // TODO: there's got to be a better way to do this. Maybe keep a cache of module -> solved
+    // abilities?
+    // let mut exposed_for_module = exposed_for_module;
+    // let mut imported_modules = VecSet::with_capacity(2);
+    // for imported in exposed_for_module.imported_values.iter() {
+    //     imported_modules.insert(imported.module_id());
+    // }
+    // for module in imported_modules.into_iter() {
+    //     let typechecked =
+    // }
 
     let import_variables = add_imports(
         &mut subs,
@@ -3628,7 +3667,7 @@ fn run_solve_solve(
         solve_aliases.insert(*name, alias.clone());
     }
 
-    let (solved_subs, exposed_vars_by_symbol, problems, abilities_store) = {
+    let (solved_subs, solved_specializations, exposed_vars_by_symbol, problems, abilities_store) = {
         let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
             &constraints,
             actual_constraint,
@@ -3638,13 +3677,36 @@ fn run_solve_solve(
             abilities_store,
         );
 
+        // STORE ABILITIES
+        let module_id = module.module_id;
+        let known_specializations =
+            abilities_store
+                .get_known_specializations()
+                .filter(|(member, typ)| {
+                    // This module solved this specialization if either the member or the type comes from the
+                    // module.
+                    member.module_id() == module_id || typ.module_id() == module_id
+                });
+
+        let mut solved_specializations: SolvedSpecializations = VecMap::default();
+        let mut specialization_symbols = VecSet::default();
+        for (member, typ) in known_specializations {
+            let specialization = abilities_store.get_specialization(member, typ).unwrap();
+            specialization_symbols.insert(specialization.symbol);
+            solved_specializations.insert((member, typ), specialization);
+        }
+        // END STORE ABILITIES
+
+        // Expose anything that is explicitly exposed by the header, or is a specialization of an
+        // ability.
         let exposed_vars_by_symbol: Vec<_> = solved_env
             .vars_by_symbol()
-            .filter(|(k, _)| exposed_symbols.contains(k))
+            .filter(|(k, _)| exposed_symbols.contains(k) || specialization_symbols.contains(k))
             .collect();
 
         (
             solved_subs,
+            solved_specializations,
             exposed_vars_by_symbol,
             problems,
             abilities_store,
@@ -3653,6 +3715,7 @@ fn run_solve_solve(
 
     (
         solved_subs,
+        solved_specializations,
         exposed_vars_by_symbol,
         problems,
         abilities_store,
@@ -3680,7 +3743,7 @@ fn run_solve<'a>(
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
 
-    let (solved_subs, exposed_vars_by_symbol, problems, abilities_store) = {
+    let (solved_subs, solved_specializations, exposed_vars_by_symbol, problems, abilities_store) = {
         if module_id.is_builtin() {
             match cached_subs.lock().remove(&module_id) {
                 None => run_solve_solve(
@@ -3694,6 +3757,8 @@ fn run_solve<'a>(
                 Some((subs, exposed_vars_by_symbol)) => {
                     (
                         Solved(subs),
+                        // TODO(abilities) replace when we have abilities for builtins
+                        VecMap::default(),
                         exposed_vars_by_symbol.to_vec(),
                         vec![],
                         // TODO(abilities) replace when we have abilities for builtins
@@ -3722,6 +3787,7 @@ fn run_solve<'a>(
         problems,
         aliases,
         stored_vars_by_symbol,
+        solved_specializations,
         storage_subs,
     };
 
