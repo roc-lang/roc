@@ -173,7 +173,7 @@ fn nested_record_anonymous() {
 fn tag_union_aliased() {
     let module = indoc!(
         r#"
-            MyTagUnion : [ Foo Str, Bar U128, Blah I32 ]
+            MyTagUnion : [ Foo Str, Bar U128, Blah I32, Baz ]
 
             main : MyTagUnion
             main = Foo "blah"
@@ -190,6 +190,7 @@ fn tag_union_aliased() {
                 #[repr(u8)]
                 pub enum tag_MyTagUnion {
                     Bar,
+                    Baz,
                     Blah,
                     Foo,
                 }
