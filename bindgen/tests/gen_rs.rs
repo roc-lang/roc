@@ -170,7 +170,6 @@ fn nested_record_anonymous() {
 }
 
 #[test]
-#[ignore]
 fn tag_union_aliased() {
     let module = indoc!(
         r#"
@@ -187,132 +186,11 @@ fn tag_union_aliased() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[repr(C)]
-                pub struct MyTagUnion {
-                    tag: tag_MyTagUnion,
-                    variant: variant_MyTagUnion,
-                }
-
-                #[repr(C)]
-                union variant_MyTagUnion {
-                    Bar: u128,
-                    Foo: std::mem::ManuallyDrop<Payload2<roc_std::RocStr, i32>>,
-                }
-
-                #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-                #[repr(C)]
-                pub struct Payload2<V0, V1> {
-                    _0: V0,
-                    _1: V1,
-                }
-
-                #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
                 #[repr(u8)]
                 pub enum tag_MyTagUnion {
                     Bar,
                     Foo,
-                }
-
-                impl MyTagUnion {
-                    pub fn tag(&self) -> tag_MyTagUnion {
-                        self.tag
-                    }
-
-                    /// Assume this is the tag named Foo, and return a reference to its payload.
-                    pub unsafe fn as_Foo(&self) -> &Payload2<roc_std::RocStr, i32> {
-                        &*self.variant.Foo
-                    }
-
-                    /// Assume this is the tag named Foo, and return a mutable reference to its payload.
-                    pub unsafe fn as_mut_Foo(&mut self) -> &mut Payload2<roc_std::RocStr, i32> {
-                        &mut *self.variant.Foo
-                    }
-
-                    /// Assume this is the tag named Bar, and return a reference to its payload.
-                    pub unsafe fn as_Bar(&self) -> u128 {
-                        self.variant.Bar
-                    }
-
-                    /// Assume this is the tag named Bar, and return a mutable reference to its payload.
-                    pub unsafe fn as_mut_Bar(&mut self) -> &mut u128 {
-                        &mut self.variant.Bar
-                    }
-
-                    /// Construct a tag named Foo, with the appropriate payload
-                    pub fn Foo(_0: roc_std::RocStr, _1: i32) -> Self {
-                        Self {
-                            tag: tag_MyTagUnion::Foo,
-                            variant: variant_MyTagUnion {
-                                Foo: std::mem::ManuallyDrop::new(Payload2 { _0, _1 }),
-                            },
-                        }
-                    }
-
-                    /// Construct a tag named Bar, with the appropriate payload
-                    pub fn Bar(arg0: u128) -> Self {
-                        Self {
-                            tag: tag_MyTagUnion::Bar,
-                            variant: variant_MyTagUnion { Bar: arg0 },
-                        }
-                    }
-                }
-
-                impl Drop for MyTagUnion {
-                    fn drop(&mut self) {
-                        match self.tag {
-                            tag_MyTagUnion::Bar => {}
-                            tag_MyTagUnion::Foo => unsafe { std::mem::ManuallyDrop::drop(&mut self.variant.Foo) },
-                        }
-                    }
-                }
-
-                impl PartialEq for MyTagUnion {
-                    fn eq(&self, other: &Self) -> bool {
-                        if self.tag != other.tag {
-                            return false;
-                        }
-
-                        unsafe {
-                            match self.tag {
-                                tag_MyTagUnion::Bar => self.variant.Bar == other.variant.Bar,
-                                tag_MyTagUnion::Foo => self.variant.Foo == other.variant.Foo,
-                            }
-                        }
-                    }
-                }
-
-                impl Eq for MyTagUnion {}
-
-                impl PartialOrd for MyTagUnion {
-                    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-                        match self.tag.partial_cmp(&other.tag) {
-                            Some(core::cmp::Ordering::Equal) => {}
-                            not_eq => return not_eq,
-                        }
-
-                        unsafe {
-                            match self.tag {
-                                tag_MyTagUnion::Bar => self.variant.Bar.partial_cmp(&other.variant.Bar),
-                                tag_MyTagUnion::Foo => self.variant.Foo.partial_cmp(&other.variant.Foo),
-                            }
-                        }
-                    }
-                }
-
-                impl Ord for MyTagUnion {
-                    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                        match self.tag.cmp(&other.tag) {
-                            core::cmp::Ordering::Equal => {}
-                            not_eq => return not_eq,
-                        }
-
-                        unsafe {
-                            match self.tag {
-                                tag_MyTagUnion::Bar => self.variant.Bar.cmp(&other.variant.Bar),
-                                tag_MyTagUnion::Foo => self.variant.Foo.cmp(&other.variant.Foo),
-                            }
-                        }
-                    }
                 }
             "#
         )
