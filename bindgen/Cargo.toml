@@ -29,7 +29,6 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 ven_graph = { path = "../vendor/pathfinding" }
 target-lexicon = "0.12.3"
 clap = { version = "3.1.15", default-features = false, features = ["std", "color", "suggestions", "derive"] }
-const_format = { version = "0.2.23", features = ["const_generics"] }
 indoc = "1.0.3"
 
 [dev-dependencies]

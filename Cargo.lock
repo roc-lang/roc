@@ -3434,7 +3434,6 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "clap 3.1.17",
- "const_format",
  "indoc",
  "pretty_assertions",
  "roc_builtins",
