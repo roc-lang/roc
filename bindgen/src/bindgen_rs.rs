@@ -503,6 +503,53 @@ fn write_tag_union(
         writeln!(buf, "impl Copy for {} {{}}\n", name)?;
     }
 
+    // The Debug impl for the tag union
+    {
+        write!(
+            buf,
+            indoc!(
+                r#"
+                    impl core::fmt::Debug for {} {{
+                        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+                            f.write_str("{}::")?;
+
+                            unsafe {{
+                                match self.tag {{
+                "#
+            ),
+            name, name
+        )?;
+
+        write_impl_tags(
+            4,
+            tags.iter(),
+            &discriminant_name,
+            buf,
+            |tag_name, opt_payload_id| {
+                if opt_payload_id.is_some() {
+                    format!(
+                        r#"f.debug_tuple("{}").field(&self.variant.{}).finish(),"#,
+                        tag_name, tag_name
+                    )
+                } else {
+                    format!(r#"f.write_str("{}"),"#, tag_name)
+                }
+            },
+        )?;
+
+        writeln!(
+            buf,
+            indoc!(
+                r#"
+                                }}
+                            }}
+                        }}
+                    }}
+                "#
+            ),
+        )?;
+    }
+
     Ok(())
 }
 

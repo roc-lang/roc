@@ -348,6 +348,21 @@ fn tag_union_aliased() {
                     }
                 }
 
+                impl core::fmt::Debug for MyTagUnion {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        f.write_str("MyTagUnion::")?;
+
+                        unsafe {
+                            match self.tag {
+                                tag_MyTagUnion::Bar => f.debug_tuple("Bar").field(&self.variant.Bar).finish(),
+                                tag_MyTagUnion::Baz => f.write_str("Baz"),
+                                tag_MyTagUnion::Blah => f.debug_tuple("Blah").field(&self.variant.Blah).finish(),
+                                tag_MyTagUnion::Foo => f.debug_tuple("Foo").field(&self.variant.Foo).finish(),
+                            }
+                        }
+                    }
+                }
+
             "#
         )
     );
