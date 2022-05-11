@@ -629,6 +629,7 @@ fn deep_copy_type_vars<'a>(
 mod test {
     use super::deep_copy_type_vars;
     use bumpalo::Bump;
+    use roc_error_macros::internal_error;
     use roc_module::symbol::Symbol;
     use roc_types::subs::{
         Content, Content::*, Descriptor, Mark, OptVariable, Rank, Subs, SubsIndex, Variable,
@@ -732,7 +733,7 @@ mod test {
             RigidAbleVar(name, Symbol::UNDERSCORE) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
-            it => unreachable!("{:?}", it),
+            it => internal_error!("{:?}", it),
         }
     }
 }
