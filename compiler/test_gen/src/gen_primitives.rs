@@ -3474,3 +3474,32 @@ fn list_map2_conslist() {
         RocStr
     )
 }
+
+#[test]
+#[ignore]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn mutual_recursion_top_level_defs() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            isEven = \n ->
+                when n is
+                    0 -> True
+                    1 -> False
+                    _ -> isOdd (n - 1)
+
+            isOdd = \n ->
+                when n is
+                    0 -> True
+                    1 -> False
+                    _ -> isEven (n - 1)
+
+            main = isOdd 11
+            "#
+        ),
+        true,
+        bool
+    )
+}

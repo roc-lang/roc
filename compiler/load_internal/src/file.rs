@@ -4354,7 +4354,30 @@ fn build_pending_specializations<'a>(
 
                 procs_base.partial_procs.insert(symbol, partial_proc);
             }
-            Destructure(_d_index) => {
+            Destructure(d_index) => {
+                let loc_pattern = &declarations.destructs[d_index.index()].loc_pattern;
+
+                use roc_can::pattern::Pattern;
+                let symbol = match &loc_pattern.value {
+                    Pattern::Identifier(_) => {
+                        debug_assert!(false, "identifier ended up in Destructure {:?}", symbol);
+                        symbol
+                    }
+                    Pattern::AbilityMemberSpecialization { ident, specializes } => {
+                        debug_assert!(
+                            false,
+                            "ability member ended up in Destructure {:?} specializes {:?}",
+                            ident, specializes
+                        );
+                        symbol
+                    }
+                    Pattern::Shadowed(_, _, shadowed) => {
+                        // this seems to work for now
+                        *shadowed
+                    }
+                    _ => todo!("top-level destrucuture patterns are not implemented"),
+                };
+
                 // mark this symbols as a top-level thunk before any other work on the procs
                 module_thunks.push(symbol);
 
