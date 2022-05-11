@@ -1198,6 +1198,11 @@ fn constrain_function_def(
                 &mut ftv,
             );
 
+            let env = &Env {
+                home: env.home,
+                rigids: ftv,
+            };
+
             let loc_pattern = Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
 
             // TODO missing equality of annotation_expected with expr_var?
