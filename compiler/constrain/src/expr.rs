@@ -1727,30 +1727,27 @@ fn constrain_def(
     }
 }
 
+/// Create a let-constraint for a non-recursive def.
+/// Recursive defs should always use `constrain_recursive_defs`.
 pub fn constrain_def_make_constraint(
     constraints: &mut Constraints,
-    new_rigid_variables: impl Iterator<Item = Variable>,
-    new_infer_variables: impl Iterator<Item = Variable>,
-    expr_con: Constraint,
-    body_con: Constraint,
+    annotation_rigid_variables: impl Iterator<Item = Variable>,
+    annotation_infer_variables: impl Iterator<Item = Variable>,
+    def_expr_con: Constraint,
+    after_def_con: Constraint,
     def_pattern_state: PatternState,
 ) -> Constraint {
-    let and_constraint = constraints.and_constraint(def_pattern_state.constraints);
+    let all_flex_variables = (def_pattern_state.vars.into_iter()).chain(annotation_infer_variables);
 
-    let def_con = constraints.let_constraint(
-        [],
-        new_infer_variables,
-        [], // empty, because our functions have no arguments!
-        and_constraint,
-        expr_con,
-    );
+    let pattern_constraints = constraints.and_constraint(def_pattern_state.constraints);
+    let def_pattern_and_body_con = constraints.and_constraint([pattern_constraints, def_expr_con]);
 
     constraints.let_constraint(
-        new_rigid_variables,
-        def_pattern_state.vars,
+        annotation_rigid_variables,
+        all_flex_variables,
         def_pattern_state.headers,
-        def_con,
-        body_con,
+        def_pattern_and_body_con,
+        after_def_con,
     )
 }
 
