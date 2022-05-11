@@ -183,6 +183,7 @@ pub fn frontload_ability_constraints(
             signature,
         } = &member_data.typ
         {
+            let signature_var = *signature_var;
             let rigids = Default::default();
             let mut env = Env {
                 home,
@@ -195,22 +196,21 @@ pub fn frontload_ability_constraints(
                 constraints,
                 &mut env,
                 &pattern,
-                Type::Variable(member_data.signature_var),
+                Type::Variable(signature_var),
             );
 
             debug_assert!(env.resolutions_to_make.is_empty());
 
-            def_pattern_state.vars.push(member_data.signature_var);
+            def_pattern_state.vars.push(signature_var);
 
-            let vars = &member_data.variables;
             let rigid_variables = vars.rigid_vars.iter().chain(vars.able_vars.iter()).copied();
             let infer_variables = vars.flex_vars.iter().copied();
 
             def_pattern_state
                 .constraints
                 .push(constraints.equal_types_var(
-                    member_data.signature_var,
-                    Expected::NoExpectation(member_data.signature.clone()),
+                    signature_var,
+                    Expected::NoExpectation(signature.clone()),
                     Category::Storage(file!(), line!()),
                     Region::zero(),
                 ));

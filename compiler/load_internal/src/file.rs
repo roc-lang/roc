@@ -3679,22 +3679,19 @@ fn run_solve_solve(
 
         // STORE ABILITIES
         let module_id = module.module_id;
-        let known_specializations =
-            abilities_store
-                .get_known_specializations()
-                .filter(|(member, typ)| {
-                    // This module solved this specialization if either the member or the type comes from the
-                    // module.
-                    member.module_id() == module_id || typ.module_id() == module_id
-                });
+        let solved_specializations: SolvedSpecializations = abilities_store
+            .iter_specializations()
+            .filter(|((member, typ), _)| {
+                // This module solved this specialization if either the member or the type comes from the
+                // module.
+                member.module_id() == module_id || typ.module_id() == module_id
+            })
+            .collect();
 
-        let mut solved_specializations: SolvedSpecializations = VecMap::default();
-        let mut specialization_symbols = VecSet::default();
-        for (member, typ) in known_specializations {
-            let specialization = abilities_store.get_specialization(member, typ).unwrap();
-            specialization_symbols.insert(specialization.symbol);
-            solved_specializations.insert((member, typ), specialization);
-        }
+        let specialization_symbols: VecSet<_> = solved_specializations
+            .values()
+            .map(|ms| ms.symbol)
+            .collect();
         // END STORE ABILITIES
 
         // Expose anything that is explicitly exposed by the header, or is a specialization of an

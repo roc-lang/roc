@@ -1,3 +1,5 @@
+use std::iter::FromIterator;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct VecSet<T> {
     elements: Vec<T>,
@@ -98,6 +100,14 @@ impl<A: Ord> Extend<A> for VecSet<A> {
                 self.elements.dedup();
             }
         }
+    }
+}
+
+impl<A: Ord> FromIterator<A> for VecSet<A> {
+    fn from_iter<T: IntoIterator<Item = A>>(iter: T) -> Self {
+        let mut set = VecSet::default();
+        set.extend(iter);
+        set
     }
 }
 
