@@ -4189,7 +4189,7 @@ fn build_pending_specializations<'a>(
     imported_module_thunks: &'a [Symbol],
     home: ModuleId,
     mut ident_ids: IdentIds,
-    decls: Declarations,
+    declarations: Declarations,
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     target_info: TargetInfo,
@@ -4225,39 +4225,137 @@ fn build_pending_specializations<'a>(
         abilities_store: &mut abilities_store,
     };
 
-    let decls = [];
-
     // Add modules' decls to Procs
-    for decl in decls {
-        use roc_can::def::Declaration::*;
+    for (index, tag) in declarations.iter_top_down() {
+        use roc_can::expr::DeclarationTag::*;
 
-        match decl {
-            Declare(def) | Builtin(def) => add_def_to_module(
-                &mut layout_cache,
-                &mut procs_base,
-                &mut module_thunks,
-                &mut mono_env,
-                def,
-                &exposed_to_host.values,
-                false,
-            ),
-            DeclareRec(defs) => {
-                for def in defs {
-                    add_def_to_module(
-                        &mut layout_cache,
-                        &mut procs_base,
-                        &mut module_thunks,
-                        &mut mono_env,
-                        def,
-                        &exposed_to_host.values,
-                        true,
-                    )
+        let symbol = declarations.symbols[index].value;
+        let expr_var = declarations.variables[index];
+
+        let is_host_exposed = exposed_to_host.values.contains_key(&symbol);
+
+        // TODO remove clones (with drain)
+        let annotation = declarations.annotations[index].clone();
+        let body = declarations.expressions[index].clone();
+
+        match tag {
+            Value => {
+                // mark this symbols as a top-level thunk before any other work on the procs
+                module_thunks.push(symbol);
+
+                // If this is an exposed symbol, we need to
+                // register it as such. Otherwise, since it
+                // never gets called by Roc code, it will never
+                // get specialized!
+                if is_host_exposed {
+                    let layout_result =
+                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
+
+                    // cannot specialize when e.g. main's type contains type variables
+                    if let Err(e) = layout_result {
+                        match e {
+                            LayoutProblem::Erroneous => {
+                                let message = "top level function has erroneous type";
+                                procs_base.runtime_errors.insert(symbol, message);
+                                continue;
+                            }
+                            LayoutProblem::UnresolvedTypeVar(v) => {
+                                let message = format!(
+                                    "top level function has unresolved type variable {:?}",
+                                    v
+                                );
+                                procs_base
+                                    .runtime_errors
+                                    .insert(symbol, mono_env.arena.alloc(message));
+                                continue;
+                            }
+                        }
+                    }
+
+                    procs_base.host_specializations.insert_host_exposed(
+                        mono_env.subs,
+                        symbol,
+                        annotation,
+                        expr_var,
+                    );
                 }
+
+                let proc = PartialProc {
+                    annotation: expr_var,
+                    // This is a 0-arity thunk, so it has no arguments.
+                    pattern_symbols: &[],
+                    // This is a top-level definition, so it cannot capture anything
+                    captured_symbols: CapturedSymbols::None,
+                    body: body.value,
+                    body_var: expr_var,
+                    // This is a 0-arity thunk, so it cannot be recursive
+                    is_self_recursive: false,
+                };
+
+                procs_base.partial_procs.insert(symbol, proc);
             }
-            InvalidCycle(_entries) => {
-                // do nothing?
-                // this may mean the loc_symbols are not defined during codegen; is that a problem?
+            Function(f_index) | Recursive(f_index) | TailRecursive(f_index) => {
+                let function_def = &declarations.function_bodies[f_index.index()].value;
+                // this is a top-level definition, it should not capture anything
+                debug_assert!(
+                    function_def.captured_symbols.is_empty(),
+                    "{:?}",
+                    (symbol, symbol.module_id(), &function_def.captured_symbols)
+                );
+
+                // If this is an exposed symbol, we need to
+                // register it as such. Otherwise, since it
+                // never gets called by Roc code, it will never
+                // get specialized!
+                if is_host_exposed {
+                    let layout_result =
+                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
+
+                    // cannot specialize when e.g. main's type contains type variables
+                    if let Err(e) = layout_result {
+                        match e {
+                            LayoutProblem::Erroneous => {
+                                let message = "top level function has erroneous type";
+                                procs_base.runtime_errors.insert(symbol, message);
+                                continue;
+                            }
+                            LayoutProblem::UnresolvedTypeVar(v) => {
+                                let message = format!(
+                                    "top level function has unresolved type variable {:?}",
+                                    v
+                                );
+                                procs_base
+                                    .runtime_errors
+                                    .insert(symbol, mono_env.arena.alloc(message));
+                                continue;
+                            }
+                        }
+                    }
+
+                    procs_base.host_specializations.insert_host_exposed(
+                        mono_env.subs,
+                        symbol,
+                        annotation,
+                        expr_var,
+                    );
+                }
+
+                let is_recursive = matches!(tag, Recursive(_) | TailRecursive(_));
+
+                let partial_proc = PartialProc::from_named_function(
+                    &mut mono_env,
+                    expr_var,
+                    function_def.arguments.clone(),
+                    body,
+                    CapturedSymbols::None,
+                    is_recursive,
+                    function_def.return_type,
+                );
+
+                procs_base.partial_procs.insert(symbol, partial_proc);
             }
+            Destructure(_) => todo!(),
+            MutualRecursion(_) => todo!(),
         }
     }
 
@@ -4279,6 +4377,158 @@ fn build_pending_specializations<'a>(
         problems,
         module_timing,
         abilities_store,
+    }
+}
+
+fn add_def_to_module_simple<'a>(
+    layout_cache: &mut LayoutCache<'a>,
+    procs: &mut ProcsBase<'a>,
+    module_thunks: &mut bumpalo::collections::Vec<'a, Symbol>,
+    mono_env: &mut roc_mono::ir::Env<'a, '_>,
+    def: roc_can::def::Def,
+    exposed_to_host: &MutMap<Symbol, Variable>,
+    is_recursive: bool,
+) {
+    use roc_can::expr::ClosureData;
+    use roc_can::expr::Expr::*;
+    use roc_can::pattern::Pattern::*;
+
+    match def.loc_pattern.value {
+        Identifier(symbol)
+        | AbilityMemberSpecialization {
+            ident: symbol,
+            specializes: _,
+        } => {
+            let is_host_exposed = exposed_to_host.contains_key(&symbol);
+
+            match def.loc_expr.value {
+                Closure(ClosureData {
+                    function_type: annotation,
+                    return_type: ret_var,
+                    arguments: loc_args,
+                    loc_body,
+                    captured_symbols,
+                    name,
+                    ..
+                }) => {
+                    // this is a top-level definition, it should not capture anything
+                    debug_assert!(
+                        captured_symbols.is_empty(),
+                        "{:?}",
+                        (symbol, name, symbol.module_id(), &captured_symbols)
+                    );
+
+                    // If this is an exposed symbol, we need to
+                    // register it as such. Otherwise, since it
+                    // never gets called by Roc code, it will never
+                    // get specialized!
+                    if is_host_exposed {
+                        let layout_result =
+                            layout_cache.raw_from_var(mono_env.arena, annotation, mono_env.subs);
+
+                        // cannot specialize when e.g. main's type contains type variables
+                        if let Err(e) = layout_result {
+                            match e {
+                                LayoutProblem::Erroneous => {
+                                    let message = "top level function has erroneous type";
+                                    procs.runtime_errors.insert(symbol, message);
+                                    return;
+                                }
+                                LayoutProblem::UnresolvedTypeVar(v) => {
+                                    let message = format!(
+                                        "top level function has unresolved type variable {:?}",
+                                        v
+                                    );
+                                    procs
+                                        .runtime_errors
+                                        .insert(symbol, mono_env.arena.alloc(message));
+                                    return;
+                                }
+                            }
+                        }
+
+                        procs.host_specializations.insert_host_exposed(
+                            mono_env.subs,
+                            symbol,
+                            def.annotation,
+                            annotation,
+                        );
+                    }
+
+                    let partial_proc = PartialProc::from_named_function(
+                        mono_env,
+                        annotation,
+                        loc_args,
+                        *loc_body,
+                        CapturedSymbols::None,
+                        is_recursive,
+                        ret_var,
+                    );
+
+                    procs.partial_procs.insert(symbol, partial_proc);
+                }
+                body => {
+                    // mark this symbols as a top-level thunk before any other work on the procs
+                    module_thunks.push(symbol);
+
+                    let annotation = def.expr_var;
+
+                    // If this is an exposed symbol, we need to
+                    // register it as such. Otherwise, since it
+                    // never gets called by Roc code, it will never
+                    // get specialized!
+                    if is_host_exposed {
+                        let layout_result =
+                            layout_cache.raw_from_var(mono_env.arena, annotation, mono_env.subs);
+
+                        // cannot specialize when e.g. main's type contains type variables
+                        if let Err(e) = layout_result {
+                            match e {
+                                LayoutProblem::Erroneous => {
+                                    let message = "top level function has erroneous type";
+                                    procs.runtime_errors.insert(symbol, message);
+                                    return;
+                                }
+                                LayoutProblem::UnresolvedTypeVar(v) => {
+                                    let message = format!(
+                                        "top level function has unresolved type variable {:?}",
+                                        v
+                                    );
+                                    procs
+                                        .runtime_errors
+                                        .insert(symbol, mono_env.arena.alloc(message));
+                                    return;
+                                }
+                            }
+                        }
+
+                        procs.host_specializations.insert_host_exposed(
+                            mono_env.subs,
+                            symbol,
+                            def.annotation,
+                            annotation,
+                        );
+                    }
+
+                    let proc = PartialProc {
+                        annotation,
+                        // This is a 0-arity thunk, so it has no arguments.
+                        pattern_symbols: &[],
+                        // This is a top-level definition, so it cannot capture anything
+                        captured_symbols: CapturedSymbols::None,
+                        body,
+                        body_var: def.expr_var,
+                        // This is a 0-arity thunk, so it cannot be recursive
+                        is_self_recursive: false,
+                    };
+
+                    procs.partial_procs.insert(symbol, proc);
+                }
+            };
+        }
+        other => {
+            todo!("TODO gracefully handle Declare({:?})", other);
+        }
     }
 }
 
