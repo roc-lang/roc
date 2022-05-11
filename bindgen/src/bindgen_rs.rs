@@ -23,13 +23,13 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
                     write_deriving(types.get(id), types, buf)?;
                     writeln!(buf, "\nstruct {}();", type_name(id, types))?;
                 } else {
-                    write_enumeration(name, types.get(id), tags.into_iter(), types, buf)?;
+                    write_enumeration(name, types.get(id), tags.iter(), types, buf)?;
                 }
             }
             RocType::TagUnion { tags, name } => {
                 // Empty tag unions can never come up at runtime,
                 // and so don't need declared types.
-                if tags.len() > 0 {
+                if !tags.is_empty() {
                     write_tag_union(name, id, tags, types, buf)?;
                 }
             }
@@ -242,7 +242,6 @@ fn write_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str>>(
     types: &Types,
     buf: &mut String,
 ) -> fmt::Result {
-    let tags = tags.into_iter();
     let tag_bytes: usize = UnionLayout::discriminant_size(tags.len())
         .stack_size()
         .try_into()
