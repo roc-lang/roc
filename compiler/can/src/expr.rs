@@ -1912,6 +1912,9 @@ pub struct Declarations {
     pub symbols: Vec<Loc<Symbol>>,
     pub annotations: Vec<Option<crate::def::Annotation>>,
 
+    // used for ability member specializatons.
+    pub specializes: VecMap<usize, Symbol>,
+
     pub function_bodies: Vec<Loc<FunctionDef>>,
     pub expressions: Vec<Loc<Expr>>,
     pub destructs: Vec<DestructureDef>,
@@ -1935,7 +1938,8 @@ impl Declarations {
             annotations: Vec::with_capacity(capacity),
             function_bodies: Vec::with_capacity(capacity),
             expressions: Vec::with_capacity(capacity),
-            destructs: Vec::new(), // number of destructs is probably low
+            specializes: VecMap::default(), // number of specializations is probably low
+            destructs: Vec::new(),          // number of destructs is probably low
         }
     }
 
@@ -1945,6 +1949,7 @@ impl Declarations {
         loc_closure_data: Loc<ClosureData>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
 
@@ -1974,6 +1979,10 @@ impl Declarations {
 
         self.expressions.push(*loc_closure_data.value.loc_body);
 
+        if let Some(specializes) = specializes {
+            self.specializes.insert(index, specializes);
+        }
+
         index
     }
 
@@ -1983,6 +1992,7 @@ impl Declarations {
         loc_closure_data: Loc<ClosureData>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
 
@@ -2006,6 +2016,10 @@ impl Declarations {
 
         self.expressions.push(*loc_closure_data.value.loc_body);
 
+        if let Some(specializes) = specializes {
+            self.specializes.insert(index, specializes);
+        }
+
         index
     }
 
@@ -2015,6 +2029,7 @@ impl Declarations {
         loc_expr: Loc<Expr>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
 
@@ -2024,6 +2039,10 @@ impl Declarations {
         self.annotations.push(annotation);
 
         self.expressions.push(loc_expr);
+
+        if let Some(specializes) = specializes {
+            self.specializes.insert(index, specializes);
+        }
 
         index
     }
@@ -2038,6 +2057,7 @@ impl Declarations {
                             Loc::at(def.loc_expr.region, closure_data),
                             def.expr_var,
                             def.annotation,
+                            None,
                         );
                     }
 
@@ -2047,6 +2067,7 @@ impl Declarations {
                             Loc::at(def.loc_expr.region, closure_data),
                             def.expr_var,
                             def.annotation,
+                            None,
                         );
                     }
                 },
@@ -2056,6 +2077,7 @@ impl Declarations {
                         def.loc_expr,
                         def.expr_var,
                         def.annotation,
+                        None,
                     );
                 }
             },

@@ -805,11 +805,27 @@ pub(crate) fn sort_can_defs_new(
                                     Loc::at(def.loc_expr.region, closure_data),
                                     def.expr_var,
                                     def.annotation,
+                                    None,
                                 );
                             }
                             _ => todo!(),
                         },
-                        _ => todo!(),
+                        Pattern::AbilityMemberSpecialization {
+                            ident: symbol,
+                            specializes,
+                        } => match def.loc_expr.value {
+                            Closure(closure_data) => {
+                                declarations.push_recursive_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    Loc::at(def.loc_expr.region, closure_data),
+                                    def.expr_var,
+                                    def.annotation,
+                                    Some(specializes),
+                                );
+                            }
+                            _ => todo!(),
+                        },
+                        _ => todo!("{:?}", &def.loc_pattern.value),
                     }
                 } else {
                     // Declaration::Declare(def)
@@ -821,6 +837,7 @@ pub(crate) fn sort_can_defs_new(
                                     Loc::at(def.loc_expr.region, closure_data),
                                     def.expr_var,
                                     def.annotation,
+                                    None,
                                 );
                             }
                             _ => {
@@ -829,10 +846,34 @@ pub(crate) fn sort_can_defs_new(
                                     def.loc_expr,
                                     def.expr_var,
                                     def.annotation,
+                                    None,
                                 );
                             }
                         },
-                        _ => todo!(),
+                        Pattern::AbilityMemberSpecialization {
+                            ident: symbol,
+                            specializes,
+                        } => match def.loc_expr.value {
+                            Closure(closure_data) => {
+                                declarations.push_function_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    Loc::at(def.loc_expr.region, closure_data),
+                                    def.expr_var,
+                                    def.annotation,
+                                    Some(specializes),
+                                );
+                            }
+                            _ => {
+                                declarations.push_value_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    def.loc_expr,
+                                    def.expr_var,
+                                    def.annotation,
+                                    Some(specializes),
+                                );
+                            }
+                        },
+                        _ => todo!("{:?}", &def.loc_pattern.value),
                     }
                 }
             }
