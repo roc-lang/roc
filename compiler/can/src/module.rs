@@ -604,6 +604,45 @@ pub fn canonicalize_module_defs<'a>(
     //        }
     //    }
 
+    let values: Vec<_> = declarations.iter_top_down().collect();
+
+    for (index, tag) in values {
+        use crate::expr::DeclarationTag::*;
+
+        match tag {
+            Value => {
+                // def pattern has no default expressions, so skip
+                let loc_expr = &mut declarations.expressions[index];
+
+                fix_values_captured_in_closure_expr(&mut loc_expr.value, &mut VecSet::default());
+            }
+            Function(f_index) | Recursive(f_index) | TailRecursive(f_index) => {
+                let name = declarations.symbols[index].value;
+                let function_def = &mut declarations.function_bodies[f_index.index()].value;
+                let loc_expr = &mut declarations.expressions[index];
+
+                function_def.captured_symbols.retain(|(s, _)| *s != name);
+
+                let mut no_capture_symbols = VecSet::default();
+                if function_def.captured_symbols.is_empty() {
+                    no_capture_symbols.insert(name);
+                }
+
+                // patterns can contain default expressions, so much go over them too!
+                for (_, _, loc_pat) in function_def.arguments.iter_mut() {
+                    fix_values_captured_in_closure_pattern(
+                        &mut loc_pat.value,
+                        &mut no_capture_symbols,
+                    );
+                }
+
+                fix_values_captured_in_closure_expr(&mut loc_expr.value, &mut no_capture_symbols);
+            }
+            Destructure(_) => todo!(),
+            MutualRecursion(_) => todo!(),
+        }
+    }
+
     ModuleOutput {
         scope,
         aliases,

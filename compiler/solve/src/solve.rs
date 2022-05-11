@@ -507,7 +507,6 @@ fn run_in_place(
     constraint: &Constraint,
     abilities_store: &mut AbilitiesStore,
 ) -> Env {
-    dbg!(&constraints);
     let mut pools = Pools::default();
 
     let state = State {
