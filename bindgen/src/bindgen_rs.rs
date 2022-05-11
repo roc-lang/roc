@@ -489,8 +489,8 @@ fn write_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str>>(
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
     writeln!(buf, "#[repr(u{})]\npub enum {} {{", tag_bytes * 8, name)?;
 
-    for name in tags {
-        writeln!(buf, "{}{},", INDENT, name.as_ref())?;
+    for (index, name) in tags.enumerate() {
+        writeln!(buf, "{}{} = {},", INDENT, name.as_ref(), index)?;
     }
 
     buf.write_str("}\n")

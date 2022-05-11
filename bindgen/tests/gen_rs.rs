@@ -189,10 +189,10 @@ fn tag_union_aliased() {
                 #[derive(Clone, PartialEq, PartialOrd, Copy, Eq, Ord, Hash, Debug)]
                 #[repr(u8)]
                 pub enum tag_MyTagUnion {
-                    Bar,
-                    Baz,
-                    Blah,
-                    Foo,
+                    Bar = 0,
+                    Baz = 1,
+                    Blah = 2,
+                    Foo = 3,
                 }
 
                 #[repr(C)]
@@ -343,9 +343,9 @@ fn tag_union_enumeration() {
                 #[derive(Clone, PartialEq, PartialOrd, Copy, Eq, Ord, Hash, Debug)]
                 #[repr(u8)]
                 pub enum MyTagUnion {
-                    Bar,
-                    Blah,
-                    Foo,
+                    Bar = 0,
+                    Blah = 1,
+                    Foo = 2,
                 }
             "#
         )
