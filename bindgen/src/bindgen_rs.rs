@@ -233,19 +233,9 @@ fn write_tag_union(
     }
 
     // The Drop impl for the tag union
-    //
-    // impl Drop for MyTagUnion {
-    //     fn drop(&mut self) {
-    //         match self.tag {
-    //             tag_MyTagUnion::Bar => {}
-    //             tag_MyTagUnion::Foo => unsafe { std::mem::ManuallyDrop::drop(&mut self.variant.Foo) },
-    //         }
-    //     }
-    // }
     {
         write!(
             buf,
-            // Don't use indoc because this must be indented once!
             indoc!(
                 r#"
 
