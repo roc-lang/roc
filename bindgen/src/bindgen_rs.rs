@@ -317,7 +317,6 @@ fn write_tag_union(
 
         writeln!(
             buf,
-            // Don't use indoc because this must be indented once!
             indoc!(
                 r#"
                                 }}
@@ -375,7 +374,6 @@ fn write_tag_union(
 
         writeln!(
             buf,
-            // Don't use indoc because this must be indented once!
             indoc!(
                 r#"
                                 }}
@@ -429,7 +427,6 @@ fn write_tag_union(
 
         writeln!(
             buf,
-            // Don't use indoc because this must be indented once!
             indoc!(
                 r#"
                                 }}
@@ -492,7 +489,6 @@ fn write_tag_union(
 
         writeln!(
             buf,
-            // Don't use indoc because this must be indented once!
             indoc!(
                 r#"
                             }}
