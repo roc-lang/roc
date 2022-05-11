@@ -53,6 +53,10 @@ impl ExposedByModule {
 
         output
     }
+
+    pub fn iter_all(&self) -> impl Iterator<Item = (&ModuleId, &ExposedModuleTypes)> {
+        self.exposed.iter()
+    }
 }
 
 #[derive(Clone, Debug, Default)]

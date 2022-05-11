@@ -213,7 +213,8 @@ impl AbilitiesStore {
     }
 
     pub fn insert_resolved(&mut self, id: SpecializationId, specialization: Symbol) {
-        debug_assert!(self.is_specialization_name(specialization));
+        // May not be a thing in mono
+        // debug_assert!(self.is_specialization_name(specialization));
 
         let old_specialization = self.resolved_specializations.insert(id, specialization);
 

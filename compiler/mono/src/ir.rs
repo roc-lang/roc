@@ -16,6 +16,7 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
 };
+use roc_error_macros::internal_error;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -2783,14 +2784,13 @@ fn resolve_abilities_in_specialized_body<'a>(
     use roc_can::traverse::{walk_expr, Visitor};
     use roc_unify::unify::unify;
 
-    struct Resolver<'a> {
-        subs: &'a mut Subs,
-        procs: &'a Procs<'a>,
-        abilities_store: &'a mut AbilitiesStore,
+    struct Resolver<'b, 'a, 'i> {
+        env: &'b mut Env<'a, 'i>,
+        procs: &'b Procs<'a>,
         seen_defs: MutSet<Symbol>,
         specialized: std::vec::Vec<SpecializationId>,
     }
-    impl Visitor for Resolver<'_> {
+    impl Visitor for Resolver<'_, '_, '_> {
         fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
             match expr {
                 Expr::Closure(..) => {
@@ -2806,6 +2806,7 @@ fn resolve_abilities_in_specialized_body<'a>(
                 }
                 Expr::AbilityMember(member_sym, specialization_id, _specialization_var) => {
                     let (specialization, specialization_def) = match self
+                        .env
                         .abilities_store
                         .get_resolved(*specialization_id)
                     {
@@ -2817,21 +2818,29 @@ fn resolve_abilities_in_specialized_body<'a>(
                             //
                             // However, we do need to walk the specialization def, because it may
                             // itself contain unspecialized defs.
-                            self.procs
-                                .partial_procs
-                                .get_symbol(specialization)
-                                .expect("Specialization found, but it's not in procs"),
+                            if !self.env.is_imported_symbol(specialization) {
+                                let def = self
+                                    .procs
+                                    .partial_procs
+                                    .get_symbol(specialization)
+                                    .expect("Specialization found, but it's not in procs");
+
+                                Some(def)
+                            } else {
+                                None
+                            },
                         ),
                         None => {
                             let specialization = resolve_ability_specialization(
-                                self.subs,
-                                self.abilities_store,
+                                self.env.subs,
+                                self.env.abilities_store,
                                 *member_sym,
                                 var,
                             )
-                            .expect("Ability specialization is unknown - code generation cannot proceed!");
+                            .unwrap_or_else(|| internal_error!("Specialization for {:?} is unknown - code generation cannot proceed!", member_sym));
 
-                            self.abilities_store
+                            self.env
+                                .abilities_store
                                 .insert_resolved(*specialization_id, specialization);
 
                             debug_assert!(!self.specialized.contains(specialization_id));
@@ -2841,17 +2850,25 @@ fn resolve_abilities_in_specialized_body<'a>(
                             // since `var` may only have partial specialization information - enough to
                             // figure out what specialization we need, but not the types of all arguments
                             // and return types. So, unify with the variable with the specialization's type.
-                            let specialization_def = self
-                                .procs
-                                .partial_procs
-                                .get_symbol(specialization)
-                                .expect("Specialization found, but it's not in procs");
-                            let specialization_var = specialization_def.annotation;
+                            let specialization_def = if !self.env.is_imported_symbol(specialization)
+                            {
+                                let specialization_def = self
+                                    .procs
+                                    .partial_procs
+                                    .get_symbol(specialization)
+                                    .expect("Specialization found, but it's not in procs");
+                                let specialization_var = specialization_def.annotation;
 
-                            let unified = unify(self.subs, var, specialization_var, Mode::EQ);
-                            unified.expect_success(
-                                "Specialization does not unify - this is a typechecker bug!",
-                            );
+                                let unified =
+                                    unify(self.env.subs, var, specialization_var, Mode::EQ);
+                                unified.expect_success(
+                                    "Specialization does not unify - this is a typechecker bug!",
+                                );
+
+                                Some(specialization_def)
+                            } else {
+                                None
+                            };
 
                             (specialization, specialization_def)
                         }
@@ -2859,13 +2876,11 @@ fn resolve_abilities_in_specialized_body<'a>(
 
                     // Now walk the specialization def to pick up any more needed types. Of course,
                     // we only want to pass through it once to avoid unbounded recursion.
-                    if !self.seen_defs.contains(&specialization) {
-                        self.visit_expr(
-                            &specialization_def.body,
-                            Region::zero(),
-                            specialization_def.body_var,
-                        );
-                        self.seen_defs.insert(specialization);
+                    if let Some(def) = specialization_def {
+                        if !self.seen_defs.contains(&specialization) {
+                            self.visit_expr(&def.body, Region::zero(), def.body_var);
+                            self.seen_defs.insert(specialization);
+                        }
                     }
                 }
                 _ => walk_expr(self, expr, var),
@@ -2874,9 +2889,8 @@ fn resolve_abilities_in_specialized_body<'a>(
     }
 
     let mut resolver = Resolver {
-        subs: env.subs,
+        env,
         procs,
-        abilities_store: env.abilities_store,
         seen_defs: MutSet::default(),
         specialized: vec![],
     };
@@ -3020,6 +3034,7 @@ fn specialize_external<'a>(
     };
 
     let body = partial_proc.body.clone();
+    dbg!(&proc_name, &body);
     let resolved_ability_specializations =
         resolve_abilities_in_specialized_body(env, procs, &body, partial_proc.body_var);
 

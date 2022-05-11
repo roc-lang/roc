@@ -440,8 +440,31 @@ fn start_phase<'a>(
                     procs_base,
                     layout_cache,
                     module_timing,
-                    abilities_store,
+                    mut abilities_store,
                 } = found_specializations;
+
+                // At this point, we know what specializations our dependents want and what
+                // ability specializations our dependencies have. But we also need to know what
+                // ability specializations our dependents have, because those might be used by the
+                // specializations we've been asked to make.
+                for (module_id, exposed_types) in state.exposed_types.iter_all() {
+                    if let ExposedModuleTypes::Valid {
+                        solved_specializations,
+                        ..
+                    } = exposed_types
+                    {
+                        for (&(member, typ), &specialization) in solved_specializations.iter() {
+                            match abilities_store.get_specialization(member, typ) {
+                                None => abilities_store.register_specialization_for_type(
+                                    member,
+                                    typ,
+                                    specialization,
+                                ),
+                                Some(existing) => debug_assert_eq!(existing, specialization),
+                            }
+                        }
+                    }
+                }
 
                 BuildTask::MakeSpecializations {
                     module_id,
@@ -4151,6 +4174,7 @@ fn make_specializations<'a>(
     // TODO: for now this final specialization pass is sequential,
     // with no parallelization at all. We should try to parallelize
     // this, but doing so will require a redesign of Procs.
+    dbg!(home, &specializations_we_must_make);
     procs = roc_mono::ir::specialize_all(
         &mut mono_env,
         procs,
