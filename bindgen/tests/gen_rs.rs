@@ -202,7 +202,6 @@ fn tag_union_aliased() {
                     Foo: std::mem::ManuallyDrop<roc_std::RocStr>,
                 }
 
-                #[derive(Clone, PartialEq, PartialOrd, Eq, Ord, Hash, Debug)]
                 #[repr(C)]
                 pub struct MyTagUnion {
                     tag: tag_MyTagUnion,

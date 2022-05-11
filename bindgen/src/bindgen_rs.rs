@@ -30,7 +30,7 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
                 // Empty tag unions can never come up at runtime,
                 // and so don't need declared types.
                 if !tags.is_empty() {
-                    write_tag_union(name, id, tags, types, buf)?;
+                    write_tag_union(name, tags, types, buf)?;
                 }
             }
             RocType::RecursiveTagUnion { .. } => {
@@ -74,7 +74,6 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
 
 fn write_tag_union(
     name: &str,
-    type_id: TypeId,
     tags: &[(String, Option<TypeId>)],
     types: &Types,
     buf: &mut String,
@@ -148,11 +147,12 @@ fn write_tag_union(
     //     variant: variant_MyTagUnion,
     // }
     {
-        write_deriving(types.get(type_id), types, buf)?;
+        // no deriving because it contains a union; we have to
+        // generate the impls explicitly!
 
         write!(
             buf,
-            "#[repr(C)]\npub struct {} {{\n{}tag: {},\n{}variant: {}\n}}\n",
+            "\n#[repr(C)]\npub struct {} {{\n{}tag: {},\n{}variant: {}\n}}\n",
             name, INDENT, discriminant_name, INDENT, variant_name
         )?;
     }
