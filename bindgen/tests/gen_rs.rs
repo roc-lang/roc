@@ -199,7 +199,7 @@ fn tag_union_aliased() {
                 pub union union_MyTagUnion {
                     Bar: u128,
                     Blah: i32,
-                    Foo: std::mem::ManuallyDrop<roc_std::RocStr>,
+                    Foo: core::mem::ManuallyDrop<roc_std::RocStr>,
                 }
 
                 #[repr(C)]
@@ -242,7 +242,7 @@ fn tag_union_aliased() {
                         Self {
                             tag: tag_MyTagUnion::Foo,
                             variant: union_MyTagUnion {
-                                Foo: std::mem::ManuallyDrop::new(payload)
+                                Foo: core::mem::ManuallyDrop::new(payload)
                             },
                         }
                     }
@@ -254,7 +254,7 @@ fn tag_union_aliased() {
                             tag_MyTagUnion::Bar => {}
                             tag_MyTagUnion::Baz => {}
                             tag_MyTagUnion::Blah => {}
-                            tag_MyTagUnion::Foo => unsafe { std::mem::ManuallyDrop::drop(&mut self.variant.Foo) },
+                            tag_MyTagUnion::Foo => unsafe { core::mem::ManuallyDrop::drop(&mut self.variant.Foo) },
                         }
                     }
                 }
@@ -297,7 +297,7 @@ fn tag_union_aliased() {
                 }
 
                 impl Ord for MyTagUnion {
-                    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
                         match self.tag.cmp(&other.tag) {
                             core::cmp::Ordering::Equal => {}
                             not_eq => return not_eq,

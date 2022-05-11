@@ -107,7 +107,7 @@ fn write_tag_union(
     // #[repr(C)]
     // union union_MyTagUnion {
     //     Bar: u128,
-    //     Foo: std::mem::ManuallyDrop<roc_std::RocStr>,
+    //     Foo: core::mem::ManuallyDrop<roc_std::RocStr>,
     // }
     let variant_name = format!("union_{}", name);
 
@@ -129,7 +129,7 @@ fn write_tag_union(
                     // know how to drop them automatically!
                     writeln!(
                         buf,
-                        "std::mem::ManuallyDrop<{}>,",
+                        "core::mem::ManuallyDrop<{}>,",
                         type_name(*payload_id, types)
                     )?;
                 } else {
@@ -187,7 +187,7 @@ fn write_tag_union(
             //     Self {
             //         tag: tag_MyTagUnion::Foo,
             //         variant: variant_MyTagUnion {
-            //             Foo: std::mem::ManuallyDrop::new(payload),
+            //             Foo: core::mem::ManuallyDrop::new(payload),
             //         },
             //     }
             // }
@@ -195,7 +195,7 @@ fn write_tag_union(
                 let payload_type = types.get(*payload_id);
 
                 let payload_name = if payload_type.has_pointer(types) {
-                    "std::mem::ManuallyDrop::new(payload)"
+                    "core::mem::ManuallyDrop::new(payload)"
                 } else {
                     "payload"
                 };
@@ -254,7 +254,7 @@ fn write_tag_union(
                 match opt_payload_id {
                     Some(payload_id) if types.get(payload_id).has_pointer(types) => {
                         format!(
-                            "unsafe {{ std::mem::ManuallyDrop::drop(&mut self.variant.{}) }},",
+                            "unsafe {{ core::mem::ManuallyDrop::drop(&mut self.variant.{}) }},",
                             tag_name
                         )
                     }
@@ -394,7 +394,7 @@ fn write_tag_union(
             indoc!(
                 r#"
                     impl Ord for {} {{
-                        fn cmp(&self, other: &Self) -> std::cmp::Ordering {{
+                        fn cmp(&self, other: &Self) -> core::cmp::Ordering {{
                             match self.tag.cmp(&other.tag) {{
                                 core::cmp::Ordering::Equal => {{}}
                                 not_eq => return not_eq,
