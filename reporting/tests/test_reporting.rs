@@ -9390,7 +9390,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                Something is off with the body of this definition:
+                Something is off with the body of the `hash` definition:
 
                 8│  hash : Id -> U32
                 9│  hash = \@Id n -> n
@@ -9400,7 +9400,7 @@ I need all branches in an `if` to have the same type!
 
                     U64
 
-                But the type annotation says it should be:
+                But the type annotation on `hash` says it should be:
 
                     U32
 
@@ -9409,7 +9409,7 @@ I need all branches in an `if` to have the same type!
                 Something is off with this specialization of `hash`:
 
                 9│  hash = \@Id n -> n
-                    ^^^^
+                           ^^^^^^^^^^^
 
                 This value is a declared specialization of type:
 
