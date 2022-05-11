@@ -282,6 +282,42 @@ fn tag_union_aliased() {
 
                 impl Eq for MyTagUnion {}
 
+                impl PartialOrd for MyTagUnion {
+                    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+                        match self.tag.partial_cmp(&other.tag) {
+                            Some(core::cmp::Ordering::Equal) => {}
+                            not_eq => return not_eq,
+                        }
+
+                        unsafe {
+                            match self.tag {
+                                tag_MyTagUnion::Bar => self.variant.Bar.partial_cmp(&other.variant.Bar),
+                                tag_MyTagUnion::Baz => core::cmp::Ordering::Equal,
+                                tag_MyTagUnion::Blah => self.variant.Blah.partial_cmp(&other.variant.Blah),
+                                tag_MyTagUnion::Foo => self.variant.Foo.partial_cmp(&other.variant.Foo),
+                            }
+                        }
+                    }
+                }
+
+                impl Ord for MyTagUnion {
+                    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                        match self.tag.partial_cmp(&other.tag) {
+                            core::cmp::Ordering::Equal => {}
+                            not_eq => return not_eq,
+                        }
+
+                        unsafe {
+                            match self.tag {
+                                tag_MyTagUnion::Bar => self.variant.Bar.cmp(&other.variant.Bar),
+                                tag_MyTagUnion::Baz => core::cmp::Ordering::Equal,
+                                tag_MyTagUnion::Blah => self.variant.Blah.cmp(&other.variant.Blah),
+                                tag_MyTagUnion::Foo => self.variant.Foo.cmp(&other.variant.Foo),
+                            }
+                        }
+                    }
+                }
+
             "#
         )
     );

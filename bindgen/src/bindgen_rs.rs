@@ -337,6 +337,114 @@ fn write_tag_union(
         writeln!(buf, "impl Eq for {} {{}}\n", name)?;
     }
 
+    // The PartialOrd impl for the tag union
+    {
+        write!(
+            buf,
+            indoc!(
+                r#"
+                    impl PartialOrd for {} {{
+                        fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {{
+                            match self.tag.partial_cmp(&other.tag) {{
+                                Some(core::cmp::Ordering::Equal) => {{}}
+                                not_eq => return not_eq,
+                            }}
+
+                            unsafe {{
+                                match self.tag {{
+                "#
+            ),
+            name
+        )?;
+
+        write_impl_tags(
+            4,
+            tags.iter(),
+            &discriminant_name,
+            buf,
+            |tag_name, opt_payload_id| {
+                if opt_payload_id.is_some() {
+                    format!(
+                        "self.variant.{}.partial_cmp(&other.variant.{}),",
+                        tag_name, tag_name
+                    )
+                } else {
+                    // if the tags themselves had been unequal, we already would have
+                    // early-returned, so this means the tags were equal and there's
+                    // no payload; return Equal!
+                    "core::cmp::Ordering::Equal,".to_string()
+                }
+            },
+        )?;
+
+        writeln!(
+            buf,
+            // Don't use indoc because this must be indented once!
+            indoc!(
+                r#"
+                                }}
+                            }}
+                        }}
+                    }}
+                "#
+            ),
+        )?;
+    }
+
+    // The Ord impl for the tag union
+    {
+        write!(
+            buf,
+            indoc!(
+                r#"
+                    impl Ord for {} {{
+                        fn cmp(&self, other: &Self) -> std::cmp::Ordering {{
+                            match self.tag.partial_cmp(&other.tag) {{
+                                core::cmp::Ordering::Equal => {{}}
+                                not_eq => return not_eq,
+                            }}
+
+                            unsafe {{
+                                match self.tag {{
+                "#
+            ),
+            name
+        )?;
+
+        write_impl_tags(
+            4,
+            tags.iter(),
+            &discriminant_name,
+            buf,
+            |tag_name, opt_payload_id| {
+                if opt_payload_id.is_some() {
+                    format!(
+                        "self.variant.{}.cmp(&other.variant.{}),",
+                        tag_name, tag_name
+                    )
+                } else {
+                    // if the tags themselves had been unequal, we already would have
+                    // early-returned, so this means the tags were equal and there's
+                    // no payload; return Equal!
+                    "core::cmp::Ordering::Equal,".to_string()
+                }
+            },
+        )?;
+
+        writeln!(
+            buf,
+            // Don't use indoc because this must be indented once!
+            indoc!(
+                r#"
+                                }}
+                            }}
+                        }}
+                    }}
+                "#
+            ),
+        )?;
+    }
+
     Ok(())
 }
 
