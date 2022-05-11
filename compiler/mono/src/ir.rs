@@ -2124,7 +2124,7 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
-            Var(original) | AbilityMember(original, _) => {
+            Var(original) | AbilityMember(original, _, _) => {
                 // a variable is aliased, e.g.
                 //
                 //  foo = bar
