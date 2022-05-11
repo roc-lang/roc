@@ -3,7 +3,9 @@ app "helloZig"
     imports []
     provides [ main ] to pf
 
-f : Str -> Str
-f = \s -> Str.concat s "!"
+Id a := a
 
-main = f "Hello, World!\n"
+f : Id a -> a 
+f = \@Id x -> x 
+
+main = f (@Id "Hello, World!\n")

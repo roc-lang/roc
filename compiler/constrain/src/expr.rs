@@ -1294,7 +1294,7 @@ fn constrain_function_def(
                 constraints.equal_types_var(
                     closure_var,
                     Expected::FromAnnotation(
-                        loc_pattern.clone(),
+                        loc_pattern,
                         arity,
                         AnnotationSource::TypedBody {
                             region: annotation.region,
@@ -1305,22 +1305,19 @@ fn constrain_function_def(
                     region,
                 ),
                 constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
-                constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
                 constraints.store(ret_type, ret_var, std::file!(), std::line!()),
                 closure_constraint,
             ];
 
             let expr_con = constraints.exists_many(vars, cons);
 
-            constrain_def_make_constraint_simple(
+            constrain_function_def_make_constraint(
                 constraints,
                 new_rigid_variables,
                 new_infer_variables,
                 expr_con,
                 body_con,
-                loc_symbol,
-                expr_var,
-                signature,
+                def_pattern_state,
             )
         }
         None => {
@@ -1341,7 +1338,7 @@ fn constrain_function_def(
                 loc_symbol.value,
             );
 
-            constrain_def_make_constraint_simple(
+            constrain_value_def_make_constraint(
                 constraints,
                 vec![],
                 vec![],
@@ -1412,7 +1409,7 @@ fn constrain_value_def(
             ];
             let expr_con = constraints.and_constraint(cons);
 
-            constrain_def_make_constraint_simple(
+            constrain_value_def_make_constraint(
                 constraints,
                 new_rigid_variables,
                 new_infer_variables,
@@ -1434,7 +1431,7 @@ fn constrain_value_def(
                 NoExpectation(expr_type),
             );
 
-            constrain_def_make_constraint_simple(
+            constrain_value_def_make_constraint(
                 constraints,
                 vec![],
                 vec![],
@@ -2163,7 +2160,7 @@ pub(crate) fn constrain_def_make_constraint(
     )
 }
 
-fn constrain_def_make_constraint_simple(
+fn constrain_value_def_make_constraint(
     constraints: &mut Constraints,
     new_rigid_variables: Vec<Variable>,
     new_infer_variables: Vec<Variable>,
@@ -2184,6 +2181,33 @@ fn constrain_def_make_constraint_simple(
     let headers = [(symbol.value, Loc::at(symbol.region, expr_type))];
 
     constraints.let_constraint(new_rigid_variables, [expr_var], headers, def_con, body_con)
+}
+
+fn constrain_function_def_make_constraint(
+    constraints: &mut Constraints,
+    new_rigid_variables: Vec<Variable>,
+    new_infer_variables: Vec<Variable>,
+    expr_con: Constraint,
+    body_con: Constraint,
+    def_pattern_state: PatternState,
+) -> Constraint {
+    let and_constraint = constraints.and_constraint(def_pattern_state.constraints);
+
+    let def_con = constraints.let_constraint(
+        [],
+        new_infer_variables,
+        [], // empty, because our functions have no arguments!
+        and_constraint,
+        expr_con,
+    );
+
+    constraints.let_constraint(
+        new_rigid_variables,
+        def_pattern_state.vars,
+        def_pattern_state.headers,
+        def_con,
+        body_con,
+    )
 }
 
 fn constrain_closure_size(
