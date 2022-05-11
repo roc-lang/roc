@@ -208,6 +208,20 @@ fn tag_union_aliased() {
                     tag: tag_MyTagUnion,
                     variant: variant_MyTagUnion
                 }
+
+                impl MyTagUnion {
+                    pub fn tag(&self) -> tag_MyTagUnion {
+                        self.tag
+                    }
+
+                    pub fn variant(&self) -> &variant_MyTagUnion {
+                        self.variant
+                    }
+
+                    pub fn into_variant(self) -> variant_MyTagUnion {
+                        self.variant
+                    }
+                }
             "#
         )
     );

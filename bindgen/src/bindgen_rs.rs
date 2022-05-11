@@ -1,5 +1,7 @@
 use roc_mono::layout::UnionLayout;
 
+use indoc::indoc;
+
 use crate::types::{RocType, TypeId, Types};
 use std::{
     convert::TryInto,
@@ -8,7 +10,7 @@ use std::{
 
 pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
 pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
-static INDENT: &str = "    ";
+const INDENT: &str = "    ";
 
 pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
     for id in types.sorted_ids() {
@@ -156,6 +158,33 @@ fn write_tag_union(
             "#[repr(C)]\npub struct {} {{\n{}tag: {},\n{}variant: {}\n}}\n",
             name, INDENT, discriminant_name, INDENT, variant_name
         )?;
+    }
+
+    // The impl for the tag union
+    {
+        write!(
+            buf,
+            indoc!(
+                r#"
+
+                    impl MyTagUnion {{
+                        pub fn tag(&self) -> {} {{
+                            self.tag
+                        }}
+
+                        pub fn variant(&self) -> &{} {{
+                            self.variant
+                        }}
+
+                        pub fn into_variant(self) -> {} {{
+                            self.variant
+                        }}
+                "#
+            ),
+            discriminant_name, variant_name, variant_name
+        )?;
+
+        buf.write_str("}\n")?;
     }
 
     Ok(())
