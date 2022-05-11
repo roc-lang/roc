@@ -257,28 +257,26 @@ fn write_tag_union(
             name
         )?;
 
-        for (tag_name, opt_payload_id) in tags {
-            write!(
-                buf,
-                "{}{}{}{}::{} => ",
-                INDENT, INDENT, INDENT, discriminant_name, tag_name
-            )?;
-
-            match opt_payload_id {
-                Some(payload_id) if types.get(*payload_id).has_pointer(types) => {
-                    writeln!(
-                        buf,
-                        "unsafe {{ std::mem::ManuallyDrop::drop(&mut self.variant.{}) }},",
-                        tag_name
-                    )?;
+        write_impl_tags(
+            tags.iter(),
+            &discriminant_name,
+            buf,
+            |tag_name, opt_payload_id| {
+                match opt_payload_id {
+                    Some(payload_id) if types.get(payload_id).has_pointer(types) => {
+                        format!(
+                            "unsafe {{ std::mem::ManuallyDrop::drop(&mut self.variant.{}) }},",
+                            tag_name
+                        )
+                    }
+                    _ => {
+                        // If it had no payload, or if the payload had no pointers,
+                        // there's nothing to clean up, so do `=> {}` for the branch.
+                        "{}".to_string()
+                    }
                 }
-                _ => {
-                    // If it had no payload, or if the payload had no pointers,
-                    // there's nothing to clean up, so do `=> {}` for the branch.
-                    buf.write_str("{}\n")?;
-                }
-            }
-        }
+            },
+        )?;
 
         writeln!(
             buf,
@@ -290,6 +288,29 @@ fn write_tag_union(
                     }}
                 "#
             ),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn write_impl_tags<
+    'a,
+    I: IntoIterator<Item = &'a (String, Option<TypeId>)>,
+    F: Fn(&str, Option<TypeId>) -> String,
+>(
+    tags: I,
+    discriminant_name: &str,
+    buf: &mut String,
+    to_branch_str: F,
+) -> fmt::Result {
+    for (tag_name, opt_payload_id) in tags {
+        let branch_str = to_branch_str(tag_name, *opt_payload_id);
+
+        writeln!(
+            buf,
+            "{}{}{}{}::{} => {}",
+            INDENT, INDENT, INDENT, discriminant_name, tag_name, branch_str
         )?;
     }
 
