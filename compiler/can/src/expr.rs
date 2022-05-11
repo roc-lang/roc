@@ -87,8 +87,9 @@ pub enum Expr {
     AbilityMember(
         /// Actual member name
         Symbol,
-        /// Specialization to use
+        /// Specialization to use, and its variable
         SpecializationId,
+        Variable,
     ),
 
     // Branching
@@ -220,7 +221,7 @@ impl Expr {
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym) => Category::Lookup(sym),
-            &Self::AbilityMember(sym, _) => Category::Lookup(sym),
+            &Self::AbilityMember(sym, _, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
             Self::LetRec(_, expr) => expr.value.category(),
@@ -698,7 +699,7 @@ pub fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Var { module_name, ident } => {
-            canonicalize_var_lookup(env, scope, module_name, ident, region)
+            canonicalize_var_lookup(env, var_store, scope, module_name, ident, region)
         }
         ast::Expr::Underscore(name) => {
             // we parse underscores, but they are not valid expression syntax
@@ -1312,6 +1313,7 @@ fn canonicalize_field<'a>(
 
 fn canonicalize_var_lookup(
     env: &mut Env<'_>,
+    var_store: &mut VarStore,
     scope: &mut Scope,
     module_name: &str,
     ident: &str,
@@ -1328,7 +1330,11 @@ fn canonicalize_var_lookup(
                 output.references.insert_value_lookup(symbol);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
-                    AbilityMember(symbol, scope.abilities_store.fresh_specialization_id())
+                    AbilityMember(
+                        symbol,
+                        scope.abilities_store.fresh_specialization_id(),
+                        var_store.fresh(),
+                    )
                 } else {
                     Var(symbol)
                 }
@@ -1347,7 +1353,11 @@ fn canonicalize_var_lookup(
                 output.references.insert_value_lookup(symbol);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
-                    AbilityMember(symbol, scope.abilities_store.fresh_specialization_id())
+                    AbilityMember(
+                        symbol,
+                        scope.abilities_store.fresh_specialization_id(),
+                        var_store.fresh(),
+                    )
                 } else {
                     Var(symbol)
                 }

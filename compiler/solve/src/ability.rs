@@ -169,16 +169,15 @@ impl DeferredMustImplementAbility {
 pub fn type_implementing_member(
     specialization_must_implement_constraints: &MustImplementConstraints,
     ability: Symbol,
-) -> Symbol {
-    debug_assert_eq!({
+) -> Option<Symbol> {
+    debug_assert!({
             specialization_must_implement_constraints
                 .clone()
                 .get_unique()
                 .into_iter()
                 .filter(|mia| mia.ability == ability)
                 .count()
-        },
-        1,
+        } < 2,
         "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization: {:?}",
         specialization_must_implement_constraints
     );
@@ -186,8 +185,7 @@ pub fn type_implementing_member(
     specialization_must_implement_constraints
         .iter_for_ability(ability)
         .next()
-        .unwrap()
-        .typ
+        .map(|mia| mia.typ)
 }
 
 pub fn resolve_ability_specialization(
@@ -212,7 +210,7 @@ pub fn resolve_ability_specialization(
     subs.rollback_to(snapshot);
 
     let specializing_type =
-        type_implementing_member(&must_implement_ability, member_def.parent_ability);
+        type_implementing_member(&must_implement_ability, member_def.parent_ability)?;
 
     let specialization = abilities_store.get_specialization(ability_member, specializing_type)?;
 

@@ -783,7 +783,7 @@ pub(crate) fn sort_can_defs(
     // recursive relations between any 2 definitions.
     let sccs = def_ordering.references.strongly_connected_components_all();
 
-    let mut declarations = Vec::new();
+    let mut declarations = Vec::with_capacity(defs.len());
 
     for group in sccs.groups() {
         if group.count_ones() == 1 {
@@ -791,6 +791,10 @@ pub(crate) fn sort_can_defs(
             let index = group.iter_ones().next().unwrap();
 
             let def = take_def!(index);
+            let is_specialization = matches!(
+                def.loc_pattern.value,
+                Pattern::AbilityMemberSpecialization { .. }
+            );
 
             let declaration = if def_ordering.direct_references.get_row_col(index, index) {
                 // a definition like `x = x + 1`, which is invalid in roc
@@ -803,6 +807,8 @@ pub(crate) fn sort_can_defs(
 
                 Declaration::InvalidCycle(entries)
             } else if def_ordering.references.get_row_col(index, index) {
+                debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {:?} now, that's a bug!", def);
+
                 // this function calls itself, and must be typechecked as a recursive def
                 Declaration::DeclareRec(vec![mark_def_recursive(def)])
             } else {
@@ -825,6 +831,10 @@ pub(crate) fn sort_can_defs(
             let direct_sccs = def_ordering
                 .direct_references
                 .strongly_connected_components_subset(group);
+
+            debug_assert!(
+                !group.iter_ones().any(|index| matches!((&defs[index]).as_ref().unwrap().loc_pattern.value, Pattern::AbilityMemberSpecialization{..})),
+                "A specialization is involved in a recursive cycle - this should not be knowable until solving");
 
             let declaration = if direct_sccs.groups().count() == 1 {
                 // all defs are part of the same direct cycle, that is invalid!

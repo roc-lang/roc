@@ -1,10 +1,11 @@
 //! Traversals over the can ast.
 
-use roc_module::ident::Lowercase;
+use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 
 use crate::{
+    abilities::SpecializationId,
     def::{Annotation, Declaration, Def},
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
     pattern::Pattern,
@@ -338,4 +339,37 @@ pub fn find_type_at(region: Region, decls: &[Declaration]) -> Option<Variable> {
     let mut visitor = TypeAtVisitor { region, typ: None };
     visitor.visit_decls(decls);
     visitor.typ
+}
+
+pub fn find_ability_member_at(
+    region: Region,
+    decls: &[Declaration],
+) -> Option<(Symbol, SpecializationId)> {
+    let mut visitor = Finder {
+        region,
+        found: None,
+    };
+    visitor.visit_decls(decls);
+    return visitor.found;
+
+    struct Finder {
+        region: Region,
+        found: Option<(Symbol, SpecializationId)>,
+    }
+
+    impl PatternVisitor for Finder {}
+    impl Visitor for Finder {
+        fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
+            if region == self.region {
+                if let &Expr::AbilityMember(symbol, specialization_id, _) = expr {
+                    debug_assert!(self.found.is_none());
+                    self.found = Some((symbol, specialization_id));
+                    return;
+                }
+            }
+            if region.contains(&self.region) {
+                walk_expr(self, expr, var);
+            }
+        }
+    }
 }
