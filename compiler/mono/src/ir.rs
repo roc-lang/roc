@@ -5439,12 +5439,9 @@ pub fn from_can<'a>(
                 env.arena.alloc(stmt),
             );
 
-            let subs = env.subs;
-            let ident_ids = env.ident_ids;
-
             for (symbol, var) in lookups_in_cond.iter().rev() {
-                let content = subs.get_content_without_compacting(*var);
-                let expr = generate_roc_value(ident_ids, *content, subs);
+                let content = env.subs.get_content_without_compacting(*var);
+                let expr = generate_roc_value(&mut env.ident_ids, *content, &env.subs);
                 let roc_value_symbol = env.unique_symbol();
 
                 // TODO: generate a function based on the Content, and then call it on the `symbol`

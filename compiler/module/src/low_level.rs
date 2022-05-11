@@ -127,6 +127,7 @@ pub enum LowLevel {
     RefCountDec,
     BoxExpr,
     UnboxExpr,
+    RocReport,
 }
 
 macro_rules! higher_order {

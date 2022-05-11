@@ -6125,6 +6125,11 @@ fn run_low_level<'a, 'ctx, 'env>(
             cond
         }
 
+        RocReport => {
+            //
+            todo!()
+        }
+
         ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
         | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
         | ListAny | ListAll | ListFindUnsafe | DictWalk => {

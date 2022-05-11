@@ -1,3 +1,4 @@
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_module::ident::TagName;
 use roc_module::symbol::IdentIds;
 use roc_types::subs::{Content, Subs};
@@ -6,6 +7,16 @@ use crate::ir::Expr;
 use crate::layout::{Builtin, Layout, UnionLayout};
 
 use super::CodeGenHelp;
+
+//      a = "foo"
+//      expect $(a != a)
+//
+//
+//      roc_report(a != a, NotEq Str a a
+//
+//  E   expect "foo" != "foo"
+//
+// a: "foo"
 
 /// THESE MUST REMAIN SORTED ALPHABETICALLY!!!
 #[repr(u8)]
@@ -85,29 +96,48 @@ pub enum RocTypeTag {
 ///     Opaque Value Type
 /// ]
 pub const ROC_VALUE_LAYOUT: UnionLayout<'static> = UnionLayout::Recursive(&[
-    //     Str Str
+    &[Layout::Builtin(Builtin::Decimal)],
+    &[Layout::Builtin(Builtin::Float(FloatWidth::F32))],
+    &[Layout::Builtin(Builtin::Float(FloatWidth::F64))],
+    // Function,
+    &[
+        Layout::Builtin(Builtin::List(&ROC_TYPE_LAYOUT)),
+        ROC_TYPE_LAYOUT,
+    ],
+    &[Layout::Builtin(Builtin::Int(IntWidth::I8))],
+    &[Layout::Builtin(Builtin::Int(IntWidth::I16))],
+    &[Layout::Builtin(Builtin::Int(IntWidth::I32))],
+    &[Layout::Builtin(Builtin::Int(IntWidth::I64))],
+    &[Layout::Builtin(Builtin::Int(IntWidth::I128))],
+    // List,
+    &[
+        Layout::Builtin(Builtin::List(&Layout::RecursivePointer)),
+        ROC_TYPE_LAYOUT,
+    ],
+    &[Layout::Builtin(Builtin::Int(IntWidth::U64))], // Nat
+    // Opaque,
+    &[Layout::RecursivePointer, ROC_TYPE_LAYOUT],
+    // Record
+    &[
+        Layout::Builtin(Builtin::List(&ROC_VALUE_RECORD_LAYOUT)),
+        ROC_TYPE_LAYOUT,
+    ],
     &[Layout::Builtin(Builtin::Str)],
-    //     I8 I8
-    //     U8 U8
-    //     I16 I16
-    //     U16 U16
-    //     I32 I32
-    //     U32 U32
-    //     I64 I64
-    //     U64 U64
-    //     I128 I128
-    //     U128 U128
-    //     F32 F32
-    //     F64 F64
-    //     Nat Nat
-    //     Dec Dec
-    //
-    //     List (List Value) Type
-    //     Function (List Type) Type
-    //     Record (List { field : Str, value : Value }) Type
-    //     Tag Str (List Value) Type
-    //     Opaque Value Type
+    // Tag,
+    &[
+        Layout::Builtin(Builtin::Str),
+        Layout::Builtin(Builtin::List(&ROC_TYPE_LAYOUT)),
+        ROC_TYPE_LAYOUT,
+    ],
+    &[Layout::Builtin(Builtin::Int(IntWidth::U8))],
+    &[Layout::Builtin(Builtin::Int(IntWidth::U16))],
+    &[Layout::Builtin(Builtin::Int(IntWidth::U32))],
+    &[Layout::Builtin(Builtin::Int(IntWidth::U64))],
+    &[Layout::Builtin(Builtin::Int(IntWidth::U128))],
 ]);
+
+pub const ROC_TYPE_LAYOUT: Layout<'static> = Layout::Builtin(Builtin::Int(IntWidth::U64));
+pub const ROC_VALUE_RECORD_LAYOUT: Layout<'static> = Layout::UNIT;
 
 pub fn generate_roc_value<'a>(ident_ids: &mut IdentIds, content: Content, subs: &Subs) -> Expr<'a> {
     match content {

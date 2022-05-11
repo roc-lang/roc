@@ -1,8 +1,10 @@
 use crate::llvm::build::Env;
 use crate::llvm::build::{add_func, C_CALL_CONV};
+use crate::llvm::convert::argument_type_from_layout;
 use inkwell::module::Linkage;
 use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
+use roc_mono::layout::Layout;
 
 /// Define functions for roc_alloc, roc_realloc, and roc_dealloc
 /// which use libc implementations (malloc, realloc, and free)
@@ -172,6 +174,20 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
         if cfg!(debug_assertions) {
             crate::llvm::build::verify_fn(fn_val);
         }
+    }
+
+    // roc_report
+    {
+        let argument = argument_type_from_layout(
+            env,
+            &Layout::Union(roc_mono::code_gen_help::rocval::ROC_VALUE_LAYOUT),
+        );
+
+        let fn_type = env.context.void_type().fn_type(&[argument.into()], false);
+
+        let fn_val = module.add_function("roc_report", fn_type, Some(Linkage::External));
+
+        fn_val.set_call_conventions(C_CALL_CONV);
     }
 
     if env.is_gen_test {
