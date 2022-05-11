@@ -1,4 +1,4 @@
-interface Encode
+interface Json
     exposes
         [
             Json, format
@@ -6,6 +6,8 @@ interface Encode
     imports
         [
             Encode.{
+                custom,
+                appendWith,
                 u8, u16, u32, u64, u128,
                 i8, i16, i32, i64, i128,
                 f32, f64, dec,
@@ -17,8 +19,10 @@ interface Encode
 
 Json := {}
 
+format = @Json {}
+
 numToBytes = \n ->
-    n |> Num.toStr |> Str.toBytes
+    n |> Num.toStr |> Str.toUtf8
 
 # impl EncoderFormatting for Json
 u8 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
@@ -49,16 +53,16 @@ dec = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
 bool = \b -> custom \bytes, @Json {} ->
                 if b
-                then List.concat bytes (Str.toBytes "true")
-                else List.concat bytes (Str.toBytes "false")
+                then List.concat bytes (Str.toUtf8 "true")
+                else List.concat bytes (Str.toUtf8 "false")
 
 string = \s -> custom \bytes, @Json {} ->
                     List.append bytes (Num.toU8 '"')
-                    |> List.append (Str.toBytes s)
+                    |> List.concat (Str.toUtf8 s)
                     |> List.append (Num.toU8 '"')
 
 list = \lst, encodeElem ->
     custom \bytes, @Json {} ->
         head = List.append bytes (Num.toU8 '[')
-        withList = List.walk lst head (\bytes1, elem -> List.concat bytes (encodeElem elem))
+        withList = List.walk lst head (\bytes1, elem -> appendWith bytes1 (encodeElem elem) (@Json {}))
         List.append withList (Num.toU8 ']')
