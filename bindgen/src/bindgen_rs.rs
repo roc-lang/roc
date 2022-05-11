@@ -248,6 +248,7 @@ fn write_tag_union(
         )?;
 
         write_impl_tags(
+            3,
             tags.iter(),
             &discriminant_name,
             buf,
@@ -289,6 +290,7 @@ fn write_impl_tags<
     I: IntoIterator<Item = &'a (String, Option<TypeId>)>,
     F: Fn(&str, Option<TypeId>) -> String,
 >(
+    indentations: usize,
     tags: I,
     discriminant_name: &str,
     buf: &mut String,
@@ -297,11 +299,11 @@ fn write_impl_tags<
     for (tag_name, opt_payload_id) in tags {
         let branch_str = to_branch_str(tag_name, *opt_payload_id);
 
-        writeln!(
-            buf,
-            "{}{}{}{}::{} => {}",
-            INDENT, INDENT, INDENT, discriminant_name, tag_name, branch_str
-        )?;
+        for _ in 0..indentations {
+            buf.write_str(INDENT)?;
+        }
+
+        writeln!(buf, "{}::{} => {}", discriminant_name, tag_name, branch_str)?;
     }
 
     Ok(())
