@@ -297,17 +297,38 @@ fn add_tag_union(
     // Sort tags alphabetically by tag name
     tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
-    let tags: Vec<_> = tags
-        .into_iter()
-        .map(|(tag_name, payload_vars)| {
-            let payloads = payload_vars
-                .iter()
-                .map(|payload_var| add_type(env, *payload_var, types))
-                .collect::<Vec<TypeId>>();
+    let tags: Vec<_> =
+        tags.into_iter()
+            .map(|(tag_name, payload_vars)| {
+                match payload_vars.len() {
+                    0 => {
+                        // no payload
+                        (tag_name, None)
+                    }
+                    1 => {
+                        // there's 1 payload item, so it doesn't need its own
+                        // struct - e.g. for `[ Foo Str, Bar Str ]` both of them
+                        // can have payloads of plain old Str, no struct wrapper needed.
+                        let payload_var = payload_vars.get(0).unwrap();
+                        let payload_id = add_type(env, *payload_var, types);
 
-            (tag_name, payloads)
-        })
-        .collect();
+                        (tag_name, Some(payload_id))
+                    }
+                    _ => {
+                        // create a struct type for the payload and save it
+
+                        let struct_name = format!("{}_{}", name, tag_name); // e.g. "MyUnion_MyVariant"
+
+                        let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
+                            (format!("f{}", index).into(), *payload_var)
+                        });
+                        let struct_id = add_struct(env, struct_name, fields, types);
+
+                        (tag_name, Some(struct_id))
+                    }
+                }
+            })
+            .collect();
 
     let typ = match env.layout_cache.from_var(env.arena, var, subs).unwrap() {
         Layout::Struct { .. } => {
@@ -319,23 +340,8 @@ fn add_tag_union(
 
             match union_layout {
                 // A non-recursive tag union
-                // e.g. `Result a e : [ Ok a, Err e ]`
-                NonRecursive(_) => {
-                    let discriminant = {
-                        let tags = tags.iter().cloned().map(|(tag_name, _)| tag_name).collect();
-
-                        types.add(RocType::Enumeration {
-                            name: name.clone(),
-                            tags,
-                        })
-                    };
-
-                    RocType::TagUnion {
-                        discriminant,
-                        name,
-                        tags,
-                    }
-                }
+                // e.g. `Result ok err : [ Ok ok, Err err ]`
+                NonRecursive(_) => RocType::TagUnion { name, tags },
                 // A recursive tag union (general case)
                 // e.g. `Expr : [ Sym Str, Add Expr Expr ]`
                 Recursive(_) => {

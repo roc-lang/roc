@@ -18,23 +18,19 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
                 if tags.len() == 1 {
                     // An enumeration with one tag is a zero-sized unit type, so
                     // represent it as a zero-sized struct (e.g. "struct Foo()").
-                    write_deriving(id, types, buf)?;
+                    write_deriving(types.get(id), types, buf)?;
                     buf.write_str("\nstruct ")?;
                     write_type_name(id, types, buf)?;
                     buf.write_str("();\n")?;
                 } else {
-                    write_enum(name, id, tags.into_iter(), types, buf)?;
+                    write_enumeration(name, types.get(id), tags.into_iter(), types, buf)?;
                 }
             }
-            RocType::TagUnion {
-                discriminant,
-                tags,
-                name,
-            } => {
+            RocType::TagUnion { tags, name } => {
                 // Empty tag unions can never come up at runtime,
                 // and so don't need declared types.
                 if tags.len() > 0 {
-                    write_tag_union(name, tags, *discriminant, types, buf)?;
+                    write_tag_union(name, id, tags, types, buf)?;
                 }
             }
             RocType::RecursiveTagUnion { .. } => {
@@ -62,7 +58,7 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
             | RocType::RocList(_)
             | RocType::RocBox(_) => {}
             RocType::TransparentWrapper { name, content } => {
-                write_deriving(id, types, buf)?;
+                write_deriving(types.get(id), types, buf)?;
                 write!(buf, "#[repr(transparent)]\npub struct {}(", name)?;
                 write_type_name(*content, types, buf)?;
                 buf.write_str(");\n")?;
@@ -75,44 +71,110 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
 
 fn write_tag_union(
     name: &str,
-    tags: &[(String, Vec<TypeId>)],
-    discriminant: TypeId,
+    type_id: TypeId,
+    tags: &[(String, Option<TypeId>)],
     types: &Types,
     buf: &mut String,
 ) -> fmt::Result {
-    // the tag union's discriminant, e.g.
+    // The tag union's discriminant, e.g.
     //
-    // #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
     // #[repr(u8)]
     // pub enum tag_MyTagUnion {
     //     Bar,
     //     Foo,
     // }
-    write_enum(
-        &format!("tag_{}", name),
-        discriminant,
-        tags.iter().map(|(name, _)| name),
+    let discriminant_name = format!("tag_{}", name);
+    let tag_names = tags.iter().map(|(name, _)| name);
+    let discriminant_type = RocType::Enumeration {
+        name: discriminant_name.clone(),
+        tags: tag_names.clone().cloned().collect(),
+    };
+
+    write_enumeration(
+        &discriminant_name,
+        &discriminant_type,
+        tag_names,
         types,
         buf,
     )?;
 
+    // The tag union's variant union, e.g.
+    //
+    // #[repr(C)]
+    // union variant_MyTagUnion {
+    //     Bar: u128,
+    //     Foo: std::mem::ManuallyDrop<roc_std::RocStr>,
+    // }
+    let variant_name = format!("variant_{}", name);
+
+    {
+        // No deriving for unions; we have to add the impls ourselves!
+
+        writeln!(
+            buf,
+            "\n#[repr(C)]\n#[allow(clippy::non_snake_case)]\npub union {} {{",
+            variant_name
+        )?;
+
+        for (tag_name, opt_payload_id) in tags {
+            // If there's no payload, we don't need a variant for it.
+            if let Some(payload_id) = opt_payload_id {
+                let payload_type = types.get(*payload_id);
+
+                write!(buf, "{}{}: ", INDENT, tag_name)?;
+
+                if payload_type.has_pointer(types) {
+                    // types with pointers need ManuallyDrop
+                    // because rust unions don't (and can't)
+                    // know how to drop them automatically!
+                    buf.write_str("std::mem::ManuallyDrop<")?;
+                    write_type_name(*payload_id, types, buf)?;
+                    buf.write_char('>')?;
+                } else {
+                    write_type_name(*payload_id, types, buf)?;
+                };
+
+                buf.write_str(",\n")?;
+            }
+        }
+
+        buf.write_str("}\n")?;
+    }
+
+    // The tag union struct itself, e.g.
+    //
+    // #[repr(C)]
+    // pub struct MyTagUnion {
+    //     tag: tag_MyTagUnion,
+    //     variant: variant_MyTagUnion,
+    // }
+    {
+        write_deriving(types.get(type_id), types, buf)?;
+
+        write!(
+            buf,
+            "#[repr(C)]\npub struct {} {{\n{}tag: {},\n{}variant: {}\n}}\n",
+            name, INDENT, discriminant_name, INDENT, variant_name
+        )?;
+    }
+
     Ok(())
 }
 
-fn write_enum<I: ExactSizeIterator<Item = S>, S: AsRef<str>>(
+fn write_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str>>(
     name: &str,
-    type_id: TypeId,
+    typ: &RocType,
     tags: I,
     types: &Types,
     buf: &mut String,
 ) -> fmt::Result {
-    write_deriving(type_id, types, buf)?;
-
     let tags = tags.into_iter();
     let tag_bytes: usize = UnionLayout::discriminant_size(tags.len())
         .stack_size()
         .try_into()
         .unwrap();
+
+    write_deriving(typ, types, buf)?;
 
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
     writeln!(buf, "#[repr(u{})]\npub enum {} {{", tag_bytes * 8, name)?;
@@ -131,7 +193,7 @@ fn write_struct(
     types: &Types,
     buf: &mut String,
 ) -> fmt::Result {
-    write_deriving(struct_id, types, buf)?;
+    write_deriving(types.get(struct_id), types, buf)?;
 
     writeln!(buf, "#[repr(C)]\npub struct {} {{", name)?;
 
@@ -192,9 +254,7 @@ fn write_type_name(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
     }
 }
 
-fn write_deriving(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
-    let typ = types.get(id);
-
+fn write_deriving(typ: &RocType, types: &Types, buf: &mut String) -> fmt::Result {
     buf.write_str("\n#[derive(Clone, PartialEq, PartialOrd, ")?;
 
     if !typ.has_pointer(types) {

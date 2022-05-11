@@ -120,16 +120,15 @@ pub enum RocType {
     RocBox(TypeId),
     RecursiveTagUnion {
         name: String,
-        tags: Vec<(String, Vec<TypeId>)>,
+        tags: Vec<(String, Option<TypeId>)>,
     },
     Enumeration {
         name: String,
         tags: Vec<String>,
     },
     TagUnion {
-        discriminant: TypeId,
         name: String,
-        tags: Vec<(String, Vec<TypeId>)>,
+        tags: Vec<(String, Option<TypeId>)>,
     },
     Struct {
         name: String,

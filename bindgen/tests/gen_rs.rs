@@ -173,10 +173,10 @@ fn nested_record_anonymous() {
 fn tag_union_aliased() {
     let module = indoc!(
         r#"
-            MyTagUnion : [ Foo U64, Bar U128 ]
+            MyTagUnion : [ Foo Str, Bar U128, Blah I32 ]
 
             main : MyTagUnion
-            main = Foo 123
+            main = Foo "blah"
         "#
     );
 
@@ -190,7 +190,23 @@ fn tag_union_aliased() {
                 #[repr(u8)]
                 pub enum tag_MyTagUnion {
                     Bar,
+                    Blah,
                     Foo,
+                }
+
+                #[repr(C)]
+                #[allow(clippy::non_snake_case)]
+                pub union variant_MyTagUnion {
+                    Bar: u128,
+                    Blah: i32,
+                    Foo: std::mem::ManuallyDrop<roc_std::RocStr>,
+                }
+
+                #[derive(Clone, PartialEq, PartialOrd, Eq, Ord, Hash, Debug)]
+                #[repr(C)]
+                pub struct MyTagUnion {
+                    tag: tag_MyTagUnion,
+                    variant: variant_MyTagUnion
                 }
             "#
         )
