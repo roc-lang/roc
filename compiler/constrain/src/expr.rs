@@ -2509,7 +2509,7 @@ pub fn rec_defs_help_simple(
                     loc_symbol.value,
                     Loc {
                         region,
-                        value: Type::Variable(expr_var),
+                        value: signature.clone(),
                     },
                 );
 
