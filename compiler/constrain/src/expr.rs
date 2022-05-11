@@ -1241,10 +1241,29 @@ fn constrain_function_def(
             def_pattern_state.headers.insert(
                 loc_symbol.value,
                 Loc {
-                    region,
-                    value: Type::Variable(expr_var),
+                    region: loc_function_def.region,
+                    // todo can we use Type::Variable(expr_var) here?
+                    value: signature.clone(),
                 },
             );
+
+            // TODO see if we can get away with not adding this constraint at all
+            def_pattern_state.vars.push(expr_var);
+            let annotation_expected = FromAnnotation(
+                loc_pattern.clone(),
+                arity,
+                AnnotationSource::TypedBody {
+                    region: annotation.region,
+                },
+                signature.clone(),
+            );
+
+            def_pattern_state.constraints.push(constraints.equal_types(
+                Type::Variable(expr_var),
+                annotation_expected,
+                Category::Storage(std::file!(), std::line!()),
+                Region::span_across(&annotation.region, &loc_body_expr.region),
+            ));
 
             constrain_typed_function_arguments_simple(
                 constraints,
