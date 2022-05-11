@@ -2121,30 +2121,48 @@ pub fn rec_defs_help(
         }
     }
 
-    let flex_constraints = constraints.and_constraint(flex_info.constraints);
-    let inner_inner = constraints.let_constraint(
+    // Strategy for recursive defs:
+    // 1. Let-generalize the type annotations we know; these are the source of truth we'll solve
+    //    everything else with. If there are circular type errors here, they will be caught during
+    //    the let-generalization.
+    // 2. Introduce all symbols of the untyped defs, but don't generalize them yet. Now, solve
+    //    the untyped defs' bodies. This way, when checking something like
+    //      f = \x -> f [ x ]
+    //    we introduce `f: b -> c`, then constrain the call `f [ x ]`,
+    //    forcing `b -> c ~ List b -> c` and correctly picking up a recursion error.
+    //    Had we generalized `b -> c`, the call `f [ x ]` would have been generalized, and this
+    //    error would not be found.
+    // 3. Now properly let-generalize the untyped body defs, since we now know their types and
+    //    that they don't have circular type errors.
+    // 4. Solve the bodies of the typed body defs, and check that they agree the types of the type
+    //    annotation.
+    // 5. Solve the rest of the program that happens after this recursive def block.
+
+    // 2. Solve untyped defs without generalization of their symbols.
+    let untyped_body_constraints = constraints.and_constraint(flex_info.constraints);
+    let untyped_def_symbols_constr = constraints.let_constraint(
         [],
         [],
         flex_info.def_types.clone(),
         Constraint::True,
-        flex_constraints,
+        untyped_body_constraints,
     );
 
-    let rigid_constraints = {
-        let mut temp = rigid_info.constraints;
-        temp.push(body_con);
+    let typed_body_constraints = constraints.and_constraint(rigid_info.constraints);
+    let typed_body_and_final_constr =
+        constraints.and_constraint([typed_body_constraints, body_con]);
 
-        constraints.and_constraint(temp)
-    };
-
+    // 3. Properly generalize untyped defs after solving them.
     let inner = constraints.let_constraint(
         [],
         flex_info.vars,
         flex_info.def_types,
-        inner_inner,
-        rigid_constraints,
+        untyped_def_symbols_constr,
+        // 4 + 5. Solve the typed body defs, and the rest of the program.
+        typed_body_and_final_constr,
     );
 
+    // 1. Let-generalize annotations we know.
     constraints.let_constraint(
         rigid_info.vars,
         [],
