@@ -263,6 +263,25 @@ fn tag_union_aliased() {
                     }
                 }
 
+                impl PartialEq for MyTagUnion {
+                    fn eq(&self, other: &Self) -> bool {
+                        if self.tag != other.tag {
+                            return false;
+                        }
+
+                        unsafe {
+                            match self.tag {
+                                tag_MyTagUnion::Bar => self.variant.Bar == other.variant.Bar,
+                                tag_MyTagUnion::Baz => true,
+                                tag_MyTagUnion::Blah => self.variant.Blah == other.variant.Blah,
+                                tag_MyTagUnion::Foo => self.variant.Foo == other.variant.Foo,
+                            }
+                        }
+                    }
+                }
+
+                impl Eq for MyTagUnion {}
+
             "#
         )
     );
