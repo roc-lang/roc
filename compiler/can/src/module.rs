@@ -166,13 +166,14 @@ pub fn canonicalize_module_defs<'a>(
     exposed_ident_ids: IdentIds,
     dep_idents: &'a IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
+    imported_abilities_state: AbilitiesStore,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home, exposed_ident_ids);
+    let mut scope = Scope::new(home, exposed_ident_ids, imported_abilities_state);
     let mut env = Env::new(home, dep_idents, module_ids);
     let num_deps = dep_idents.len();
 

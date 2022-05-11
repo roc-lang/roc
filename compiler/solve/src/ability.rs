@@ -1,4 +1,5 @@
 use roc_can::abilities::AbilitiesStore;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Subs;
@@ -20,7 +21,7 @@ pub enum AbilityImplError {
     BadPattern(Region, PatternCategory, Variable),
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DeferredMustImplementAbility(Vec<(MustImplementConstraints, AbilityImplError)>);
 
 impl DeferredMustImplementAbility {
@@ -201,9 +202,14 @@ pub fn resolve_ability_specialization(
         .expect("Not an ability member symbol");
 
     let snapshot = subs.snapshot();
-    instantiate_rigids(subs, member_def.signature_var);
-    let (_, must_implement_ability) =
-        unify(subs, specialization_var, member_def.signature_var, Mode::EQ).expect_success(
+
+    let signature_var = member_def
+        .signature_var()
+        .unwrap_or_else(|| internal_error!("Signature var not resolved for {:?}", ability_member));
+
+    instantiate_rigids(subs, signature_var);
+    let (_, must_implement_ability) = unify(subs, specialization_var, signature_var, Mode::EQ)
+        .expect_success(
             "If resolving a specialization, the specialization must be known to typecheck.",
         );
 

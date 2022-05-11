@@ -1309,8 +1309,10 @@ define_builtins! {
         0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
         1 BOX_BOX_FUNCTION: "box" // Box.box
         2 BOX_UNBOX: "unbox"
-
+    }
+    9 ENCODE: "Encode" => {
+        0 ENCODE_ENCODE: "Encode"
     }
 
-    num_modules: 9 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 10 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

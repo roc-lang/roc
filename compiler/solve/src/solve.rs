@@ -314,7 +314,7 @@ impl Aliases {
 
         let (typ, delayed_variables, &mut kind) =
             match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
-                None => return Err(()),
+                None => panic!("{:?}", &self.aliases),
                 Some((_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),
             };
 
@@ -1495,7 +1495,9 @@ fn check_ability_specialization(
     // inferred type for the specialization actually aligns with the expected
     // implementation.
     if let Some((root_symbol, root_data)) = abilities_store.root_name_and_def(symbol) {
-        let root_signature_var = root_data.signature_var;
+        let root_signature_var = root_data
+            .signature_var()
+            .unwrap_or_else(|| internal_error!("Signature var not resolved for {:?}", root_symbol));
 
         // Check if they unify - if they don't, then the claimed specialization isn't really one,
         // and that's a type error!

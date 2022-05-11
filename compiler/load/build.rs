@@ -13,6 +13,7 @@ const MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::DICT, "Dict.roc"),
     (ModuleId::SET, "Set.roc"),
     (ModuleId::BOX, "Box.roc"),
+    (ModuleId::ENCODE, "Encode.roc"),
 ];
 
 fn main() {

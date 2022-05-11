@@ -191,15 +191,20 @@ pub fn canonicalize_def_header_pattern<'a>(
         Identifier(name) => {
             match scope.introduce_or_shadow_ability_member((*name).into(), region) {
                 Ok((symbol, shadowing_ability_member)) => {
-                    output.references.insert_bound(symbol);
                     let can_pattern = match shadowing_ability_member {
                         // A fresh identifier.
-                        None => Pattern::Identifier(symbol),
+                        None => {
+                            output.references.insert_bound(symbol);
+                            Pattern::Identifier(symbol)
+                        }
                         // Likely a specialization of an ability.
-                        Some(ability_member_name) => Pattern::AbilityMemberSpecialization {
-                            ident: symbol,
-                            specializes: ability_member_name,
-                        },
+                        Some(ability_member_name) => {
+                            output.references.insert_value_lookup(ability_member_name);
+                            Pattern::AbilityMemberSpecialization {
+                                ident: symbol,
+                                specializes: ability_member_name,
+                            }
+                        }
                     };
                     Loc::at(region, can_pattern)
                 }
