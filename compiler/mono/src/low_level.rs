@@ -181,7 +181,7 @@ enum FirstOrder {
     NumSqrtUnchecked,
     NumLogUnchecked,
     NumRound,
-    NumToFloat,
+    NumToFrac,
     NumPow,
     NumCeiling,
     NumPowInt,

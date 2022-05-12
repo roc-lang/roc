@@ -22,7 +22,7 @@ fn main() -> io::Result<()> {
 
     // Populate roc_files
     for os_str in matches.values_of_os(DIRECTORY_OR_FILES).unwrap() {
-        let metadata = fs::metadata(os_str.clone())?;
+        let metadata = fs::metadata(os_str)?;
         roc_files_recursive(os_str, metadata.file_type(), &mut roc_files)?;
     }
 

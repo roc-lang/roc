@@ -1,6 +1,4 @@
-#[cfg(feature = "llvm")]
 use roc_gen_llvm::llvm::build::module_from_builtins;
-#[cfg(feature = "llvm")]
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_load::{LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
@@ -156,27 +154,6 @@ fn report_problems_help(
     }
 }
 
-#[cfg(not(feature = "llvm"))]
-pub fn gen_from_mono_module(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
-    _roc_file_path: &Path,
-    target: &target_lexicon::Triple,
-    app_o_file: &Path,
-    opt_level: OptLevel,
-    _emit_debug_info: bool,
-) -> CodeGenTiming {
-    match opt_level {
-        OptLevel::Optimize | OptLevel::Size => {
-            todo!("Return this error message in a better way: optimized builds not supported without llvm backend");
-        }
-        OptLevel::Normal | OptLevel::Development => {
-            gen_from_mono_module_dev(arena, loaded, target, app_o_file)
-        }
-    }
-}
-
-#[cfg(feature = "llvm")]
 pub fn gen_from_mono_module(
     arena: &bumpalo::Bump,
     loaded: MonomorphizedModule,
@@ -203,7 +180,6 @@ pub fn gen_from_mono_module(
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
-#[cfg(feature = "llvm")]
 pub fn gen_from_mono_module_llvm(
     arena: &bumpalo::Bump,
     loaded: MonomorphizedModule,

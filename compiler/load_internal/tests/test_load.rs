@@ -29,7 +29,7 @@ mod test_load {
     use roc_reporting::report::RenderTarget;
     use roc_reporting::report::RocDocAllocator;
     use roc_target::TargetInfo;
-    use roc_types::pretty_print::{content_to_string, name_all_type_vars};
+    use roc_types::pretty_print::name_and_print_var;
     use roc_types::subs::Subs;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -237,10 +237,7 @@ mod test_load {
         expected_types: &mut HashMap<&str, &str>,
     ) {
         for (symbol, expr_var) in &def.pattern_vars {
-            name_all_type_vars(*expr_var, subs);
-
-            let content = subs.get_content_without_compacting(*expr_var);
-            let actual_str = content_to_string(content, subs, home, interns);
+            let actual_str = name_and_print_var(*expr_var, subs, home, interns);
             let fully_qualified = symbol.fully_qualified(interns, home).to_string();
             let expected_type = expected_types
                 .remove(fully_qualified.as_str())
@@ -420,12 +417,13 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "floatTest" => "Float *",
+                "floatTest" => "F64",
                 "divisionFn" => "Float a, Float a -> Float a",
-                "divisionTest" => "Float *",
-                "intTest" => "I64",
                 "x" => "Float *",
+                "divisionTest" => "F64",
+                "intTest" => "I64",
                 "constantNum" => "Num *",
+                "divisionTest" => "F64",
                 "divDep1ByDep2" => "Float *",
                 "fromDep2" => "Float *",
             },

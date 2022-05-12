@@ -176,7 +176,7 @@ fn builtin_alias(
 #[inline(always)]
 pub fn num_float(range: Type) -> Type {
     builtin_alias(
-        Symbol::NUM_FLOAT,
+        Symbol::NUM_FRAC,
         vec![OptAbleType::unbound(range.clone())],
         Box::new(num_num(num_floatingpoint(range))),
         AliasKind::Structural,

@@ -1,9 +1,7 @@
 use crate::target::{arch_str, target_zig_str};
-#[cfg(feature = "llvm")]
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
-// #[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
 use std::env;
@@ -1061,7 +1059,6 @@ fn link_windows(
     todo!("Add windows support to the surgical linker. See issue #2608.")
 }
 
-#[cfg(feature = "llvm")]
 pub fn module_to_dylib(
     module: &inkwell::module::Module,
     target: &Triple,

@@ -22,7 +22,6 @@ mod test_reporting {
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
     use roc_test_utils::assert_multiline_str_eq;
-    use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
 
@@ -122,19 +121,11 @@ mod test_reporting {
             mut can_problems,
             mut type_problems,
             interns,
-            mut solved,
-            exposed_to_host,
             ..
         } = result?;
 
         let can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
-
-        let subs = solved.inner_mut();
-
-        for var in exposed_to_host.values() {
-            name_all_type_vars(*var, subs);
-        }
 
         Ok((module_src, type_problems, can_problems, home, interns))
     }
@@ -233,7 +224,7 @@ mod test_reporting {
 
         let mut unify_problems = Vec::new();
         let mut abilities_store = AbilitiesStore::default();
-        let (_content, mut subs) = infer_expr(
+        let (_content, _subs) = infer_expr(
             subs,
             &mut unify_problems,
             &constraints,
@@ -242,8 +233,6 @@ mod test_reporting {
             &mut abilities_store,
             var,
         );
-
-        name_all_type_vars(var, &mut subs);
 
         Ok((unify_problems, can_problems, home, interns))
     }
@@ -1317,7 +1306,7 @@ mod test_reporting {
 
                 This `Blue` tag application has the type:
 
-                    [ Blue (Float a) ]b
+                    [ Blue (Frac a) ]b
 
                 But `f` needs the 1st argument to be:
 
@@ -1354,16 +1343,16 @@ mod test_reporting {
                 2│  x = if True then 3.14 else 4
                                      ^^^^
 
-                The 1st branch is a float of type:
+                The 1st branch is a frac of type:
 
-                    Float a
+                    Frac a
 
                 But the type annotation on `x` says it should be:
 
                     Int *
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1395,14 +1384,14 @@ mod test_reporting {
 
                 This `when` expression produces:
 
-                    Float a
+                    Frac a
 
                 But the type annotation on `x` says it should be:
 
                     Int *
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1429,16 +1418,16 @@ mod test_reporting {
                 2│  x = \_ -> 3.14
                               ^^^^
 
-                The body is a float of type:
+                The body is a frac of type:
 
-                    Float a
+                    Frac a
 
                 But the type annotation on `x` says it should be:
 
                     Int *
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1801,14 +1790,14 @@ mod test_reporting {
 
                 The body is a record of type:
 
-                    { x : Float a }
+                    { x : Frac a }
 
                 But the type annotation says it should be:
 
                     { x : Int * }
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -1944,7 +1933,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : { a : Num.Int *, b : Num.Float *, c : Str }
+                x : { a : Num.Int *, b : Num.Frac *, c : Str }
                 x = { b: 4.0 }
 
                 x
@@ -1956,17 +1945,17 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
-                1│  x : { a : Num.Int *, b : Num.Float *, c : Str }
+                1│  x : { a : Num.Int *, b : Num.Frac *, c : Str }
                 2│  x = { b: 4.0 }
                         ^^^^^^^^^^
 
                 The body is a record of type:
 
-                    { b : Float a }
+                    { b : Frac a }
 
                 But the type annotation on `x` says it should be:
 
-                    { a : Int *, b : Float *, c : Str }
+                    { a : Int *, b : Frac *, c : Str }
 
                 Tip: Looks like the c and a fields are missing.
                 "#
@@ -2405,7 +2394,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn int_float() {
+    fn int_frac() {
         report_problem_as(
             indoc!(
                 r#"
@@ -2421,16 +2410,16 @@ mod test_reporting {
                 1│  0x4 + 3.14
                           ^^^^
 
-                This argument is a float of type:
+                This argument is a frac of type:
 
-                    Float a
+                    Frac a
 
                 But `add` needs the 2nd argument to be:
 
                     Num (Integer a)
 
-                Tip: You can convert between Int and Float using functions like
-                `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
                 "#
             ),
         )
@@ -2893,7 +2882,7 @@ mod test_reporting {
 
                 This argument is a record of type:
 
-                    { y : Float a }
+                    { y : Frac a }
 
                 But `f` needs the 1st argument to be:
 
@@ -3520,8 +3509,9 @@ mod test_reporting {
                 This `ACons` tag application has the type:
 
                     [ ACons (Num (Integer Signed64)) [
-                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 a, BNil ],
-                    ANil ], BNil ], ANil ]
+                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 [
+                    ACons I64 (BList I64 I64), ANil ] as ∞, BNil ], ANil ], BNil ],
+                    ANil ]
 
                 But the type annotation on `x` says it should be:
 
@@ -7275,7 +7265,7 @@ I need all branches in an `if` to have the same type!
                 let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
                 let carets = "^".repeat(number.len() + $suffix.len());
                 let kind = match $suffix {
-                    "dec"|"f32"|"f64" => "a float",
+                    "dec"|"f32"|"f64" => "a frac",
                     _ => "an integer",
                 };
 
@@ -9762,6 +9752,158 @@ I need all branches in an `if` to have the same type!
                 "#
             ),
             "", // no problem
+        )
+    }
+
+    #[test]
+    fn nested_specialization() {
+        new_report_problem_as(
+            "nested_specialization",
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Default has default : {} -> a | a has Default
+
+                main =
+                    A := {}
+                    default = \{} -> @A {}
+                    default {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SPECIALIZATION NOT ON TOP-LEVEL ─────────────────────── /code/proj/Main.roc ─
+
+                This specialization of the `default` ability member is in a nested
+                scope:
+
+                7│      default = \{} -> @A {}
+                        ^^^^^^^
+
+                Specializations can only be defined on the top-level of a module.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursion_var_specialization_error() {
+        new_report_problem_as(
+            "recursion_var_specialization_error",
+            indoc!(
+                r#"
+                Job a : [ Job (List (Job a)) ]
+
+                job : Job Str
+
+                when job is
+                    Job lst -> lst == ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                The 2nd argument to `isEq` is not what I expect:
+
+                9│          Job lst -> lst == ""
+                                              ^^
+
+                This argument is a string of type:
+
+                    Str
+
+                But `isEq` needs the 2nd argument to be:
+
+                    List [ Job ∞ ] as ∞
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_error_in_apply_is_circular() {
+        new_report_problem_as(
+            "type_error_in_apply_is_circular",
+            indoc!(
+                r#"
+                app "test" provides [ go ] to "./platform"
+
+                S a : { set : Set a }
+
+                go : a, S a -> Result (List a) *
+                go = \goal, model ->
+                        if goal == goal
+                        then Ok []
+                        else
+                            new = { model & set : Set.remove goal model.set }
+                            go goal new
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                The 1st argument to `remove` is not what I expect:
+
+                10│              new = { model & set : Set.remove goal model.set }
+                                                                  ^^^^
+
+                This `goal` value is a:
+
+                    a
+
+                But `remove` needs the 1st argument to be:
+
+                    Set a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `Set` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `new`:
+
+                10│              new = { model & set : Set.remove goal model.set }
+                                 ^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    { set : Set ∞ }
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `model`:
+
+                6│  go = \goal, model ->
+                                ^^^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    S (Set ∞)
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `goal`:
+
+                6│  go = \goal, model ->
+                          ^^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    Set ∞
+                "#
+            ),
         )
     }
 }

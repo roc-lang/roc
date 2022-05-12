@@ -502,11 +502,11 @@ trait Backend<'a> {
                 );
                 self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
             }
-            LowLevel::NumToFloat => {
+            LowLevel::NumToFrac => {
                 debug_assert_eq!(
                     1,
                     args.len(),
-                    "NumToFloat: expected to have exactly one argument"
+                    "NumToFrac: expected to have exactly one argument"
                 );
 
                 debug_assert!(
@@ -514,9 +514,9 @@ trait Backend<'a> {
                         *ret_layout,
                         Layout::Builtin(Builtin::Float(FloatWidth::F32 | FloatWidth::F64)),
                     ),
-                    "NumToFloat: expected to have return layout of type Float"
+                    "NumToFrac: expected to have return layout of type Float"
                 );
-                self.build_num_to_float(sym, &args[0], &arg_layouts[0], ret_layout)
+                self.build_num_to_frac(sym, &args[0], &arg_layouts[0], ret_layout)
             }
             LowLevel::NumLte => {
                 debug_assert_eq!(
@@ -691,8 +691,8 @@ trait Backend<'a> {
     /// build_num_lt stores the result of `src1 < src2` into dst.
     fn build_num_lt(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);
 
-    /// build_num_to_float convert Number to Float
-    fn build_num_to_float(
+    /// build_num_to_frac convert Number to Frac
+    fn build_num_to_frac(
         &mut self,
         dst: &Symbol,
         src: &Symbol,

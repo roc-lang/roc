@@ -40,12 +40,11 @@ const OPAQUE_OVER_APPLIED: &str = "OPAQUE TYPE APPLIED TO TOO MANY ARGS";
 const INVALID_EXTENSION_TYPE: &str = "INVALID_EXTENSION_TYPE";
 const ABILITY_HAS_TYPE_VARIABLES: &str = "ABILITY HAS TYPE VARIABLES";
 const HAS_CLAUSE_IS_NOT_AN_ABILITY: &str = "HAS CLAUSE IS NOT AN ABILITY";
-const ALIAS_USES_ABILITY: &str = "ALIAS USES ABILITY";
 const ILLEGAL_HAS_CLAUSE: &str = "ILLEGAL HAS CLAUSE";
 const ABILITY_MEMBER_MISSING_HAS_CLAUSE: &str = "ABILITY MEMBER MISSING HAS CLAUSE";
-const ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE: &str = "ABILITY MEMBER HAS EXTRANEOUS HAS CLAUSE";
 const ABILITY_MEMBER_BINDS_MULTIPLE_VARIABLES: &str = "ABILITY MEMBER BINDS MULTIPLE VARIABLES";
 const ABILITY_NOT_ON_TOPLEVEL: &str = "ABILITY NOT ON TOP-LEVEL";
+const SPECIALIZATION_NOT_ON_TOPLEVEL: &str = "SPECIALIZATION NOT ON TOP-LEVEL";
 const ABILITY_USED_AS_TYPE: &str = "ABILITY USED AS TYPE";
 
 pub fn can_problem<'b>(
@@ -201,7 +200,7 @@ pub fn can_problem<'b>(
                 WhenBranch => unreachable!("all patterns are allowed in a When"),
             };
 
-            let suggestion = vec![
+            let suggestion = [
                 alloc.reflow(
                     "Patterns like this don't cover all possible shapes of the input type. Use a ",
                 ),
@@ -603,37 +602,6 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
 
-        Problem::AliasUsesAbility {
-            loc_name: Loc {
-                region,
-                value: name,
-            },
-            ability,
-        } => {
-            doc = alloc.stack([
-                alloc.concat([
-                    alloc.reflow("The definition of the "),
-                    alloc.symbol_unqualified(name),
-                    alloc.reflow(" aliases references the ability "),
-                    alloc.symbol_unqualified(ability),
-                    alloc.reflow(":"),
-                ]),
-                alloc.region(lines.convert_region(region)),
-                alloc.concat([
-                    alloc.reflow("Abilities are not types, but you can add an ability constraint to a type variable "),
-                    alloc.type_variable("a".into()),
-                    alloc.reflow(" by writing"),
-                ]),
-                alloc.type_block(alloc.concat([
-                        alloc.reflow("| a has "),
-                        alloc.symbol_unqualified(ability),
-                ])),
-                alloc.reflow(" at the end of the type."),
-            ]);
-            title = ALIAS_USES_ABILITY.to_string();
-            severity = Severity::RuntimeError;
-        }
-
         Problem::IllegalHasClause { region } => {
             doc = alloc.stack([
                 alloc.concat([
@@ -716,35 +684,11 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
 
-        Problem::AbilityMemberBindsExternalAbility {
-            member,
-            ability,
-            region,
-        } => {
-            doc = alloc.stack([
-                alloc.concat([
-                    alloc.reflow("The definition of the ability member "),
-                    alloc.symbol_unqualified(member),
-                    alloc.reflow(" includes a has clause binding an ability it is not a part of:"),
-                ]),
-                alloc.region(lines.convert_region(region)),
-                alloc.reflow("Currently, ability members can only bind variables to the ability they are a part of."),
-                alloc.concat([
-                    alloc.hint(""),
-                    alloc.reflow("Did you mean to bind the "),
-                    alloc.symbol_unqualified(ability),
-                    alloc.reflow(" ability instead?"),
-                ]),
-            ]);
-            title = ABILITY_MEMBER_HAS_EXTRANEOUS_HAS_CLAUSE.to_string();
-            severity = Severity::RuntimeError;
-        }
-
         Problem::AbilityNotOnToplevel { region } => {
-            doc = alloc.stack(vec![
-                alloc.concat(vec![alloc.reflow(
-                    "This ability definition is not on the top-level of a module:",
-                )]),
+            doc = alloc.stack([
+                alloc
+                    .concat([alloc
+                        .reflow("This ability definition is not on the top-level of a module:")]),
                 alloc.region(lines.convert_region(region)),
                 alloc.reflow("Abilities can only be defined on the top-level of a Roc module."),
             ]);
@@ -753,8 +697,8 @@ pub fn can_problem<'b>(
         }
 
         Problem::AbilityUsedAsType(suggested_var_name, ability, region) => {
-            doc = alloc.stack(vec![
-                alloc.concat(vec![
+            doc = alloc.stack([
+                alloc.concat([
                     alloc.reflow("You are attempting to use the ability "),
                     alloc.symbol_unqualified(ability),
                     alloc.reflow(" as a type directly:"),
@@ -768,7 +712,7 @@ pub fn can_problem<'b>(
                     .append(alloc.reflow("Perhaps you meant to include a "))
                     .append(alloc.keyword("has"))
                     .append(alloc.reflow(" annotation, like")),
-                alloc.type_block(alloc.concat(vec![
+                alloc.type_block(alloc.concat([
                     alloc.type_variable(suggested_var_name),
                     alloc.space(),
                     alloc.keyword("has"),
@@ -778,6 +722,19 @@ pub fn can_problem<'b>(
             ]);
             title = ABILITY_USED_AS_TYPE.to_string();
             severity = Severity::RuntimeError;
+        }
+        Problem::NestedSpecialization(member, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This specialization of the "),
+                    alloc.symbol_unqualified(member),
+                    alloc.reflow(" ability member is in a nested scope:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Specializations can only be defined on the top-level of a module."),
+            ]);
+            title = SPECIALIZATION_NOT_ON_TOPLEVEL.to_string();
+            severity = Severity::Warning;
         }
     };
 
