@@ -223,6 +223,19 @@ fn tag_union_aliased() {
                         }
                     }
 
+                    /// Construct a tag named Baz
+                    pub fn Baz() -> Self {
+                        Self {
+                            tag: tag_MyTagUnion::Baz,
+                            variant: unsafe {
+                                core::mem::transmute::<
+                                    core::mem::MaybeUninit<union_MyTagUnion>,
+                                    union_MyTagUnion,
+                                >(core::mem::MaybeUninit::uninit())
+                            },
+                        }
+                    }
+
                     /// Construct a tag named Blah, with the appropriate payload
                     pub fn Blah(payload: i32) -> Self {
                         Self {

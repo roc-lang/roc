@@ -220,6 +220,25 @@ fn write_tag_union(
                     tag_name,
                     payload_name
                 )?;
+            } else {
+                writeln!(
+                    buf,
+                    // Don't use indoc because this must be indented once!
+                    r#"
+    /// Construct a tag named {}
+    pub fn {}() -> Self {{
+        Self {{
+            tag: {}::{},
+            variant: unsafe {{
+                core::mem::transmute::<
+                    core::mem::MaybeUninit<{}>,
+                    {},
+                >(core::mem::MaybeUninit::uninit())
+            }},
+        }}
+    }}"#,
+                    tag_name, tag_name, discriminant_name, tag_name, variant_name, variant_name,
+                )?;
             }
         }
 
