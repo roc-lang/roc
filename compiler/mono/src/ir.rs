@@ -799,69 +799,6 @@ struct SymbolSpecializations<'a>(
 );
 
 impl<'a> SymbolSpecializations<'a> {
-    /// Gets a specialization for a symbol, or creates a new one.
-    #[inline(always)]
-    fn get_or_insert(
-        &mut self,
-        env: &mut Env<'a, '_>,
-        layout_cache: &mut LayoutCache<'a>,
-        symbol: Symbol,
-        specialization_var: Variable,
-    ) -> Symbol {
-        let arena = env.arena;
-        let subs: &Subs = env.subs;
-
-        let layout = match layout_cache.from_var(arena, specialization_var, subs) {
-            Ok(layout) => layout,
-            // This can happen when the def symbol has a type error. In such cases just use the
-            // def symbol, which is erroring.
-            Err(_) => return symbol,
-        };
-
-        let is_closure = matches!(
-            subs.get_content_without_compacting(specialization_var),
-            Content::Structure(FlatType::Func(..))
-        );
-        let function_mark = if is_closure {
-            let fn_layout = match layout_cache.raw_from_var(arena, specialization_var, subs) {
-                Ok(layout) => layout,
-                // This can happen when the def symbol has a type error. In such cases just use the
-                // def symbol, which is erroring.
-                Err(_) => return symbol,
-            };
-            Some(fn_layout)
-        } else {
-            None
-        };
-
-        let specialization_mark = SpecializationMark {
-            layout,
-            function_mark,
-        };
-
-        let symbol_specializations = self.0.get_or_insert(symbol, Default::default);
-
-        // For the first specialization, always reuse the current symbol. The vast majority of defs
-        // only have one instance type, so this preserves readability of the IR.
-        // TODO: turn me off and see what breaks.
-        let needs_fresh_symbol = !symbol_specializations.is_empty();
-
-        let mut make_specialized_symbol = || {
-            if needs_fresh_symbol {
-                env.unique_symbol()
-            } else {
-                symbol
-            }
-        };
-
-        let (_var, specialized_symbol) = symbol_specializations
-            .get_or_insert(specialization_mark, || {
-                (specialization_var, make_specialized_symbol())
-            });
-
-        *specialized_symbol
-    }
-
     /// Inserts a known specialization for a symbol. Returns the overwritten specialization, if any.
     pub fn get_or_insert_known(
         &mut self,
@@ -918,6 +855,8 @@ pub struct Procs<'a> {
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations>,
     symbol_specializations: SymbolSpecializations<'a>,
+    let_bindings: BumpMap<Symbol, (roc_can::expr::Expr, Variable)>,
+    specialized_lets: BumpMap<Symbol, (roc_can::expr::Expr, Variable)>,
 }
 
 impl<'a> Procs<'a> {
@@ -932,6 +871,113 @@ impl<'a> Procs<'a> {
             runtime_errors: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
             symbol_specializations: Default::default(),
+            let_bindings: BumpMap::new_in(arena),
+            specialized_lets: BumpMap::new_in(arena),
+        }
+    }
+
+    /// Gets a specialization for a symbol, or creates a new one.
+    #[inline(always)]
+    fn get_or_insert_symbol_specialization(
+        &mut self,
+        env: &mut Env<'a, '_>,
+        layout_cache: &mut LayoutCache<'a>,
+        symbol: Symbol,
+        specialization_var: Variable,
+    ) -> Symbol {
+        let arena = env.arena;
+        let subs: &Subs = env.subs;
+
+        let layout = match layout_cache.from_var(arena, specialization_var, subs) {
+            Ok(layout) => layout,
+            // This can happen when the def symbol has a type error. In such cases just use the
+            // def symbol, which is erroring.
+            Err(_) => return symbol,
+        };
+
+        let is_closure = matches!(
+            subs.get_content_without_compacting(specialization_var),
+            Content::Structure(FlatType::Func(..))
+        );
+        let function_mark = if is_closure {
+            let fn_layout = match layout_cache.raw_from_var(arena, specialization_var, subs) {
+                Ok(layout) => layout,
+                // This can happen when the def symbol has a type error. In such cases just use the
+                // def symbol, which is erroring.
+                Err(_) => return symbol,
+            };
+            Some(fn_layout)
+        } else {
+            None
+        };
+
+        let specialization_mark = SpecializationMark {
+            layout,
+            function_mark,
+        };
+
+        let specializations_for_symbol = self
+            .symbol_specializations
+            .0
+            .get_or_insert(symbol, Default::default);
+
+        match specializations_for_symbol.get(&specialization_mark) {
+            Some((_, specialization_symbol)) => *specialization_symbol,
+            None => {
+                // For the first specialization, always reuse the current symbol. The vast majority of defs
+                // only have one instance type, so this preserves readability of the IR.
+                // TODO: turn me off and see what breaks.
+                let needs_fresh_symbol = !specializations_for_symbol.is_empty();
+
+                let specialization_symbol = if needs_fresh_symbol {
+                    env.unique_symbol()
+                } else {
+                    symbol
+                };
+
+                if let Some((def_expr, def_expr_var)) = self.let_bindings.get(&symbol) {
+                    use crate::copy::deep_copy_type_vars_into_expr;
+
+                    let (specialized_expr_var, specialized_expr) = deep_copy_type_vars_into_expr(
+                        env.arena,
+                        env.subs,
+                        *def_expr_var,
+                        def_expr,
+                    )
+                    .expect("expr marked as having specializations, but it has no type variables!");
+
+                    let _res = roc_unify::unify::unify(
+                        env.subs,
+                        specialization_var,
+                        specialized_expr_var,
+                        Mode::EQ,
+                    );
+                    _res.expect_success("??? unification failed???");
+
+                    resolve_abilities_in_specialized_body(
+                        env,
+                        self,
+                        &specialized_expr,
+                        specialized_expr_var,
+                    );
+
+                    self.specialized_lets.insert(
+                        specialization_symbol,
+                        (specialized_expr, specialized_expr_var),
+                    );
+                }
+
+                self.symbol_specializations
+                    .0
+                    .get_mut(&symbol)
+                    .unwrap()
+                    .insert(
+                        specialization_mark,
+                        (specialization_var, specialization_symbol),
+                    );
+
+                specialization_symbol
+            }
         }
     }
 }
@@ -2229,7 +2275,13 @@ fn from_can_let<'a>(
                 lower_rest!(variable, new_outer)
             }
             _ => {
+                procs
+                    .let_bindings
+                    .insert(*symbol, (def.loc_expr.value.clone(), def.expr_var));
+
                 let rest = lower_rest!(variable, cont.value);
+
+                procs.let_bindings.remove(symbol);
 
                 // Remove all the requested symbol specializations now, since this is the
                 // def site and hence we won't need them any higher up.
@@ -2280,30 +2332,13 @@ fn from_can_let<'a>(
 
                         // Need to eat the cost and create a specialized version of the body for
                         // each specialization.
-                        for (_specialization_mark, (var, specialized_symbol)) in
+                        for (_specialization_mark, (_var, specialized_symbol)) in
                             needed_specializations
                         {
-                            use crate::copy::deep_copy_type_vars_into_expr;
-
-                            let (new_def_expr_var, specialized_expr) = deep_copy_type_vars_into_expr(
-                            env.arena,
-                            env.subs,
-                            def.expr_var,
-                            &def.loc_expr.value,
-                        )
-                        .expect(
-                            "expr marked as having specializations, but it has no type variables!",
-                        );
-
-                            let _res =
-                                roc_unify::unify::unify(env.subs, var, new_def_expr_var, Mode::EQ);
-
-                            resolve_abilities_in_specialized_body(
-                                env,
-                                procs,
-                                &def.loc_expr.value,
-                                def.expr_var,
-                            );
+                            let (specialized_expr, new_def_expr_var) = procs
+                                .specialized_lets
+                                .remove(&specialized_symbol)
+                                .expect("No specialization??");
 
                             stmt = with_hole(
                                 env,
@@ -3863,9 +3898,7 @@ pub fn with_hole<'a>(
                 can_reuse_symbol(env, procs, &roc_can::expr::Expr::Var(symbol))
             {
                 let real_symbol =
-                    procs
-                        .symbol_specializations
-                        .get_or_insert(env, layout_cache, symbol, variable);
+                    procs.get_or_insert_symbol_specialization(env, layout_cache, symbol, variable);
                 symbol = real_symbol;
             }
 
@@ -3960,7 +3993,7 @@ pub fn with_hole<'a>(
             match can_reuse_symbol(env, procs, &loc_arg_expr.value) {
                 // Opaques decay to their argument.
                 ReuseSymbol::Value(symbol) => {
-                    let real_name = procs.symbol_specializations.get_or_insert(
+                    let real_name = procs.get_or_insert_symbol_specialization(
                         env,
                         layout_cache,
                         symbol,
@@ -4018,7 +4051,7 @@ pub fn with_hole<'a>(
                             can_fields.push(Field::Function(symbol, variable));
                         }
                         Value(symbol) => {
-                            let reusable = procs.symbol_specializations.get_or_insert(
+                            let reusable = procs.get_or_insert_symbol_specialization(
                                 env,
                                 layout_cache,
                                 symbol,
@@ -4845,7 +4878,7 @@ pub fn with_hole<'a>(
                             }
                         }
                         Value(function_symbol) => {
-                            let function_symbol = procs.symbol_specializations.get_or_insert(
+                            let function_symbol = procs.get_or_insert_symbol_specialization(
                                 env,
                                 layout_cache,
                                 function_symbol,
@@ -7014,9 +7047,7 @@ fn possible_reuse_symbol_or_specialize<'a>(
 ) -> Symbol {
     match can_reuse_symbol(env, procs, expr) {
         ReuseSymbol::Value(symbol) => {
-            procs
-                .symbol_specializations
-                .get_or_insert(env, layout_cache, symbol, var)
+            procs.get_or_insert_symbol_specialization(env, layout_cache, symbol, var)
         }
         _ => env.unique_symbol(),
     }
@@ -7057,6 +7088,10 @@ where
         // the correct proc.
         procs.partial_procs.insert_alias(left, right);
         return build_rest(env, procs, layout_cache);
+    }
+
+    if let Some(let_binding) = procs.let_bindings.get(&right).cloned() {
+        procs.let_bindings.insert(left, let_binding);
     }
 
     // Otherwise we're dealing with an alias whose usages will tell us what specializations we
