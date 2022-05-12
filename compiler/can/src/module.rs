@@ -518,8 +518,16 @@ pub fn canonicalize_module_defs<'a>(
         aliases.insert(symbol, alias);
     }
 
-    for member in scope.abilities_store.root_ability_members().keys() {
-        exposed_but_not_defined.remove(member);
+    for (ability, members) in scope
+        .abilities_store
+        .iter_abilities()
+        .filter(|(ab, _)| ab.module_id() == home)
+    {
+        exposed_but_not_defined.remove(&ability);
+        members.iter().for_each(|member| {
+            debug_assert!(member.module_id() == home);
+            exposed_but_not_defined.remove(member);
+        });
     }
 
     // By this point, all exposed symbols should have been removed from

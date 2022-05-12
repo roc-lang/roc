@@ -187,6 +187,13 @@ impl AbilitiesStore {
         self.ability_members.get(&member)
     }
 
+    /// Iterator over all abilities and their members that this store knows about.
+    pub fn iter_abilities(&self) -> impl Iterator<Item = (Symbol, &[Symbol])> {
+        self.members_of_ability
+            .iter()
+            .map(|(k, v)| (*k, v.as_slice()))
+    }
+
     /// Returns an iterator over pairs ((ability member, type), specialization) specifying that
     /// "ability member" has a "specialization" for type "type".
     pub fn iter_specializations(
