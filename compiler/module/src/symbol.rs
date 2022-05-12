@@ -46,7 +46,7 @@ const SYMBOL_HAS_NICHE: () =
 // Set it to false if you want to see the raw ModuleId and IdentId ints,
 // but please set it back to true before checking in the result!
 #[cfg(debug_assertions)]
-const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
+const PRETTY_PRINT_DEBUG_SYMBOLS: bool = false;
 
 /// In Debug builds only, Symbol has a name() method that lets
 /// you look up its name in a global intern table. This table is

@@ -2307,25 +2307,42 @@ fn from_can_let<'a>(
                         let (_specialization_mark, (var, specialized_symbol)) =
                             needed_specializations.next().unwrap();
 
-                        // Unify the expr_var with the requested specialization once.
-                        let _res = roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
+                        use crate::copy::deep_copy_type_vars_into_expr;
 
-                        resolve_abilities_in_specialized_body(
-                            env,
-                            procs,
-                            &def.loc_expr.value,
+                        dbg!(symbol);
+                        let (copy_var, copy_expr) = deep_copy_type_vars_into_expr(
+                            env.arena,
+                            env.subs,
                             def.expr_var,
+                            &def.loc_expr.value,
+                        )
+                        .expect(
+                            "expr marked as having specializations, but it has no type variables!",
                         );
 
-                        with_hole(
+                        // Unify the expr_var with the requested specialization once.
+                        let _res = roc_unify::unify::unify(env.subs, var, copy_var, Mode::EQ);
+                        _res.expect_success("??? bugged");
+
+                        resolve_abilities_in_specialized_body(env, procs, &copy_expr, copy_var);
+
+                        let c = roc_types::subs::SubsFmtContent(
+                            env.subs.get_content_without_compacting(copy_var),
+                            env.subs,
+                        );
+                        dbg!(symbol, specialized_symbol, c);
+                        dbg!("in");
+                        let r = with_hole(
                             env,
-                            def.loc_expr.value,
-                            def.expr_var,
+                            copy_expr,
+                            copy_var,
                             procs,
                             layout_cache,
                             specialized_symbol,
                             env.arena.alloc(rest),
-                        )
+                        );
+                        dbg!("out");
+                        r
                     }
                     _n => {
                         let mut stmt = rest;
@@ -4702,6 +4719,16 @@ pub fn with_hole<'a>(
 
             let raw = layout_cache.raw_from_var(env.arena, function_type, env.subs);
 
+            let c = roc_types::subs::SubsFmtContent(
+                env.subs.get_content_without_compacting(function_type),
+                env.subs,
+            );
+            let d = roc_types::subs::SubsFmtContent(
+                env.subs.get_content_without_compacting(variable),
+                env.subs,
+            );
+            dbg!(name, function_type, c, &raw, d);
+
             match return_on_layout_error!(env, raw) {
                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                     unreachable!("a closure syntactically always must have at least one argument")
@@ -4751,7 +4778,14 @@ pub fn with_hole<'a>(
         }
 
         Call(boxed, loc_args, _) => {
-            let (fn_var, loc_expr, _lambda_set_var, _ret_var) = *boxed;
+            let (fn_var, loc_expr, _lambda_set_var, ret_var) = *boxed;
+            let fret = roc_types::subs::SubsFmtContent(
+                env.subs.get_content_without_compacting(ret_var),
+                env.subs,
+            );
+            dbg!(fret);
+
+            let _res = roc_unify::unify::unify(env.subs, variable, ret_var, Mode::EQ);
 
             // even if a call looks like it's by name, it may in fact be by-pointer.
             // E.g. in `(\f, x -> f x)` the call is in fact by pointer.
@@ -4767,6 +4801,19 @@ pub fn with_hole<'a>(
             match loc_expr.value {
                 roc_can::expr::Expr::Var(proc_name) if is_known(proc_name) => {
                     // a call by a known name
+                    let ff = roc_types::subs::SubsFmtContent(
+                        env.subs.get_content_without_compacting(fn_var),
+                        env.subs,
+                    );
+                    let fret = roc_types::subs::SubsFmtContent(
+                        env.subs.get_content_without_compacting(ret_var),
+                        env.subs,
+                    );
+                    let fv = roc_types::subs::SubsFmtContent(
+                        env.subs.get_content_without_compacting(variable),
+                        env.subs,
+                    );
+                    dbg!(proc_name, variable, fn_var, ff, fret, fv);
                     call_by_name(
                         env,
                         procs,

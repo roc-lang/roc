@@ -428,7 +428,7 @@ impl Env {
 const DEFAULT_POOLS: usize = 8;
 
 #[derive(Clone, Debug)]
-struct Pools(Vec<Vec<Variable>>);
+pub struct Pools(Vec<Vec<Variable>>);
 
 impl Default for Pools {
     fn default() -> Self {
@@ -3023,6 +3023,36 @@ fn deep_copy_var_in(
     }
 
     copy
+}
+
+pub fn deep_copy_var_in2(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    var: Variable,
+    arena: &Bump,
+) -> Vec<(Variable, Variable)> {
+    let mut visited = bumpalo::collections::Vec::with_capacity_in(256, arena);
+
+    let _copy = deep_copy_var_help(subs, rank, pools, &mut visited, var);
+
+    let mut result = vec![];
+
+    // we have tracked all visited variables, and can now traverse them
+    // in one go (without looking at the UnificationTable) and clear the copy field
+    for var in visited {
+        let descriptor = subs.get_ref_mut(var);
+
+        if let Some(copy_var) = descriptor.copy.into_variable() {
+            descriptor.rank = Rank::NONE;
+            descriptor.mark = Mark::NONE;
+            descriptor.copy = OptVariable::NONE;
+
+            result.push((var, copy_var));
+        }
+    }
+
+    result
 }
 
 fn deep_copy_var_help(

@@ -1,0 +1,234 @@
+   Compiling roc_mono v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/mono)
+warning: function is never used: `deep_copy_type_vars`
+   --> compiler/mono/src/copy.rs:380:4
+    |
+380 | fn deep_copy_type_vars<'a>(
+    |    ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` on by default
+
+   Compiling roc_load_internal v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/load_internal)
+   Compiling roc_alias_analysis v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/alias_analysis)
+   Compiling roc_gen_dev v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/gen_dev)
+   Compiling roc_gen_wasm v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/gen_wasm)
+   Compiling roc_gen_llvm v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/gen_llvm)
+warning: `roc_mono` (lib) generated 1 warning (1 duplicate)
+   Compiling roc_load v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/load)
+warning: `roc_mono` (lib) generated 1 warning
+   Compiling roc_build v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/build)
+   Compiling test_gen v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/test_gen)
+    Finished test [unoptimized + debuginfo] target(s) in 11.06s
+     Running src/tests.rs (target/debug/deps/test_gen-4720b38f8ff7f055)
+[compiler/mono/src/ir.rs:4786] fret = Opaque(`2.IdentId(0)`, [169], <169>Flex(None))
+[compiler/mono/src/copy.rs:37] &substitutions = [
+    (
+        148,
+        170,
+    ),
+    (
+        149,
+        171,
+    ),
+    (
+        150,
+        172,
+    ),
+    (
+        151,
+        173,
+    ),
+    (
+        152,
+        174,
+    ),
+    (
+        153,
+        175,
+    ),
+    (
+        154,
+        176,
+    ),
+]
+[compiler/mono/src/copy.rs:39] help(subs, expr, &substitutions) = Call(
+    (
+        101,
+        @136-146 Var(
+            `10.IdentId(2)`,
+        ),
+        102,
+        170,
+    ),
+    [
+        (
+            174,
+            @147-148 Num(
+                99,
+                "3",
+                I128(
+                    3,
+                ),
+                AtLeastIntOrFloat {
+                    sign: NoDemand,
+                    width: I8,
+                },
+            ),
+        ),
+    ],
+    Space,
+)
+[compiler/mono/src/ir.rs:2311] symbol = `10.IdentId(3)`
+[compiler/mono/src/copy.rs:37] &substitutions = [
+    (
+        148,
+        177,
+    ),
+    (
+        149,
+        178,
+    ),
+    (
+        150,
+        179,
+    ),
+    (
+        151,
+        180,
+    ),
+    (
+        152,
+        181,
+    ),
+    (
+        153,
+        182,
+    ),
+    (
+        154,
+        183,
+    ),
+]
+[compiler/mono/src/copy.rs:39] help(subs, expr, &substitutions) = Call(
+    (
+        101,
+        @136-146 Var(
+            `10.IdentId(2)`,
+        ),
+        102,
+        177,
+    ),
+    [
+        (
+            181,
+            @147-148 Num(
+                99,
+                "3",
+                I128(
+                    3,
+                ),
+                AtLeastIntOrFloat {
+                    sign: NoDemand,
+                    width: I8,
+                },
+            ),
+        ),
+    ],
+    Space,
+)
+[compiler/mono/src/ir.rs:2332] symbol = `10.IdentId(3)`
+[compiler/mono/src/ir.rs:2332] specialized_symbol = `10.IdentId(3)`
+[compiler/mono/src/ir.rs:2332] c = Func([<183>EmptyRecord,], 180, <178>Opaque(`2.IdentId(0)`, [179], <179>Flex(None)))
+[compiler/mono/src/ir.rs:2333] "in" = "in"
+[compiler/mono/src/ir.rs:4786] fret = Func([<183>EmptyRecord,], 180, <178>Opaque(`2.IdentId(0)`, [179], <179>Flex(None)))
+[compiler/mono/src/ir.rs:4816] proc_name = `10.IdentId(2)`
+[compiler/mono/src/ir.rs:4816] variable = 177
+[compiler/mono/src/ir.rs:4816] fn_var = 101
+[compiler/mono/src/ir.rs:4816] ff = Func([<100>Opaque(`2.IdentId(0)`, [150], <150>Flex(None)),], 102, <103>Func([<154>Flex(None),], 151, <149>Opaque(`2.IdentId(0)`, [150], <150>Flex(None))))
+[compiler/mono/src/ir.rs:4816] fret = Func([<183>EmptyRecord,], 180, <178>Opaque(`2.IdentId(0)`, [179], <179>Flex(None)))
+[compiler/mono/src/ir.rs:4816] fv = Func([<183>EmptyRecord,], 180, <178>Opaque(`2.IdentId(0)`, [179], <179>Flex(None)))
+[compiler/mono/src/ir.rs:4730] name = `10.IdentId(6)`
+[compiler/mono/src/ir.rs:4730] function_type = 89
+[compiler/mono/src/ir.rs:4730] c = Func([<154>Flex(None),], 151, <149>Opaque(`2.IdentId(0)`, [150], <150>Flex(None)))
+[compiler/mono/src/ir.rs:4730] &raw = Err(
+    UnresolvedTypeVar(
+        154,
+    ),
+)
+[compiler/mono/src/ir.rs:4730] d = Func([<154>Flex(None),], 151, <149>Opaque(`2.IdentId(0)`, [150], <150>Flex(None)))
+[compiler/mono/src/ir.rs:2343] "out" = "out"
+procedure : `10.IdentId(2)` {I64}
+procedure = `10.IdentId(2)` (`10.IdentId(5)`):
+    Error UnresolvedTypeVar compiler/mono/src/ir.rs line 4732
+
+procedure : `10.IdentId(0)` I64
+procedure = `10.IdentId(0)` ():
+    let `10.IdentId(9)` : I64 = 3i64;
+    let `10.IdentId(3)` : {I64} = CallByName `10.IdentId(2)` `10.IdentId(9)`;
+    let `10.IdentId(8)` : {} = Struct {};
+    let `10.IdentId(7)` : I64 = CallByName `10.IdentId(6)` `10.IdentId(8)` `10.IdentId(3)`;
+    ret `10.IdentId(7)`;
+
+thread 'gen_primitives::issue_2322' panicked at 'internal error: entered unreachable code: symbol/layout `10.IdentId(6)` ProcLayout { arguments: [Struct { field_order_hash: FieldOrderHash(0), field_layouts: [] }, LambdaSet(LambdaSet { set: [( `10.IdentId(6)`, [Builtin(Int(I64))])], representation: Struct { field_order_hash: FieldOrderHash(1), field_layouts: [Builtin(Int(I64))] } })], result: Builtin(Int(I64)) } combo must be in DeclarationToIndex', compiler/mono/src/borrow.rs:165:9
+stack backtrace:
+   0: rust_begin_unwind
+             at /rustc/7737e0b5c4103216d6fd8cf941b7ab9bdbaace7c/library/std/src/panicking.rs:584:5
+   1: core::panicking::panic_fmt
+             at /rustc/7737e0b5c4103216d6fd8cf941b7ab9bdbaace7c/library/core/src/panicking.rs:143:14
+   2: roc_mono::borrow::DeclarationToIndex::get_param_offset
+             at /Users/hafiz/Code/Roc/roc/compiler/mono/src/borrow.rs:165:9
+   3: roc_mono::borrow::ParamMap::get_param_offset
+             at /Users/hafiz/Code/Roc/roc/compiler/mono/src/borrow.rs:188:9
+   4: roc_mono::borrow::ParamMap::get_symbol
+             at /Users/hafiz/Code/Roc/roc/compiler/mono/src/borrow.rs:193:28
+   5: roc_mono::borrow::BorrowInfState::collect_call
+             at /Users/hafiz/Code/Roc/roc/compiler/mono/src/borrow.rs:504:26
+   6: roc_mono::borrow::BorrowInfState::collect_expr
+             at /Users/hafiz/Code/Roc/roc/compiler/mono/src/borrow.rs:699:27
+   7: roc_mono::borrow::BorrowInfState::collect_stmt
+             at /Users/hafiz/Code/Roc/roc/compiler/mono/src/borrow.rs:811:17
+   8: roc_mono::borrow::BorrowInfState::collect_proc
+             at /Users/hafiz/Code/Roc/roc/compiler/mono/src/borrow.rs:861:9
+   9: roc_mono::borrow::infer_borrow
+             at /Users/hafiz/Code/Roc/roc/compiler/mono/src/borrow.rs:83:17
+  10: roc_mono::ir::Proc::insert_refcount_operations
+             at /Users/hafiz/Code/Roc/roc/compiler/mono/src/ir.rs:401:41
+  11: roc_load_internal::file::update
+             at /Users/hafiz/Code/Roc/roc/compiler/load_internal/src/file.rs:2245:17
+  12: roc_load_internal::file::state_thread_step
+             at /Users/hafiz/Code/Roc/roc/compiler/load_internal/src/file.rs:1369:37
+  13: roc_load_internal::file::load_multi_threaded::{{closure}}
+             at /Users/hafiz/Code/Roc/roc/compiler/load_internal/src/file.rs:1553:23
+  14: crossbeam_utils::thread::scope::{{closure}}
+             at /Users/hafiz/.cargo/registry/src/github.com-1ecc6299db9ec823/crossbeam-utils-0.8.8/src/thread.rs:160:65
+  15: <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/7737e0b5c4103216d6fd8cf941b7ab9bdbaace7c/library/core/src/panic/unwind_safe.rs:271:9
+  16: std::panicking::try::do_call
+             at /rustc/7737e0b5c4103216d6fd8cf941b7ab9bdbaace7c/library/std/src/panicking.rs:492:40
+  17: ___rust_try
+  18: std::panicking::try
+             at /rustc/7737e0b5c4103216d6fd8cf941b7ab9bdbaace7c/library/std/src/panicking.rs:456:19
+  19: std::panic::catch_unwind
+             at /rustc/7737e0b5c4103216d6fd8cf941b7ab9bdbaace7c/library/std/src/panic.rs:137:14
+  20: crossbeam_utils::thread::scope
+             at /Users/hafiz/.cargo/registry/src/github.com-1ecc6299db9ec823/crossbeam-utils-0.8.8/src/thread.rs:160:18
+  21: roc_load_internal::file::load_multi_threaded
+             at /Users/hafiz/Code/Roc/roc/compiler/load_internal/src/file.rs:1493:9
+  22: roc_load_internal::file::load
+             at /Users/hafiz/Code/Roc/roc/compiler/load_internal/src/file.rs:1200:35
+  23: roc_load::load
+             at /Users/hafiz/Code/Roc/roc/compiler/load/src/lib.rs:30:5
+  24: roc_load::load_and_monomorphize_from_str
+             at /Users/hafiz/Code/Roc/roc/compiler/load/src/lib.rs:82:11
+  25: test_gen::helpers::llvm::create_llvm_module
+             at ./src/helpers/llvm.rs:55:18
+  26: test_gen::helpers::llvm::helper
+             at ./src/helpers/llvm.rs:266:50
+  27: test_gen::gen_primitives::issue_2322
+             at ./src/gen_primitives.rs:3271:5
+  28: test_gen::gen_primitives::issue_2322::{{closure}}
+             at ./src/gen_primitives.rs:3270:1
+  29: core::ops::function::FnOnce::call_once
+             at /rustc/7737e0b5c4103216d6fd8cf941b7ab9bdbaace7c/library/core/src/ops/function.rs:227:5
+  30: core::ops::function::FnOnce::call_once
+             at /rustc/7737e0b5c4103216d6fd8cf941b7ab9bdbaace7c/library/core/src/ops/function.rs:227:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.

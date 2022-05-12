@@ -4,6 +4,7 @@ use roc_can::{
     def::Def,
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
 };
+use roc_solve::solve::{deep_copy_var_in2, Pools};
 use roc_types::subs::{
     AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionTags, Variable,
     VariableSubsSlice,
@@ -20,7 +21,9 @@ pub fn deep_copy_type_vars_into_expr<'a>(
     // Always deal with the root, so that aliases propagate correctly.
     let var = subs.get_root_key_without_compacting(var);
 
-    let substitutions = deep_copy_type_vars(arena, subs, var);
+    // let substitutions = deep_copy_type_vars(arena, subs, var);
+    let rank = subs.get(var).rank;
+    let substitutions = deep_copy_var_in2(subs, rank, &mut Pools::default(), var, arena);
 
     if substitutions.is_empty() {
         return None;
@@ -31,7 +34,9 @@ pub fn deep_copy_type_vars_into_expr<'a>(
         .find_map(|&(original, new)| if original == var { Some(new) } else { None })
         .expect("Variable marked as cloned, but it isn't");
 
-    return Some((new_var, help(subs, expr, &substitutions)));
+    dbg!(&substitutions);
+
+    return Some((new_var, dbg!(help(subs, expr, &substitutions))));
 
     fn help(subs: &Subs, expr: &Expr, substitutions: &[(Variable, Variable)]) -> Expr {
         use Expr::*;

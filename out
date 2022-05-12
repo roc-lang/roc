@@ -1,0 +1,33 @@
+   Compiling test_gen v0.1.0 (/Users/hafiz/Code/Roc/roc/compiler/test_gen)
+    Finished test [unoptimized + debuginfo] target(s) in 10.12s
+     Running src/tests.rs (target/debug/deps/test_gen-4720b38f8ff7f055)
+procedure : `10.IdentId(6)` I64
+procedure = `10.IdentId(6)` (`10.IdentId(11)`, `1.IdentId(12)`):
+    let `10.IdentId(5)` : I64 = StructAtIndex 0 `1.IdentId(12)`;
+    let `10.IdentId(13)` : I64 = CallByName `10.IdentId(1)` `10.IdentId(5)`;
+    ret `10.IdentId(13)`;
+
+procedure : `2.IdentId(21)` I64
+procedure = `2.IdentId(21)` (`1.IdentId(2)`, `1.IdentId(3)`):
+    let `2.IdentId(271)` : I64 = lowlevel NumMul `1.IdentId(2)` `1.IdentId(3)`;
+    ret `2.IdentId(271)`;
+
+procedure : `10.IdentId(2)` {I64}
+procedure = `10.IdentId(2)` (`10.IdentId(5)`):
+    let `10.IdentId(10)` : {I64} = Struct {`10.IdentId(5)`};
+    ret `10.IdentId(10)`;
+
+procedure : `10.IdentId(1)` I64
+procedure = `10.IdentId(1)` (`10.IdentId(4)`):
+    let `10.IdentId(15)` : I64 = 2i64;
+    let `10.IdentId(14)` : I64 = CallByName `2.IdentId(21)` `10.IdentId(4)` `10.IdentId(15)`;
+    ret `10.IdentId(14)`;
+
+procedure : `10.IdentId(0)` I64
+procedure = `10.IdentId(0)` ():
+    let `10.IdentId(9)` : I64 = 3i64;
+    let `10.IdentId(3)` : {I64} = CallByName `10.IdentId(2)` `10.IdentId(9)`;
+    let `10.IdentId(8)` : {} = Struct {};
+    let `10.IdentId(7)` : I64 = CallByName `10.IdentId(6)` `10.IdentId(8)` `10.IdentId(3)`;
+    ret `10.IdentId(7)`;
+
