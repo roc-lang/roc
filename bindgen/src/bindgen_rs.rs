@@ -189,24 +189,45 @@ fn write_tag_union(
             // }
             if let Some(payload_id) = opt_payload_id {
                 let payload_type = types.get(*payload_id);
+                let payload_type_name = type_name(*payload_id, types);
 
-                let (init_payload, get_payload, deref_for_as) = if payload_type.has_pointer(types) {
+                let (init_payload, get_payload, deref_for_as, self_for_into) = if payload_type
+                    .has_pointer(types)
+                {
                     (
                         "core::mem::ManuallyDrop::new(payload)",
                         format!(
-                            "core::mem::ManuallyDrop::<{}>::into_inner(self.variant.{})",
-                            type_name(*payload_id, types),
-                            tag_name
+                            r#"// We know our Drop impl was only ever going to run the payload's Drop impl,
+        // so returning the payload directly doesn't leak resources.
+        let variant = core::mem::replace(
+            &mut self.variant,
+            core::mem::transmute::<core::mem::MaybeUninit<{}>, {}>(
+                core::mem::MaybeUninit::uninit(),
+            ),
+        );
+
+        core::mem::forget(self);
+
+        core::mem::ManuallyDrop::<{}>::into_inner(variant.{})"#,
+                            variant_name, variant_name, payload_type_name, tag_name
                         ),
                         // Since this is a ManuallyDrop, our `as_` method will need
                         // to dereference the variant (e.g. `&self.variant.Foo`)
                         "&",
+                        // we need `mut self` for the argument because of ManuallyDrop
+                        "mut self",
                     )
                 } else {
-                    ("payload", format!("self.variant.{}", tag_name), "")
+                    (
+                        "payload",
+                        format!("self.variant.{}", tag_name),
+                        // Since this is not a ManuallyDrop, our `as_` method will not
+                        // want to dereference the variant (e.g. `self.variant.Foo` with no '&')
+                        "",
+                        // we don't need `mut self` unless we need ManuallyDrop
+                        "self",
+                    )
                 };
-
-                let payload_type_name = type_name(*payload_id, types);
 
                 writeln!(
                     buf,
@@ -237,10 +258,16 @@ fn write_tag_union(
                     r#"
     /// Unsafely assume the given {} has a .tag() of {} and convert it to {}'s payload.
     /// (always examine .tag() first to make sure this is the correct variant!)
-    pub unsafe fn into_{}(self) -> {} {{
+    pub unsafe fn into_{}({}) -> {} {{
         {}
     }}"#,
-                    name, tag_name, tag_name, tag_name, payload_type_name, get_payload
+                    name,
+                    tag_name,
+                    tag_name,
+                    tag_name,
+                    self_for_into,
+                    payload_type_name,
+                    get_payload,
                 )?;
 
                 writeln!(

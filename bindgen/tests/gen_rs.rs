@@ -294,8 +294,19 @@ fn tag_union_aliased() {
 
                     /// Unsafely assume the given MyTagUnion has a .tag() of Foo and convert it to Foo's payload.
                     /// (always examine .tag() first to make sure this is the correct variant!)
-                    pub unsafe fn into_Foo(self) -> roc_std::RocStr {
-                        core::mem::ManuallyDrop::<roc_std::RocStr>::into_inner(self.variant.Foo)
+                    pub unsafe fn into_Foo(mut self) -> roc_std::RocStr {
+                        // We know our Drop impl was only ever going to run the payload's Drop impl,
+                        // so returning the payload directly doesn't leak resources.
+                        let variant = core::mem::replace(
+                            &mut self.variant,
+                            core::mem::transmute::<core::mem::MaybeUninit<union_MyTagUnion>, union_MyTagUnion>(
+                                core::mem::MaybeUninit::uninit(),
+                            ),
+                        );
+
+                        core::mem::forget(self);
+
+                        core::mem::ManuallyDrop::<roc_std::RocStr>::into_inner(variant.Foo)
                     }
 
                     /// Unsafely assume the given MyTagUnion has a .tag() of Foo and return its payload.
