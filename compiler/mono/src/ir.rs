@@ -3034,7 +3034,6 @@ fn specialize_external<'a>(
     };
 
     let body = partial_proc.body.clone();
-    dbg!(&proc_name, &body);
     let resolved_ability_specializations =
         resolve_abilities_in_specialized_body(env, procs, &body, partial_proc.body_var);
 

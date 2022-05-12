@@ -4174,7 +4174,6 @@ fn make_specializations<'a>(
     // TODO: for now this final specialization pass is sequential,
     // with no parallelization at all. We should try to parallelize
     // this, but doing so will require a redesign of Procs.
-    dbg!(home, &specializations_we_must_make);
     procs = roc_mono::ir::specialize_all(
         &mut mono_env,
         procs,
