@@ -417,11 +417,11 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    fn tag_id_builtin_help(union_size: usize) -> Builtin<'a> {
-        if union_size <= u8::MAX as usize {
-            Builtin::Int(IntWidth::U8)
-        } else if union_size <= u16::MAX as usize {
-            Builtin::Int(IntWidth::U16)
+    pub fn discriminant_size(num_tags: usize) -> IntWidth {
+        if num_tags <= u8::MAX as usize {
+            IntWidth::U8
+        } else if num_tags <= u16::MAX as usize {
+            IntWidth::U16
         } else {
             panic!("tag union is too big")
         }
@@ -431,16 +431,16 @@ impl<'a> UnionLayout<'a> {
         match self {
             UnionLayout::NonRecursive(tags) => {
                 let union_size = tags.len();
-                Self::tag_id_builtin_help(union_size)
+                Builtin::Int(Self::discriminant_size(union_size))
             }
             UnionLayout::Recursive(tags) => {
                 let union_size = tags.len();
 
-                Self::tag_id_builtin_help(union_size)
+                Builtin::Int(Self::discriminant_size(union_size))
             }
 
             UnionLayout::NullableWrapped { other_tags, .. } => {
-                Self::tag_id_builtin_help(other_tags.len() + 1)
+                Builtin::Int(Self::discriminant_size(other_tags.len() + 1))
             }
             UnionLayout::NonNullableUnwrapped(_) => Builtin::Bool,
             UnionLayout::NullableUnwrapped { .. } => Builtin::Bool,
