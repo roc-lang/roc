@@ -1,6 +1,7 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_can::{
+    abilities::AbilitiesStore,
     def::Def,
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
 };
@@ -14,6 +15,7 @@ use roc_types::subs::{
 pub fn deep_copy_type_vars_into_expr<'a>(
     arena: &'a Bump,
     subs: &mut Subs,
+    abilities_store: &mut AbilitiesStore,
     var: Variable,
     expr: &Expr,
 ) -> Option<(Variable, Expr)> {
@@ -31,9 +33,14 @@ pub fn deep_copy_type_vars_into_expr<'a>(
         .find_map(|&(original, new)| if original == var { Some(new) } else { None })
         .expect("Variable marked as cloned, but it isn't");
 
-    return Some((new_var, help(subs, expr, &substitutions)));
+    return Some((new_var, help(subs, expr, abilities_store, &substitutions)));
 
-    fn help(subs: &Subs, expr: &Expr, substitutions: &[(Variable, Variable)]) -> Expr {
+    fn help(
+        subs: &Subs,
+        expr: &Expr,
+        abilities_store: &mut AbilitiesStore,
+        substitutions: &[(Variable, Variable)],
+    ) -> Expr {
         use Expr::*;
 
         macro_rules! sub {
@@ -47,7 +54,11 @@ pub fn deep_copy_type_vars_into_expr<'a>(
             }};
         }
 
-        let go_help = |e: &Expr| help(subs, e, substitutions);
+        macro_rules! go {
+            ($e:expr) => {
+                help(subs, $e, abilities_store, substitutions)
+            };
+        }
 
         match expr {
             Num(var, str, val, bound) => Num(sub!(*var), str.clone(), val.clone(), *bound),
@@ -64,11 +75,15 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 loc_elems,
             } => List {
                 elem_var: sub!(*elem_var),
-                loc_elems: loc_elems.iter().map(|le| le.map(go_help)).collect(),
+                loc_elems: loc_elems.iter().map(|le| le.map(|e| go!(e))).collect(),
             },
             Var(sym) => Var(*sym),
             &AbilityMember(sym, specialization, specialization_var) => {
-                AbilityMember(sym, specialization, specialization_var)
+                let new_specialization_id = match abilities_store.get_resolved(specialization) {
+                    Some(_) => specialization, // solved during type checking
+                    None => abilities_store.fresh_specialization_id(),
+                };
+                AbilityMember(sym, new_specialization_id, specialization_var)
             }
             When {
                 loc_cond,
@@ -79,7 +94,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 branches_cond_var,
                 exhaustive,
             } => When {
-                loc_cond: Box::new(loc_cond.map(go_help)),
+                loc_cond: Box::new(loc_cond.map(|c| go!(c))),
                 cond_var: sub!(*cond_var),
                 expr_var: sub!(*expr_var),
                 region: *region,
@@ -93,8 +108,8 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                              redundant,
                          }| WhenBranch {
                             patterns: patterns.clone(),
-                            value: value.map(go_help),
-                            guard: guard.as_ref().map(|le| le.map(go_help)),
+                            value: value.map(|v| go!(v)),
+                            guard: guard.as_ref().map(|le| le.map(|v| go!(v))),
                             redundant: *redundant,
                         },
                     )
@@ -112,9 +127,9 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 branch_var: sub!(*branch_var),
                 branches: branches
                     .iter()
-                    .map(|(c, e)| (c.map(go_help), e.map(go_help)))
+                    .map(|(c, e)| (c.map(|e| go!(e)), e.map(|e| go!(e))))
                     .collect(),
-                final_else: Box::new(final_else.map(go_help)),
+                final_else: Box::new(final_else.map(|e| go!(e))),
             },
 
             LetRec(defs, body, cycle_mark) => LetRec(
@@ -128,7 +143,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                              annotation,
                          }| Def {
                             loc_pattern: loc_pattern.clone(),
-                            loc_expr: loc_expr.map(go_help),
+                            loc_expr: loc_expr.map(|e| go!(e)),
                             expr_var: sub!(*expr_var),
                             pattern_vars: pattern_vars
                                 .iter()
@@ -138,7 +153,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                         },
                     )
                     .collect(),
-                Box::new(body.map(go_help)),
+                Box::new(body.map(|e| go!(e))),
                 *cycle_mark,
             ),
             LetNonRec(def, body) => {
@@ -151,12 +166,12 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 } = &**def;
                 let def = Def {
                     loc_pattern: loc_pattern.clone(),
-                    loc_expr: loc_expr.map(go_help),
+                    loc_expr: loc_expr.map(|e| go!(e)),
                     expr_var: sub!(*expr_var),
                     pattern_vars: pattern_vars.iter().map(|(s, v)| (*s, sub!(*v))).collect(),
                     annotation: annotation.clone(),
                 };
-                LetNonRec(Box::new(def), Box::new(body.map(go_help)))
+                LetNonRec(Box::new(def), Box::new(body.map(|e| go!(e))))
             }
 
             Call(f, args, called_via) => {
@@ -164,12 +179,12 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 Call(
                     Box::new((
                         sub!(*fn_var),
-                        fn_expr.map(go_help),
+                        fn_expr.map(|e| go!(e)),
                         sub!(*clos_var),
                         sub!(*ret_var),
                     )),
                     args.iter()
-                        .map(|(var, expr)| (sub!(*var), expr.map(go_help)))
+                        .map(|(var, expr)| (sub!(*var), expr.map(|e| go!(e))))
                         .collect(),
                     *called_via,
                 )
@@ -178,7 +193,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 op: *op,
                 args: args
                     .iter()
-                    .map(|(var, expr)| (sub!(*var), go_help(expr)))
+                    .map(|(var, expr)| (sub!(*var), go!(expr)))
                     .collect(),
                 ret_var: sub!(*ret_var),
             },
@@ -190,7 +205,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 foreign_symbol: foreign_symbol.clone(),
                 args: args
                     .iter()
-                    .map(|(var, expr)| (sub!(*var), go_help(expr)))
+                    .map(|(var, expr)| (sub!(*var), go!(expr)))
                     .collect(),
                 ret_var: sub!(*ret_var),
             },
@@ -220,7 +235,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                     .iter()
                     .map(|(v, mark, pat)| (sub!(*v), *mark, pat.clone()))
                     .collect(),
-                loc_body: Box::new(loc_body.map(go_help)),
+                loc_body: Box::new(loc_body.map(|e| go!(e))),
             }),
 
             Record { record_var, fields } => Record {
@@ -241,7 +256,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                                 Field {
                                     var: sub!(*var),
                                     region: *region,
-                                    loc_expr: Box::new(loc_expr.map(go_help)),
+                                    loc_expr: Box::new(loc_expr.map(|e| go!(e))),
                                 },
                             )
                         },
@@ -261,7 +276,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 record_var: sub!(*record_var),
                 ext_var: sub!(*ext_var),
                 field_var: sub!(*field_var),
-                loc_expr: Box::new(loc_expr.map(go_help)),
+                loc_expr: Box::new(loc_expr.map(|e| go!(e))),
                 field: field.clone(),
             },
 
@@ -310,7 +325,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                                 Field {
                                     var: sub!(*var),
                                     region: *region,
-                                    loc_expr: Box::new(loc_expr.map(go_help)),
+                                    loc_expr: Box::new(loc_expr.map(|e| go!(e))),
                                 },
                             )
                         },
@@ -329,7 +344,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 name: name.clone(),
                 arguments: arguments
                     .iter()
-                    .map(|(v, e)| (sub!(*v), e.map(go_help)))
+                    .map(|(v, e)| (sub!(*v), e.map(|e| go!(e))))
                     .collect(),
             },
 
@@ -355,7 +370,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
             } => OpaqueRef {
                 opaque_var: sub!(*opaque_var),
                 name: *name,
-                argument: Box::new((sub!(argument.0), argument.1.map(go_help))),
+                argument: Box::new((sub!(argument.0), argument.1.map(|e| go!(e)))),
                 // These shouldn't matter for opaques during mono, because they are only used for reporting
                 // and pretty-printing to the user. During mono we decay immediately into the argument.
                 // NB: if there are bugs, check if not substituting here is the problem!
@@ -364,7 +379,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 lambda_set_variables: lambda_set_variables.clone(),
             },
 
-            Expect(e1, e2) => Expect(Box::new(e1.map(go_help)), Box::new(e2.map(go_help))),
+            Expect(e1, e2) => Expect(Box::new(e1.map(|e| go!(e))), Box::new(e2.map(|e| go!(e)))),
 
             RuntimeError(err) => RuntimeError(err.clone()),
         }

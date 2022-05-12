@@ -825,7 +825,17 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                     RecordField::Required(_) => ':',
                     RecordField::Demanded(_) => ':',
                 };
-                write!(f, "{:?} {} {:?}, ", name, separator, content)?;
+                write!(
+                    f,
+                    "{:?} {} {:?}{:?}, ",
+                    name,
+                    separator,
+                    content,
+                    SubsFmtContent(
+                        subs.get_content_without_compacting(*content.as_inner()),
+                        subs
+                    )
+                )?;
             }
 
             write!(f, "}}<{:?}>", new_ext)
