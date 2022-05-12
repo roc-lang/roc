@@ -223,6 +223,18 @@ fn tag_union_aliased() {
                         }
                     }
 
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Bar and convert it to Bar's payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn into_Bar(self) -> u128 {
+                        self.variant.Bar
+                    }
+
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Bar and return its payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn as_Bar(&self) -> u128 {
+                        self.variant.Bar
+                    }
+
                     /// Construct a tag named Baz
                     pub fn Baz() -> Self {
                         Self {
@@ -236,6 +248,18 @@ fn tag_union_aliased() {
                         }
                     }
 
+                    /// Other `into_` methods return a payload, but since the Baz tag
+                    /// has no payload, this does nothing and is only here for completeness.
+                    pub fn into_Baz(self) -> () {
+                        ()
+                    }
+
+                    /// Other `as` methods return a payload, but since the Baz tag
+                    /// has no payload, this does nothing and is only here for completeness.
+                    pub unsafe fn as_Baz(&self) -> () {
+                        ()
+                    }
+
                     /// Construct a tag named Blah, with the appropriate payload
                     pub fn Blah(payload: i32) -> Self {
                         Self {
@@ -246,6 +270,18 @@ fn tag_union_aliased() {
                         }
                     }
 
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Blah and convert it to Blah's payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn into_Blah(self) -> i32 {
+                        self.variant.Blah
+                    }
+
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Blah and return its payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn as_Blah(&self) -> i32 {
+                        self.variant.Blah
+                    }
+
                     /// Construct a tag named Foo, with the appropriate payload
                     pub fn Foo(payload: roc_std::RocStr) -> Self {
                         Self {
@@ -254,6 +290,18 @@ fn tag_union_aliased() {
                                 Foo: core::mem::ManuallyDrop::new(payload)
                             },
                         }
+                    }
+
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Foo and convert it to Foo's payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn into_Foo(self) -> roc_std::RocStr {
+                        core::mem::ManuallyDrop::<roc_std::RocStr>::into_inner(self.variant.Foo)
+                    }
+
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Foo and return its payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn as_Foo(&self) -> &roc_std::RocStr {
+                        &self.variant.Foo
                     }
                 }
 

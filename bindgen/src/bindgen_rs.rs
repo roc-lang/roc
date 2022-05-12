@@ -190,10 +190,20 @@ fn write_tag_union(
             if let Some(payload_id) = opt_payload_id {
                 let payload_type = types.get(*payload_id);
 
-                let payload_name = if payload_type.has_pointer(types) {
-                    "core::mem::ManuallyDrop::new(payload)"
+                let (init_payload, get_payload, deref_for_as) = if payload_type.has_pointer(types) {
+                    (
+                        "core::mem::ManuallyDrop::new(payload)",
+                        format!(
+                            "core::mem::ManuallyDrop::<{}>::into_inner(self.variant.{})",
+                            type_name(*payload_id, types),
+                            tag_name
+                        ),
+                        // Since this is a ManuallyDrop, our `as_` method will need
+                        // to dereference the variant (e.g. `&self.variant.Foo`)
+                        "&",
+                    )
                 } else {
-                    "payload"
+                    ("payload", format!("self.variant.{}", tag_name), "")
                 };
 
                 let payload_type_name = type_name(*payload_id, types);
@@ -218,7 +228,37 @@ fn write_tag_union(
                     tag_name,
                     variant_name,
                     tag_name,
-                    payload_name
+                    init_payload
+                )?;
+
+                writeln!(
+                    buf,
+                    // Don't use indoc because this must be indented once!
+                    r#"
+    /// Unsafely assume the given {} has a .tag() of {} and convert it to {}'s payload.
+    /// (always examine .tag() first to make sure this is the correct variant!)
+    pub unsafe fn into_{}(self) -> {} {{
+        {}
+    }}"#,
+                    name, tag_name, tag_name, tag_name, payload_type_name, get_payload
+                )?;
+
+                writeln!(
+                    buf,
+                    // Don't use indoc because this must be indented once!
+                    r#"
+    /// Unsafely assume the given {} has a .tag() of {} and return its payload.
+    /// (always examine .tag() first to make sure this is the correct variant!)
+    pub unsafe fn as_{}(&self) -> {}{} {{
+        {}self.variant.{}
+    }}"#,
+                    name,
+                    tag_name,
+                    tag_name,
+                    deref_for_as,
+                    payload_type_name,
+                    deref_for_as,
+                    tag_name
                 )?;
             } else {
                 writeln!(
@@ -238,6 +278,30 @@ fn write_tag_union(
         }}
     }}"#,
                     tag_name, tag_name, discriminant_name, tag_name, variant_name, variant_name,
+                )?;
+
+                writeln!(
+                    buf,
+                    // Don't use indoc because this must be indented once!
+                    r#"
+    /// Other `into_` methods return a payload, but since the {} tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_{}(self) -> () {{
+        ()
+    }}"#,
+                    tag_name, tag_name
+                )?;
+
+                writeln!(
+                    buf,
+                    // Don't use indoc because this must be indented once!
+                    r#"
+    /// Other `as` methods return a payload, but since the {} tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub unsafe fn as_{}(&self) -> () {{
+        ()
+    }}"#,
+                    tag_name, tag_name
                 )?;
             }
         }
