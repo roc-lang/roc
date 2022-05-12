@@ -204,8 +204,8 @@ fn tag_union_aliased() {
 
                 #[repr(C)]
                 pub struct MyTagUnion {
+                    variant: union_MyTagUnion,
                     tag: tag_MyTagUnion,
-                    variant: union_MyTagUnion
                 }
 
                 impl MyTagUnion {
@@ -318,31 +318,31 @@ fn tag_union_aliased() {
                     fn clone(&self) -> Self {
                         match self.tag {
                             tag_MyTagUnion::Bar => Self {
-                                tag: tag_MyTagUnion::Bar,
                                 variant: union_MyTagUnion {
                                     Bar: unsafe { self.variant.Bar.clone() },
                                 },
+                                tag: tag_MyTagUnion::Bar,
                             },
                             tag_MyTagUnion::Baz => Self {
-                                tag: tag_MyTagUnion::Baz,
                                 variant: unsafe {
                                     core::mem::transmute::<
                                         core::mem::MaybeUninit<union_MyTagUnion>,
                                         union_MyTagUnion,
                                     >(core::mem::MaybeUninit::uninit())
                                 },
+                                tag: tag_MyTagUnion::Baz,
                             },
                             tag_MyTagUnion::Blah => Self {
-                                tag: tag_MyTagUnion::Blah,
                                 variant: union_MyTagUnion {
                                     Blah: unsafe { self.variant.Blah.clone() },
                                 },
+                                tag: tag_MyTagUnion::Blah,
                             },
                             tag_MyTagUnion::Foo => Self {
-                                tag: tag_MyTagUnion::Foo,
                                 variant: union_MyTagUnion {
                                     Foo: unsafe { self.variant.Foo.clone() },
                                 },
+                                tag: tag_MyTagUnion::Foo,
                             },
                         }
                     }

@@ -145,8 +145,8 @@ fn write_tag_union(
     //
     // #[repr(C)]
     // pub struct MyTagUnion {
-    //     tag: tag_MyTagUnion,
     //     variant: variant_MyTagUnion,
+    //     tag: tag_MyTagUnion,
     // }
     {
         // no deriving because it contains a union; we have to
@@ -154,8 +154,8 @@ fn write_tag_union(
 
         write!(
             buf,
-            "\n#[repr(C)]\npub struct {} {{\n{}tag: {},\n{}variant: {}\n}}\n",
-            name, INDENT, discriminant_name, INDENT, variant_name
+            "\n#[repr(C)]\npub struct {} {{\n{}variant: {},\n{}tag: {},\n}}\n",
+            name, INDENT, variant_name, INDENT, discriminant_name
         )?;
     }
 
@@ -461,27 +461,27 @@ fn write_tag_union(
                 if opt_payload_id.is_some() {
                     format!(
                         r#"Self {{
-                tag: {}::{},
                 variant: {} {{
                     {}: unsafe {{ self.variant.{}.clone() }},
                 }},
+                tag: {}::{},
             }},"#,
-                        discriminant_name, tag_name, variant_name, tag_name, tag_name
+                        variant_name, tag_name, tag_name, discriminant_name, tag_name
                     )
                 } else {
                     // when there's no payload, we set the clone's `variant` field to
                     // garbage memory
                     format!(
                         r#"Self {{
-                tag: {}::{},
                 variant: unsafe {{
                     core::mem::transmute::<
                         core::mem::MaybeUninit<{}>,
                         {},
                     >(core::mem::MaybeUninit::uninit())
                 }},
+                tag: {}::{},
             }},"#,
-                        discriminant_name, tag_name, variant_name, variant_name
+                        variant_name, variant_name, discriminant_name, tag_name
                     )
                 }
             },
