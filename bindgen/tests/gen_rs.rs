@@ -213,10 +213,6 @@ fn tag_union_aliased() {
                         self.tag
                     }
 
-                    pub fn variant(&self) -> &union_MyTagUnion {
-                        &self.variant
-                    }
-
                     /// Construct a tag named Bar, with the appropriate payload
                     pub fn Bar(payload: u128) -> Self {
                         Self {

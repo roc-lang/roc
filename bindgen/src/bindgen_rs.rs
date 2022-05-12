@@ -170,13 +170,9 @@ fn write_tag_union(
                         pub fn tag(&self) -> {} {{
                             self.tag
                         }}
-
-                        pub fn variant(&self) -> &{} {{
-                            &self.variant
-                        }}
                 "#
             ),
-            discriminant_name, variant_name
+            discriminant_name
         )?;
 
         for (tag_name, opt_payload_id) in tags {
