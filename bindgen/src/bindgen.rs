@@ -43,8 +43,7 @@ pub fn add_type_help<'a>(
         Content::FlexVar(_)
         | Content::RigidVar(_)
         | Content::FlexAbleVar(_, _)
-        | Content::RigidAbleVar(_, _)
-        | Content::RecursionVar { .. } => {
+        | Content::RigidAbleVar(_, _) => {
             todo!("TODO give a nice error message for a non-concrete type being passed to the host")
         }
         Content::Structure(FlatType::Record(fields, ext)) => {
@@ -73,7 +72,12 @@ pub fn add_type_help<'a>(
         Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 
-            add_tag_union(env, opt_name, tags, var, types)
+            add_tag_union(env, opt_name, tags, var, None, types)
+        }
+        Content::Structure(FlatType::RecursiveTagUnion(rec_var, tag_vars, ext_var)) => {
+            debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
+
+            add_tag_union(env, opt_name, tag_vars, var, Some(*rec_var), types)
         }
         Content::Structure(FlatType::Apply(symbol, _)) => {
             if symbol.is_builtin() {
@@ -93,9 +97,6 @@ pub fn add_type_help<'a>(
             todo!()
         }
         Content::Structure(FlatType::FunctionOrTagUnion(_, _, _)) => {
-            todo!()
-        }
-        Content::Structure(FlatType::RecursiveTagUnion(_, _, _)) => {
             todo!()
         }
         Content::Structure(FlatType::Erroneous(_)) => todo!(),
@@ -122,6 +123,10 @@ pub fn add_type_help<'a>(
         }
         Content::RangedNumber(_, _) => todo!(),
         Content::Error => todo!(),
+        Content::RecursionVar { .. } => {
+            // We should always skip over RecursionVars before we get here.
+            unreachable!()
+        }
     }
 }
 
@@ -218,11 +223,19 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
 
     let fields = sortables
         .into_iter()
-        .map(|(label, field_var, field_layout)| {
-            (
-                label.to_string(),
-                add_type_help(env, field_layout, field_var, None, types),
-            )
+        .filter_map(|(label, field_var, field_layout)| {
+            let content = subs.get_content_without_compacting(field_var);
+
+            // Discard RecursionVar nodes. If we try to follow them,
+            // we'll end up right back here and recurse forever!
+            if matches!(content, Content::RecursionVar { .. }) {
+                None
+            } else {
+                Some((
+                    label.to_string(),
+                    add_type_help(env, field_layout, field_var, None, types),
+                ))
+            }
         })
         .collect();
 
@@ -234,6 +247,7 @@ fn add_tag_union(
     opt_name: Option<Symbol>,
     union_tags: &UnionTags,
     var: Variable,
+    opt_rec_var: Option<Variable>,
     types: &mut Types,
 ) -> TypeId {
     let subs = env.subs;
@@ -331,10 +345,6 @@ fn add_tag_union(
             .collect();
 
     let typ = match env.layout_cache.from_var(env.arena, var, subs).unwrap() {
-        Layout::Struct { .. } => {
-            // a single-tag union with multiple payload values, e.g. [ Foo Str Str ]
-            unreachable!()
-        }
         Layout::Union(union_layout) => {
             use roc_mono::layout::UnionLayout::*;
 
@@ -382,7 +392,10 @@ fn add_tag_union(
             | Builtin::Set(_)
             | Builtin::List(_) => unreachable!(),
         },
-        Layout::Boxed(_) | Layout::LambdaSet(_) | Layout::RecursivePointer => {
+        Layout::Struct { .. }
+        | Layout::Boxed(_)
+        | Layout::LambdaSet(_)
+        | Layout::RecursivePointer => {
             unreachable!()
         }
     };
