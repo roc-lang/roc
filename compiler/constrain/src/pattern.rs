@@ -166,7 +166,7 @@ fn headers_from_annotation_help(
 /// based on its knowledge of their lengths.
 pub fn constrain_pattern(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     pattern: &Pattern,
     region: Region,
     expected: PExpected<Type>,

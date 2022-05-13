@@ -170,14 +170,13 @@ fn nested_record_anonymous() {
 }
 
 #[test]
-#[ignore]
 fn tag_union_aliased() {
     let module = indoc!(
         r#"
-            MyTagUnion : [ Foo U64, Bar U128 ]
+            MyTagUnion : [ Foo Str, Bar U128, Blah I32, Baz ]
 
             main : MyTagUnion
-            main = Foo 123
+            main = Foo "blah"
         "#
     );
 
@@ -187,30 +186,26 @@ fn tag_union_aliased() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[repr(C)]
-                pub struct MyTagUnion {
-                    tag: tag_MyTagUnion,
-                    variant: variant_MyTagUnion,
-                }
-
-                #[repr(C)]
-                union variant_MyTagUnion {
-                    Bar: u128,
-                    Foo: std::mem::ManuallyDrop<Payload2<roc_std::RocStr, i32>>,
-                }
-
-                #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-                #[repr(C)]
-                pub struct Payload2<V0, V1> {
-                    _0: V0,
-                    _1: V1,
-                }
-
-                #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+                #[derive(Clone, PartialEq, PartialOrd, Copy, Eq, Ord, Hash, Debug)]
                 #[repr(u8)]
                 pub enum tag_MyTagUnion {
-                    Bar,
-                    Foo,
+                    Bar = 0,
+                    Baz = 1,
+                    Blah = 2,
+                    Foo = 3,
+                }
+
+                #[repr(C)]
+                pub union union_MyTagUnion {
+                    Bar: u128,
+                    Blah: i32,
+                    Foo: core::mem::ManuallyDrop<roc_std::RocStr>,
+                }
+
+                #[repr(C)]
+                pub struct MyTagUnion {
+                    variant: union_MyTagUnion,
+                    tag: tag_MyTagUnion,
                 }
 
                 impl MyTagUnion {
@@ -218,42 +213,95 @@ fn tag_union_aliased() {
                         self.tag
                     }
 
-                    /// Assume this is the tag named Foo, and return a reference to its payload.
-                    pub unsafe fn as_Foo(&self) -> &Payload2<roc_std::RocStr, i32> {
-                        &*self.variant.Foo
-                    }
-
-                    /// Assume this is the tag named Foo, and return a mutable reference to its payload.
-                    pub unsafe fn as_mut_Foo(&mut self) -> &mut Payload2<roc_std::RocStr, i32> {
-                        &mut *self.variant.Foo
-                    }
-
-                    /// Assume this is the tag named Bar, and return a reference to its payload.
-                    pub unsafe fn as_Bar(&self) -> u128 {
-                        self.variant.Bar
-                    }
-
-                    /// Assume this is the tag named Bar, and return a mutable reference to its payload.
-                    pub unsafe fn as_mut_Bar(&mut self) -> &mut u128 {
-                        &mut self.variant.Bar
-                    }
-
-                    /// Construct a tag named Foo, with the appropriate payload
-                    pub fn Foo(_0: roc_std::RocStr, _1: i32) -> Self {
+                    /// Construct a tag named Bar, with the appropriate payload
+                    pub fn Bar(payload: u128) -> Self {
                         Self {
-                            tag: tag_MyTagUnion::Foo,
-                            variant: variant_MyTagUnion {
-                                Foo: std::mem::ManuallyDrop::new(Payload2 { _0, _1 }),
+                            tag: tag_MyTagUnion::Bar,
+                            variant: union_MyTagUnion {
+                                Bar: payload
                             },
                         }
                     }
 
-                    /// Construct a tag named Bar, with the appropriate payload
-                    pub fn Bar(arg0: u128) -> Self {
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Bar and convert it to Bar's payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn into_Bar(self) -> u128 {
+                        self.variant.Bar
+                    }
+
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Bar and return its payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn as_Bar(&self) -> u128 {
+                        self.variant.Bar
+                    }
+
+                    /// Construct a tag named Baz
+                    pub fn Baz() -> Self {
                         Self {
-                            tag: tag_MyTagUnion::Bar,
-                            variant: variant_MyTagUnion { Bar: arg0 },
+                            tag: tag_MyTagUnion::Baz,
+                            variant: unsafe {
+                                core::mem::transmute::<
+                                    core::mem::MaybeUninit<union_MyTagUnion>,
+                                    union_MyTagUnion,
+                                >(core::mem::MaybeUninit::uninit())
+                            },
                         }
+                    }
+
+                    /// Other `into_` methods return a payload, but since the Baz tag
+                    /// has no payload, this does nothing and is only here for completeness.
+                    pub fn into_Baz(self) -> () {
+                        ()
+                    }
+
+                    /// Other `as` methods return a payload, but since the Baz tag
+                    /// has no payload, this does nothing and is only here for completeness.
+                    pub unsafe fn as_Baz(&self) -> () {
+                        ()
+                    }
+
+                    /// Construct a tag named Blah, with the appropriate payload
+                    pub fn Blah(payload: i32) -> Self {
+                        Self {
+                            tag: tag_MyTagUnion::Blah,
+                            variant: union_MyTagUnion {
+                                Blah: payload
+                            },
+                        }
+                    }
+
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Blah and convert it to Blah's payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn into_Blah(self) -> i32 {
+                        self.variant.Blah
+                    }
+
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Blah and return its payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn as_Blah(&self) -> i32 {
+                        self.variant.Blah
+                    }
+
+                    /// Construct a tag named Foo, with the appropriate payload
+                    pub fn Foo(payload: roc_std::RocStr) -> Self {
+                        Self {
+                            tag: tag_MyTagUnion::Foo,
+                            variant: union_MyTagUnion {
+                                Foo: core::mem::ManuallyDrop::new(payload)
+                            },
+                        }
+                    }
+
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Foo and convert it to Foo's payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn into_Foo(mut self) -> roc_std::RocStr {
+                        core::mem::ManuallyDrop::take(&mut self.variant.Foo)
+                    }
+
+                    /// Unsafely assume the given MyTagUnion has a .tag() of Foo and return its payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn as_Foo(&self) -> &roc_std::RocStr {
+                        &self.variant.Foo
                     }
                 }
 
@@ -261,7 +309,9 @@ fn tag_union_aliased() {
                     fn drop(&mut self) {
                         match self.tag {
                             tag_MyTagUnion::Bar => {}
-                            tag_MyTagUnion::Foo => unsafe { std::mem::ManuallyDrop::drop(&mut self.variant.Foo) },
+                            tag_MyTagUnion::Baz => {}
+                            tag_MyTagUnion::Blah => {}
+                            tag_MyTagUnion::Foo => unsafe { core::mem::ManuallyDrop::drop(&mut self.variant.Foo) },
                         }
                     }
                 }
@@ -275,6 +325,8 @@ fn tag_union_aliased() {
                         unsafe {
                             match self.tag {
                                 tag_MyTagUnion::Bar => self.variant.Bar == other.variant.Bar,
+                                tag_MyTagUnion::Baz => true,
+                                tag_MyTagUnion::Blah => self.variant.Blah == other.variant.Blah,
                                 tag_MyTagUnion::Foo => self.variant.Foo == other.variant.Foo,
                             }
                         }
@@ -293,6 +345,8 @@ fn tag_union_aliased() {
                         unsafe {
                             match self.tag {
                                 tag_MyTagUnion::Bar => self.variant.Bar.partial_cmp(&other.variant.Bar),
+                                tag_MyTagUnion::Baz => Some(core::cmp::Ordering::Equal),
+                                tag_MyTagUnion::Blah => self.variant.Blah.partial_cmp(&other.variant.Blah),
                                 tag_MyTagUnion::Foo => self.variant.Foo.partial_cmp(&other.variant.Foo),
                             }
                         }
@@ -300,7 +354,7 @@ fn tag_union_aliased() {
                 }
 
                 impl Ord for MyTagUnion {
-                    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
                         match self.tag.cmp(&other.tag) {
                             core::cmp::Ordering::Equal => {}
                             not_eq => return not_eq,
@@ -309,11 +363,63 @@ fn tag_union_aliased() {
                         unsafe {
                             match self.tag {
                                 tag_MyTagUnion::Bar => self.variant.Bar.cmp(&other.variant.Bar),
+                                tag_MyTagUnion::Baz => core::cmp::Ordering::Equal,
+                                tag_MyTagUnion::Blah => self.variant.Blah.cmp(&other.variant.Blah),
                                 tag_MyTagUnion::Foo => self.variant.Foo.cmp(&other.variant.Foo),
                             }
                         }
                     }
                 }
+
+                impl Clone for MyTagUnion {
+                    fn clone(&self) -> Self {
+                        match self.tag {
+                            tag_MyTagUnion::Bar => Self {
+                                variant: union_MyTagUnion {
+                                    Bar: unsafe { self.variant.Bar.clone() },
+                                },
+                                tag: tag_MyTagUnion::Bar,
+                            },
+                            tag_MyTagUnion::Baz => Self {
+                                variant: unsafe {
+                                    core::mem::transmute::<
+                                        core::mem::MaybeUninit<union_MyTagUnion>,
+                                        union_MyTagUnion,
+                                    >(core::mem::MaybeUninit::uninit())
+                                },
+                                tag: tag_MyTagUnion::Baz,
+                            },
+                            tag_MyTagUnion::Blah => Self {
+                                variant: union_MyTagUnion {
+                                    Blah: unsafe { self.variant.Blah.clone() },
+                                },
+                                tag: tag_MyTagUnion::Blah,
+                            },
+                            tag_MyTagUnion::Foo => Self {
+                                variant: union_MyTagUnion {
+                                    Foo: unsafe { self.variant.Foo.clone() },
+                                },
+                                tag: tag_MyTagUnion::Foo,
+                            },
+                        }
+                    }
+                }
+
+                impl core::fmt::Debug for MyTagUnion {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        f.write_str("MyTagUnion::")?;
+
+                        unsafe {
+                            match self.tag {
+                                tag_MyTagUnion::Bar => f.debug_tuple("Bar").field(&self.variant.Bar).finish(),
+                                tag_MyTagUnion::Baz => f.write_str("Baz"),
+                                tag_MyTagUnion::Blah => f.debug_tuple("Blah").field(&self.variant.Blah).finish(),
+                                tag_MyTagUnion::Foo => f.debug_tuple("Foo").field(&self.variant.Foo).finish(),
+                            }
+                        }
+                    }
+                }
+
             "#
         )
     );
@@ -339,9 +445,9 @@ fn tag_union_enumeration() {
                 #[derive(Clone, PartialEq, PartialOrd, Copy, Eq, Ord, Hash, Debug)]
                 #[repr(u8)]
                 pub enum MyTagUnion {
-                    Bar,
-                    Blah,
-                    Foo,
+                    Bar = 0,
+                    Blah = 1,
+                    Foo = 2,
                 }
             "#
         )

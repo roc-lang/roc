@@ -1383,7 +1383,7 @@ pub mod test_ed_update {
         expected_post_lines: Vec<String>,
         new_char_seq: &str,
     ) -> Result<(), String> {
-        let mut code_str = pre_lines.join("\n").replace("┃", "");
+        let mut code_str = pre_lines.join("\n").replace('┃', "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();
@@ -1453,11 +1453,11 @@ pub mod test_ed_update {
     macro_rules! ovec {
         ( $( $x:expr ),* ) => {
             {
-                let mut temp_vec = Vec::new();
-                $(
-                    temp_vec.push($x.to_owned());
-                )*
-                temp_vec
+                vec![
+                    $(
+                        $x.to_owned(),
+                    )*
+                ]
             }
         };
     }
@@ -2589,7 +2589,7 @@ pub mod test_ed_update {
         input_seq: &str,
         repeats: usize,
     ) -> Result<(), String> {
-        let mut code_str = pre_lines.join("").replace("┃", "");
+        let mut code_str = pre_lines.join("").replace('┃', "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();
@@ -3001,7 +3001,7 @@ pub mod test_ed_update {
         expected_tooltips: Vec<String>,
         new_char_seq: &str,
     ) -> Result<(), String> {
-        let mut code_str = pre_lines.join("").replace("┃", "");
+        let mut code_str = pre_lines.join("").replace('┃', "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();
@@ -3179,7 +3179,7 @@ pub mod test_ed_update {
         repeats: usize,
         move_caret_fun: ModelMoveCaretFun,
     ) -> Result<(), String> {
-        let mut code_str = pre_lines.join("").replace("┃", "");
+        let mut code_str = pre_lines.join("").replace('┃', "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();
@@ -3343,7 +3343,7 @@ pub mod test_ed_update {
         expected_post_lines: Vec<String>,
         repeats: usize,
     ) -> Result<(), String> {
-        let mut code_str = pre_lines.join("").replace("┃", "");
+        let mut code_str = pre_lines.join("").replace('┃', "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();

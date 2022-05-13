@@ -12,7 +12,9 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) ];
-        pkgs = import nixpkgs { inherit system overlays; };
+        pkgs = import nixpkgs { 
+          inherit system overlays;
+        };
         llvmPkgs = pkgs.llvmPackages_13;
 
         # get current working directory
@@ -80,6 +82,7 @@
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
             ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
+          NIXPKGS_ALLOW_UNFREE = 1; # to run the editor with NVIDIA's closed source drivers
         };
 
     }

@@ -48,14 +48,47 @@ If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.ne
 The editor is a :construction:WIP:construction: and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
 `cargo run edit` should work from NixOS, if you use a nix-shell from inside another OS, follow the instructions below.
 
-#### Nvidia GPU
+#### from nix flake
+
+Running the ediotr may fail using the classic nix-shell, we recommend using the nix flake, see [enabling nix flakes](https://nixos.wiki/wiki/Flakes).
+
+start a nix shell using `nix develop` and follow the instructions below for your graphics configuration.
+
+##### Nvidia GPU
+
+```
+nix run --override-input nixpkgs nixpkgs/nixos-21.11 --impure github:guibou/nixGL#nixVulkanNvidia -- cargo run edit
+```
+
+If you get an error like:
+```
+error: unable to execute '/nix/store/qk6...wjla-nixVulkanNvidia-470.103.01/bin/nixVulkanNvidia': No such file or directory
+```
+The intel command should work:
+```
+nix run --override-input nixpkgs nixpkgs/nixos-21.11 --impure github:guibou/nixGL#nixVulkanIntel -- cargo run edit
+```
+
+##### Integrated Intel Graphics
+
+```
+nix run --override-input nixpkgs nixpkgs/nixos-21.11 --impure github:guibou/nixGL#nixVulkanIntel -- cargo run edit
+```
+
+##### Other configs
+
+Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations. Feel free to ask us for help if you get stuck.
+
+#### using a classic nix-shell
+
+##### Nvidia GPU
 
 Outside of a nix shell, execute the following:
 ```
 nix-channel --add https://github.com/guibou/nixGL/archive/main.tar.gz nixgl && nix-channel --update
 nix-env -iA nixgl.auto.nixVulkanNvidia
 ```
-Running the editor does not work with `nix-shell --pure`.
+Running the editor does not work with `nix-shell --pure`, instead run:
 ```
 nix-shell
 ```
@@ -64,25 +97,11 @@ nix-shell
 nixVulkanNvidia-460.91.03 cargo run edit
 ```
 
-#### Integrated Intel Graphics
+##### Integrated Intel Graphics
 
-:exclamation: ** Our Nix setup currently cannot run the editor with integrated intel graphics, see #1856 ** :exclamation:
+nix-shell does not work here, use the flake instead; check the section "Integrated Intel Graphics" under "from nix flake".
 
-Outside of a nix shell, run:
-
-```bash
-git clone https://github.com/guibou/nixGL
-cd nixGL
-nix-env -f ./ -iA nixVulkanIntel
-```
-
-cd to the roc repo, and run (without --pure):
-```
-nix-shell
-nixVulkanIntel cargo run edit
-```
-
-#### Other configs
+##### Other configs
 
 Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations.
 

@@ -67,7 +67,9 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 loc_elems: loc_elems.iter().map(|le| le.map(go_help)).collect(),
             },
             Var(sym) => Var(*sym),
-            AbilityMember(sym, specialization) => AbilityMember(*sym, *specialization),
+            &AbilityMember(sym, specialization, specialization_var) => {
+                AbilityMember(sym, specialization, specialization_var)
+            }
             When {
                 loc_cond,
                 cond_var,
@@ -629,6 +631,7 @@ fn deep_copy_type_vars<'a>(
 mod test {
     use super::deep_copy_type_vars;
     use bumpalo::Bump;
+    use roc_error_macros::internal_error;
     use roc_module::symbol::Symbol;
     use roc_types::subs::{
         Content, Content::*, Descriptor, Mark, OptVariable, Rank, Subs, SubsIndex, Variable,
@@ -663,7 +666,7 @@ mod test {
             FlexVar(Some(name)) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
-            it => assert!(false, "{:?}", it),
+            it => unreachable!("{:?}", it),
         }
     }
 
@@ -686,7 +689,7 @@ mod test {
             RigidVar(name) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
-            it => assert!(false, "{:?}", it),
+            it => unreachable!("{:?}", it),
         }
     }
 
@@ -709,7 +712,7 @@ mod test {
             FlexAbleVar(Some(name), Symbol::UNDERSCORE) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
-            it => assert!(false, "{:?}", it),
+            it => unreachable!("{:?}", it),
         }
     }
 
@@ -732,7 +735,7 @@ mod test {
             RigidAbleVar(name, Symbol::UNDERSCORE) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
-            it => assert!(false, "{:?}", it),
+            it => internal_error!("{:?}", it),
         }
     }
 }

@@ -69,7 +69,7 @@ check-clippy:
     FROM +build-rust-test
     RUN cargo clippy -V
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo clippy -- -D warnings
+        cargo clippy --workspace --tests -- -D warnings
 
 check-rustfmt:
     FROM +build-rust-test

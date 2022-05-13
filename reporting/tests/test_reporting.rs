@@ -101,6 +101,7 @@ mod test_reporting {
         (module_src, loaded)
     }
 
+    #[allow(clippy::type_complexity)]
     fn infer_expr_help_new<'a>(
         subdir: &str,
         arena: &'a Bump,
@@ -176,8 +177,7 @@ mod test_reporting {
                 buf
             }
             Err(other) => {
-                assert!(false, "failed to load: {:?}", other);
-                unreachable!()
+                panic!("failed to load: {:?}", other);
             }
         }
     }
@@ -342,7 +342,7 @@ mod test_reporting {
         list_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
-        if true && buf != expected_rendering {
+        if buf != expected_rendering {
             for line in buf.split('\n') {
                 println!("                {}", line);
             }
@@ -364,7 +364,7 @@ mod test_reporting {
         list_header_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
-        if true && buf != expected_rendering {
+        if buf != expected_rendering {
             for line in buf.split('\n') {
                 println!("                {}", line);
             }
@@ -1201,6 +1201,128 @@ mod test_reporting {
                 infinitely.
 
                     List ∞ -> a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = \x -> g x
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `f`:
+
+                1│  f = \x -> g x
+                    ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> a
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `g`:
+
+                2│  g = \x -> f [x]
+                    ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion_annotated() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> List a
+                f = \x -> g x
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression is used in an unexpected way:
+
+                2│  f = \x -> g x
+                              ^^^
+
+                This `g` call produces:
+
+                    List List a
+
+                But you are trying to use it as:
+
+                    List a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `List` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion_dually_annotated_lie() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> List a
+                f = \x -> g x
+                g : b -> List b
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression is used in an unexpected way:
+
+                4│  g = \x -> f [x]
+                              ^^^^^
+
+                This `f` call produces:
+
+                    List List b
+
+                But you are trying to use it as:
+
+                    List b
+
+                Tip: The type annotation uses the type variable `b` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `List` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
                 "#
             ),
         )

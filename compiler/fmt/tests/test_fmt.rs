@@ -86,7 +86,7 @@ mod test_fmt {
     ) {
         fmt_module(buf, module);
 
-        match module_defs().parse(&arena, state) {
+        match module_defs().parse(arena, state) {
             Ok((_, loc_defs, _)) => {
                 for loc_def in loc_defs {
                     fmt_def(buf, arena.alloc(loc_def.value), 0);

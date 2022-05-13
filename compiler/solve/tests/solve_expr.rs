@@ -12,7 +12,7 @@ mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
     use lazy_static::lazy_static;
     use regex::Regex;
-    use roc_can::traverse::find_type_at;
+    use roc_can::traverse::{find_ability_member_at, find_type_at};
     use roc_load::LoadedModule;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_problem::can::Problem;
@@ -113,7 +113,7 @@ mod solve_expr {
         let filename = PathBuf::from("test.roc");
         let src_lines: Vec<&str> = src.split('\n').collect();
         let lines = LineInfo::new(src);
-        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+        let alloc = RocDocAllocator::new(&src_lines, home, interns);
 
         let mut can_reports = vec![];
         let mut type_reports = vec![];
@@ -241,6 +241,7 @@ mod solve_expr {
                 mut declarations_by_id,
                 mut solved,
                 interns,
+                abilities_store,
                 ..
             },
             src,
@@ -271,11 +272,30 @@ mod solve_expr {
             let end = region.end().offset;
             let text = &src[start as usize..end as usize];
             let var = find_type_at(region, &decls)
-                .expect(&format!("No type for {} ({:?})!", &text, region));
+                .unwrap_or_else(|| panic!("No type for {} ({:?})!", &text, region));
 
             let actual_str = name_and_print_var(var, subs, home, &interns);
 
-            solved_queries.push(format!("{} : {}", text, actual_str));
+            let elaborated = match find_ability_member_at(region, &decls) {
+                Some((member, specialization_id)) => {
+                    let qual = match abilities_store.get_resolved(specialization_id) {
+                        Some(specialization) => {
+                            abilities_store
+                                .iter_specializations()
+                                .find(|(_, ms)| ms.symbol == specialization)
+                                .unwrap()
+                                .0
+                                 .1
+                        }
+                        None => abilities_store.member_def(member).unwrap().parent_ability,
+                    };
+                    let qual_str = qual.as_str(&interns);
+                    format!("{}#{} : {}", qual_str, text, actual_str)
+                }
+                None => format!("{} : {}", text, actual_str),
+            };
+
+            solved_queries.push(elaborated);
         }
 
         assert_eq!(solved_queries, expected)
@@ -304,11 +324,11 @@ mod solve_expr {
             panic!();
         }
 
-        let known_specializations = abilities_store.get_known_specializations();
+        let known_specializations = abilities_store.iter_specializations();
         use std::collections::HashSet;
         let pretty_specializations = known_specializations
             .into_iter()
-            .map(|(member, typ)| {
+            .map(|((member, typ), _)| {
                 let member_data = abilities_store.member_def(member).unwrap();
                 let member_str = member.as_str(&interns);
                 let ability_str = member_data.parent_ability.as_str(&interns);
@@ -323,8 +343,7 @@ mod solve_expr {
             let has_the_one = pretty_specializations
                 .iter()
                 // references are annoying so we do this
-                .find(|(p, s)| p == parent && s == &specialization)
-                .is_some();
+                .any(|(p, s)| p == parent && s == &specialization);
             assert!(
                 has_the_one,
                 "{:#?} not in {:#?}",
@@ -3737,7 +3756,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn sorting() {
         // based on https://github.com/elm/compiler/issues/2057
         // Roc seems to do this correctly, tracking to make sure it stays that way
@@ -3771,7 +3789,6 @@ mod solve_expr {
                         g = \bs ->
                             when bs is
                                 bx -> f bx
-                                _ -> Nil
 
                         always Nil (f list)
 
@@ -4281,7 +4298,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn rbtree_full_remove_min() {
         infer_eq_without_problem(
             indoc!(
@@ -6386,5 +6402,28 @@ mod solve_expr {
             ),
             "Task val err -> Task * *",
         );
+    }
+
+    #[test]
+    fn static_specialization() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                Default has default : {} -> a | a has Default
+
+                A := {}
+                default = \{} -> @A {}
+
+                main =
+                    a : A
+                    a = default {}
+                #       ^^^^^^^
+                    a
+                "#
+            ),
+            &["A#default : {} -> A"],
+        )
     }
 }
