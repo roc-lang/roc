@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-21.11";
     rust-overlay.url = "github:oxalica/rust-overlay"; # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
-    zig.url = "github:roarkanize/zig-overlay"; # using an overlay allows for quick updates fater zig releases
+    zig.url = "github:roarkanize/zig-overlay"; # using an overlay allows for quick updates after zig releases
     flake-utils.url = "github:numtide/flake-utils"; # to easily make configs for all architectures
   };
 
@@ -45,7 +45,6 @@
             Security
         ]);
 
-        # zig 0.9.1 from pkgs is broken on aarch64-darwin, hence the workaround
         zig-toolchain = zig.packages.${system}."0.9.1";
 
         sharedInputs = (with pkgs; [
