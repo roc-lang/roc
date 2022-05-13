@@ -2,7 +2,7 @@ use roc_mono::layout::UnionLayout;
 
 use indoc::indoc;
 
-use crate::types::{RocType, TypeId, Types};
+use crate::types::{RocTagUnion, RocType, TypeId, Types};
 use std::{
     convert::TryInto,
     fmt::{self, Write},
@@ -16,25 +16,38 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
     for id in types.sorted_ids() {
         match types.get(id) {
             RocType::Struct { name, fields } => write_struct(name, fields, id, types, buf)?,
-            RocType::Enumeration { tags, name } => {
-                if tags.len() == 1 {
-                    // An enumeration with one tag is a zero-sized unit type, so
-                    // represent it as a zero-sized struct (e.g. "struct Foo()").
-                    write_deriving(types.get(id), types, buf)?;
-                    writeln!(buf, "\nstruct {}();", type_name(id, types))?;
-                } else {
-                    write_enumeration(name, types.get(id), tags.iter(), types, buf)?;
+            RocType::TagUnion(tag_union) => {
+                match tag_union {
+                    RocTagUnion::Enumeration { tags, name } => {
+                        if tags.len() == 1 {
+                            // An enumeration with one tag is a zero-sized unit type, so
+                            // represent it as a zero-sized struct (e.g. "struct Foo()").
+                            write_deriving(types.get(id), types, buf)?;
+                            writeln!(buf, "\nstruct {}();", type_name(id, types))?;
+                        } else {
+                            write_enumeration(name, types.get(id), tags.iter(), types, buf)?;
+                        }
+                    }
+                    RocTagUnion::NonRecursive { tags, name } => {
+                        // Empty tag unions can never come up at runtime,
+                        // and so don't need declared types.
+                        if !tags.is_empty() {
+                            write_tag_union(name, id, tags, types, buf)?;
+                        }
+                    }
+                    RocTagUnion::Recursive { .. } => {
+                        todo!();
+                    }
+                    RocTagUnion::NullableWrapped { .. } => {
+                        todo!();
+                    }
+                    RocTagUnion::NullableUnwrapped { .. } => {
+                        todo!();
+                    }
+                    RocTagUnion::NonNullableUnwrapped { .. } => {
+                        todo!();
+                    }
                 }
-            }
-            RocType::TagUnion { tags, name } => {
-                // Empty tag unions can never come up at runtime,
-                // and so don't need declared types.
-                if !tags.is_empty() {
-                    write_tag_union(name, id, tags, types, buf)?;
-                }
-            }
-            RocType::RecursiveTagUnion { .. } => {
-                todo!();
             }
             // These types don't need to be declared in Rust.
             RocType::U8
@@ -88,10 +101,10 @@ fn write_tag_union(
     // }
     let discriminant_name = format!("tag_{}", name);
     let tag_names = tags.iter().map(|(name, _)| name);
-    let discriminant_type = RocType::Enumeration {
+    let discriminant_type = RocType::TagUnion(RocTagUnion::Enumeration {
         name: discriminant_name.clone(),
         tags: tag_names.clone().cloned().collect(),
-    };
+    });
     let typ = types.get(type_id);
 
     write_enumeration(
@@ -746,10 +759,13 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
         RocType::Struct { name, .. }
-        | RocType::TagUnion { name, .. }
         | RocType::TransparentWrapper { name, .. }
-        | RocType::Enumeration { name, .. }
-        | RocType::RecursiveTagUnion { name, .. } => name.clone(),
+        | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
+        | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
+        | RocType::TagUnion(RocTagUnion::Enumeration { name, .. })
+        | RocType::TagUnion(RocTagUnion::NullableWrapped { name, .. })
+        | RocType::TagUnion(RocTagUnion::NullableUnwrapped { name, .. })
+        | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { name, .. }) => name.clone(),
     }
 }
 

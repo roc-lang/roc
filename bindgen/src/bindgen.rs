@@ -1,5 +1,5 @@
 use crate::structs::Structs;
-use crate::types::{TypeId, Types};
+use crate::types::{RocTagUnion, TypeId, Types};
 use crate::{enums::Enums, types::RocType};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth::*, IntWidth::*};
@@ -311,7 +311,7 @@ fn add_tag_union(
     // Sort tags alphabetically by tag name
     tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
-    let tags: Vec<_> =
+    let mut tags: Vec<_> =
         tags.into_iter()
             .map(|(tag_name, payload_vars)| {
                 match payload_vars.len() {
@@ -336,6 +336,7 @@ fn add_tag_union(
                         let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
                             (format!("f{}", index).into(), *payload_var)
                         });
+
                         let struct_id = add_struct(env, struct_name, fields, types);
 
                         (tag_name, Some(struct_id))
@@ -351,7 +352,7 @@ fn add_tag_union(
             match union_layout {
                 // A non-recursive tag union
                 // e.g. `Result ok err : [ Ok ok, Err err ]`
-                NonRecursive(_) => RocType::TagUnion { name, tags },
+                NonRecursive(_) => RocType::TagUnion(RocTagUnion::NonRecursive { name, tags }),
                 // A recursive tag union (general case)
                 // e.g. `Expr : [ Sym Str, Add Expr Expr ]`
                 Recursive(_) => {
@@ -374,16 +375,30 @@ fn add_tag_union(
                 // A recursive tag union with only two variants, where one is empty.
                 // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
                 // e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
-                NullableUnwrapped { .. } => {
-                    todo!()
+                NullableUnwrapped { nullable_id, .. } => {
+                    // NullableUnwrapped tag unions should always have exactly 2 tags.
+                    debug_assert_eq!(tags.len(), 2);
+
+                    // The nullable tag is the one with no payload.
+                    let (null_tag, _) = tags.remove(nullable_id as usize);
+
+                    // By process of elimination, the remaining tag has the payload.
+                    let (non_null_tag, non_null_payload) = tags.remove(0);
+
+                    RocType::TagUnion(RocTagUnion::NullableUnwrapped {
+                        name,
+                        null_tag,
+                        non_null_tag,
+                        non_null_payload: non_null_payload.unwrap(),
+                    })
                 }
             }
         }
         Layout::Builtin(builtin) => match builtin {
-            Builtin::Int(_) => RocType::Enumeration {
+            Builtin::Int(_) => RocType::TagUnion(RocTagUnion::Enumeration {
                 name,
                 tags: tags.into_iter().map(|(tag_name, _)| tag_name).collect(),
-            },
+            }),
             Builtin::Bool => RocType::Bool,
             Builtin::Float(_)
             | Builtin::Decimal
