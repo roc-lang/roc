@@ -379,11 +379,21 @@ fn add_tag_union(
                     // NullableUnwrapped tag unions should always have exactly 2 tags.
                     debug_assert_eq!(tags.len(), 2);
 
-                    // The nullable tag is the one with no payload.
-                    let (null_tag, _) = tags.remove(nullable_id as usize);
+                    let null_tag;
+                    let non_null;
 
-                    // By process of elimination, the remaining tag has the payload.
-                    let (non_null_tag, non_null_payload) = tags.remove(0);
+                    if nullable_id {
+                        // If nullable_id is true, then the null tag is second, which means
+                        // pop() will return it because it's at the end of the vec.
+                        null_tag = tags.pop().unwrap().0;
+                        non_null = tags.pop().unwrap();
+                    } else {
+                        // The null tag is first, which means the tag with the payload is second.
+                        non_null = tags.pop().unwrap();
+                        null_tag = tags.pop().unwrap().0;
+                    }
+
+                    let (non_null_tag, non_null_payload) = non_null;
 
                     RocType::TagUnion(RocTagUnion::NullableUnwrapped {
                         name,
