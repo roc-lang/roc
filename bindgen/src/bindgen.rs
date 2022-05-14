@@ -21,7 +21,7 @@ pub struct Env<'a> {
     pub enum_names: Enums,
 }
 
-pub fn add_type<'a>(env: &mut Env<'a>, var: Variable, types: &mut Types) -> TypeId {
+pub fn add_type<'a>(env: &mut Env<'a>, var: Variable, types: &mut Types) -> Option<TypeId> {
     let layout = env
         .layout_cache
         .from_var(env.arena, var, env.subs)
@@ -36,7 +36,7 @@ pub fn add_type_help<'a>(
     var: Variable,
     opt_name: Option<Symbol>,
     types: &mut Types,
-) -> TypeId {
+) -> Option<TypeId> {
     let subs = env.subs;
 
     match subs.get_content_without_compacting(var) {
@@ -193,15 +193,33 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
     name: String,
     fields: I,
     types: &mut Types,
-) -> TypeId {
+) -> Option<TypeId> {
     let subs = env.subs;
     let fields_iter = fields.into_iter();
+    let first_field = match fields_iter.next() {
+        Some(field) => field,
+        None => {
+            // This is an empty record; we don't need to make a struct for it!
+            return None;
+        }
+    };
+    let second_field = match fields_iter.next() {
+        Some(field) => field,
+        None => {
+            // This is a single-field record; we don't need to make a struct for it,
+            // but we may need to add a type for the previous one.
+            return add_type(env, first_field.1, types);
+        }
+    };
     let mut sortables = bumpalo::collections::Vec::with_capacity_in(
-        fields_iter.size_hint().1.unwrap_or_default(),
+        2 + fields_iter.size_hint().1.unwrap_or_default(),
         env.arena,
     );
 
-    for (label, field_var) in fields_iter {
+    for (label, field_var) in std::iter::once(first_field)
+        .chain(std::iter::once(second_field))
+        .chain(fields_iter)
+    {
         sortables.push((
             label,
             field_var,
@@ -249,7 +267,7 @@ fn add_tag_union(
     var: Variable,
     opt_rec_var: Option<Variable>,
     types: &mut Types,
-) -> TypeId {
+) -> Option<TypeId> {
     let subs = env.subs;
     let mut tags: Vec<(String, Vec<Variable>)> = union_tags
         .iter_from_subs(subs)
@@ -275,15 +293,12 @@ fn add_tag_union(
         return match payload_vars.len() {
             0 => {
                 // This is a single-tag union with no payload, e.g. `[ Foo ]`
-                // so just generate an empty record
-                types.add(RocType::Struct {
-                    name,
-                    fields: Vec::new(),
-                })
+                // so don't generate anything.
+                None
             }
             1 => {
                 // This is a single-tag union with 1 payload field, e.g.`[ Foo Str ]`.
-                // We'll just wrap that.
+                // We'll just unwrap wrap that.
                 let var = *payload_vars.get(0).unwrap();
                 let content = add_type(env, var, types);
 
