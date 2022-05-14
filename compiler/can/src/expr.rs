@@ -422,12 +422,7 @@ pub fn canonicalize_expr<'a>(
 
     let (expr, output) = match expr {
         &ast::Expr::Num(str) => {
-            let answer = num_expr_from_result(
-                var_store,
-                finish_parsing_num(str),
-                region,
-                env,
-            );
+            let answer = num_expr_from_result(var_store, finish_parsing_num(str), region, env);
 
             (answer, Output::default())
         }
