@@ -100,6 +100,24 @@ fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
             )
         }
     }
+}
+
+fn write_nullable_unwrapped(
+    name: &str,
+    id: TypeId,
+    null_tag: String,
+    non_null_tag: String,
+    non_null_payload: TypeId,
+    types: &Types,
+    buf: &mut String,
+) -> fmt::Result {
+    let mut tag_names = vec![null_tag, non_null_tag];
+
+    tag_names.sort();
+
+    let discriminant_name = write_discriminant(name, tag_names, types, buf)?;
+
+    write_deriving(types.get(id), types, buf)?;
 
     Ok(())
 }
