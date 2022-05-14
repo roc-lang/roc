@@ -131,25 +131,6 @@ pub enum RocType {
 }
 
 impl RocType {
-    pub fn fold<'a, S, F>(&'a self, state: S, step: F) -> S
-    where
-        F: Fn(S, TypeId) -> S,
-    {
-        use RocType::*;
-
-        match self {
-            RocStr | Bool | I8 | U8 | I16 | U16 | I32 | U32 | I64 | U64 | I128 | U128 | F32
-            | F64 | F128 | RocDec => state,
-            RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => step(state, *id),
-            RocType::RocDict(key_id, val_id) => step(step(state, *key_id), *val_id),
-            RocType::Struct { fields, .. } => fields
-                .iter()
-                .fold(state, |inner_state, (_, id)| step(inner_state, *id)),
-            RocType::TagUnion(tag_union) => tag_union.fold(state, step),
-            RocType::TransparentWrapper { content, .. } => step(state, *content),
-        }
-    }
-
     /// Useful when determining whether to derive Copy in a Rust type.
     pub fn has_pointer(&self, types: &Types) -> bool {
         match self {
@@ -425,40 +406,4 @@ pub enum RocTagUnion {
         /// Otherwise, this would have been an Enumeration!
         non_null_payload: TypeId,
     },
-}
-
-impl RocTagUnion {
-    pub fn fold<'a, S, F>(&'a self, mut state: S, step: F) -> S
-    where
-        F: Fn(S, TypeId) -> S,
-    {
-        use RocTagUnion::*;
-
-        match self {
-            Enumeration { .. } => state,
-            Recursive { tags, .. } | NonRecursive { tags, .. } => {
-                for (_, opt_tag_id) in tags {
-                    if let Some(tag_id) = opt_tag_id {
-                        state = step(state, *tag_id);
-                    }
-                }
-
-                state
-            }
-            NullableUnwrapped {
-                non_null_payload: content,
-                ..
-            }
-            | NonNullableUnwrapped { content, .. } => step(state, *content),
-            NullableWrapped { non_null_tags, .. } => {
-                for (_, _, opt_tag_id) in non_null_tags {
-                    if let Some(tag_id) = opt_tag_id {
-                        state = step(state, *tag_id);
-                    }
-                }
-
-                state
-            }
-        }
-    }
 }
