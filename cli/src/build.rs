@@ -255,8 +255,6 @@ pub fn build_file<'a>(
         if matches!(opt_level, OptLevel::Development) {
             inputs.push(bitcode::BUILTINS_HOST_OBJ_PATH);
         }
-        dbg!(app_o_file.to_str().unwrap());
-        std::fs::copy(app_o_file.to_str().unwrap(), "/home/anton/Desktop/roc_app_wasm.bc").unwrap();
 
         let (mut child, _) =  // TODO use lld
             link(

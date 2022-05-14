@@ -25,7 +25,10 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 name = "combined"
 version = "0.1.0"
 dependencies = [
+ "app_sys",
  "platform",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -56,11 +59,7 @@ dependencies = [
 name = "platform"
 version = "0.1.0"
 dependencies = [
- "app_sys",
- "roc_std",
  "wasi_libc_sys",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]

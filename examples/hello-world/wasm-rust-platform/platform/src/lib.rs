@@ -1,6 +1,6 @@
-mod roc;
+pub mod roc;
 
-use app_sys::roc_main;
+/*use app_sys::roc_main;
 
 use wasm_bindgen::prelude::{
     wasm_bindgen,
@@ -22,4 +22,4 @@ pub fn run_main() {
     val.set_text_content(Some(roc_str.as_str()));
 
     body.append_child(&val).ok();
-}
+}*/

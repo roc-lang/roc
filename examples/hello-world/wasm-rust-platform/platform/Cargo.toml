@@ -11,14 +11,14 @@ path = "src/lib.rs"
 crate-type = ["lib"]
 
 [dependencies]
-roc_std = { path = "../../../../roc_std" }
+#roc_std = { path = "../../../../roc_std" }
 wasi_libc_sys = { path = "../../../../wasi-libc-sys" }
-wasm-bindgen = "0.2.80"
-web-sys = { version = "0.3.57", features = [
-    'Document',
-    'Element',
-    'HtmlElement',
-    'Node',
-    'Window',
-]}
-app_sys = { path = "../app_sys" }
+#wasm-bindgen = "0.2.80"
+#web-sys = { version = "0.3.57", features = [
+#    'Document',
+#    'Element',
+#    'HtmlElement',
+#    'Node',
+#    'Window',
+#]}
+#app_sys = { path = "../app_sys" }
