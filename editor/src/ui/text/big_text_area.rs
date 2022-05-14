@@ -587,7 +587,7 @@ pub mod test_big_sel_text {
 
         let lines_vec = all_lines_vec(&big_text)
             .iter()
-            .map(|l| l.replace("\n", ""))
+            .map(|l| l.replace('\n', ""))
             .collect();
         let post_lines_res = convert_selection_to_dsl(big_text.caret_w_select, lines_vec);
 

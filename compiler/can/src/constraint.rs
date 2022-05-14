@@ -1,10 +1,11 @@
+use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExhaustiveMark, Variable};
+use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
 use roc_types::types::{Category, PatternCategory, Type};
 
 #[derive(Debug)]
@@ -23,6 +24,7 @@ pub struct Constraints {
     pub sketched_rows: Vec<SketchedRows>,
     pub eq: Vec<Eq>,
     pub pattern_eq: Vec<PatternEq>,
+    pub cycles: Vec<Cycle>,
 }
 
 impl Default for Constraints {
@@ -47,6 +49,7 @@ impl Constraints {
         let sketched_rows = Vec::new();
         let eq = Vec::new();
         let pattern_eq = Vec::new();
+        let cycles = Vec::new();
 
         types.extend([
             Type::EmptyRec,
@@ -100,6 +103,7 @@ impl Constraints {
             sketched_rows,
             eq,
             pattern_eq,
+            cycles,
         }
     }
 
@@ -580,7 +584,9 @@ impl Constraints {
             | Constraint::IsOpenType(_)
             | Constraint::IncludesTag(_)
             | Constraint::PatternPresence(_, _, _, _)
-            | Constraint::Exhaustive { .. } => false,
+            | Constraint::Exhaustive { .. }
+            | Constraint::Resolve(..)
+            | Constraint::CheckCycle(..) => false,
         }
     }
 
@@ -643,6 +649,32 @@ impl Constraints {
 
         Constraint::Exhaustive(equality, sketched_rows, context, exhaustive)
     }
+
+    pub fn check_cycle<I, I1>(
+        &mut self,
+        loc_symbols: I,
+        expr_regions: I1,
+        cycle_mark: IllegalCycleMark,
+    ) -> Constraint
+    where
+        I: IntoIterator<Item = (Symbol, Region)>,
+        I1: IntoIterator<Item = Region>,
+    {
+        let def_names = Slice::extend_new(&mut self.loc_symbols, loc_symbols);
+
+        // we add a dummy symbol to these regions, so we can store the data in the loc_symbols vec
+        let it = expr_regions.into_iter().map(|r| (Symbol::ATTR_ATTR, r));
+        let expr_regions = Slice::extend_new(&mut self.loc_symbols, it);
+        let expr_regions = Slice::new(expr_regions.start() as _, expr_regions.len() as _);
+
+        let cycle = Cycle {
+            def_names,
+            expr_regions,
+        };
+        let cycle_index = Index::push_new(&mut self.cycles, cycle);
+
+        Constraint::CheckCycle(cycle_index, cycle_mark)
+    }
 }
 
 roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
@@ -663,6 +695,31 @@ pub struct PatternEq(
     pub Index<PatternCategory>,
     pub Region,
 );
+
+/// When we come across a lookup of an ability member, we'd like to try to specialize that
+/// lookup during solving (knowing the specialization statically avoids re-solving during mono,
+/// and always gives us a way to show what specialization was intended in the editor).
+///
+/// However, we attempting to resolve the specialization right at the lookup site is futile
+/// (we may not have solved enough of the surrounding context to know the specialization).
+/// So, we only collect what resolutions we'd like to make, and attempt to resolve them once
+/// we pass through a let-binding (a def, or a normal `=` binding). At those positions, the
+/// expression is generalized, so if there is a static specialization, we'd know it at that
+/// point.
+///
+/// Note that this entirely opportunistic; if a lookup of an ability member uses it
+/// polymorphically, we won't find its specialization(s) until monomorphization.
+#[derive(Clone, Copy, Debug)]
+pub struct OpportunisticResolve {
+    /// The specialized type of this lookup, to try to resolve.
+    pub specialization_variable: Variable,
+    pub specialization_expectation: Index<Expected<Type>>,
+
+    /// The ability member to try to resolve.
+    pub member: Symbol,
+    /// If we resolve a specialization, what specialization ID to store it on.
+    pub specialization_id: SpecializationId,
+}
 
 #[derive(Clone, Copy)]
 pub enum Constraint {
@@ -705,6 +762,9 @@ pub enum Constraint {
         ExhaustiveContext,
         ExhaustiveMark,
     ),
+    /// Attempt to resolve a specialization.
+    Resolve(OpportunisticResolve),
+    CheckCycle(Index<Cycle>, IllegalCycleMark),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -728,6 +788,12 @@ pub struct IncludesTag {
     pub types: Slice<Type>,
     pub pattern_category: Index<PatternCategory>,
     pub region: Region,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Cycle {
+    pub def_names: Slice<(Symbol, Region)>,
+    pub expr_regions: Slice<Region>,
 }
 
 /// Custom impl to limit vertical space used by the debug output
@@ -765,6 +831,12 @@ impl std::fmt::Debug for Constraint {
                     "Exhaustive({:?}, {:?}, {:?}, {:?})",
                     arg0, arg1, arg2, arg3
                 )
+            }
+            Self::Resolve(arg0) => {
+                write!(f, "Resolve({:?})", arg0)
+            }
+            Self::CheckCycle(arg0, arg1) => {
+                write!(f, "CheckCycle({:?}, {:?})", arg0, arg1)
             }
         }
     }

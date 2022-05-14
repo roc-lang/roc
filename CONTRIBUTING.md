@@ -14,7 +14,7 @@ Most contributors execute the following commands befor pushing their code:
 ```
 cargo test
 cargo fmt --all -- --check
-cargo clippy -- -D warnings
+cargo clippy --workspace --tests -- -D warnings
 ```
 Execute `cargo fmt --all` to fix the formatting.
 

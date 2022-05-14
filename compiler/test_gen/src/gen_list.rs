@@ -1088,17 +1088,17 @@ fn list_map_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            pi : F64
-            pi = 3.14
+            float : F64
+            float = 1.23
 
             single : List F64
             single =
                 [ 0 ]
 
-            List.map single (\x -> x + pi)
+            List.map single (\x -> x + float)
             "#
         ),
-        RocList::from_slice(&[3.14]),
+        RocList::from_slice(&[1.23]),
         RocList<f64>
     );
 }

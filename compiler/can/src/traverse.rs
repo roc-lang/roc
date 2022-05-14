@@ -1,13 +1,14 @@
 //! Traversals over the can ast.
 
-use roc_module::ident::Lowercase;
+use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 
 use crate::{
+    abilities::SpecializationId,
     def::{Annotation, Declaration, Def},
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
-    pattern::Pattern,
+    pattern::{DestructType, Pattern, RecordDestruct},
 };
 
 macro_rules! visit_list {
@@ -27,7 +28,7 @@ pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
         Declaration::Declare(def) => {
             visitor.visit_def(def);
         }
-        Declaration::DeclareRec(defs) => {
+        Declaration::DeclareRec(defs, _cycle_mark) => {
             visit_list!(visitor, visit_def, defs)
         }
         Declaration::Builtin(def) => visitor.visit_def(def),
@@ -91,7 +92,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             branch_var,
             final_else,
         } => walk_if(visitor, *cond_var, branches, *branch_var, final_else),
-        Expr::LetRec(defs, body) => {
+        Expr::LetRec(defs, body, _cycle_mark) => {
             defs.iter().for_each(|def| visitor.visit_def(def));
             visitor.visit_expr(&body.value, body.region, var);
         }
@@ -271,7 +272,7 @@ pub fn walk_record_fields<'a, V: Visitor>(
     )
 }
 
-pub trait Visitor: Sized + PatternVisitor {
+pub trait Visitor: Sized {
     fn visit_decls(&mut self, decls: &[Declaration]) {
         walk_decls(self, decls);
     }
@@ -291,15 +292,51 @@ pub trait Visitor: Sized + PatternVisitor {
     fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
         walk_expr(self, expr, var);
     }
-}
 
-pub fn walk_pattern<V: PatternVisitor>(_visitor: &mut V, _pattern: &Pattern) {
-    // ignore for now
-}
-
-pub trait PatternVisitor: Sized {
     fn visit_pattern(&mut self, pattern: &Pattern, _region: Region, _opt_var: Option<Variable>) {
         walk_pattern(self, pattern);
+    }
+
+    fn visit_record_destruct(&mut self, destruct: &RecordDestruct, _region: Region) {
+        walk_record_destruct(self, destruct);
+    }
+}
+
+pub fn walk_pattern<V: Visitor>(visitor: &mut V, pattern: &Pattern) {
+    use Pattern::*;
+
+    match pattern {
+        Identifier(..) => { /* terminal */ }
+        AppliedTag { arguments, .. } => arguments
+            .iter()
+            .for_each(|(v, lp)| visitor.visit_pattern(&lp.value, lp.region, Some(*v))),
+        UnwrappedOpaque { argument, .. } => {
+            let (v, lp) = &**argument;
+            visitor.visit_pattern(&lp.value, lp.region, Some(*v));
+        }
+        RecordDestructure { destructs, .. } => destructs
+            .iter()
+            .for_each(|d| visitor.visit_record_destruct(&d.value, d.region)),
+        NumLiteral(..) => { /* terminal */ }
+        IntLiteral(..) => { /* terminal */ }
+        FloatLiteral(..) => { /* terminal */ }
+        StrLiteral(..) => { /* terminal */ }
+        SingleQuote(..) => { /* terminal */ }
+        Underscore => { /* terminal */ }
+        AbilityMemberSpecialization { .. } => { /* terminal */ }
+        Shadowed(..) => { /* terminal */ }
+        OpaqueNotInScope(..) => { /* terminal */ }
+        UnsupportedPattern(..) => { /* terminal */ }
+        MalformedPattern(..) => { /* terminal */ }
+    }
+}
+
+pub fn walk_record_destruct<V: Visitor>(visitor: &mut V, destruct: &RecordDestruct) {
+    use DestructType::*;
+    match &destruct.typ {
+        Required => { /* terminal */ }
+        Optional(var, expr) => visitor.visit_expr(&expr.value, expr.region, *var),
+        Guard(var, pat) => visitor.visit_pattern(&pat.value, pat.region, Some(*var)),
     }
 }
 
@@ -308,18 +345,6 @@ struct TypeAtVisitor {
     typ: Option<Variable>,
 }
 
-impl PatternVisitor for TypeAtVisitor {
-    fn visit_pattern(&mut self, pat: &Pattern, region: Region, opt_var: Option<Variable>) {
-        if region == self.region {
-            debug_assert!(self.typ.is_none());
-            self.typ = opt_var;
-            return;
-        }
-        if region.contains(&self.region) {
-            walk_pattern(self, pat)
-        }
-    }
-}
 impl Visitor for TypeAtVisitor {
     fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
         if region == self.region {
@@ -331,6 +356,17 @@ impl Visitor for TypeAtVisitor {
             walk_expr(self, expr, var);
         }
     }
+
+    fn visit_pattern(&mut self, pat: &Pattern, region: Region, opt_var: Option<Variable>) {
+        if region == self.region {
+            debug_assert!(self.typ.is_none());
+            self.typ = opt_var;
+            return;
+        }
+        if region.contains(&self.region) {
+            walk_pattern(self, pat)
+        }
+    }
 }
 
 /// Attempts to find the type of an expression at `region`, if it exists.
@@ -338,4 +374,72 @@ pub fn find_type_at(region: Region, decls: &[Declaration]) -> Option<Variable> {
     let mut visitor = TypeAtVisitor { region, typ: None };
     visitor.visit_decls(decls);
     visitor.typ
+}
+
+pub fn find_ability_member_at(
+    region: Region,
+    decls: &[Declaration],
+) -> Option<(Symbol, SpecializationId)> {
+    let mut visitor = Finder {
+        region,
+        found: None,
+    };
+    visitor.visit_decls(decls);
+    return visitor.found;
+
+    struct Finder {
+        region: Region,
+        found: Option<(Symbol, SpecializationId)>,
+    }
+
+    impl Visitor for Finder {
+        fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
+            if region == self.region {
+                if let &Expr::AbilityMember(symbol, specialization_id, _) = expr {
+                    debug_assert!(self.found.is_none());
+                    self.found = Some((symbol, specialization_id));
+                    return;
+                }
+            }
+            if region.contains(&self.region) {
+                walk_expr(self, expr, var);
+            }
+        }
+    }
+}
+
+pub fn symbols_introduced_from_pattern(
+    pattern: &Loc<Pattern>,
+) -> impl Iterator<Item = Loc<Symbol>> {
+    let mut visitor = Collector {
+        symbols: Vec::new(),
+    };
+    visitor.visit_pattern(&pattern.value, pattern.region, None);
+    return visitor.symbols.into_iter();
+
+    struct Collector {
+        symbols: Vec<Loc<Symbol>>,
+    }
+    impl Visitor for Collector {
+        fn visit_pattern(&mut self, pattern: &Pattern, region: Region, _opt_var: Option<Variable>) {
+            use Pattern::*;
+            match pattern {
+                Identifier(symbol)
+                | Shadowed(_, _, symbol)
+                | AbilityMemberSpecialization { ident: symbol, .. } => {
+                    self.symbols.push(Loc::at(region, *symbol));
+                }
+                _ => walk_pattern(self, pattern),
+            }
+        }
+
+        fn visit_record_destruct(&mut self, destruct: &RecordDestruct, region: Region) {
+            // when a record field has a pattern guard, only symbols in the guard are introduced
+            if let DestructType::Guard(_, subpattern) = &destruct.typ {
+                self.visit_pattern(&subpattern.value, subpattern.region, None);
+            } else {
+                self.symbols.push(Loc::at(region, destruct.symbol));
+            }
+        }
+    }
 }

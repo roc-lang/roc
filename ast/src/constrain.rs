@@ -1937,7 +1937,7 @@ pub mod test_constrain {
     use roc_parse::parser::{SourceError, SyntaxError};
     use roc_region::all::Region;
     use roc_types::{
-        pretty_print::{content_to_string, name_all_type_vars},
+        pretty_print::name_and_print_var,
         solved_types::Solved,
         subs::{Subs, VarStore, Variable},
     };
@@ -2050,11 +2050,6 @@ pub mod test_constrain {
 
                 let subs = solved.inner_mut();
 
-                // name type vars
-                name_all_type_vars(var, subs);
-
-                let content = subs.get_content_without_compacting(var);
-
                 // Connect the ModuleId to it's IdentIds
                 dep_idents.insert(mod_id, env.ident_ids);
 
@@ -2063,7 +2058,7 @@ pub mod test_constrain {
                     all_ident_ids: dep_idents,
                 };
 
-                let actual_str = content_to_string(content, subs, mod_id, &interns);
+                let actual_str = name_and_print_var(var, subs, mod_id, &interns);
 
                 assert_eq!(actual_str, expected_str);
             }

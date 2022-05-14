@@ -217,7 +217,7 @@ fn gen_when_one_branch() {
     assert_evals_to!(
         indoc!(
             r#"
-                when 3.14 is
+                when 1.23 is
                     _ -> 23
             "#
         ),
@@ -332,12 +332,12 @@ fn return_unnamed_fn() {
                 alwaysFloatIdentity = \_ ->
                     (\a -> a)
 
-                (alwaysFloatIdentity 2) 3.14
+                (alwaysFloatIdentity 2) 1.23
 
             wrapper {}
             "#
         ),
-        3.14,
+        1.23,
         f64
     );
 }
@@ -380,12 +380,12 @@ fn gen_basic_def() {
     assert_evals_to!(
         indoc!(
             r#"
-                pi = 3.14
+                float = 1.23
 
-                pi
+                float
             "#
         ),
-        3.14,
+        1.23,
         f64
     );
 }
@@ -398,9 +398,9 @@ fn gen_multiple_defs() {
             r#"
                 answer = 42
 
-                pi = 3.14
+                float = 1.23
 
-                if pi > 3 then answer else answer
+                if float > 3 then answer else answer
             "#
         ),
         42,
@@ -412,12 +412,12 @@ fn gen_multiple_defs() {
             r#"
                 answer = 42
 
-                pi = 3.14
+                float = 1.23
 
-                if answer > 3 then pi else pi
+                if answer > 3 then float else float
             "#
         ),
-        3.14,
+        1.23,
         f64
     );
 }
@@ -582,13 +582,13 @@ fn top_level_constant() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            pi = 3.1415
+            float = 1.2315
 
             main =
-                pi + pi
+                float + float
                 "#
         ),
-        3.1415 + 3.1415,
+        1.2315 + 1.2315,
         f64
     );
 }
@@ -1144,7 +1144,7 @@ fn io_poc_effect() {
 
             foo : Effect F64
             foo =
-                succeed 3.14
+                succeed 1.23
 
             main : F64
             main =
@@ -1152,7 +1152,7 @@ fn io_poc_effect() {
 
             "#
         ),
-        3.14,
+        1.23,
         f64
     );
 }
@@ -1170,7 +1170,7 @@ fn io_poc_desugared() {
 
             foo : Str -> F64
             foo =
-                succeed 3.14
+                succeed 1.23
 
             # runEffect : ({} ->  a) -> a
             runEffect = \thunk -> thunk ""
@@ -1180,7 +1180,7 @@ fn io_poc_desugared() {
                 runEffect foo
             "#
         ),
-        3.14,
+        1.23,
         f64
     );
 }
@@ -1817,15 +1817,15 @@ fn unified_empty_closure_bool() {
 
             foo = \{} ->
                 when A is
-                    A -> (\_ -> 3.14)
-                    B -> (\_ -> 3.14)
+                    A -> (\_ -> 1.23)
+                    B -> (\_ -> 1.23)
 
             main : Frac *
             main =
                 (foo {}) 0
             "#
         ),
-        3.14,
+        1.23,
         f64
     );
 }
@@ -1842,16 +1842,16 @@ fn unified_empty_closure_byte() {
 
             foo = \{} ->
                 when A is
-                    A -> (\_ -> 3.14)
-                    B -> (\_ -> 3.14)
-                    C -> (\_ -> 3.14)
+                    A -> (\_ -> 1.23)
+                    B -> (\_ -> 1.23)
+                    C -> (\_ -> 1.23)
 
             main : Frac *
             main =
                 (foo {}) 0
             "#
         ),
-        3.14,
+        1.23,
         f64
     );
 }
@@ -3406,7 +3406,7 @@ fn polymorphic_def_used_in_closure() {
             a : I64 -> _
             a = \g ->
                 f = { r: g, h: 32 }
-            
+
                 h1 : U64
                 h1 = (\{} -> f.h) {}
                 h1
@@ -3501,5 +3501,24 @@ fn mutual_recursion_top_level_defs() {
         ),
         true,
         bool
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn polymorphic_lambda_captures_polymorphic_value() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = 2
+
+            f1 = \_ -> x
+
+            f = if True then f1 else f1
+            f {}
+            "#
+        ),
+        2,
+        u64
     )
 }

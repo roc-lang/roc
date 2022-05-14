@@ -12,8 +12,10 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) ];
-        pkgs = import nixpkgs { inherit system overlays; };
-        llvmPkgs = pkgs.llvmPackages_12;
+        pkgs = import nixpkgs { 
+          inherit system overlays;
+        };
+        llvmPkgs = pkgs.llvmPackages_13;
 
         # get current working directory
         cwd = builtins.toString ./.;
@@ -33,8 +35,8 @@
           alsa-lib
         ];
 
-        # zig 0.8.1 from pkgs is broken on aarch64-darwin, hence the workaround
-        zig-toolchain = zig.packages.${system}."0.8.1";
+        # zig 0.9.1 from pkgs is broken on aarch64-darwin, hence the workaround
+        zig-toolchain = zig.packages.${system}."0.9.1";
 
         sharedInputs = (with pkgs; [
           # build libraries
@@ -65,11 +67,12 @@
         devShell = pkgs.mkShell {
           buildInputs = sharedInputs ++ linuxInputs;
 
-          LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
+          LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
           NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
             ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
+          NIXPKGS_ALLOW_UNFREE = 1; # to run the editor with NVIDIA's closed source drivers
         };
 
     }

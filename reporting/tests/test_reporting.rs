@@ -22,7 +22,6 @@ mod test_reporting {
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
     use roc_test_utils::assert_multiline_str_eq;
-    use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
 
@@ -102,6 +101,7 @@ mod test_reporting {
         (module_src, loaded)
     }
 
+    #[allow(clippy::type_complexity)]
     fn infer_expr_help_new<'a>(
         subdir: &str,
         arena: &'a Bump,
@@ -122,19 +122,11 @@ mod test_reporting {
             mut can_problems,
             mut type_problems,
             interns,
-            mut solved,
-            exposed_to_host,
             ..
         } = result?;
 
         let can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
-
-        let subs = solved.inner_mut();
-
-        for var in exposed_to_host.values() {
-            name_all_type_vars(*var, subs);
-        }
 
         Ok((module_src, type_problems, can_problems, home, interns))
     }
@@ -185,8 +177,7 @@ mod test_reporting {
                 buf
             }
             Err(other) => {
-                assert!(false, "failed to load: {:?}", other);
-                unreachable!()
+                panic!("failed to load: {:?}", other);
             }
         }
     }
@@ -233,7 +224,7 @@ mod test_reporting {
 
         let mut unify_problems = Vec::new();
         let mut abilities_store = AbilitiesStore::default();
-        let (_content, mut subs) = infer_expr(
+        let (_content, _subs) = infer_expr(
             subs,
             &mut unify_problems,
             &constraints,
@@ -242,8 +233,6 @@ mod test_reporting {
             &mut abilities_store,
             var,
         );
-
-        name_all_type_vars(var, &mut subs);
 
         Ok((unify_problems, can_problems, home, interns))
     }
@@ -353,7 +342,7 @@ mod test_reporting {
         list_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
-        if true && buf != expected_rendering {
+        if buf != expected_rendering {
             for line in buf.split('\n') {
                 println!("                {}", line);
             }
@@ -375,7 +364,7 @@ mod test_reporting {
         list_header_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
-        if true && buf != expected_rendering {
+        if buf != expected_rendering {
             for line in buf.split('\n') {
                 println!("                {}", line);
             }
@@ -1212,6 +1201,128 @@ mod test_reporting {
                 infinitely.
 
                     List ∞ -> a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = \x -> g x
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `f`:
+
+                1│  f = \x -> g x
+                    ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> a
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `g`:
+
+                2│  g = \x -> f [x]
+                    ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion_annotated() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> List a
+                f = \x -> g x
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression is used in an unexpected way:
+
+                2│  f = \x -> g x
+                              ^^^
+
+                This `g` call produces:
+
+                    List List a
+
+                But you are trying to use it as:
+
+                    List a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `List` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion_dually_annotated_lie() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> List a
+                f = \x -> g x
+                g : b -> List b
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression is used in an unexpected way:
+
+                4│  g = \x -> f [x]
+                              ^^^^^
+
+                This `f` call produces:
+
+                    List List b
+
+                But you are trying to use it as:
+
+                    List b
+
+                Tip: The type annotation uses the type variable `b` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `List` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
                 "#
             ),
         )
@@ -3520,8 +3631,9 @@ mod test_reporting {
                 This `ACons` tag application has the type:
 
                     [ ACons (Num (Integer Signed64)) [
-                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 a, BNil ],
-                    ANil ], BNil ], ANil ]
+                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 [
+                    ACons I64 (BList I64 I64), ANil ] as ∞, BNil ], ANil ], BNil ],
+                    ANil ]
 
                 But the type annotation on `x` says it should be:
 
@@ -9792,6 +9904,164 @@ I need all branches in an `if` to have the same type!
                         ^^^^^^^
 
                 Specializations can only be defined on the top-level of a module.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn recursion_var_specialization_error() {
+        new_report_problem_as(
+            "recursion_var_specialization_error",
+            indoc!(
+                r#"
+                Job a : [ Job (List (Job a)) ]
+
+                job : Job Str
+
+                when job is
+                    Job lst -> lst == ""
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                The 2nd argument to `isEq` is not what I expect:
+
+                9│          Job lst -> lst == ""
+                                              ^^
+
+                This argument is a string of type:
+
+                    Str
+
+                But `isEq` needs the 2nd argument to be:
+
+                    List [ Job ∞ ] as ∞
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn type_error_in_apply_is_circular() {
+        new_report_problem_as(
+            "type_error_in_apply_is_circular",
+            indoc!(
+                r#"
+                app "test" provides [ go ] to "./platform"
+
+                S a : { set : Set a }
+
+                go : a, S a -> Result (List a) *
+                go = \goal, model ->
+                        if goal == goal
+                        then Ok []
+                        else
+                            new = { model & set : Set.remove goal model.set }
+                            go goal new
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                The 1st argument to `remove` is not what I expect:
+
+                10│              new = { model & set : Set.remove goal model.set }
+                                                                  ^^^^
+
+                This `goal` value is a:
+
+                    a
+
+                But `remove` needs the 1st argument to be:
+
+                    Set a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `Set` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `new`:
+
+                10│              new = { model & set : Set.remove goal model.set }
+                                 ^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    { set : Set ∞ }
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `model`:
+
+                6│  go = \goal, model ->
+                                ^^^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    S (Set ∞)
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `goal`:
+
+                6│  go = \goal, model ->
+                          ^^^^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    Set ∞
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn cycle_through_non_function() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                force : ({} -> I64) -> I64
+                force = \eval -> eval {}
+
+                t1 = \_ -> force (\_ -> t2)
+
+                t2 = t1 {}
+
+                t2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+
+                The `t1` definition is causing a very tricky infinite loop:
+
+                7│      t1 = \_ -> force (\_ -> t2)
+                        ^^
+
+                The `t1` value depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     t1
+                    │     ↓
+                    │     t2
+                    └─────┘
                 "#
             ),
         )

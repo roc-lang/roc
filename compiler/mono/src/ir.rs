@@ -15,7 +15,6 @@ use roc_debug_flags::{
     dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
     ROC_PRINT_IR_AFTER_SPECIALIZATION,
 };
-use roc_error_macros::internal_error;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -2076,6 +2075,305 @@ impl<'a> Stmt<'a> {
     }
 }
 
+fn from_can_let<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    def: Box<roc_can::def::Def>,
+    cont: Box<Loc<roc_can::expr::Expr>>,
+    variable: Variable,
+    opt_assigned_and_hole: Option<(Symbol, &'a Stmt<'a>)>,
+) -> Stmt<'a> {
+    use roc_can::expr::Expr::*;
+
+    macro_rules! lower_rest {
+        ($variable:expr, $expr:expr) => {
+            lower_rest!(env, procs, layout_cache, $variable, $expr)
+        };
+        ($env:expr, $procs:expr, $layout_cache:expr, $variable:expr, $expr:expr) => {
+            match opt_assigned_and_hole {
+                None => from_can($env, $variable, $expr, $procs, $layout_cache),
+                Some((assigned, hole)) => with_hole(
+                    $env,
+                    $expr,
+                    $variable,
+                    $procs,
+                    $layout_cache,
+                    assigned,
+                    hole,
+                ),
+            }
+        };
+    }
+
+    if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
+        return match def.loc_expr.value {
+            Closure(closure_data) => {
+                register_capturing_closure(env, procs, layout_cache, *symbol, closure_data);
+
+                lower_rest!(variable, cont.value)
+            }
+            Accessor(accessor_data) => {
+                let fresh_record_symbol = env.unique_symbol();
+                register_noncapturing_closure(
+                    env,
+                    procs,
+                    *symbol,
+                    accessor_data.to_closure_data(fresh_record_symbol),
+                );
+
+                lower_rest!(variable, cont.value)
+            }
+            Var(original) | AbilityMember(original, _, _) => {
+                // a variable is aliased, e.g.
+                //
+                //  foo = bar
+                //
+                // or
+                //
+                //  foo = RBTRee.empty
+
+                // TODO: right now we need help out rustc with the closure types;
+                // it isn't able to infer the right lifetime bounds. See if we
+                // can remove the annotations in the future.
+                let build_rest =
+                    |env: &mut Env<'a, '_>,
+                     procs: &mut Procs<'a>,
+                     layout_cache: &mut LayoutCache<'a>| {
+                        lower_rest!(env, procs, layout_cache, variable, cont.value)
+                    };
+
+                return handle_variable_aliasing(
+                    env,
+                    procs,
+                    layout_cache,
+                    def.expr_var,
+                    *symbol,
+                    original,
+                    build_rest,
+                );
+            }
+            LetNonRec(nested_def, nested_cont) => {
+                use roc_can::expr::Expr::*;
+                // We must transform
+                //
+                //      let answer = 1337
+                //      in
+                //          let unused =
+                //                  let nested = 17
+                //                  in
+                //                      nested
+                //          in
+                //              answer
+                //
+                // into
+                //
+                //      let answer = 1337
+                //      in
+                //          let nested = 17
+                //          in
+                //              let unused = nested
+                //              in
+                //                  answer
+
+                let new_def = roc_can::def::Def {
+                    loc_pattern: def.loc_pattern,
+                    loc_expr: *nested_cont,
+                    pattern_vars: def.pattern_vars,
+                    annotation: def.annotation,
+                    expr_var: def.expr_var,
+                };
+
+                let new_inner = LetNonRec(Box::new(new_def), cont);
+
+                let new_outer = LetNonRec(nested_def, Box::new(Loc::at_zero(new_inner)));
+
+                lower_rest!(variable, new_outer)
+            }
+            LetRec(nested_defs, nested_cont, cycle_mark) => {
+                use roc_can::expr::Expr::*;
+                // We must transform
+                //
+                //      let answer = 1337
+                //      in
+                //          let unused =
+                //                  let nested = \{} -> nested {}
+                //                  in
+                //                      nested
+                //          in
+                //              answer
+                //
+                // into
+                //
+                //      let answer = 1337
+                //      in
+                //          let nested = \{} -> nested {}
+                //          in
+                //              let unused = nested
+                //              in
+                //                  answer
+
+                let new_def = roc_can::def::Def {
+                    loc_pattern: def.loc_pattern,
+                    loc_expr: *nested_cont,
+                    pattern_vars: def.pattern_vars,
+                    annotation: def.annotation,
+                    expr_var: def.expr_var,
+                };
+
+                let new_inner = LetNonRec(Box::new(new_def), cont);
+
+                let new_outer = LetRec(nested_defs, Box::new(Loc::at_zero(new_inner)), cycle_mark);
+
+                lower_rest!(variable, new_outer)
+            }
+            _ => {
+                let rest = lower_rest!(variable, cont.value);
+
+                // Remove all the requested symbol specializations now, since this is the
+                // def site and hence we won't need them any higher up.
+                let mut needed_specializations = procs.symbol_specializations.remove(*symbol);
+
+                match needed_specializations.len() {
+                    0 => {
+                        // We don't need any specializations, that means this symbol is never
+                        // referenced.
+                        with_hole(
+                            env,
+                            def.loc_expr.value,
+                            def.expr_var,
+                            procs,
+                            layout_cache,
+                            *symbol,
+                            env.arena.alloc(rest),
+                        )
+                    }
+
+                    // We do need specializations
+                    1 => {
+                        let (_specialization_mark, (var, specialized_symbol)) =
+                            needed_specializations.next().unwrap();
+
+                        // Unify the expr_var with the requested specialization once.
+                        let _res = roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
+
+                        resolve_abilities_in_specialized_body(
+                            env,
+                            procs,
+                            &def.loc_expr.value,
+                            def.expr_var,
+                        );
+
+                        with_hole(
+                            env,
+                            def.loc_expr.value,
+                            def.expr_var,
+                            procs,
+                            layout_cache,
+                            specialized_symbol,
+                            env.arena.alloc(rest),
+                        )
+                    }
+                    _n => {
+                        let mut stmt = rest;
+
+                        // Need to eat the cost and create a specialized version of the body for
+                        // each specialization.
+                        for (_specialization_mark, (var, specialized_symbol)) in
+                            needed_specializations
+                        {
+                            use crate::copy::deep_copy_type_vars_into_expr;
+
+                            let (new_def_expr_var, specialized_expr) = deep_copy_type_vars_into_expr(
+                            env.arena,
+                            env.subs,
+                            def.expr_var,
+                            &def.loc_expr.value,
+                        )
+                        .expect(
+                            "expr marked as having specializations, but it has no type variables!",
+                        );
+
+                            let _res =
+                                roc_unify::unify::unify(env.subs, var, new_def_expr_var, Mode::EQ);
+
+                            resolve_abilities_in_specialized_body(
+                                env,
+                                procs,
+                                &def.loc_expr.value,
+                                def.expr_var,
+                            );
+
+                            stmt = with_hole(
+                                env,
+                                specialized_expr,
+                                new_def_expr_var,
+                                procs,
+                                layout_cache,
+                                specialized_symbol,
+                                env.arena.alloc(stmt),
+                            );
+                        }
+
+                        stmt
+                    }
+                }
+            }
+        };
+    }
+
+    // this may be a destructure pattern
+    let (mono_pattern, assignments) =
+        match from_can_pattern(env, procs, layout_cache, &def.loc_pattern.value) {
+            Ok(v) => v,
+            Err(_) => todo!(),
+        };
+
+    // convert the continuation
+    let mut stmt = lower_rest!(variable, cont.value);
+
+    // layer on any default record fields
+    for (symbol, variable, expr) in assignments {
+        let specialization_symbol = procs
+            .symbol_specializations
+            .remove_single(symbol)
+            // Can happen when the symbol was never used under this body, and hence has no
+            // requested specialization.
+            .unwrap_or(symbol);
+
+        let hole = env.arena.alloc(stmt);
+        stmt = with_hole(
+            env,
+            expr,
+            variable,
+            procs,
+            layout_cache,
+            specialization_symbol,
+            hole,
+        );
+    }
+
+    if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
+        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+    } else {
+        let outer_symbol = env.unique_symbol();
+        stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
+
+        resolve_abilities_in_specialized_body(env, procs, &def.loc_expr.value, def.expr_var);
+
+        // convert the def body, store in outer_symbol
+        with_hole(
+            env,
+            def.loc_expr.value,
+            def.expr_var,
+            procs,
+            layout_cache,
+            outer_symbol,
+            env.arena.alloc(stmt),
+        )
+    }
+}
+
 /// turn record/tag patterns into a when expression, e.g.
 ///
 /// foo = \{ x } -> body
@@ -2487,7 +2785,7 @@ fn resolve_abilities_in_specialized_body<'a>(
     body_var: Variable,
 ) -> std::vec::Vec<SpecializationId> {
     use roc_can::expr::Expr;
-    use roc_can::traverse::{walk_expr, PatternVisitor, Visitor};
+    use roc_can::traverse::{walk_expr, Visitor};
     use roc_unify::unify::unify;
 
     struct Resolver<'a> {
@@ -2497,7 +2795,6 @@ fn resolve_abilities_in_specialized_body<'a>(
         seen_defs: MutSet<Symbol>,
         specialized: std::vec::Vec<SpecializationId>,
     }
-    impl PatternVisitor for Resolver<'_> {}
     impl Visitor for Resolver<'_> {
         fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
             match expr {
@@ -2512,39 +2809,58 @@ fn resolve_abilities_in_specialized_body<'a>(
                     // So, we'll resolve any nested abilities when we know their specialized type
                     // during def construction.
                 }
-                Expr::AbilityMember(member_sym, specialization_id) => {
-                    if self
+                Expr::AbilityMember(member_sym, specialization_id, _specialization_var) => {
+                    let (specialization, specialization_def) = match self
                         .abilities_store
                         .get_resolved(*specialization_id)
-                        .is_some()
                     {
-                        // We already know the specialization from type solving; we are good to go.
-                        return;
-                    }
+                        Some(specialization) => (
+                            specialization,
+                            // If we know the specialization at this point, the specialization must
+                            // be static. That means the relevant type state was populated during
+                            // solving, so we don't need additional unification here.
+                            //
+                            // However, we do need to walk the specialization def, because it may
+                            // itself contain unspecialized defs.
+                            self.procs
+                                .partial_procs
+                                .get_symbol(specialization)
+                                .expect("Specialization found, but it's not in procs"),
+                        ),
+                        None => {
+                            let specialization = resolve_ability_specialization(
+                                self.subs,
+                                self.abilities_store,
+                                *member_sym,
+                                var,
+                            )
+                            .expect("Ability specialization is unknown - code generation cannot proceed!");
 
-                    let specialization = resolve_ability_specialization(
-                        self.subs,
-                        self.abilities_store,
-                        *member_sym,
-                        var,
-                    )
-                    .expect("Ability specialization is unknown - code generation cannot proceed!");
+                            self.abilities_store
+                                .insert_resolved(*specialization_id, specialization);
 
-                    // We must now refine the current type state to account for this specialization,
-                    // since `var` may only have partial specialization information - enough to
-                    // figure out what specialization we need, but not the types of all arguments
-                    // and return types. So, unify with the variable with the specialization's type.
-                    let specialization_def = self
-                        .procs
-                        .partial_procs
-                        .get_symbol(specialization)
-                        .expect("Specialization found, but it's not in procs");
-                    let specialization_var = specialization_def.annotation;
+                            debug_assert!(!self.specialized.contains(specialization_id));
+                            self.specialized.push(*specialization_id);
 
-                    let unified = unify(self.subs, var, specialization_var, Mode::EQ);
-                    unified.expect_success(
-                        "Specialization does not unify - this is a typechecker bug!",
-                    );
+                            // We must now refine the current type state to account for this specialization,
+                            // since `var` may only have partial specialization information - enough to
+                            // figure out what specialization we need, but not the types of all arguments
+                            // and return types. So, unify with the variable with the specialization's type.
+                            let specialization_def = self
+                                .procs
+                                .partial_procs
+                                .get_symbol(specialization)
+                                .expect("Specialization found, but it's not in procs");
+                            let specialization_var = specialization_def.annotation;
+
+                            let unified = unify(self.subs, var, specialization_var, Mode::EQ);
+                            unified.expect_success(
+                                "Specialization does not unify - this is a typechecker bug!",
+                            );
+
+                            (specialization, specialization_def)
+                        }
+                    };
 
                     // Now walk the specialization def to pick up any more needed types. Of course,
                     // we only want to pass through it once to avoid unbounded recursion.
@@ -2556,28 +2872,22 @@ fn resolve_abilities_in_specialized_body<'a>(
                         );
                         self.seen_defs.insert(specialization);
                     }
-
-                    self.abilities_store
-                        .insert_resolved(*specialization_id, specialization);
-
-                    debug_assert!(!self.specialized.contains(specialization_id));
-                    self.specialized.push(*specialization_id);
                 }
                 _ => walk_expr(self, expr, var),
             }
         }
     }
 
-    let mut specializer = Resolver {
+    let mut resolver = Resolver {
         subs: env.subs,
         procs,
         abilities_store: env.abilities_store,
         seen_defs: MutSet::default(),
         specialized: vec![],
     };
-    specializer.visit_expr(specialized_body, Region::zero(), body_var);
+    resolver.visit_expr(specialized_body, Region::zero(), body_var);
 
-    specializer.specialized
+    resolver.specialized
 }
 
 fn specialize_external<'a>(
@@ -3514,131 +3824,16 @@ pub fn with_hole<'a>(
                 }
             }
         }
-
-        LetNonRec(def, cont) => {
-            if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
-                if let Closure(closure_data) = def.loc_expr.value {
-                    register_noncapturing_closure(env, procs, symbol, closure_data);
-
-                    return with_hole(
-                        env,
-                        cont.value,
-                        variable,
-                        procs,
-                        layout_cache,
-                        assigned,
-                        hole,
-                    );
-                }
-                // special-case the form `let x = E in x`
-                // not doing so will drop the `hole`
-                match &cont.value {
-                    roc_can::expr::Expr::Var(original) if *original == symbol => {
-                        return with_hole(
-                            env,
-                            def.loc_expr.value,
-                            def.expr_var,
-                            procs,
-                            layout_cache,
-                            assigned,
-                            hole,
-                        );
-                    }
-                    _ => {}
-                }
-
-                let build_rest =
-                    |env: &mut Env<'a, '_>,
-                     procs: &mut Procs<'a>,
-                     layout_cache: &mut LayoutCache<'a>| {
-                        with_hole(
-                            env,
-                            cont.value,
-                            variable,
-                            procs,
-                            layout_cache,
-                            assigned,
-                            hole,
-                        )
-                    };
-
-                // a variable is aliased
-                if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
-                    // a variable is aliased, e.g.
-                    //
-                    //  foo = bar
-                    //
-                    // or
-                    //
-                    //  foo = RBTRee.empty
-
-                    handle_variable_aliasing(
-                        env,
-                        procs,
-                        layout_cache,
-                        def.expr_var,
-                        symbol,
-                        original,
-                        build_rest,
-                    )
-                } else {
-                    let rest = build_rest(env, procs, layout_cache);
-                    with_hole(
-                        env,
-                        def.loc_expr.value,
-                        def.expr_var,
-                        procs,
-                        layout_cache,
-                        symbol,
-                        env.arena.alloc(rest),
-                    )
-                }
-            } else {
-                // this may be a destructure pattern
-                let (mono_pattern, assignments) =
-                    match from_can_pattern(env, procs, layout_cache, &def.loc_pattern.value) {
-                        Ok(v) => v,
-                        Err(_runtime_error) => {
-                            // todo
-                            panic!();
-                        }
-                    };
-
-                let mut hole = hole;
-
-                for (symbol, variable, expr) in assignments {
-                    let stmt = with_hole(env, expr, variable, procs, layout_cache, symbol, hole);
-
-                    hole = env.arena.alloc(stmt);
-                }
-
-                // convert the continuation
-                let mut stmt = with_hole(
-                    env,
-                    cont.value,
-                    variable,
-                    procs,
-                    layout_cache,
-                    assigned,
-                    hole,
-                );
-
-                let outer_symbol = env.unique_symbol();
-                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
-
-                // convert the def body, store in outer_symbol
-                with_hole(
-                    env,
-                    def.loc_expr.value,
-                    def.expr_var,
-                    procs,
-                    layout_cache,
-                    outer_symbol,
-                    env.arena.alloc(stmt),
-                )
-            }
-        }
-        LetRec(defs, cont) => {
+        LetNonRec(def, cont) => from_can_let(
+            env,
+            procs,
+            layout_cache,
+            def,
+            cont,
+            variable,
+            Some((assigned, hole)),
+        ),
+        LetRec(defs, cont, _cycle_mark) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -3675,7 +3870,7 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
-        AbilityMember(_member, specialization_id) => {
+        AbilityMember(_member, specialization_id, _) => {
             let specialization_symbol = env
                 .abilities_store
                 .get_resolved(specialization_id)
@@ -4549,7 +4744,7 @@ pub fn with_hole<'a>(
                         hole,
                     )
                 }
-                roc_can::expr::Expr::AbilityMember(_, specialization_id) => {
+                roc_can::expr::Expr::AbilityMember(_, specialization_id, _) => {
                     let proc_name = env.abilities_store.get_resolved(specialization_id).expect(
                         "Ability specialization is unknown - code generation cannot proceed!",
                     );
@@ -5762,7 +5957,7 @@ pub fn from_can<'a>(
             )
         }
 
-        LetRec(defs, cont) => {
+        LetRec(defs, cont, _cycle_mark) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -5788,286 +5983,7 @@ pub fn from_can<'a>(
 
             from_can(env, variable, cont.value, procs, layout_cache)
         }
-        LetNonRec(def, cont) => {
-            if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                match def.loc_expr.value {
-                    roc_can::expr::Expr::Closure(closure_data) => {
-                        register_capturing_closure(env, procs, layout_cache, *symbol, closure_data);
-
-                        return from_can(env, variable, cont.value, procs, layout_cache);
-                    }
-                    roc_can::expr::Expr::Accessor(accessor_data) => {
-                        let fresh_record_symbol = env.unique_symbol();
-                        register_noncapturing_closure(
-                            env,
-                            procs,
-                            *symbol,
-                            accessor_data.to_closure_data(fresh_record_symbol),
-                        );
-
-                        return from_can(env, variable, cont.value, procs, layout_cache);
-                    }
-                    roc_can::expr::Expr::Var(original)
-                    | roc_can::expr::Expr::AbilityMember(original, _) => {
-                        // a variable is aliased, e.g.
-                        //
-                        //  foo = bar
-                        //
-                        // or
-                        //
-                        //  foo = RBTRee.empty
-
-                        // TODO: right now we need help out rustc with the closure types;
-                        // it isn't able to infer the right lifetime bounds. See if we
-                        // can remove the annotations in the future.
-                        let build_rest =
-                            |env: &mut Env<'a, '_>,
-                             procs: &mut Procs<'a>,
-                             layout_cache: &mut LayoutCache<'a>| {
-                                from_can(env, def.expr_var, cont.value, procs, layout_cache)
-                            };
-
-                        return handle_variable_aliasing(
-                            env,
-                            procs,
-                            layout_cache,
-                            def.expr_var,
-                            *symbol,
-                            original,
-                            build_rest,
-                        );
-                    }
-                    roc_can::expr::Expr::LetNonRec(nested_def, nested_cont) => {
-                        use roc_can::expr::Expr::*;
-                        // We must transform
-                        //
-                        //      let answer = 1337
-                        //      in
-                        //          let unused =
-                        //                  let nested = 17
-                        //                  in
-                        //                      nested
-                        //          in
-                        //              answer
-                        //
-                        // into
-                        //
-                        //      let answer = 1337
-                        //      in
-                        //          let nested = 17
-                        //          in
-                        //              let unused = nested
-                        //              in
-                        //                  answer
-
-                        let new_def = roc_can::def::Def {
-                            loc_pattern: def.loc_pattern,
-                            loc_expr: *nested_cont,
-                            pattern_vars: def.pattern_vars,
-                            annotation: def.annotation,
-                            expr_var: def.expr_var,
-                        };
-
-                        let new_inner = LetNonRec(Box::new(new_def), cont);
-
-                        let new_outer = LetNonRec(nested_def, Box::new(Loc::at_zero(new_inner)));
-
-                        return from_can(env, variable, new_outer, procs, layout_cache);
-                    }
-                    roc_can::expr::Expr::LetRec(nested_defs, nested_cont) => {
-                        use roc_can::expr::Expr::*;
-                        // We must transform
-                        //
-                        //      let answer = 1337
-                        //      in
-                        //          let unused =
-                        //                  let nested = \{} -> nested {}
-                        //                  in
-                        //                      nested
-                        //          in
-                        //              answer
-                        //
-                        // into
-                        //
-                        //      let answer = 1337
-                        //      in
-                        //          let nested = \{} -> nested {}
-                        //          in
-                        //              let unused = nested
-                        //              in
-                        //                  answer
-
-                        let new_def = roc_can::def::Def {
-                            loc_pattern: def.loc_pattern,
-                            loc_expr: *nested_cont,
-                            pattern_vars: def.pattern_vars,
-                            annotation: def.annotation,
-                            expr_var: def.expr_var,
-                        };
-
-                        let new_inner = LetNonRec(Box::new(new_def), cont);
-
-                        let new_outer = LetRec(nested_defs, Box::new(Loc::at_zero(new_inner)));
-
-                        return from_can(env, variable, new_outer, procs, layout_cache);
-                    }
-                    _ => {
-                        let rest = from_can(env, variable, cont.value, procs, layout_cache);
-
-                        // Remove all the requested symbol specializations now, since this is the
-                        // def site and hence we won't need them any higher up.
-                        let mut needed_specializations =
-                            procs.symbol_specializations.remove(*symbol);
-
-                        if needed_specializations.len() == 0 {
-                            // We don't need any specializations, that means this symbol is never
-                            // referenced.
-                            return with_hole(
-                                env,
-                                def.loc_expr.value,
-                                def.expr_var,
-                                procs,
-                                layout_cache,
-                                *symbol,
-                                env.arena.alloc(rest),
-                            );
-                        }
-
-                        // We do need specializations
-
-                        let mut stmt = rest;
-
-                        if needed_specializations.len() == 1 {
-                            let (_specialization_mark, (var, specialized_symbol)) =
-                                needed_specializations.next().unwrap();
-
-                            // Unify the expr_var with the requested specialization once.
-                            let _res =
-                                roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
-
-                            resolve_abilities_in_specialized_body(
-                                env,
-                                procs,
-                                &def.loc_expr.value,
-                                def.expr_var,
-                            );
-
-                            return with_hole(
-                                env,
-                                def.loc_expr.value,
-                                def.expr_var,
-                                procs,
-                                layout_cache,
-                                specialized_symbol,
-                                env.arena.alloc(stmt),
-                            );
-                        } else {
-                            // Need to eat the cost and create a specialized version of the body for each specialization.
-                            for (_specialization_mark, (var, specialized_symbol)) in
-                                needed_specializations
-                            {
-                                use crate::copy::deep_copy_type_vars_into_expr;
-
-                                let (new_def_expr_var, specialized_expr) =
-                                    deep_copy_type_vars_into_expr(
-                                        env.arena,
-                                        env.subs,
-                                        def.expr_var,
-                                        &def.loc_expr.value
-                                    ).expect("expr marked as having specializations, but it has no type variables!");
-
-                                let _res = roc_unify::unify::unify(
-                                    env.subs,
-                                    var,
-                                    new_def_expr_var,
-                                    Mode::EQ,
-                                );
-
-                                resolve_abilities_in_specialized_body(
-                                    env,
-                                    procs,
-                                    &def.loc_expr.value,
-                                    def.expr_var,
-                                );
-
-                                stmt = with_hole(
-                                    env,
-                                    specialized_expr,
-                                    new_def_expr_var,
-                                    procs,
-                                    layout_cache,
-                                    specialized_symbol,
-                                    env.arena.alloc(stmt),
-                                );
-                            }
-
-                            return stmt;
-                        }
-                    }
-                }
-            }
-
-            // this may be a destructure pattern
-            let (mono_pattern, assignments) =
-                match from_can_pattern(env, procs, layout_cache, &def.loc_pattern.value) {
-                    Ok(v) => v,
-                    Err(_) => todo!(),
-                };
-
-            if let Pattern::Identifier(_symbol) = mono_pattern {
-                internal_error!("Identifier patterns should be handled in a higher code pass!")
-            }
-
-            // convert the continuation
-            let mut stmt = from_can(env, variable, cont.value, procs, layout_cache);
-
-            // layer on any default record fields
-            for (symbol, variable, expr) in assignments {
-                let specialization_symbol = procs
-                    .symbol_specializations
-                    .remove_single(symbol)
-                    // Can happen when the symbol was never used under this body, and hence has no
-                    // requested specialization.
-                    .unwrap_or(symbol);
-
-                let hole = env.arena.alloc(stmt);
-                stmt = with_hole(
-                    env,
-                    expr,
-                    variable,
-                    procs,
-                    layout_cache,
-                    specialization_symbol,
-                    hole,
-                );
-            }
-
-            if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
-                store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-            } else {
-                let outer_symbol = env.unique_symbol();
-                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
-
-                resolve_abilities_in_specialized_body(
-                    env,
-                    procs,
-                    &def.loc_expr.value,
-                    def.expr_var,
-                );
-
-                // convert the def body, store in outer_symbol
-                with_hole(
-                    env,
-                    def.loc_expr.value,
-                    def.expr_var,
-                    procs,
-                    layout_cache,
-                    outer_symbol,
-                    env.arena.alloc(stmt),
-                )
-            }
-        }
-
+        LetNonRec(def, cont) => from_can_let(env, procs, layout_cache, def, cont, variable, None),
         _ => {
             let symbol = env.unique_symbol();
             let hole = env.arena.alloc(Stmt::Ret(symbol));
@@ -7057,7 +6973,7 @@ fn can_reuse_symbol<'a>(
     use ReuseSymbol::*;
 
     let symbol = match expr {
-        AbilityMember(_, specialization_id) => env
+        AbilityMember(_, specialization_id, _) => env
             .abilities_store
             .get_resolved(*specialization_id)
             .expect("Specialization must be known!"),

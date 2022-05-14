@@ -2,10 +2,13 @@ use crate::structs::Structs;
 use crate::types::{TypeId, Types};
 use crate::{enums::Enums, types::RocType};
 use bumpalo::Bump;
+use roc_builtins::bitcode::{FloatWidth::*, IntWidth::*};
+use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::layout::{Layout, LayoutCache};
+use roc_mono::layout::{cmp_fields, ext_var_is_empty_tag_union, Builtin, Layout, LayoutCache};
+use roc_types::subs::UnionTags;
 use roc_types::{
-    subs::{Content, FlatType, RecordFields, Subs, Variable},
+    subs::{Content, FlatType, Subs, Variable},
     types::RecordField,
 };
 
@@ -18,174 +21,371 @@ pub struct Env<'a> {
     pub enum_names: Enums,
 }
 
-pub fn add_type<'a>(
+pub fn add_type<'a>(env: &mut Env<'a>, var: Variable, types: &mut Types) -> TypeId {
+    let layout = env
+        .layout_cache
+        .from_var(env.arena, var, env.subs)
+        .expect("Something weird ended up in the content");
+
+    add_type_help(env, layout, var, None, types)
+}
+
+pub fn add_type_help<'a>(
     env: &mut Env<'a>,
     layout: Layout<'a>,
     var: Variable,
+    opt_name: Option<Symbol>,
     types: &mut Types,
 ) -> TypeId {
-    use roc_builtins::bitcode::FloatWidth::*;
-    use roc_builtins::bitcode::IntWidth::*;
-    use roc_mono::layout::Builtin;
-
     let subs = env.subs;
-    let content = subs.get_content_without_compacting(var);
 
-    let (opt_name, content) = match content {
-        Content::Alias(name, _variable, real_var, _kind) => {
-            // todo handle type variables
-            (Some(*name), subs.get_content_without_compacting(*real_var))
+    match subs.get_content_without_compacting(var) {
+        Content::FlexVar(_)
+        | Content::RigidVar(_)
+        | Content::FlexAbleVar(_, _)
+        | Content::RigidAbleVar(_, _)
+        | Content::RecursionVar { .. } => {
+            todo!("TODO give a nice error message for a non-concrete type being passed to the host")
         }
-        _ => (None, content),
-    };
+        Content::Structure(FlatType::Record(fields, ext)) => {
+            let it = fields
+                .unsorted_iterator(subs, *ext)
+                .expect("something weird in content")
+                .flat_map(|(label, field)| {
+                    match field {
+                        RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
+                            Some((label.clone(), field_var))
+                        }
+                        RecordField::Optional(_) => {
+                            // drop optional fields
+                            None
+                        }
+                    }
+                });
 
-    match layout {
-        Layout::Builtin(builtin) => match builtin {
-            Builtin::Int(width) => match width {
-                U8 => types.add(RocType::U8),
-                U16 => types.add(RocType::U16),
-                U32 => types.add(RocType::U32),
-                U64 => types.add(RocType::U64),
-                U128 => types.add(RocType::U128),
-                I8 => types.add(RocType::I8),
-                I16 => types.add(RocType::I16),
-                I32 => types.add(RocType::I32),
-                I64 => types.add(RocType::I64),
-                I128 => types.add(RocType::I128),
-            },
-            Builtin::Float(width) => match width {
-                F32 => types.add(RocType::F32),
-                F64 => types.add(RocType::F64),
-                F128 => types.add(RocType::F128),
-            },
-            Builtin::Bool => types.add(RocType::Bool),
-            Builtin::Decimal => types.add(RocType::RocDec),
-            Builtin::Str => types.add(RocType::RocStr),
-            Builtin::Dict(key_layout, val_layout) => {
-                // TODO FIXME this `var` is wrong - should have a different `var` for key and for val
-                let key_id = add_type(env, *key_layout, var, types);
-                let val_id = add_type(env, *val_layout, var, types);
-                let dict_id = types.add(RocType::RocDict(key_id, val_id));
+            let name = match opt_name {
+                Some(sym) => sym.as_str(env.interns).to_string(),
+                None => env.struct_names.get_name(var),
+            };
 
-                types.depends(dict_id, key_id);
-                types.depends(dict_id, val_id);
+            add_struct(env, name, it, types)
+        }
+        Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+            debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 
-                dict_id
-            }
-            Builtin::Set(elem_layout) => {
-                let elem_id = add_type(env, *elem_layout, var, types);
-                let set_id = types.add(RocType::RocSet(elem_id));
-
-                types.depends(set_id, elem_id);
-
-                set_id
-            }
-            Builtin::List(elem_layout) => {
-                let elem_id = add_type(env, *elem_layout, var, types);
-                let list_id = types.add(RocType::RocList(elem_id));
-
-                types.depends(list_id, elem_id);
-
-                list_id
-            }
-        },
-        Layout::Struct { .. } => {
-            match content {
-                Content::FlexVar(_)
-                | Content::RigidVar(_)
-                | Content::FlexAbleVar(_, _)
-                | Content::RigidAbleVar(_, _)
-                | Content::RecursionVar { .. } => {
-                    todo!("TODO give a nice error message for a non-concrete type being passed to the host")
+            add_tag_union(env, opt_name, tags, var, types)
+        }
+        Content::Structure(FlatType::Apply(symbol, _)) => {
+            if symbol.is_builtin() {
+                match layout {
+                    Layout::Builtin(builtin) => {
+                        add_builtin_type(env, builtin, var, opt_name, types)
+                    }
+                    _ => {
+                        unreachable!()
+                    }
                 }
-                Content::Structure(FlatType::Record(fields, ext)) => {
-                    add_struct(env, opt_name, fields, var, *ext, types)
-                }
-                Content::Structure(FlatType::TagUnion(tags, _)) => {
-                    debug_assert_eq!(tags.len(), 1);
-                    todo!()
-
-                    // let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
-                    // single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, payload_vars)
-                }
-
-                Content::Structure(FlatType::Apply(_, _)) => {
-                    todo!()
-                }
-                Content::Structure(FlatType::Func(_, _, _)) => {
-                    todo!()
-                }
-                Content::Structure(FlatType::FunctionOrTagUnion(_, _, _)) => {
-                    todo!()
-                }
-                Content::Structure(FlatType::RecursiveTagUnion(_, _, _)) => {
-                    todo!()
-                }
-                Content::Structure(FlatType::Erroneous(_)) => todo!(),
-                Content::Structure(FlatType::EmptyRecord) => todo!(),
-                Content::Structure(FlatType::EmptyTagUnion) => todo!(),
-                Content::Alias(_, _, _, _) => todo!(),
-                Content::RangedNumber(_, _) => todo!(),
-                Content::Error => todo!(),
+            } else {
+                todo!("Handle non-builtin Apply")
             }
         }
-        Layout::Boxed(_) => todo!("support Box in host bindgen"),
-        Layout::Union(_) => todo!("support tag unions in host bindgen"),
-        Layout::LambdaSet(_) => todo!("support functions in host bindgen"),
-        Layout::RecursivePointer => todo!("support recursive pointers in host bindgen"),
+        Content::Structure(FlatType::Func(_, _, _)) => {
+            todo!()
+        }
+        Content::Structure(FlatType::FunctionOrTagUnion(_, _, _)) => {
+            todo!()
+        }
+        Content::Structure(FlatType::RecursiveTagUnion(_, _, _)) => {
+            todo!()
+        }
+        Content::Structure(FlatType::Erroneous(_)) => todo!(),
+        Content::Structure(FlatType::EmptyRecord) => todo!(),
+        Content::Structure(FlatType::EmptyTagUnion) => {
+            // This can happen when unwrapping a tag union; don't do anything.
+            todo!()
+        }
+        Content::Alias(name, _, real_var, _) => {
+            if name.is_builtin() {
+                match layout {
+                    Layout::Builtin(builtin) => {
+                        add_builtin_type(env, builtin, var, opt_name, types)
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                }
+            } else {
+                // If this was a non-builtin type alias, we can use that alias name
+                // in the generated bindings.
+                add_type_help(env, layout, *real_var, Some(*name), types)
+            }
+        }
+        Content::RangedNumber(_, _) => todo!(),
+        Content::Error => todo!(),
     }
 }
 
-fn add_struct(
-    env: &mut Env<'_>,
-    opt_name: Option<Symbol>,
-    record_fields: &RecordFields,
+pub fn add_builtin_type<'a>(
+    env: &mut Env<'a>,
+    builtin: Builtin<'a>,
     var: Variable,
-    ext: Variable,
+    opt_name: Option<Symbol>,
+    types: &mut Types,
+) -> TypeId {
+    match builtin {
+        Builtin::Int(width) => match width {
+            U8 => types.add(RocType::U8),
+            U16 => types.add(RocType::U16),
+            U32 => types.add(RocType::U32),
+            U64 => types.add(RocType::U64),
+            U128 => types.add(RocType::U128),
+            I8 => types.add(RocType::I8),
+            I16 => types.add(RocType::I16),
+            I32 => types.add(RocType::I32),
+            I64 => types.add(RocType::I64),
+            I128 => types.add(RocType::I128),
+        },
+        Builtin::Float(width) => match width {
+            F32 => types.add(RocType::F32),
+            F64 => types.add(RocType::F64),
+            F128 => types.add(RocType::F128),
+        },
+        Builtin::Bool => types.add(RocType::Bool),
+        Builtin::Decimal => types.add(RocType::RocDec),
+        Builtin::Str => types.add(RocType::RocStr),
+        Builtin::Dict(key_layout, val_layout) => {
+            // TODO FIXME this `var` is wrong - should have a different `var` for key and for val
+            let key_id = add_type_help(env, *key_layout, var, opt_name, types);
+            let val_id = add_type_help(env, *val_layout, var, opt_name, types);
+            let dict_id = types.add(RocType::RocDict(key_id, val_id));
+
+            types.depends(dict_id, key_id);
+            types.depends(dict_id, val_id);
+
+            dict_id
+        }
+        Builtin::Set(elem_layout) => {
+            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
+            let set_id = types.add(RocType::RocSet(elem_id));
+
+            types.depends(set_id, elem_id);
+
+            set_id
+        }
+        Builtin::List(elem_layout) => {
+            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
+            let list_id = types.add(RocType::RocList(elem_id));
+
+            types.depends(list_id, elem_id);
+
+            list_id
+        }
+    }
+}
+
+fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
+    env: &mut Env<'_>,
+    name: String,
+    fields: I,
     types: &mut Types,
 ) -> TypeId {
     let subs = env.subs;
-    let mut pairs = bumpalo::collections::Vec::with_capacity_in(record_fields.len(), env.arena);
-    let it = record_fields
-        .unsorted_iterator(subs, ext)
-        .expect("something weird in content");
+    let fields_iter = fields.into_iter();
+    let mut sortables = bumpalo::collections::Vec::with_capacity_in(
+        fields_iter.size_hint().1.unwrap_or_default(),
+        env.arena,
+    );
 
-    for (label, field) in it {
-        // drop optional fields
-        let var = match field {
-            RecordField::Optional(_) => continue,
-            RecordField::Required(var) => var,
-            RecordField::Demanded(var) => var,
-        };
-
-        pairs.push((
+    for (label, field_var) in fields_iter {
+        sortables.push((
             label,
-            var,
-            env.layout_cache.from_var(env.arena, var, subs).unwrap(),
+            field_var,
+            env.layout_cache
+                .from_var(env.arena, field_var, subs)
+                .unwrap(),
         ));
     }
 
-    pairs.sort_by(|(label1, _, layout1), (label2, _, layout2)| {
-        let size1 = layout1.alignment_bytes(env.layout_cache.target_info);
-        let size2 = layout2.alignment_bytes(env.layout_cache.target_info);
-
-        size2.cmp(&size1).then(label1.cmp(label2))
+    sortables.sort_by(|(label1, _, layout1), (label2, _, layout2)| {
+        cmp_fields(
+            label1,
+            layout1,
+            label2,
+            layout2,
+            env.layout_cache.target_info,
+        )
     });
 
-    let fields = pairs
+    let fields = sortables
         .into_iter()
         .map(|(label, field_var, field_layout)| {
             (
                 label.to_string(),
-                add_type(env, field_layout, field_var, types),
+                add_type_help(env, field_layout, field_var, None, types),
             )
         })
         .collect();
 
+    types.add(RocType::Struct { name, fields })
+}
+
+fn add_tag_union(
+    env: &mut Env<'_>,
+    opt_name: Option<Symbol>,
+    union_tags: &UnionTags,
+    var: Variable,
+    types: &mut Types,
+) -> TypeId {
+    let subs = env.subs;
+    let mut tags: Vec<(String, Vec<Variable>)> = union_tags
+        .iter_from_subs(subs)
+        .map(|(tag_name, payload_vars)| {
+            let name_str = match tag_name {
+                TagName::Tag(uppercase) => uppercase.as_str().to_string(),
+                TagName::Closure(_) => unreachable!(),
+            };
+
+            (name_str, payload_vars.to_vec())
+        })
+        .collect();
+
+    if tags.len() == 1 {
+        let (tag_name, payload_vars) = tags.pop().unwrap();
+
+        // If there was a type alias name, use that. Otherwise use the tag name.
+        let name = match opt_name {
+            Some(sym) => sym.as_str(env.interns).to_string(),
+            None => tag_name,
+        };
+
+        return match payload_vars.len() {
+            0 => {
+                // This is a single-tag union with no payload, e.g. `[ Foo ]`
+                // so just generate an empty record
+                types.add(RocType::Struct {
+                    name,
+                    fields: Vec::new(),
+                })
+            }
+            1 => {
+                // This is a single-tag union with 1 payload field, e.g.`[ Foo Str ]`.
+                // We'll just wrap that.
+                let var = *payload_vars.get(0).unwrap();
+                let content = add_type(env, var, types);
+
+                types.add(RocType::TransparentWrapper { name, content })
+            }
+            _ => {
+                // This is a single-tag union with multiple payload field, e.g.`[ Foo Str U32 ]`.
+                // Generate a record.
+                let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
+                    let field_name = format!("f{}", index).into();
+
+                    (field_name, *payload_var)
+                });
+
+                add_struct(env, name, fields, types)
+            }
+        };
+    }
+
     let name = match opt_name {
         Some(sym) => sym.as_str(env.interns).to_string(),
-        None => env.struct_names.get_name(var),
+        None => env.enum_names.get_name(var),
     };
 
-    types.add(RocType::Struct { name, fields })
+    // Sort tags alphabetically by tag name
+    tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+
+    let tags: Vec<_> =
+        tags.into_iter()
+            .map(|(tag_name, payload_vars)| {
+                match payload_vars.len() {
+                    0 => {
+                        // no payload
+                        (tag_name, None)
+                    }
+                    1 => {
+                        // there's 1 payload item, so it doesn't need its own
+                        // struct - e.g. for `[ Foo Str, Bar Str ]` both of them
+                        // can have payloads of plain old Str, no struct wrapper needed.
+                        let payload_var = payload_vars.get(0).unwrap();
+                        let payload_id = add_type(env, *payload_var, types);
+
+                        (tag_name, Some(payload_id))
+                    }
+                    _ => {
+                        // create a struct type for the payload and save it
+
+                        let struct_name = format!("{}_{}", name, tag_name); // e.g. "MyUnion_MyVariant"
+
+                        let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
+                            (format!("f{}", index).into(), *payload_var)
+                        });
+                        let struct_id = add_struct(env, struct_name, fields, types);
+
+                        (tag_name, Some(struct_id))
+                    }
+                }
+            })
+            .collect();
+
+    let typ = match env.layout_cache.from_var(env.arena, var, subs).unwrap() {
+        Layout::Struct { .. } => {
+            // a single-tag union with multiple payload values, e.g. [ Foo Str Str ]
+            unreachable!()
+        }
+        Layout::Union(union_layout) => {
+            use roc_mono::layout::UnionLayout::*;
+
+            match union_layout {
+                // A non-recursive tag union
+                // e.g. `Result ok err : [ Ok ok, Err err ]`
+                NonRecursive(_) => RocType::TagUnion { name, tags },
+                // A recursive tag union (general case)
+                // e.g. `Expr : [ Sym Str, Add Expr Expr ]`
+                Recursive(_) => {
+                    todo!()
+                }
+                // A recursive tag union with just one constructor
+                // Optimization: No need to store a tag ID (the payload is "unwrapped")
+                // e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
+                NonNullableUnwrapped(_) => {
+                    todo!()
+                }
+                // A recursive tag union that has an empty variant
+                // Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
+                // It has more than one other variant, so they need tag IDs (payloads are "wrapped")
+                // e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
+                // see also: https://youtu.be/ip92VMpf_-A?t=164
+                NullableWrapped { .. } => {
+                    todo!()
+                }
+                // A recursive tag union with only two variants, where one is empty.
+                // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
+                // e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
+                NullableUnwrapped { .. } => {
+                    todo!()
+                }
+            }
+        }
+        Layout::Builtin(builtin) => match builtin {
+            Builtin::Int(_) => RocType::Enumeration {
+                name,
+                tags: tags.into_iter().map(|(tag_name, _)| tag_name).collect(),
+            },
+            Builtin::Bool => RocType::Bool,
+            Builtin::Float(_)
+            | Builtin::Decimal
+            | Builtin::Str
+            | Builtin::Dict(_, _)
+            | Builtin::Set(_)
+            | Builtin::List(_) => unreachable!(),
+        },
+        Layout::Boxed(_) | Layout::LambdaSet(_) | Layout::RecursivePointer => {
+            unreachable!()
+        }
+    };
+
+    types.add(typ)
 }

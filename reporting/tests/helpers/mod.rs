@@ -168,9 +168,10 @@ pub fn can_expr_with<'a>(
     let mut constraints = Constraints::new();
     let constraint = constrain_expr(
         &mut constraints,
-        &roc_constrain::expr::Env {
+        &mut roc_constrain::expr::Env {
             rigids: MutMap::default(),
             home,
+            resolutions_to_make: vec![],
         },
         loc_expr.region,
         &loc_expr.value,
@@ -285,11 +286,11 @@ where
 }
 
 #[allow(dead_code)]
-pub fn fixtures_dir<'a>() -> PathBuf {
+pub fn fixtures_dir() -> PathBuf {
     Path::new("tests").join("fixtures").join("build")
 }
 
 #[allow(dead_code)]
-pub fn builtins_dir<'a>() -> PathBuf {
+pub fn builtins_dir() -> PathBuf {
     PathBuf::new().join("builtins")
 }

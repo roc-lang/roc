@@ -1,8 +1,10 @@
 use core::mem::align_of;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::VecMap;
+use roc_mono::layout::UnionLayout;
 use roc_std::RocDec;
 use roc_target::TargetInfo;
+use std::convert::TryInto;
 use ven_graph::topological_sort;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -118,15 +120,24 @@ pub enum RocType {
     RocBox(TypeId),
     RecursiveTagUnion {
         name: String,
-        tags: Vec<(String, Vec<TypeId>)>,
+        tags: Vec<(String, Option<TypeId>)>,
+    },
+    Enumeration {
+        name: String,
+        tags: Vec<String>,
     },
     TagUnion {
         name: String,
-        tags: Vec<(String, Vec<TypeId>)>,
+        tags: Vec<(String, Option<TypeId>)>,
     },
     Struct {
         name: String,
         fields: Vec<(String, TypeId)>,
+    },
+    /// Either a single-tag union or a single-field record
+    TransparentWrapper {
+        name: String,
+        content: TypeId,
     },
 }
 
@@ -148,6 +159,7 @@ impl RocType {
             | RocType::F32
             | RocType::F64
             | RocType::F128
+            | RocType::Enumeration { .. }
             | RocType::RocDec => false,
             RocType::RocStr
             | RocType::RocList(_)
@@ -161,6 +173,7 @@ impl RocType {
             RocType::Struct { fields, .. } => fields
                 .iter()
                 .any(|(_, id)| types.get(*id).has_pointer(types)),
+            RocType::TransparentWrapper { content, .. } => types.get(*content).has_pointer(types),
         }
     }
 
@@ -180,7 +193,8 @@ impl RocType {
             | RocType::U64
             | RocType::I128
             | RocType::U128
-            | RocType::RocDec => false,
+            | RocType::RocDec
+            | RocType::Enumeration { .. } => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
                 types.get(*id).has_float(types)
             }
@@ -193,13 +207,16 @@ impl RocType {
             RocType::Struct { fields, .. } => {
                 fields.iter().any(|(_, id)| types.get(*id).has_float(types))
             }
+            RocType::TransparentWrapper { content, .. } => types.get(*content).has_float(types),
         }
     }
 
     /// Useful when determining whether to derive Default in a Rust type.
-    pub fn has_tag_union(&self, types: &Types) -> bool {
+    pub fn has_enumeration(&self, types: &Types) -> bool {
         match self {
-            RocType::RecursiveTagUnion { .. } | RocType::TagUnion { .. } => true,
+            RocType::RecursiveTagUnion { .. }
+            | RocType::TagUnion { .. }
+            | RocType::Enumeration { .. } => true,
             RocType::RocStr
             | RocType::Bool
             | RocType::I8
@@ -217,14 +234,18 @@ impl RocType {
             | RocType::F128
             | RocType::RocDec => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get(*id).has_tag_union(types)
+                types.get(*id).has_enumeration(types)
             }
             RocType::RocDict(key_id, val_id) => {
-                types.get(*key_id).has_tag_union(types) || types.get(*val_id).has_tag_union(types)
+                types.get(*key_id).has_enumeration(types)
+                    || types.get(*val_id).has_enumeration(types)
             }
             RocType::Struct { fields, .. } => fields
                 .iter()
-                .any(|(_, id)| types.get(*id).has_tag_union(types)),
+                .any(|(_, id)| types.get(*id).has_enumeration(types)),
+            RocType::TransparentWrapper { content, .. } => {
+                types.get(*content).has_enumeration(types)
+            }
         }
     }
 
@@ -282,6 +303,13 @@ impl RocType {
             RocType::F32 => FloatWidth::F32.alignment_bytes(target_info) as usize,
             RocType::F64 => FloatWidth::F64.alignment_bytes(target_info) as usize,
             RocType::F128 => FloatWidth::F128.alignment_bytes(target_info) as usize,
+            RocType::TransparentWrapper { content, .. } => {
+                types.get(*content).alignment(types, target_info)
+            }
+            RocType::Enumeration { tags, .. } => UnionLayout::discriminant_size(tags.len())
+                .stack_size()
+                .try_into()
+                .unwrap(),
         }
     }
 }

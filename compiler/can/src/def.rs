@@ -29,6 +29,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::ShadowKind;
 use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
+use roc_types::subs::IllegalCycleMark;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
@@ -159,8 +160,10 @@ impl PendingTypeDef<'_> {
 #[allow(clippy::large_enum_variant)]
 pub enum Declaration {
     Declare(Def),
-    DeclareRec(Vec<Def>),
+    DeclareRec(Vec<Def>, IllegalCycleMark),
     Builtin(Def),
+    /// If we know a cycle is illegal during canonicalization.
+    /// Otherwise we will try to detect this during solving; see [`IllegalCycleMark`].
     InvalidCycle(Vec<CycleEntry>),
 }
 
@@ -169,7 +172,7 @@ impl Declaration {
         use Declaration::*;
         match self {
             Declare(_) => 1,
-            DeclareRec(defs) => defs.len(),
+            DeclareRec(defs, _) => defs.len(),
             InvalidCycle { .. } => 0,
             Builtin(_) => 0,
         }
@@ -749,6 +752,7 @@ impl DefOrdering {
 #[inline(always)]
 pub(crate) fn sort_can_defs_new(
     env: &mut Env<'_>,
+    var_store: &mut VarStore,
     defs: CanDefs,
     mut output: Output,
 ) -> (Declarations, Output) {
@@ -900,6 +904,7 @@ pub(crate) fn sort_can_defs_new(
 #[inline(always)]
 pub(crate) fn sort_can_defs(
     env: &mut Env<'_>,
+    var_store: &mut VarStore,
     defs: CanDefs,
     mut output: Output,
 ) -> (Vec<Declaration>, Output) {
@@ -935,7 +940,7 @@ pub(crate) fn sort_can_defs(
     // recursive relations between any 2 definitions.
     let sccs = def_ordering.references.strongly_connected_components_all();
 
-    let mut declarations = Vec::new();
+    let mut declarations = Vec::with_capacity(defs.len());
 
     for group in sccs.groups() {
         if group.count_ones() == 1 {
@@ -943,6 +948,10 @@ pub(crate) fn sort_can_defs(
             let index = group.iter_ones().next().unwrap();
 
             let def = take_def!(index);
+            let is_specialization = matches!(
+                def.loc_pattern.value,
+                Pattern::AbilityMemberSpecialization { .. }
+            );
 
             let declaration = if def_ordering.direct_references.get_row_col(index, index) {
                 // a definition like `x = x + 1`, which is invalid in roc
@@ -955,8 +964,13 @@ pub(crate) fn sort_can_defs(
 
                 Declaration::InvalidCycle(entries)
             } else if def_ordering.references.get_row_col(index, index) {
+                debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {:?} now, that's a bug!", def);
+
                 // this function calls itself, and must be typechecked as a recursive def
-                Declaration::DeclareRec(vec![mark_def_recursive(def)])
+                Declaration::DeclareRec(
+                    vec![mark_def_recursive(def)],
+                    IllegalCycleMark::new(var_store),
+                )
             } else {
                 Declaration::Declare(def)
             };
@@ -973,10 +987,16 @@ pub(crate) fn sort_can_defs(
             //
             // boom = \{} -> boom {}
             //
-            // In general we cannot spot faulty recursion (halting problem) so this is our best attempt
+            // In general we cannot spot faulty recursion (halting problem), so this is our
+            // purely-syntactic heuristic. We'll have a second attempt once we know the types in
+            // the cycle.
             let direct_sccs = def_ordering
                 .direct_references
                 .strongly_connected_components_subset(group);
+
+            debug_assert!(
+                !group.iter_ones().any(|index| matches!((&defs[index]).as_ref().unwrap().loc_pattern.value, Pattern::AbilityMemberSpecialization{..})),
+                "A specialization is involved in a recursive cycle - this should not be knowable until solving");
 
             let declaration = if direct_sccs.groups().count() == 1 {
                 // all defs are part of the same direct cycle, that is invalid!
@@ -999,7 +1019,7 @@ pub(crate) fn sort_can_defs(
                     .map(|index| mark_def_recursive(take_def!(index)))
                     .collect();
 
-                Declaration::DeclareRec(rec_defs)
+                Declaration::DeclareRec(rec_defs, IllegalCycleMark::new(var_store))
             };
 
             declarations.push(declaration);
@@ -1430,7 +1450,7 @@ pub fn can_defs_with_return<'a>(
         }
     }
 
-    let (declarations, output) = sort_can_defs(env, unsorted, output);
+    let (declarations, output) = sort_can_defs(env, var_store, unsorted, output);
 
     let mut loc_expr: Loc<Expr> = ret_expr;
 
@@ -1447,7 +1467,9 @@ pub fn can_defs_with_return<'a>(
 fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Expr {
     match decl {
         Declaration::Declare(def) => Expr::LetNonRec(Box::new(def), Box::new(loc_ret)),
-        Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret)),
+        Declaration::DeclareRec(defs, cycle_mark) => {
+            Expr::LetRec(defs, Box::new(loc_ret), cycle_mark)
+        }
         Declaration::InvalidCycle(entries) => {
             Expr::RuntimeError(RuntimeError::CircularDef(entries))
         }

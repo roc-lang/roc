@@ -59,9 +59,10 @@ pub enum ErrorTypeContext {
 
 struct ErrorTypeState {
     taken: MutSet<Lowercase>,
-    normals: u32,
+    letters_used: u32,
     problems: Vec<crate::types::Problem>,
     context: ErrorTypeContext,
+    recursive_tag_unions_seen: Vec<Variable>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1036,6 +1037,28 @@ pub fn new_marks(var_store: &mut VarStore) -> (RedundantMark, ExhaustiveMark) {
     )
 }
 
+/// Marks whether a recursive let-cycle was determined to be illegal during solving.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IllegalCycleMark(Variable);
+
+impl IllegalCycleMark {
+    pub fn new(var_store: &mut VarStore) -> Self {
+        Self(var_store.fresh())
+    }
+
+    pub fn variable_for_introduction(&self) -> Variable {
+        self.0
+    }
+
+    pub fn set_illegal(&self, subs: &mut Subs) {
+        subs.set_content(self.0, Content::Error);
+    }
+
+    pub fn is_illegal(&self, subs: &Subs) -> bool {
+        matches!(subs.get_content_without_compacting(self.0), Content::Error)
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Variable(u32);
 
@@ -1866,9 +1889,10 @@ impl Subs {
 
         let mut state = ErrorTypeState {
             taken,
-            normals: 0,
+            letters_used: 0,
             problems: Vec::new(),
             context,
+            recursive_tag_unions_seen: Vec::new(),
         };
 
         (var_to_err_type(self, &mut state, var), state.problems)
@@ -2172,23 +2196,6 @@ impl Content {
             Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _))
         )
     }
-
-    #[cfg(debug_assertions)]
-    #[allow(dead_code)]
-    pub fn dbg(self, subs: &Subs) -> Self {
-        let home = roc_module::symbol::ModuleIds::default().get_or_insert(&"#Dbg".into());
-        let interns = roc_module::symbol::Interns {
-            all_ident_ids: roc_module::symbol::IdentIds::exposed_builtins(0),
-            ..Default::default()
-        };
-
-        eprintln!(
-            "{}",
-            crate::pretty_print::content_to_string(&self, subs, home, &interns)
-        );
-
-        self
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2409,6 +2416,17 @@ impl UnionTags {
         self.tag_names()
             .into_iter()
             .zip(self.variables().into_iter())
+    }
+
+    /// Iterator over (TagName, &[Variable]) pairs obtained by
+    /// looking up slices in the given Subs
+    pub fn iter_from_subs<'a>(
+        &'a self,
+        subs: &'a Subs,
+    ) -> impl Iterator<Item = (&'a TagName, &'a [Variable])> + ExactSizeIterator {
+        self.iter_all().map(move |(name_index, payload_index)| {
+            (&subs[name_index], subs.get_subs_slice(subs[payload_index]))
+        })
     }
 
     #[inline(always)]
@@ -2644,12 +2662,13 @@ impl RecordFields {
             field_types_start,
         }
     }
+
     #[inline(always)]
     pub fn unsorted_iterator<'a>(
         &'a self,
         subs: &'a Subs,
         ext: Variable,
-    ) -> Result<impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a, RecordFieldsError>
+    ) -> Result<impl Iterator<Item = (&'a Lowercase, RecordField<Variable>)> + 'a, RecordFieldsError>
     {
         let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext)?;
 
@@ -3354,7 +3373,10 @@ fn content_to_err_type(
             ErrorType::RigidAbleVar(name, ability)
         }
 
-        RecursionVar { opt_name, .. } => {
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
             let name = match opt_name {
                 Some(name_index) => subs.field_names[name_index.index as usize].clone(),
                 None => {
@@ -3367,7 +3389,11 @@ fn content_to_err_type(
                 }
             };
 
-            ErrorType::FlexVar(name)
+            if state.recursive_tag_unions_seen.contains(&var) {
+                ErrorType::FlexVar(name)
+            } else {
+                var_to_err_type(subs, state, structure)
+            }
         }
 
         Alias(symbol, args, aliased_to, kind) => {
@@ -3548,6 +3574,8 @@ fn flat_type_to_err_type(
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {
+            state.recursive_tag_unions_seen.push(rec_var);
+
             let mut err_tags = SendMap::default();
 
             for (name_index, slice_index) in tags.iter_all() {
@@ -3598,11 +3626,12 @@ fn flat_type_to_err_type(
 }
 
 fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
-    let (name, new_index) = name_type_var(state.normals, &mut state.taken.iter(), |var, str| {
-        var.as_str() == str
-    });
+    let (name, new_index) =
+        name_type_var(state.letters_used, &mut state.taken.iter(), |var, str| {
+            var.as_str() == str
+        });
 
-    state.normals = new_index;
+    state.letters_used = new_index;
 
     state.taken.insert(name.clone());
 

@@ -489,7 +489,7 @@ fn lex_string(bytes: &[u8]) -> (Token, usize) {
 }
 
 #[cfg(test)]
-mod tokenizer {
+mod test_tokenizer {
     use super::Token;
     use crate::tokenizer::tokenize;
 
@@ -566,7 +566,7 @@ mod tokenizer {
     when dict is
         Empty ->
             4
-    
+
         Node ->
             5"#,
         );

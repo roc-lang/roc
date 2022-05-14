@@ -92,7 +92,7 @@ mod cli_run {
         let (before_first_digit, _) = err.split_at(err.rfind("found in ").unwrap());
         let err = format!("{}found in <ignored for test> ms.", before_first_digit);
 
-        assert_multiline_str_eq!(err.as_str(), expected.into());
+        assert_multiline_str_eq!(err.as_str(), expected);
     }
 
     fn check_format_check_as_expected(file: &Path, expects_success_exit_code: bool) {
@@ -122,10 +122,9 @@ mod cli_run {
             ),
         };
 
-        if !compile_out.stderr.is_empty() &&
-            // If there is any stderr, it should be reporting the runtime and that's it!
-            !(compile_out.stderr.starts_with("runtime: ")
-                && compile_out.stderr.ends_with("ms\n"))
+        // If there is any stderr, it should be reporting the runtime and that's it!
+        if !(compile_out.stderr.is_empty()
+            || compile_out.stderr.starts_with("runtime: ") && compile_out.stderr.ends_with("ms\n"))
         {
             panic!(
                 "`roc` command had unexpected stderr: {}",
@@ -165,7 +164,7 @@ mod cli_run {
                     if use_valgrind && ALLOW_VALGRIND {
                         let (valgrind_out, raw_xml) = if let Some(ref input_file) = input_file {
                             run_with_valgrind(
-                                stdin.clone().iter().copied(),
+                                stdin.iter().copied(),
                                 &[
                                     file.with_file_name(executable_filename).to_str().unwrap(),
                                     input_file.clone().to_str().unwrap(),
@@ -173,7 +172,7 @@ mod cli_run {
                             )
                         } else {
                             run_with_valgrind(
-                                stdin.clone().iter().copied(),
+                                stdin.iter().copied(),
                                 &[file.with_file_name(executable_filename).to_str().unwrap()],
                             )
                         };

@@ -163,7 +163,6 @@ export fn roc_fx_putLine(rocPath: *str.RocStr) callconv(.C) void {
 
 const GetInt = extern struct {
     value: i64,
-    error_code: bool,
     is_error: bool,
 };
 
@@ -177,14 +176,14 @@ comptime {
 
 fn roc_fx_getInt_64bit() callconv(.C) GetInt {
     if (roc_fx_getInt_help()) |value| {
-        const get_int = GetInt{ .is_error = false, .value = value, .error_code = false };
+        const get_int = GetInt{ .is_error = false, .value = value };
         return get_int;
     } else |err| switch (err) {
         error.InvalidCharacter => {
-            return GetInt{ .is_error = true, .value = 0, .error_code = false };
+            return GetInt{ .is_error = true, .value = 0 };
         },
         else => {
-            return GetInt{ .is_error = true, .value = 0, .error_code = true };
+            return GetInt{ .is_error = true, .value = 0 };
         },
     }
 

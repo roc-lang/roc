@@ -109,6 +109,10 @@ impl<T> Slice<T> {
         self.length as _
     }
 
+    pub const fn start(&self) -> usize {
+        self.start as _
+    }
+
     pub const fn is_empty(&self) -> bool {
         self.length == 0
     }

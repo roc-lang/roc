@@ -23,7 +23,7 @@ use roc_repl_eval::{ReplApp, ReplAppMemory};
 use roc_reporting::report::DEFAULT_PALETTE;
 use roc_std::RocStr;
 use roc_target::TargetInfo;
-use roc_types::pretty_print::{content_to_string, name_all_type_vars};
+use roc_types::pretty_print::name_and_print_var;
 
 const BLUE: &str = "\u{001b}[36m";
 const PINK: &str = "\u{001b}[35m";
@@ -227,9 +227,8 @@ fn gen_and_eval_llvm<'a>(
     let main_fn_var = *main_fn_var;
 
     // pretty-print the expr type string for later.
-    name_all_type_vars(main_fn_var, &mut subs);
+    let expr_type_str = name_and_print_var(main_fn_var, &mut subs, home, &interns);
     let content = subs.get_content_without_compacting(main_fn_var);
-    let expr_type_str = content_to_string(content, &subs, home, &interns);
 
     let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(layout) => *layout,

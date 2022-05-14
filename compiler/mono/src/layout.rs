@@ -12,6 +12,7 @@ use roc_types::subs::{
     Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
+use std::cmp::Ordering;
 use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -416,11 +417,11 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    fn tag_id_builtin_help(union_size: usize) -> Builtin<'a> {
-        if union_size <= u8::MAX as usize {
-            Builtin::Int(IntWidth::U8)
-        } else if union_size <= u16::MAX as usize {
-            Builtin::Int(IntWidth::U16)
+    pub fn discriminant_size(num_tags: usize) -> IntWidth {
+        if num_tags <= u8::MAX as usize {
+            IntWidth::U8
+        } else if num_tags <= u16::MAX as usize {
+            IntWidth::U16
         } else {
             panic!("tag union is too big")
         }
@@ -430,16 +431,16 @@ impl<'a> UnionLayout<'a> {
         match self {
             UnionLayout::NonRecursive(tags) => {
                 let union_size = tags.len();
-                Self::tag_id_builtin_help(union_size)
+                Builtin::Int(Self::discriminant_size(union_size))
             }
             UnionLayout::Recursive(tags) => {
                 let union_size = tags.len();
 
-                Self::tag_id_builtin_help(union_size)
+                Builtin::Int(Self::discriminant_size(union_size))
             }
 
             UnionLayout::NullableWrapped { other_tags, .. } => {
-                Self::tag_id_builtin_help(other_tags.len() + 1)
+                Builtin::Int(Self::discriminant_size(other_tags.len() + 1))
             }
             UnionLayout::NonNullableUnwrapped(_) => Builtin::Bool,
             UnionLayout::NullableUnwrapped { .. } => Builtin::Bool,
@@ -1751,41 +1752,39 @@ fn layout_from_flat_type<'a>(
         Record(fields, ext_var) => {
             // extract any values from the ext_var
 
-            let mut pairs = Vec::with_capacity_in(fields.len(), arena);
+            let mut sortables = Vec::with_capacity_in(fields.len(), arena);
             let it = match fields.unsorted_iterator(subs, ext_var) {
                 Ok(it) => it,
                 Err(RecordFieldsError) => return Err(LayoutProblem::Erroneous),
             };
-            for (label, field) in it {
-                // drop optional fields
-                let var = match field {
-                    RecordField::Optional(_) => continue,
-                    RecordField::Required(var) => var,
-                    RecordField::Demanded(var) => var,
-                };
 
-                pairs.push((label, Layout::from_var(env, var)?));
+            for (label, field) in it {
+                match field {
+                    RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
+                        sortables.push((label, Layout::from_var(env, field_var)?));
+                    }
+                    RecordField::Optional(_) => {
+                        // drop optional fields
+                    }
+                }
             }
 
-            pairs.sort_by(|(label1, layout1), (label2, layout2)| {
-                let size1 = layout1.alignment_bytes(target_info);
-                let size2 = layout2.alignment_bytes(target_info);
-
-                size2.cmp(&size1).then(label1.cmp(label2))
+            sortables.sort_by(|(label1, layout1), (label2, layout2)| {
+                cmp_fields(label1, layout1, label2, layout2, target_info)
             });
 
             let ordered_field_names =
-                Vec::from_iter_in(pairs.iter().map(|(label, _)| *label), arena);
+                Vec::from_iter_in(sortables.iter().map(|(label, _)| *label), arena);
             let field_order_hash =
                 FieldOrderHash::from_ordered_fields(ordered_field_names.as_slice());
 
-            let mut layouts = Vec::from_iter_in(pairs.into_iter().map(|t| t.1), arena);
-
-            if layouts.len() == 1 {
+            if sortables.len() == 1 {
                 // If the record has only one field that isn't zero-sized,
                 // unwrap it.
-                Ok(layouts.pop().unwrap())
+                Ok(sortables.pop().unwrap().1)
             } else {
+                let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
+
                 Ok(Layout::Struct {
                     field_order_hash,
                     field_layouts: layouts.into_bump_slice(),
@@ -1951,10 +1950,7 @@ fn sort_record_fields_help<'a>(
         |(label1, _, res_layout1), (label2, _, res_layout2)| match res_layout1 {
             Ok(layout1) | Err(layout1) => match res_layout2 {
                 Ok(layout2) | Err(layout2) => {
-                    let size1 = layout1.alignment_bytes(target_info);
-                    let size2 = layout2.alignment_bytes(target_info);
-
-                    size2.cmp(&size1).then(label1.cmp(label2))
+                    cmp_fields(label1, layout1, label2, layout2, target_info)
                 }
             },
         },
@@ -2920,4 +2916,21 @@ mod test {
         let target_info = TargetInfo::default_x86_64();
         assert_eq!(layout.stack_size_without_alignment(target_info), 5);
     }
+}
+
+/// Compare two fields when sorting them for code gen.
+/// This is called by both code gen and bindgen, so that
+/// their field orderings agree.
+#[inline(always)]
+pub fn cmp_fields(
+    label1: &Lowercase,
+    layout1: &Layout<'_>,
+    label2: &Lowercase,
+    layout2: &Layout<'_>,
+    target_info: TargetInfo,
+) -> Ordering {
+    let size1 = layout1.alignment_bytes(target_info);
+    let size2 = layout2.alignment_bytes(target_info);
+
+    size2.cmp(&size1).then(label1.cmp(label2))
 }

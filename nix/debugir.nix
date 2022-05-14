@@ -5,8 +5,8 @@ pkgs.stdenv.mkDerivation {
   src = pkgs.fetchFromGitHub {
     owner = "vaivaswatha";
     repo = "debugir";
-    rev = "db871e6cee7f653e284b226e2567a2574635247c";
-    sha256 = "0rgh9gawf92mjya1plxlgi9azkwca3gq8qa5hri18k4b7sbjm6lx";
+    rev = "b981e0b74872d9896ba447dd6391dfeb63332b80";
+    sha256 = "Gzey0SF0NZkpiObk5e29nbc41dn4Olv1dx+6YixaZH0=";
   };
   buildInputs = with pkgs; [ cmake libxml2 llvmPackages_13.llvm.dev ];
   buildPhase = ''
