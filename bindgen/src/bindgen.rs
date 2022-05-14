@@ -79,12 +79,20 @@ pub fn add_type_help<'a>(
 
             add_tag_union(env, opt_name, tag_vars, var, Some(*rec_var), types)
         }
-        Content::Structure(FlatType::Apply(_symbol, _)) => match layout {
-            Layout::Builtin(builtin) => add_builtin_type(env, builtin, var, opt_name, types),
-            _ => {
+        Content::Structure(FlatType::Apply(symbol, _)) => {
+            if symbol.is_builtin() {
+                match layout {
+                    Layout::Builtin(builtin) => {
+                        add_builtin_type(env, builtin, var, opt_name, types)
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                }
+            } else {
                 todo!("Handle non-builtin Apply")
             }
-        },
+        }
         Content::Structure(FlatType::Func(_, _, _)) => {
             todo!()
         }
@@ -187,33 +195,13 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
     types: &mut Types,
 ) -> TypeId {
     let subs = env.subs;
-    let fields_iter = &mut fields.into_iter();
-    let first_field = match fields_iter.next() {
-        Some(field) => field,
-        None => {
-            // This is an empty record; there's no more work to do!
-            return types.add(RocType::Struct {
-                name,
-                fields: Vec::new(),
-            });
-        }
-    };
-    let second_field = match fields_iter.next() {
-        Some(field) => field,
-        None => {
-            // This is a single-field record; unwrap that field.
-            return add_type(env, first_field.1, types);
-        }
-    };
+    let fields_iter = fields.into_iter();
     let mut sortables = bumpalo::collections::Vec::with_capacity_in(
-        2 + fields_iter.size_hint().1.unwrap_or_default(),
+        fields_iter.size_hint().1.unwrap_or_default(),
         env.arena,
     );
 
-    for (label, field_var) in std::iter::once(first_field)
-        .chain(std::iter::once(second_field))
-        .chain(fields_iter)
-    {
+    for (label, field_var) in fields_iter {
         sortables.push((
             label,
             field_var,
@@ -295,10 +283,11 @@ fn add_tag_union(
             }
             1 => {
                 // This is a single-tag union with 1 payload field, e.g.`[ Foo Str ]`.
-                // We'll just unwrap that.
+                // We'll just wrap that.
                 let var = *payload_vars.get(0).unwrap();
+                let content = add_type(env, var, types);
 
-                add_type(env, var, types)
+                types.add(RocType::TransparentWrapper { name, content })
             }
             _ => {
                 // This is a single-tag union with multiple payload field, e.g.`[ Foo Str U32 ]`.
