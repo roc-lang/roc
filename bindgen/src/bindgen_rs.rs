@@ -1,7 +1,5 @@
 use roc_mono::layout::UnionLayout;
 
-use indoc::indoc;
-
 use crate::types::{RocTagUnion, RocType, TypeId, Types};
 use std::{
     convert::TryInto,
@@ -94,8 +92,7 @@ fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
             write_derive(types.get(id), types, buf)?;
             writeln!(
                 buf,
-                "#[repr(transparent)]\npub struct {}({});",
-                name,
+                "#[repr(transparent)]\npub struct {name}({});",
                 type_name(*content, types)
             )
         }
@@ -115,7 +112,7 @@ fn write_discriminant(
     //     Bar,
     //     Foo,
     // }
-    let discriminant_name = format!("tag_{}", name);
+    let discriminant_name = format!("tag_{name}");
     let discriminant_type = RocType::TagUnion(RocTagUnion::Enumeration {
         name: discriminant_name.clone(),
         tags: tag_names.clone(),
@@ -150,19 +147,24 @@ fn write_tag_union(
     //     Bar: u128,
     //     Foo: core::mem::ManuallyDrop<roc_std::RocStr>,
     // }
-    let variant_name = format!("union_{}", name);
+    let variant_name = format!("union_{name}");
 
     {
         // No deriving for unions; we have to add the impls ourselves!
 
-        writeln!(buf, "\n#[repr(C)]\npub union {} {{", variant_name)?;
+        writeln!(
+            buf,
+            r#"
+#[repr(C)]
+pub union {variant_name} {{"#
+        )?;
 
         for (tag_name, opt_payload_id) in tags {
             // If there's no payload, we don't need a variant for it.
             if let Some(payload_id) = opt_payload_id {
                 let payload_type = types.get(*payload_id);
 
-                write!(buf, "{}{}: ", INDENT, tag_name)?;
+                write!(buf, "{INDENT}{tag_name}: ")?;
 
                 if payload_type.has_pointer(types) {
                     // types with pointers need ManuallyDrop
@@ -193,10 +195,14 @@ fn write_tag_union(
         // no deriving because it contains a union; we have to
         // generate the impls explicitly!
 
-        write!(
+        writeln!(
             buf,
-            "\n#[repr(C)]\npub struct {} {{\n{}variant: {},\n{}tag: {},\n}}\n",
-            name, INDENT, variant_name, INDENT, discriminant_name
+            r#"
+#[repr(C)]
+pub struct {name} {{
+    variant: {variant_name},
+    tag: {discriminant_name},
+}}"#,
         )?;
     }
 
@@ -204,16 +210,12 @@ fn write_tag_union(
     {
         write!(
             buf,
-            indoc!(
-                r#"
-
-                    impl MyTagUnion {{
-                        pub fn tag(&self) -> {} {{
-                            self.tag
-                        }}
-                "#
-            ),
-            discriminant_name
+            r#"
+impl {name} {{
+    pub fn tag(&self) -> {discriminant_name} {{
+        self.tag
+    }}
+"#
         )?;
 
         for (tag_name, opt_payload_id) in tags {
@@ -232,14 +234,11 @@ fn write_tag_union(
                 let payload_type = types.get(*payload_id);
                 let payload_type_name = type_name(*payload_id, types);
 
-                let (init_payload, get_payload, deref_for_as, self_for_into) =
+                let (init_payload, get_payload, ref_if_needed, self_for_into) =
                     if payload_type.has_pointer(types) {
                         (
                             "core::mem::ManuallyDrop::new(payload)",
-                            format!(
-                                "core::mem::ManuallyDrop::take(&mut self.variant.{})",
-                                tag_name,
-                            ),
+                            format!("core::mem::ManuallyDrop::take(&mut self.variant.{tag_name})",),
                             // Since this is a ManuallyDrop, our `as_` method will need
                             // to dereference the variant (e.g. `&self.variant.Foo`)
                             "&",
@@ -249,7 +248,7 @@ fn write_tag_union(
                     } else {
                         (
                             "payload",
-                            format!("self.variant.{}", tag_name),
+                            format!("self.variant.{tag_name}"),
                             // Since this is not a ManuallyDrop, our `as_` method will not
                             // want to dereference the variant (e.g. `self.variant.Foo` with no '&')
                             "",
@@ -262,102 +261,77 @@ fn write_tag_union(
                     buf,
                     // Don't use indoc because this must be indented once!
                     r#"
-    /// Construct a tag named {}, with the appropriate payload
-    pub fn {}(payload: {}) -> Self {{
+    /// Construct a tag named {tag_name}, with the appropriate payload
+    pub fn {tag_name}(payload: {payload_type_name}) -> Self {{
         Self {{
-            tag: {}::{},
-            variant: {} {{
-                {}: {}
+            tag: {discriminant_name}::{tag_name},
+            variant: {variant_name} {{
+                {tag_name}: {init_payload}
             }},
         }}
     }}"#,
-                    tag_name,
-                    tag_name,
-                    payload_type_name,
-                    discriminant_name,
-                    tag_name,
-                    variant_name,
-                    tag_name,
-                    init_payload
                 )?;
 
                 writeln!(
                     buf,
                     // Don't use indoc because this must be indented once!
                     r#"
-    /// Unsafely assume the given {} has a .tag() of {} and convert it to {}'s payload.
+    /// Unsafely assume the given {name} has a .tag() of {tag_name} and convert it to {tag_name}'s payload.
     /// (always examine .tag() first to make sure this is the correct variant!)
-    pub unsafe fn into_{}({}) -> {} {{
-        {}
+    pub unsafe fn into_{tag_name}({self_for_into}) -> {payload_type_name} {{
+        {get_payload}
     }}"#,
-                    name,
-                    tag_name,
-                    tag_name,
-                    tag_name,
-                    self_for_into,
-                    payload_type_name,
-                    get_payload,
                 )?;
 
                 writeln!(
                     buf,
                     // Don't use indoc because this must be indented once!
                     r#"
-    /// Unsafely assume the given {} has a .tag() of {} and return its payload.
+    /// Unsafely assume the given {name} has a .tag() of {tag_name} and return its payload.
     /// (always examine .tag() first to make sure this is the correct variant!)
-    pub unsafe fn as_{}(&self) -> {}{} {{
-        {}self.variant.{}
+    pub unsafe fn as_{tag_name}(&self) -> {ref_if_needed}{payload_type_name} {{
+        {ref_if_needed}self.variant.{tag_name}
     }}"#,
-                    name,
-                    tag_name,
-                    tag_name,
-                    deref_for_as,
-                    payload_type_name,
-                    deref_for_as,
-                    tag_name
                 )?;
             } else {
                 writeln!(
                     buf,
                     // Don't use indoc because this must be indented once!
                     r#"
-    /// Construct a tag named {}
-    pub fn {}() -> Self {{
+    /// Construct a tag named {tag_name}
+    pub fn {tag_name}() -> Self {{
         Self {{
-            tag: {}::{},
+            tag: {discriminant_name}::{tag_name},
             variant: unsafe {{
                 core::mem::transmute::<
-                    core::mem::MaybeUninit<{}>,
-                    {},
+                    core::mem::MaybeUninit<{variant_name}>,
+                    {variant_name},
                 >(core::mem::MaybeUninit::uninit())
             }},
         }}
     }}"#,
-                    tag_name, tag_name, discriminant_name, tag_name, variant_name, variant_name,
                 )?;
 
                 writeln!(
                     buf,
                     // Don't use indoc because this must be indented once!
                     r#"
-    /// Other `into_` methods return a payload, but since the {} tag
+    /// Other `into_` methods return a payload, but since the {tag_name} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_{}(self) -> () {{
+    pub fn into_{tag_name}(self) -> () {{
         ()
     }}"#,
-                    tag_name, tag_name
                 )?;
 
                 writeln!(
                     buf,
                     // Don't use indoc because this must be indented once!
                     r#"
-    /// Other `as` methods return a payload, but since the {} tag
+    /// Other `as` methods return a payload, but since the {tag_name} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_{}(&self) -> () {{
+    pub unsafe fn as_{tag_name}(&self) -> () {{
         ()
     }}"#,
-                    tag_name, tag_name
                 )?;
             }
         }
@@ -369,15 +343,11 @@ fn write_tag_union(
     {
         write!(
             buf,
-            indoc!(
-                r#"
-
-                    impl Drop for {} {{
-                        fn drop(&mut self) {{
-                            match self.tag {{
-                "#
-            ),
-            name
+            r#"
+impl Drop for {name} {{
+    fn drop(&mut self) {{
+        match self.tag {{
+"#
         )?;
 
         write_impl_tags(
@@ -389,8 +359,7 @@ fn write_tag_union(
                 match opt_payload_id {
                     Some(payload_id) if types.get(payload_id).has_pointer(types) => {
                         format!(
-                            "unsafe {{ core::mem::ManuallyDrop::drop(&mut self.variant.{}) }},",
-                            tag_name
+                            "unsafe {{ core::mem::ManuallyDrop::drop(&mut self.variant.{tag_name}) }},",
                         )
                     }
                     _ => {
@@ -404,13 +373,9 @@ fn write_tag_union(
 
         writeln!(
             buf,
-            indoc!(
-                r#"
-                            }}
-                        }}
-                    }}
-                "#
-            ),
+            r#"        }}
+    }}
+}}"#
         )?;
     }
 
@@ -418,19 +383,16 @@ fn write_tag_union(
     {
         write!(
             buf,
-            indoc!(
-                r#"
-                    impl PartialEq for {} {{
-                        fn eq(&self, other: &Self) -> bool {{
-                            if self.tag != other.tag {{
-                                return false;
-                            }}
+            r#"
+impl PartialEq for {name} {{
+    fn eq(&self, other: &Self) -> bool {{
+        if self.tag != other.tag {{
+            return false;
+        }}
 
-                            unsafe {{
-                                match self.tag {{
-                "#
-            ),
-            name
+        unsafe {{
+            match self.tag {{
+"#
         )?;
 
         write_impl_tags(
@@ -440,7 +402,7 @@ fn write_tag_union(
             buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
-                    format!("self.variant.{} == other.variant.{},", tag_name, tag_name)
+                    format!("self.variant.{tag_name} == other.variant.{tag_name},")
                 } else {
                     // if the tags themselves had been unequal, we already would have
                     // early-returned with false, so this means the tags were equal
@@ -452,39 +414,32 @@ fn write_tag_union(
 
         writeln!(
             buf,
-            indoc!(
-                r#"
-                                }}
-                            }}
-                        }}
-                    }}
-                "#
-            ),
+            r#"            }}
+        }}
+    }}
+}}"#
         )?;
     }
 
     if !typ.has_float(types) {
-        writeln!(buf, "impl Eq for {} {{}}\n", name)?;
+        writeln!(buf, "\nimpl Eq for {name} {{}}")?;
     }
 
     // The PartialOrd impl for the tag union
     {
         write!(
             buf,
-            indoc!(
-                r#"
-                    impl PartialOrd for {} {{
-                        fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {{
-                            match self.tag.partial_cmp(&other.tag) {{
-                                Some(core::cmp::Ordering::Equal) => {{}}
-                                not_eq => return not_eq,
-                            }}
+            r#"
+impl PartialOrd for {name} {{
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {{
+        match self.tag.partial_cmp(&other.tag) {{
+            Some(core::cmp::Ordering::Equal) => {{}}
+            not_eq => return not_eq,
+        }}
 
-                            unsafe {{
-                                match self.tag {{
-                "#
-            ),
-            name
+        unsafe {{
+            match self.tag {{
+"#
         )?;
 
         write_impl_tags(
@@ -494,10 +449,7 @@ fn write_tag_union(
             buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
-                    format!(
-                        "self.variant.{}.partial_cmp(&other.variant.{}),",
-                        tag_name, tag_name
-                    )
+                    format!("self.variant.{tag_name}.partial_cmp(&other.variant.{tag_name}),",)
                 } else {
                     // if the tags themselves had been unequal, we already would have
                     // early-returned, so this means the tags were equal and there's
@@ -509,14 +461,10 @@ fn write_tag_union(
 
         writeln!(
             buf,
-            indoc!(
-                r#"
-                                }}
-                            }}
-                        }}
-                    }}
-                "#
-            ),
+            r#"            }}
+        }}
+    }}
+}}"#
         )?;
     }
 
@@ -524,20 +472,17 @@ fn write_tag_union(
     {
         write!(
             buf,
-            indoc!(
-                r#"
-                    impl Ord for {} {{
-                        fn cmp(&self, other: &Self) -> core::cmp::Ordering {{
-                            match self.tag.cmp(&other.tag) {{
-                                core::cmp::Ordering::Equal => {{}}
-                                not_eq => return not_eq,
-                            }}
+            r#"
+impl Ord for {name} {{
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {{
+        match self.tag.cmp(&other.tag) {{
+            core::cmp::Ordering::Equal => {{}}
+            not_eq => return not_eq,
+        }}
 
-                            unsafe {{
-                                match self.tag {{
-                "#
-            ),
-            name
+        unsafe {{
+            match self.tag {{
+"#
         )?;
 
         write_impl_tags(
@@ -547,10 +492,7 @@ fn write_tag_union(
             buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
-                    format!(
-                        "self.variant.{}.cmp(&other.variant.{}),",
-                        tag_name, tag_name
-                    )
+                    format!("self.variant.{tag_name}.cmp(&other.variant.{tag_name}),",)
                 } else {
                     // if the tags themselves had been unequal, we already would have
                     // early-returned, so this means the tags were equal and there's
@@ -562,14 +504,10 @@ fn write_tag_union(
 
         writeln!(
             buf,
-            indoc!(
-                r#"
-                                }}
-                            }}
-                        }}
-                    }}
-                "#
-            ),
+            r#"            }}
+        }}
+    }}
+}}"#
         )?;
     }
 
@@ -577,14 +515,11 @@ fn write_tag_union(
     {
         write!(
             buf,
-            indoc!(
-                r#"
-                    impl Clone for {} {{
-                        fn clone(&self) -> Self {{
-                            match self.tag {{
-                "#
-            ),
-            name
+            r#"
+impl Clone for {name} {{
+    fn clone(&self) -> Self {{
+        match self.tag {{
+"#
         )?;
 
         write_impl_tags(
@@ -596,12 +531,11 @@ fn write_tag_union(
                 if opt_payload_id.is_some() {
                     format!(
                         r#"Self {{
-                variant: {} {{
-                    {}: unsafe {{ self.variant.{}.clone() }},
+                variant: {variant_name} {{
+                    {tag_name}: unsafe {{ self.variant.{tag_name}.clone() }},
                 }},
-                tag: {}::{},
+                tag: {discriminant_name}::{tag_name},
             }},"#,
-                        variant_name, tag_name, tag_name, discriminant_name, tag_name
                     )
                 } else {
                     // when there's no payload, we set the clone's `variant` field to
@@ -610,13 +544,12 @@ fn write_tag_union(
                         r#"Self {{
                 variant: unsafe {{
                     core::mem::transmute::<
-                        core::mem::MaybeUninit<{}>,
-                        {},
+                        core::mem::MaybeUninit<{variant_name}>,
+                        {variant_name},
                     >(core::mem::MaybeUninit::uninit())
                 }},
-                tag: {}::{},
+                tag: {discriminant_name}::{tag_name},
             }},"#,
-                        variant_name, variant_name, discriminant_name, tag_name
                     )
                 }
             },
@@ -624,35 +557,28 @@ fn write_tag_union(
 
         writeln!(
             buf,
-            indoc!(
-                r#"
-                            }}
-                        }}
-                    }}
-                "#
-            ),
+            r#"        }}
+    }}
+}}"#
         )?;
     }
 
     if !typ.has_pointer(types) {
-        writeln!(buf, "impl Copy for {} {{}}\n", name)?;
+        writeln!(buf, "impl Copy for {name} {{}}\n")?;
     }
 
     // The Debug impl for the tag union
     {
         write!(
             buf,
-            indoc!(
-                r#"
-                    impl core::fmt::Debug for {} {{
-                        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
-                            f.write_str("{}::")?;
+            r#"
+impl core::fmt::Debug for {name} {{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+        f.write_str("{name}::")?;
 
-                            unsafe {{
-                                match self.tag {{
-                "#
-            ),
-            name, name
+        unsafe {{
+            match self.tag {{
+"#
         )?;
 
         write_impl_tags(
@@ -663,25 +589,21 @@ fn write_tag_union(
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
                     format!(
-                        r#"f.debug_tuple("{}").field(&self.variant.{}).finish(),"#,
-                        tag_name, tag_name
+                        r#"f.debug_tuple("{tag_name}").field(&self.variant.{tag_name}).finish(),"#,
                     )
                 } else {
-                    format!(r#"f.write_str("{}"),"#, tag_name)
+                    format!(r#"f.write_str("{tag_name}"),"#)
                 }
             },
         )?;
 
         writeln!(
             buf,
-            indoc!(
-                r#"
-                                }}
-                            }}
-                        }}
-                    }}
-                "#
-            ),
+            r#"            }}
+        }}
+    }}
+}}
+"#
         )?;
     }
 
@@ -706,7 +628,7 @@ fn write_impl_tags<
             buf.write_str(INDENT)?;
         }
 
-        writeln!(buf, "{}::{} => {}", discriminant_name, tag_name, branch_str)?;
+        writeln!(buf, "{discriminant_name}::{tag_name} => {branch_str}")?;
     }
 
     Ok(())
@@ -727,10 +649,10 @@ fn write_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str>>(
     write_derive(typ, types, buf)?;
 
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
-    writeln!(buf, "#[repr(u{})]\npub enum {} {{", tag_bytes * 8, name)?;
+    writeln!(buf, "#[repr(u{})]\npub enum {name} {{", tag_bytes * 8)?;
 
     for (index, name) in tags.enumerate() {
-        writeln!(buf, "{}{} = {},", INDENT, name.as_ref(), index)?;
+        writeln!(buf, "{INDENT}{} = {index},", name.as_ref())?;
     }
 
     buf.write_str("}\n")
@@ -755,13 +677,12 @@ fn write_struct(
         _ => {
             write_derive(types.get(struct_id), types, buf)?;
 
-            writeln!(buf, "#[repr(C)]\npub struct {} {{", name)?;
+            writeln!(buf, "#[repr(C)]\npub struct {name} {{")?;
 
             for (label, field_id) in fields {
                 writeln!(
                     buf,
-                    "{}{}: {},",
-                    INDENT,
+                    "{INDENT}{}: {},",
                     label.as_str(),
                     type_name(*field_id, types)
                 )?;
@@ -850,7 +771,7 @@ fn write_nullable_unwrapped(
     let has_pointer = payload_type.has_pointer(types);
     let (wrapped_payload_type_name, init_payload, ref_if_needed) = if has_pointer {
         (
-            format!("core::mem::ManuallyDrop<{}>", payload_type_name),
+            format!("core::mem::ManuallyDrop<{payload_type_name}>"),
             "core::mem::ManuallyDrop::new(payload)",
             "&",
         )
@@ -862,35 +783,27 @@ fn write_nullable_unwrapped(
 
     write!(
         buf,
-        indoc!(
-            r#"
-                #[repr(C)]
-                pub struct {} {{
-                    pointer: *mut {},
-                }}
-            "#
-        ),
-        name, wrapped_payload_type_name
+        r#"#[repr(C)]
+pub struct {name} {{
+    pointer: *mut {wrapped_payload_type_name},
+}}
+"#
     )?;
 
     // The impl for the tag union
     {
         write!(
             buf,
-            indoc!(
-                r#"
-
-                    impl {} {{
-                        pub fn tag(&self) -> {} {{
-                            if self.pointer.is_null() {{
-                                {}::{}
-                            }} else {{
-                                {}::{}
-                            }}
-                        }}
-                "#
-            ),
-            name, discriminant_name, discriminant_name, null_tag, discriminant_name, non_null_tag
+            r#"
+impl {name} {{
+    pub fn tag(&self) -> {discriminant_name} {{
+        if self.pointer.is_null() {{
+            {discriminant_name}::{null_tag}
+        }} else {{
+            {discriminant_name}::{non_null_tag}
+        }}
+    }}
+"#
         )?;
     }
 
@@ -915,26 +828,19 @@ fn write_nullable_unwrapped(
             buf,
             // Don't use indoc because this must be indented once!
             r#"
-    /// Construct a tag named {}, with the appropriate payload
-    pub fn {}(payload: {}) -> Self {{
-        let size = core::mem::size_of::<{}>();
-        let align = core::mem::align_of::<{}>();
+    /// Construct a tag named {non_null_tag}, with the appropriate payload
+    pub fn {non_null_tag}(payload: {payload_type_name}) -> Self {{
+        let size = core::mem::size_of::<{payload_type_name}>();
+        let align = core::mem::align_of::<{payload_type_name}>();
 
         unsafe {{
-            let pointer = crate::roc_alloc(size, align as u32) as *mut {};
+            let pointer = crate::roc_alloc(size, align as u32) as *mut {wrapped_payload_type_name};
 
-            *pointer = {};
+            *pointer = {init_payload};
 
             Self {{ pointer }}
         }}
     }}"#,
-            non_null_tag,
-            non_null_tag,
-            payload_type_name,
-            payload_type_name,
-            payload_type_name,
-            wrapped_payload_type_name,
-            init_payload
         )?;
 
         let assign_payload = if has_pointer {
@@ -947,29 +853,27 @@ fn write_nullable_unwrapped(
             buf,
             // Don't use indoc because this must be indented once!
             r#"
-    /// Unsafely assume the given {} has a .tag() of {} and convert it to {}'s payload.
+    /// Unsafely assume the given {name} has a .tag() of {non_null_tag} and convert it to {non_null_tag}'s payload.
     /// (always examine .tag() first to make sure this is the correct variant!)
-    pub unsafe fn into_{}(self) -> {} {{
+    pub unsafe fn into_{non_null_tag}(self) -> {payload_type_name} {{
         let payload = {assign_payload};
-        let align = core::mem::align_of::<{}>() as u32;
+        let align = core::mem::align_of::<{payload_type_name}>() as u32;
 
-        roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
+        crate::roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
 
         payload
     }}"#,
-            name, non_null_tag, non_null_tag, non_null_tag, payload_type_name, payload_type_name
         )?;
 
         writeln!(
             buf,
             // Don't use indoc because this must be indented once!
             r#"
-    /// Unsafely assume the given {} has a .tag() of {} and return its payload.
+    /// Unsafely assume the given {name} has a .tag() of {non_null_tag} and return its payload.
     /// (always examine .tag() first to make sure this is the correct variant!)
-    pub unsafe fn as_{}(&self) -> {ref_if_needed}{} {{
+    pub unsafe fn as_{non_null_tag}(&self) -> {ref_if_needed}{payload_type_name} {{
         {ref_if_needed}*self.pointer
     }}"#,
-            name, non_null_tag, non_null_tag, payload_type_name
         )?;
     }
 
@@ -986,37 +890,34 @@ fn write_nullable_unwrapped(
             buf,
             // Don't use indoc because this must be indented once!
             r#"
-    /// Construct a tag named {}
-    pub fn {}() -> Self {{
+    /// Construct a tag named {null_tag}
+    pub fn {null_tag}() -> Self {{
         Self {{
             pointer: core::ptr::null_mut(),
         }}
     }}"#,
-            null_tag, null_tag,
         )?;
 
         writeln!(
             buf,
             // Don't use indoc because this must be indented once!
             r#"
-    /// Other `into_` methods return a payload, but since the {} tag
+    /// Other `into_` methods return a payload, but since the {null_tag} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_{}(self) -> () {{
+    pub fn into_{null_tag}(self) -> () {{
         ()
     }}"#,
-            null_tag, null_tag
         )?;
 
         writeln!(
             buf,
             // Don't use indoc because this must be indented once!
             r#"
-    /// Other `as` methods return a payload, but since the {} tag
+    /// Other `as` methods return a payload, but since the {null_tag} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_{}(&self) -> () {{
+    pub unsafe fn as_{null_tag}(&self) -> () {{
         ()
     }}"#,
-            null_tag, null_tag
         )?;
     }
 
@@ -1026,27 +927,22 @@ fn write_nullable_unwrapped(
     {
         write!(
             buf,
-            indoc!(
-                r#"
+            r#"
+impl Drop for {name} {{
+    fn drop(&mut self) {{
+        if !self.pointer.is_null() {{
+            let payload = unsafe {{ &*self.pointer }};
+            let align = core::mem::align_of::<{payload_type_name}>() as u32;
 
-                    impl Drop for {} {{
-                        fn drop(&mut self) {{
-                            if !self.pointer.is_null() {{
-                                let payload = unsafe {{ &*self.pointer }};
-                                let align = core::mem::align_of::<{}>() as u32;
+            unsafe {{
+                crate::roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
+            }}
 
-                                unsafe {{
-                                    roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
-                                }}
-
-                                drop(payload);
-                            }}
-                        }}
-                    }}
-
-                "#
-            ),
-            name, payload_type_name
+            drop(payload);
+        }}
+    }}
+}}
+"#
         )?;
     }
 
@@ -1056,23 +952,20 @@ fn write_nullable_unwrapped(
 
         write!(
             buf,
-            indoc!(
-                r#"
-                    impl core::fmt::Debug for {} {{
-                        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
-                            if self.pointer.is_null() {{
-                                f.write_str("{}::{}")
-                            }} else {{
-                                f.write_str("{}::")?;
+            r#"
+impl core::fmt::Debug for {name} {{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+        if self.pointer.is_null() {{
+            f.write_str("{name}::{null_tag}")
+        }} else {{
+            f.write_str("{name}::")?;
 
-                                unsafe {{ f.debug_tuple("{}").field(&*{}self.pointer).finish() }}
-                            }}
-                        }}
-                    }}
+            unsafe {{ f.debug_tuple("{non_null_tag}").field(&*{extra_deref}self.pointer).finish() }}
+        }}
+    }}
+}}
 
-                "#
-            ),
-            name, name, null_tag, name, non_null_tag, extra_deref
+"#
         )?;
     }
 

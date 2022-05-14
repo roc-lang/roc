@@ -566,7 +566,7 @@ fn cons_list_of_strings() {
                         let payload = core::mem::ManuallyDrop::take(&mut *self.pointer);
                         let align = core::mem::align_of::<roc_std::RocStr>() as u32;
 
-                        roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
+                        crate::roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
 
                         payload
                     }
@@ -604,7 +604,7 @@ fn cons_list_of_strings() {
                             let align = core::mem::align_of::<roc_std::RocStr>() as u32;
 
                             unsafe {
-                                roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
+                                crate::roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
                             }
 
                             drop(payload);
