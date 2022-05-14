@@ -102,26 +102,6 @@ fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
     }
 }
 
-fn write_nullable_unwrapped(
-    name: &str,
-    id: TypeId,
-    null_tag: String,
-    non_null_tag: String,
-    non_null_payload: TypeId,
-    types: &Types,
-    buf: &mut String,
-) -> fmt::Result {
-    let mut tag_names = vec![null_tag, non_null_tag];
-
-    tag_names.sort();
-
-    let discriminant_name = write_discriminant(name, tag_names, types, buf)?;
-
-    write_derive(types.get(id), types, buf)?;
-
-    Ok(())
-}
-
 fn write_discriminant(
     name: &str,
     tag_names: Vec<String>,
@@ -849,4 +829,46 @@ fn write_derive(typ: &RocType, types: &Types, buf: &mut String) -> fmt::Result {
     }
 
     buf.write_str("PartialEq, PartialOrd)]\n")
+}
+
+fn write_nullable_unwrapped(
+    name: &str,
+    id: TypeId,
+    null_tag: String,
+    non_null_tag: String,
+    non_null_payload: TypeId,
+    types: &Types,
+    buf: &mut String,
+) -> fmt::Result {
+    let mut tag_names = vec![null_tag, non_null_tag];
+
+    tag_names.sort();
+
+    let discriminant_name = write_discriminant(name, tag_names, types, buf)?;
+    let payload_type = types.get(non_null_payload);
+    let payload_type_name = if payload_type.has_pointer(types) {
+        format!(
+            "core::mem::ManuallyDrop<{}>",
+            type_name(non_null_payload, types)
+        )
+    } else {
+        type_name(non_null_payload, types)
+    };
+
+    write_derive(types.get(id), types, buf)?;
+
+    write!(
+        buf,
+        indoc!(
+            r#"
+                #[repr(C)]
+                pub struct {} {{
+                    pointer: *mut {},
+                }}
+            "#
+        ),
+        name, payload_type_name
+    )?;
+
+    Ok(())
 }
