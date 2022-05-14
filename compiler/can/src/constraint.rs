@@ -13,8 +13,7 @@ pub struct Constraints {
     pub constraints: Vec<Constraint>,
     pub types: Vec<Type>,
     pub variables: Vec<Variable>,
-    pub symbols: Vec<Symbol>,
-    pub regions: Vec<Region>,
+    pub loc_symbols: Vec<(Symbol, Region)>,
     pub let_constraints: Vec<LetConstraint>,
     pub categories: Vec<Category>,
     pub pattern_categories: Vec<PatternCategory>,
@@ -39,8 +38,7 @@ impl Constraints {
         let constraints = Vec::new();
         let mut types = Vec::new();
         let variables = Vec::new();
-        let symbols = Vec::new();
-        let regions = Vec::new();
+        let loc_symbols = Vec::new();
         let let_constraints = Vec::new();
         let mut categories = Vec::with_capacity(16);
         let mut pattern_categories = Vec::with_capacity(16);
@@ -94,8 +92,7 @@ impl Constraints {
             constraints,
             types,
             variables,
-            symbols,
-            regions,
+            loc_symbols,
             let_constraints,
             categories,
             pattern_categories,
@@ -369,28 +366,24 @@ impl Constraints {
         let it = it.into_iter();
 
         let types_start = self.types.len();
-        let symbols_start = self.symbols.len();
-        let regions_start = self.regions.len();
+        let loc_symbols_start = self.loc_symbols.len();
 
         // because we have an ExactSizeIterator, we can reserve space here
         let length = it.len();
 
         self.types.reserve(length);
-        self.symbols.reserve(length);
-        self.regions.reserve(length);
+        self.loc_symbols.reserve(length);
 
         for (symbol, loc_type) in it {
             let Loc { region, value } = loc_type;
 
             self.types.push(value);
-            self.symbols.push(symbol);
-            self.regions.push(region);
+            self.loc_symbols.push((symbol, region));
         }
 
         DefTypes {
             types: Slice::new(types_start as _, length as _),
-            symbols: Slice::new(symbols_start as _, length as _),
-            regions: Slice::new(regions_start as _, length as _),
+            loc_symbols: Slice::new(loc_symbols_start as _, length as _),
         }
     }
 
@@ -657,24 +650,25 @@ impl Constraints {
         Constraint::Exhaustive(equality, sketched_rows, context, exhaustive)
     }
 
-    pub fn check_cycle<I, I1, I2>(
+    pub fn check_cycle<I, I1>(
         &mut self,
-        symbols: I,
-        symbol_regions: I1,
-        expr_regions: I2,
+        loc_symbols: I,
+        expr_regions: I1,
         cycle_mark: IllegalCycleMark,
     ) -> Constraint
     where
-        I: IntoIterator<Item = Symbol>,
+        I: IntoIterator<Item = (Symbol, Region)>,
         I1: IntoIterator<Item = Region>,
-        I2: IntoIterator<Item = Region>,
     {
-        let symbols = Slice::extend_new(&mut self.symbols, symbols);
-        let symbol_regions = Slice::extend_new(&mut self.regions, symbol_regions);
-        let expr_regions = Slice::extend_new(&mut self.regions, expr_regions);
+        let def_names = Slice::extend_new(&mut self.loc_symbols, loc_symbols);
+
+        // we add a dummy symbol to these regions, so we can store the data in the loc_symbols vec
+        let it = expr_regions.into_iter().map(|r| (Symbol::ATTR_ATTR, r));
+        let expr_regions = Slice::extend_new(&mut self.loc_symbols, it);
+        let expr_regions = Slice::new(expr_regions.start() as _, expr_regions.len() as _);
+
         let cycle = Cycle {
-            symbols,
-            symbol_regions,
+            def_names,
             expr_regions,
         };
         let cycle_index = Index::push_new(&mut self.cycles, cycle);
@@ -776,8 +770,7 @@ pub enum Constraint {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefTypes {
     pub types: Slice<Type>,
-    pub symbols: Slice<Symbol>,
-    pub regions: Slice<Region>,
+    pub loc_symbols: Slice<(Symbol, Region)>,
 }
 
 #[derive(Debug, Clone)]
@@ -799,8 +792,7 @@ pub struct IncludesTag {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Cycle {
-    pub symbols: Slice<Symbol>,
-    pub symbol_regions: Slice<Region>,
+    pub def_names: Slice<(Symbol, Region)>,
     pub expr_regions: Slice<Region>,
 }
 

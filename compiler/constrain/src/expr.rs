@@ -2135,7 +2135,7 @@ pub fn rec_defs_help(
         flex_constraints,
     );
 
-    let ((symbols, symbol_regions), expr_regions): ((Vec<_>, Vec<_>), Vec<_>) = defs
+    let (loc_symbols, expr_regions): (Vec<_>, Vec<_>) = defs
         .iter()
         .flat_map(|def| {
             symbols_introduced_from_pattern(&def.loc_pattern)
@@ -2143,8 +2143,7 @@ pub fn rec_defs_help(
         })
         .unzip();
 
-    let cycle_constraint =
-        constraints.check_cycle(symbols, symbol_regions, expr_regions, cycle_mark);
+    let cycle_constraint = constraints.check_cycle(loc_symbols, expr_regions, cycle_mark);
 
     let rigid_constraints = {
         let mut temp = rigid_info.constraints;

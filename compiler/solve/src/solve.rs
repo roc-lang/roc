@@ -1399,31 +1399,32 @@ fn solve(
             }
             CheckCycle(cycle, cycle_mark) => {
                 let Cycle {
-                    symbols,
-                    symbol_regions,
+                    def_names,
                     expr_regions,
                 } = &constraints.cycles[cycle.index()];
-                let symbols = &constraints.symbols[symbols.indices()];
-                let mut any_is_bad = false;
-                for symbol in symbols {
-                    // If the type of a symbol is not a function, that's an error.
-                    // Roc is strict, so only functions can be mutually recursive.
-                    let var = env.get_var_by_symbol(symbol).expect("Symbol not solved!");
-                    any_is_bad = any_is_bad
-                        || !matches!(
-                            subs.get_content_without_compacting(var),
-                            Content::Error | Content::Structure(FlatType::Func(..))
-                        );
-                }
+                let symbols = &constraints.loc_symbols[def_names.indices()];
+
+                // If the type of a symbol is not a function, that's an error.
+                // Roc is strict, so only functions can be mutually recursive.
+                let any_is_bad = {
+                    use Content::*;
+
+                    symbols.iter().any(|(s, _)| {
+                        let var = env.get_var_by_symbol(s).expect("Symbol not solved!");
+                        let content = subs.get_content_without_compacting(var);
+                        !matches!(content, Error | Structure(FlatType::Func(..)))
+                    })
+                };
 
                 if any_is_bad {
-                    let symbol_regions = &constraints.regions[symbol_regions.indices()];
-                    let expr_regions = &constraints.regions[expr_regions.indices()];
+                    // expr regions are stored in loc_symbols (that turned out to be convenient).
+                    // The symbol is just a dummy, and should not be used
+                    let expr_regions = &constraints.loc_symbols[expr_regions.indices()];
 
-                    let cycle = (symbols.iter())
-                        .zip(symbol_regions.iter())
+                    let cycle = symbols
+                        .iter()
                         .zip(expr_regions.iter())
-                        .map(|((&symbol, &symbol_region), &expr_region)| CycleEntry {
+                        .map(|(&(symbol, symbol_region), &(_, expr_region))| CycleEntry {
                             symbol,
                             symbol_region,
                             expr_region,
@@ -1634,15 +1635,11 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
         def_types_slice: roc_can::constraint::DefTypes,
     ) -> Self {
         let types_slice = &constraints.types[def_types_slice.types.indices()];
-        let symbols_slice = &constraints.symbols[def_types_slice.symbols.indices()];
-        let regions_slice = &constraints.regions[def_types_slice.regions.indices()];
+        let loc_symbols_slice = &constraints.loc_symbols[def_types_slice.loc_symbols.indices()];
 
         let mut local_def_vars = Self::with_length(types_slice.len());
 
-        for ((&symbol, &region), typ) in (symbols_slice.iter())
-            .zip(regions_slice.iter())
-            .zip(types_slice)
-        {
+        for (&(symbol, region), typ) in (loc_symbols_slice.iter()).zip(types_slice) {
             let var = type_to_var(subs, rank, pools, aliases, typ);
 
             local_def_vars.push((symbol, Loc { value: var, region }));
