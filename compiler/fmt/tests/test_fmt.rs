@@ -2152,6 +2152,111 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_fn_signature() {
+        expr_formats_same(indoc!(
+            r#"
+                foo :
+                    Str,
+                    Nat
+                    -> Bool
+
+                foo
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+                        Str, Int, Nat -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Int,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+
+                        Str,
+                        Nat
+                        
+                        -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+
+                        Str, Nat -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn final_comment_record_annotation() {
         expr_formats_to(
             indoc!(
@@ -4375,11 +4480,32 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             foo :
-                (Str -> Bool) -> Bool
+                (Str -> Bool)
+                -> Bool
 
             42
             "#
         ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool) -> Bool
+
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool)
+                    -> Bool
+
+                42
+                "#
+            ),
+        );
     }
 
     #[test]
