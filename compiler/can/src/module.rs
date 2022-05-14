@@ -399,8 +399,7 @@ pub fn canonicalize_module_defs<'a>(
         );
     }
 
-    let mut index = 0;
-    while index < declarations.len() {
+    for index in 0..declarations.len() {
         use crate::expr::DeclarationTag::*;
 
         let tag = declarations.declarations[index];
@@ -463,8 +462,6 @@ pub fn canonicalize_module_defs<'a>(
                         _ => (),
                     }
                 }
-
-                index += 1;
             }
             Function(_) | Recursive(_) | TailRecursive(_) => {
                 let symbol = &declarations.symbols[index].value;
@@ -523,8 +520,6 @@ pub fn canonicalize_module_defs<'a>(
                         _ => (),
                     }
                 }
-
-                index += 1;
             }
             Destructure(d_index) => {
                 let destruct_def = &declarations.destructs[d_index.index()];
@@ -532,10 +527,10 @@ pub fn canonicalize_module_defs<'a>(
                 for (symbol, _) in BindingsFromPattern::new(&destruct_def.loc_pattern) {
                     exposed_but_not_defined.remove(&symbol);
                 }
-
-                index += 1;
             }
-            MutualRecursion(_) => todo!(),
+            MutualRecursion { .. } => {
+                // the declarations of this group will be treaded individually by later iterations
+            }
         }
     }
 
@@ -603,21 +598,10 @@ pub fn canonicalize_module_defs<'a>(
     referenced_values.extend(env.qualified_value_lookups.iter().copied());
     referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
-    // TODO
-    //    for declaration in declarations.iter_mut() {
-    //        match declaration {
-    //            Declare(def) => fix_values_captured_in_closure_def(def, &mut VecSet::default()),
-    //            DeclareRec(defs) => fix_values_captured_in_closure_defs(defs, &mut VecSet::default()),
-    //            InvalidCycle(_) | Builtin(_) => {}
-    //        }
-    //    }
-
-    let values: Vec<_> = declarations.iter_top_down().collect();
-
-    for (index, tag) in values {
+    for index in 0..declarations.len() {
         use crate::expr::DeclarationTag::*;
 
-        match tag {
+        match declarations.declarations[index] {
             Value => {
                 // def pattern has no default expressions, so skip
                 let loc_expr = &mut declarations.expressions[index];
@@ -654,7 +638,9 @@ pub fn canonicalize_module_defs<'a>(
                 fix_values_captured_in_closure_pattern(&mut loc_pat.value, &mut VecSet::default());
                 fix_values_captured_in_closure_expr(&mut loc_expr.value, &mut VecSet::default());
             }
-            MutualRecursion(_) => todo!(),
+            MutualRecursion { .. } => {
+                // the declarations of this group will be treaded individually by later iterations
+            }
         }
     }
 

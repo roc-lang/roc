@@ -50,8 +50,8 @@ impl<T> Index<T> {
 
 #[derive(PartialEq, Eq)]
 pub struct Slice<T> {
-    start: u32,
     length: u16,
+    start: u32,
     _marker: std::marker::PhantomData<T>,
 }
 

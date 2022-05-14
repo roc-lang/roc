@@ -1747,7 +1747,7 @@ pub fn constrain_decls(
                     constraint,
                 );
             }
-            MutualRecursion(_) => todo!(),
+            MutualRecursion { .. } => todo!(),
         }
     }
 

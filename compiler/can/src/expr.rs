@@ -10,7 +10,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::soa::{Index, Slice};
+use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -2065,7 +2065,8 @@ impl Declarations {
 
         let destructure_def_index = Index::push_new(&mut self.destructs, destruct_def);
 
-        self.declarations.push(DeclarationTag::Destructure(destructure_def_index));
+        self.declarations
+            .push(DeclarationTag::Destructure(destructure_def_index));
         self.variables.push(expr_var);
         self.symbols.push(Loc::at_zero(Symbol::ATTR_ATTR));
         self.annotations.push(annotation);
@@ -2182,6 +2183,8 @@ impl Declarations {
     }
 }
 
+roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
+
 #[derive(Clone, Copy, Debug)]
 pub enum DeclarationTag {
     Value,
@@ -2189,7 +2192,7 @@ pub enum DeclarationTag {
     Recursive(Index<Loc<FunctionDef>>),
     TailRecursive(Index<Loc<FunctionDef>>),
     Destructure(Index<DestructureDef>),
-    MutualRecursion(Slice<FunctionDef>),
+    MutualRecursion { length: u16, cycle_mark: u32 },
 }
 
 impl DeclarationTag {
@@ -2200,7 +2203,7 @@ impl DeclarationTag {
             DeclarationTag::TailRecursive(_) => 1,
             DeclarationTag::Value => 1,
             DeclarationTag::Destructure(_) => 1,
-            DeclarationTag::MutualRecursion(slice) => slice.len(),
+            DeclarationTag::MutualRecursion { length, .. } => length as usize + 1,
         }
     }
 }

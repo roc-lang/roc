@@ -4226,7 +4226,7 @@ fn build_pending_specializations<'a>(
     };
 
     // Add modules' decls to Procs
-    for (index, tag) in declarations.iter_top_down() {
+    for index in 0..declarations.len() {
         use roc_can::expr::DeclarationTag::*;
 
         let symbol = declarations.symbols[index].value;
@@ -4238,6 +4238,7 @@ fn build_pending_specializations<'a>(
         let annotation = declarations.annotations[index].clone();
         let body = declarations.expressions[index].clone();
 
+        let tag = declarations.declarations[index];
         match tag {
             Value => {
                 // mark this symbols as a top-level thunk before any other work on the procs
@@ -4432,7 +4433,9 @@ fn build_pending_specializations<'a>(
 
                 procs_base.partial_procs.insert(symbol, proc);
             }
-            MutualRecursion(_) => todo!(),
+            MutualRecursion { .. } => {
+                // the declarations of this group will be treaded individually by later iterations
+            }
         }
     }
 
