@@ -629,3 +629,125 @@ fn cons_list_of_strings() {
         )
     );
 }
+
+#[test]
+fn cons_list_of_ints() {
+    let module = indoc!(
+        r#"
+            IntConsList : [ Empty, Prepend U16 IntConsList ]
+
+            main : IntConsList
+            main = Prepend 42 (Prepend 26 Empty)
+        "#
+    );
+
+    assert_eq!(
+        generate_bindings(module)
+            .strip_prefix('\n')
+            .unwrap_or_default(),
+        indoc!(
+            r#"
+                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+                #[repr(u8)]
+                pub enum tag_IntConsList {
+                    Empty = 0,
+                    Prepend = 1,
+                }
+
+                #[derive(Clone, Eq, Ord, Hash, PartialEq, PartialOrd)]
+                #[repr(C)]
+                pub struct IntConsList {
+                    pointer: *mut u16,
+                }
+
+                impl IntConsList {
+                    pub fn tag(&self) -> tag_IntConsList {
+                        if self.pointer.is_null() {
+                            tag_IntConsList::Empty
+                        } else {
+                            tag_IntConsList::Prepend
+                        }
+                    }
+
+                    /// Construct a tag named Prepend, with the appropriate payload
+                    pub fn Prepend(payload: u16) -> Self {
+                        let size = core::mem::size_of::<u16>();
+                        let align = core::mem::align_of::<u16>();
+
+                        unsafe {
+                            let pointer = crate::roc_alloc(size, align as u32) as *mut u16;
+
+                            *pointer = payload;
+
+                            Self { pointer }
+                        }
+                    }
+
+                    /// Unsafely assume the given IntConsList has a .tag() of Prepend and convert it to Prepend's payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn into_Prepend(self) -> u16 {
+                        let payload = *self.pointer;
+                        let align = core::mem::align_of::<u16>() as u32;
+
+                        roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
+
+                        payload
+                    }
+
+                    /// Unsafely assume the given IntConsList has a .tag() of Prepend and return its payload.
+                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    pub unsafe fn as_Prepend(&self) -> u16 {
+                        *self.pointer
+                    }
+
+                    /// Construct a tag named Empty
+                    pub fn Empty() -> Self {
+                        Self {
+                            pointer: core::ptr::null_mut(),
+                        }
+                    }
+
+                    /// Other `into_` methods return a payload, but since the Empty tag
+                    /// has no payload, this does nothing and is only here for completeness.
+                    pub fn into_Empty(self) -> () {
+                        ()
+                    }
+
+                    /// Other `as` methods return a payload, but since the Empty tag
+                    /// has no payload, this does nothing and is only here for completeness.
+                    pub unsafe fn as_Empty(&self) -> () {
+                        ()
+                    }
+                }
+
+                impl Drop for IntConsList {
+                    fn drop(&mut self) {
+                        if !self.pointer.is_null() {
+                            let payload = unsafe { &*self.pointer };
+                            let align = core::mem::align_of::<u16>() as u32;
+
+                            unsafe {
+                                roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
+                            }
+
+                            drop(payload);
+                        }
+                    }
+                }
+
+                impl core::fmt::Debug for IntConsList {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        if self.pointer.is_null() {
+                            f.write_str("IntConsList::Empty")
+                        } else {
+                            f.write_str("IntConsList::")?;
+
+                            unsafe { f.debug_tuple("Prepend").field(&*self.pointer).finish() }
+                        }
+                    }
+                }
+
+            "#
+        )
+    );
+}
