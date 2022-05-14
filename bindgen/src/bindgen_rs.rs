@@ -104,13 +104,12 @@ fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
     Ok(())
 }
 
-fn write_tag_union(
+fn write_discriminant(
     name: &str,
-    type_id: TypeId,
-    tags: &[(String, Option<TypeId>)],
+    tag_names: Vec<String>,
     types: &Types,
     buf: &mut String,
-) -> fmt::Result {
+) -> Result<String, fmt::Error> {
     // The tag union's discriminant, e.g.
     //
     // #[repr(u8)]
@@ -119,20 +118,32 @@ fn write_tag_union(
     //     Foo,
     // }
     let discriminant_name = format!("tag_{}", name);
-    let tag_names = tags.iter().map(|(name, _)| name);
     let discriminant_type = RocType::TagUnion(RocTagUnion::Enumeration {
         name: discriminant_name.clone(),
-        tags: tag_names.clone().cloned().collect(),
+        tags: tag_names.clone(),
     });
-    let typ = types.get(type_id);
 
     write_enumeration(
         &discriminant_name,
         &discriminant_type,
-        tag_names,
+        tag_names.into_iter(),
         types,
         buf,
     )?;
+
+    Ok(discriminant_name)
+}
+
+fn write_tag_union(
+    name: &str,
+    type_id: TypeId,
+    tags: &[(String, Option<TypeId>)],
+    types: &Types,
+    buf: &mut String,
+) -> fmt::Result {
+    let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
+    let discriminant_name = write_discriminant(name, tag_names, types, buf)?;
+    let typ = types.get(type_id);
 
     // The tag union's variant union, e.g.
     //
@@ -734,21 +745,33 @@ fn write_struct(
     types: &Types,
     buf: &mut String,
 ) -> fmt::Result {
-    write_deriving(types.get(struct_id), types, buf)?;
+    match fields.len() {
+        0 => {
+            // An empty record is zero-sized and won't end up being passed to/from the host.
+            Ok(())
+        }
+        1 => {
+            // Unwrap single-field records
+            write_type(fields.first().unwrap().1, types, buf)
+        }
+        _ => {
+            write_deriving(types.get(struct_id), types, buf)?;
 
-    writeln!(buf, "#[repr(C)]\npub struct {} {{", name)?;
+            writeln!(buf, "#[repr(C)]\npub struct {} {{", name)?;
 
-    for (label, field_id) in fields {
-        writeln!(
-            buf,
-            "{}{}: {},",
-            INDENT,
-            label.as_str(),
-            type_name(*field_id, types)
-        )?;
+            for (label, field_id) in fields {
+                writeln!(
+                    buf,
+                    "{}{}: {},",
+                    INDENT,
+                    label.as_str(),
+                    type_name(*field_id, types)
+                )?;
+            }
+
+            buf.write_str("}\n")
+        }
     }
-
-    buf.write_str("}\n")
 }
 
 fn type_name(id: TypeId, types: &Types) -> String {
