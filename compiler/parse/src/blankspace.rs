@@ -326,7 +326,36 @@ fn eat_line_comment<'a>(
                 }
                 state = state.advance_newline();
                 multiline = true;
-                return eat_spaces(state, multiline, comments_and_newlines);
+
+                for c in state.bytes() {
+                    match c {
+                        b' ' => {
+                            state = state.advance(1);
+                        }
+                        b'\n' => {
+                            state = state.advance_newline();
+                            multiline = true;
+                            comments_and_newlines.push(CommentOrNewline::Newline);
+                        }
+                        b'\r' => {
+                            state = state.advance_newline();
+                        }
+                        b'\t' => {
+                            return HasTab(state);
+                        }
+                        b'#' => {
+                            state = state.advance(1);
+                            return eat_line_comment(state, multiline, comments_and_newlines);
+                        }
+                        _ => break,
+                    }
+                }
+
+                return Good {
+                    state,
+                    multiline,
+                    comments_and_newlines,
+                };
             }
             b'\r' => {
                 state = state.advance_newline();
