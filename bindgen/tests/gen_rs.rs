@@ -497,13 +497,7 @@ fn single_tag_union_with_one_payload_field() {
         generate_bindings(module)
             .strip_prefix('\n')
             .unwrap_or_default(),
-        indoc!(
-            r#"
-                #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
-                #[repr(transparent)]
-                pub struct UserId(roc_std::RocStr);
-            "#
-        )
+        "" // This shoud get completely unwrapped into nothing
     );
 }
 
