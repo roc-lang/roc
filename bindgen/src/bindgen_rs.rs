@@ -41,8 +41,13 @@ pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
                     RocTagUnion::NullableWrapped { .. } => {
                         todo!();
                     }
-                    RocTagUnion::NullableUnwrapped { .. } => {
-                        todo!();
+                    RocTagUnion::NullableUnwrapped {
+                        name,
+                        null_tag,
+                        non_null_tag,
+                        non_null_payload,
+                    } => {
+                        todo!("Write nullable unwrapped tag union.")
                     }
                     RocTagUnion::NonNullableUnwrapped { .. } => {
                         todo!();
