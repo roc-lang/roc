@@ -58,8 +58,8 @@ fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
                 } => write_nullable_unwrapped(
                     name,
                     id,
-                    null_tag.clone(),
-                    non_null_tag.clone(),
+                    null_tag,
+                    non_null_tag,
                     *non_null_payload,
                     types,
                     buf,
@@ -834,25 +834,23 @@ fn write_derive(typ: &RocType, types: &Types, buf: &mut String) -> fmt::Result {
 fn write_nullable_unwrapped(
     name: &str,
     id: TypeId,
-    null_tag: String,
-    non_null_tag: String,
+    null_tag: &str,
+    non_null_tag: &str,
     non_null_payload: TypeId,
     types: &Types,
     buf: &mut String,
 ) -> fmt::Result {
-    let mut tag_names = vec![null_tag, non_null_tag];
+    let mut tag_names = vec![null_tag.to_string(), non_null_tag.to_string()];
 
     tag_names.sort();
 
     let discriminant_name = write_discriminant(name, tag_names, types, buf)?;
     let payload_type = types.get(non_null_payload);
-    let payload_type_name = if payload_type.has_pointer(types) {
-        format!(
-            "core::mem::ManuallyDrop<{}>",
-            type_name(non_null_payload, types)
-        )
+    let payload_type_name = type_name(non_null_payload, types);
+    let wrapped_payload_type_name = if payload_type.has_pointer(types) {
+        format!("core::mem::ManuallyDrop<{}>", payload_type_name)
     } else {
-        type_name(non_null_payload, types)
+        payload_type_name.clone()
     };
 
     write_derive(types.get(id), types, buf)?;
@@ -867,8 +865,179 @@ fn write_nullable_unwrapped(
                 }}
             "#
         ),
-        name, payload_type_name
+        name, wrapped_payload_type_name
     )?;
+
+    // The impl for the tag union
+    {
+        write!(
+            buf,
+            indoc!(
+                r#"
+
+                    impl {} {{
+                        pub fn tag(&self) -> {} {{
+                            if self.pointer.is_null() {{
+                                {}::{}
+                            }} else {{
+                                {}::{}
+                            }}
+                        }}
+                "#
+            ),
+            name, discriminant_name, discriminant_name, null_tag, discriminant_name, non_null_tag
+        )?;
+    }
+
+    {
+        // Add a convenience constructor function for the tag with the payload, e.g.
+        //
+        // /// Construct a tag named Cons, with the appropriate payload
+        // pub fn Cons(payload: roc_std::RocStr) -> Self {
+        //     let size = core::mem::size_of::<roc_std::RocStr>();
+        //     let align = core::mem::align_of::<roc_std::RocStr>();
+        //
+        //     unsafe {
+        //         let pointer =
+        //             roc_alloc(size, align as u32) as *mut core::mem::ManuallyDrop<roc_std::RocStr>;
+        //
+        //         *pointer = core::mem::ManuallyDrop::new(payload);
+        //
+        //         Self { pointer }
+        //     }
+        // }
+        writeln!(
+            buf,
+            // Don't use indoc because this must be indented once!
+            r#"
+    /// Construct a tag named {}, with the appropriate payload
+    pub fn {}(payload: {}) -> Self {{
+        let size = core::mem::size_of::<{}>();
+        let align = core::mem::align_of::<{}>();
+
+        unsafe {{
+            let pointer =
+                crate::roc_alloc(size, align as u32) as *mut {};
+
+            *pointer = core::mem::ManuallyDrop::new(payload);
+
+            Self {{ pointer }}
+        }}
+    }}"#,
+            non_null_tag,
+            non_null_tag,
+            payload_type_name,
+            payload_type_name,
+            payload_type_name,
+            wrapped_payload_type_name
+        )?;
+
+        writeln!(
+            buf,
+            // Don't use indoc because this must be indented once!
+            r#"
+    /// Unsafely assume the given {} has a .tag() of {} and convert it to {}'s payload.
+    /// (always examine .tag() first to make sure this is the correct variant!)
+    pub unsafe fn into_{}(self) -> {} {{
+        let payload = core::mem::ManuallyDrop::take(&mut *self.pointer);
+        let align = core::mem::align_of::<{}>() as u32;
+
+        roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
+
+        payload
+    }}"#,
+            name, non_null_tag, non_null_tag, non_null_tag, payload_type_name, payload_type_name
+        )?;
+
+        writeln!(
+            buf,
+            // Don't use indoc because this must be indented once!
+            r#"
+    /// Unsafely assume the given {} has a .tag() of {} and return its payload.
+    /// (always examine .tag() first to make sure this is the correct variant!)
+    pub unsafe fn as_{}(&self) -> &{} {{
+        &*self.pointer
+    }}"#,
+            name, non_null_tag, non_null_tag, payload_type_name
+        )?;
+    }
+
+    {
+        // Add a convenience constructor function for the nullable tag, e.g.
+        //
+        // /// Construct a tag named Nil
+        // pub fn Nil() -> Self {
+        //     Self {
+        //         pointer: core::ptr::null_mut(),
+        //     }
+        // }
+        writeln!(
+            buf,
+            // Don't use indoc because this must be indented once!
+            r#"
+    /// Construct a tag named {}
+    pub fn {}() -> Self {{
+        Self {{
+            pointer: core::ptr::null_mut(),
+        }}
+    }}"#,
+            null_tag, null_tag,
+        )?;
+
+        writeln!(
+            buf,
+            // Don't use indoc because this must be indented once!
+            r#"
+    /// Other `into_` methods return a payload, but since the {} tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_{}(self) -> () {{
+        ()
+    }}"#,
+            null_tag, null_tag
+        )?;
+
+        writeln!(
+            buf,
+            // Don't use indoc because this must be indented once!
+            r#"
+    /// Other `as` methods return a payload, but since the {} tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub unsafe fn as_{}(&self) -> () {{
+        ()
+    }}"#,
+            null_tag, null_tag
+        )?;
+    }
+
+    buf.write_str("}\n")?;
+
+    // The Drop impl for the tag union
+    {
+        write!(
+            buf,
+            indoc!(
+                r#"
+
+                    impl Drop for {} {{
+                        fn drop(&mut self) {{
+                            if !self.pointer.is_null() {{
+                                let payload = unsafe {{ &*self.pointer }};
+                                let align = core::mem::align_of::<{}>() as u32;
+
+                                unsafe {{
+                                    roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
+                                }}
+
+                                drop(payload);
+                            }}
+                        }}
+                    }}
+
+                "#
+            ),
+            name, payload_type_name
+        )?;
+    }
 
     Ok(())
 }

@@ -553,7 +553,7 @@ fn cons_list_of_strings() {
 
                         unsafe {
                             let pointer =
-                                roc_alloc(size, align as u32) as *mut core::mem::ManuallyDrop<roc_std::RocStr>;
+                                crate::roc_alloc(size, align as u32) as *mut core::mem::ManuallyDrop<roc_std::RocStr>;
 
                             *pointer = core::mem::ManuallyDrop::new(payload);
 
