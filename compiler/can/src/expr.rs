@@ -19,7 +19,7 @@ use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
@@ -115,7 +115,7 @@ pub enum Expr {
     },
 
     // Let
-    LetRec(Vec<Def>, Box<Loc<Expr>>),
+    LetRec(Vec<Def>, Box<Loc<Expr>>, IllegalCycleMark),
     LetNonRec(Box<Def>, Box<Loc<Expr>>),
 
     /// This is *only* for calling functions, not for tag application.
@@ -224,7 +224,7 @@ impl Expr {
             &Self::AbilityMember(sym, _, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
-            Self::LetRec(_, expr) => expr.value.category(),
+            Self::LetRec(_, expr, _) => expr.value.category(),
             Self::LetNonRec(_, expr) => expr.value.category(),
             &Self::Call(_, _, called_via) => Category::CallResult(None, called_via),
             &Self::RunLowLevel { op, .. } => Category::LowLevelOpResult(op),
@@ -1516,7 +1516,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             Expect(Box::new(loc_condition), Box::new(loc_expr))
         }
 
-        LetRec(defs, loc_expr) => {
+        LetRec(defs, loc_expr, mark) => {
             let mut new_defs = Vec::with_capacity(defs.len());
 
             for def in defs {
@@ -1537,7 +1537,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 value: inline_calls(var_store, scope, loc_expr.value),
             };
 
-            LetRec(new_defs, Box::new(loc_expr))
+            LetRec(new_defs, Box::new(loc_expr), mark)
         }
 
         LetNonRec(def, loc_expr) => {

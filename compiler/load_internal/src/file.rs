@@ -4238,7 +4238,7 @@ fn build_pending_specializations<'a>(
                 &exposed_to_host.values,
                 false,
             ),
-            DeclareRec(defs) => {
+            DeclareRec(defs, cycle_mark) if !cycle_mark.is_illegal(mono_env.subs) => {
                 for def in defs {
                     add_def_to_module(
                         &mut layout_cache,
@@ -4251,7 +4251,7 @@ fn build_pending_specializations<'a>(
                     )
                 }
             }
-            InvalidCycle(_entries) => {
+            InvalidCycle(_) | DeclareRec(..) => {
                 // do nothing?
                 // this may mean the loc_symbols are not defined during codegen; is that a problem?
             }

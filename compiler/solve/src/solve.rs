@@ -5,13 +5,14 @@ use crate::ability::{
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
 use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::{Constraints, LetConstraint, OpportunisticResolve};
+use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::MutMap;
 use roc_debug_flags::{dbg_do, ROC_VERIFY_RIGID_LET_GENERALIZED};
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
+use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
@@ -89,6 +90,7 @@ pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
+    CircularDef(Vec<CycleEntry>),
     BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
     IncompleteAbilityImplementation(IncompleteAbilityImplementation),
@@ -1395,6 +1397,47 @@ fn solve(
 
                 state
             }
+            CheckCycle(cycle, cycle_mark) => {
+                let Cycle {
+                    def_names,
+                    expr_regions,
+                } = &constraints.cycles[cycle.index()];
+                let symbols = &constraints.loc_symbols[def_names.indices()];
+
+                // If the type of a symbol is not a function, that's an error.
+                // Roc is strict, so only functions can be mutually recursive.
+                let any_is_bad = {
+                    use Content::*;
+
+                    symbols.iter().any(|(s, _)| {
+                        let var = env.get_var_by_symbol(s).expect("Symbol not solved!");
+                        let content = subs.get_content_without_compacting(var);
+                        !matches!(content, Error | Structure(FlatType::Func(..)))
+                    })
+                };
+
+                if any_is_bad {
+                    // expr regions are stored in loc_symbols (that turned out to be convenient).
+                    // The symbol is just a dummy, and should not be used
+                    let expr_regions = &constraints.loc_symbols[expr_regions.indices()];
+
+                    let cycle = symbols
+                        .iter()
+                        .zip(expr_regions.iter())
+                        .map(|(&(symbol, symbol_region), &(_, expr_region))| CycleEntry {
+                            symbol,
+                            symbol_region,
+                            expr_region,
+                        })
+                        .collect();
+
+                    problems.push(TypeError::CircularDef(cycle));
+
+                    cycle_mark.set_illegal(subs);
+                }
+
+                state
+            }
         };
     }
 
@@ -1596,7 +1639,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
 
         let mut local_def_vars = Self::with_length(types_slice.len());
 
-        for ((symbol, region), typ) in loc_symbols_slice.iter().copied().zip(types_slice) {
+        for (&(symbol, region), typ) in (loc_symbols_slice.iter()).zip(types_slice) {
             let var = type_to_var(subs, rank, pools, aliases, typ);
 
             local_def_vars.push((symbol, Loc { value: var, region }));

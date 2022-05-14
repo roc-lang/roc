@@ -5,7 +5,7 @@ use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExhaustiveMark, Variable};
+use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
 use roc_types::types::{Category, PatternCategory, Type};
 
 #[derive(Debug)]
@@ -24,6 +24,7 @@ pub struct Constraints {
     pub sketched_rows: Vec<SketchedRows>,
     pub eq: Vec<Eq>,
     pub pattern_eq: Vec<PatternEq>,
+    pub cycles: Vec<Cycle>,
 }
 
 impl Default for Constraints {
@@ -48,6 +49,7 @@ impl Constraints {
         let sketched_rows = Vec::new();
         let eq = Vec::new();
         let pattern_eq = Vec::new();
+        let cycles = Vec::new();
 
         types.extend([
             Type::EmptyRec,
@@ -101,6 +103,7 @@ impl Constraints {
             sketched_rows,
             eq,
             pattern_eq,
+            cycles,
         }
     }
 
@@ -582,7 +585,8 @@ impl Constraints {
             | Constraint::IncludesTag(_)
             | Constraint::PatternPresence(_, _, _, _)
             | Constraint::Exhaustive { .. }
-            | Constraint::Resolve(..) => false,
+            | Constraint::Resolve(..)
+            | Constraint::CheckCycle(..) => false,
         }
     }
 
@@ -644,6 +648,32 @@ impl Constraints {
         };
 
         Constraint::Exhaustive(equality, sketched_rows, context, exhaustive)
+    }
+
+    pub fn check_cycle<I, I1>(
+        &mut self,
+        loc_symbols: I,
+        expr_regions: I1,
+        cycle_mark: IllegalCycleMark,
+    ) -> Constraint
+    where
+        I: IntoIterator<Item = (Symbol, Region)>,
+        I1: IntoIterator<Item = Region>,
+    {
+        let def_names = Slice::extend_new(&mut self.loc_symbols, loc_symbols);
+
+        // we add a dummy symbol to these regions, so we can store the data in the loc_symbols vec
+        let it = expr_regions.into_iter().map(|r| (Symbol::ATTR_ATTR, r));
+        let expr_regions = Slice::extend_new(&mut self.loc_symbols, it);
+        let expr_regions = Slice::new(expr_regions.start() as _, expr_regions.len() as _);
+
+        let cycle = Cycle {
+            def_names,
+            expr_regions,
+        };
+        let cycle_index = Index::push_new(&mut self.cycles, cycle);
+
+        Constraint::CheckCycle(cycle_index, cycle_mark)
     }
 }
 
@@ -734,6 +764,7 @@ pub enum Constraint {
     ),
     /// Attempt to resolve a specialization.
     Resolve(OpportunisticResolve),
+    CheckCycle(Index<Cycle>, IllegalCycleMark),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -757,6 +788,12 @@ pub struct IncludesTag {
     pub types: Slice<Type>,
     pub pattern_category: Index<PatternCategory>,
     pub region: Region,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Cycle {
+    pub def_names: Slice<(Symbol, Region)>,
+    pub expr_regions: Slice<Region>,
 }
 
 /// Custom impl to limit vertical space used by the debug output
@@ -797,6 +834,9 @@ impl std::fmt::Debug for Constraint {
             }
             Self::Resolve(arg0) => {
                 write!(f, "Resolve({:?})", arg0)
+            }
+            Self::CheckCycle(arg0, arg1) => {
+                write!(f, "CheckCycle({:?}, {:?})", arg0, arg1)
             }
         }
     }
