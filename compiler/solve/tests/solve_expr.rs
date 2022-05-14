@@ -3756,7 +3756,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn sorting() {
         // based on https://github.com/elm/compiler/issues/2057
         // Roc seems to do this correctly, tracking to make sure it stays that way
@@ -3790,7 +3789,6 @@ mod solve_expr {
                         g = \bs ->
                             when bs is
                                 bx -> f bx
-                                _ -> Nil
 
                         always Nil (f list)
 
@@ -4300,7 +4298,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn rbtree_full_remove_min() {
         infer_eq_without_problem(
             indoc!(

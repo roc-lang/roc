@@ -1,5 +1,3 @@
-use std::convert::TryInto;
-
 use crate::structs::Structs;
 use crate::types::{TypeId, Types};
 use crate::{enums::Enums, types::RocType};
@@ -299,29 +297,82 @@ fn add_tag_union(
     // Sort tags alphabetically by tag name
     tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
-    let tags = tags
-        .into_iter()
-        .map(|(tag_name, payload_vars)| {
-            let payloads = payload_vars
-                .iter()
-                .map(|payload_var| add_type(env, *payload_var, types))
-                .collect::<Vec<TypeId>>();
+    let tags: Vec<_> =
+        tags.into_iter()
+            .map(|(tag_name, payload_vars)| {
+                match payload_vars.len() {
+                    0 => {
+                        // no payload
+                        (tag_name, None)
+                    }
+                    1 => {
+                        // there's 1 payload item, so it doesn't need its own
+                        // struct - e.g. for `[ Foo Str, Bar Str ]` both of them
+                        // can have payloads of plain old Str, no struct wrapper needed.
+                        let payload_var = payload_vars.get(0).unwrap();
+                        let payload_id = add_type(env, *payload_var, types);
 
-            (tag_name, payloads)
-        })
-        .collect();
+                        (tag_name, Some(payload_id))
+                    }
+                    _ => {
+                        // create a struct type for the payload and save it
+
+                        let struct_name = format!("{}_{}", name, tag_name); // e.g. "MyUnion_MyVariant"
+
+                        let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
+                            (format!("f{}", index).into(), *payload_var)
+                        });
+                        let struct_id = add_struct(env, struct_name, fields, types);
+
+                        (tag_name, Some(struct_id))
+                    }
+                }
+            })
+            .collect();
 
     let typ = match env.layout_cache.from_var(env.arena, var, subs).unwrap() {
         Layout::Struct { .. } => {
             // a single-tag union with multiple payload values, e.g. [ Foo Str Str ]
             unreachable!()
         }
-        Layout::Union(_) => todo!(),
+        Layout::Union(union_layout) => {
+            use roc_mono::layout::UnionLayout::*;
+
+            match union_layout {
+                // A non-recursive tag union
+                // e.g. `Result ok err : [ Ok ok, Err err ]`
+                NonRecursive(_) => RocType::TagUnion { name, tags },
+                // A recursive tag union (general case)
+                // e.g. `Expr : [ Sym Str, Add Expr Expr ]`
+                Recursive(_) => {
+                    todo!()
+                }
+                // A recursive tag union with just one constructor
+                // Optimization: No need to store a tag ID (the payload is "unwrapped")
+                // e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
+                NonNullableUnwrapped(_) => {
+                    todo!()
+                }
+                // A recursive tag union that has an empty variant
+                // Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
+                // It has more than one other variant, so they need tag IDs (payloads are "wrapped")
+                // e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
+                // see also: https://youtu.be/ip92VMpf_-A?t=164
+                NullableWrapped { .. } => {
+                    todo!()
+                }
+                // A recursive tag union with only two variants, where one is empty.
+                // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
+                // e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
+                NullableUnwrapped { .. } => {
+                    todo!()
+                }
+            }
+        }
         Layout::Builtin(builtin) => match builtin {
-            Builtin::Int(int_width) => RocType::TagUnion {
-                tag_bytes: int_width.stack_size().try_into().unwrap(),
+            Builtin::Int(_) => RocType::Enumeration {
                 name,
-                tags,
+                tags: tags.into_iter().map(|(tag_name, _)| tag_name).collect(),
             },
             Builtin::Bool => RocType::Bool,
             Builtin::Float(_)

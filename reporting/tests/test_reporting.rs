@@ -1207,6 +1207,128 @@ mod test_reporting {
     }
 
     #[test]
+    fn polymorphic_mutual_recursion() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = \x -> g x
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `f`:
+
+                1│  f = \x -> g x
+                    ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> a
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `g`:
+
+                2│  g = \x -> f [x]
+                    ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion_annotated() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> List a
+                f = \x -> g x
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression is used in an unexpected way:
+
+                2│  f = \x -> g x
+                              ^^^
+
+                This `g` call produces:
+
+                    List List a
+
+                But you are trying to use it as:
+
+                    List a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `List` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion_dually_annotated_lie() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> List a
+                f = \x -> g x
+                g : b -> List b
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression is used in an unexpected way:
+
+                4│  g = \x -> f [x]
+                              ^^^^^
+
+                This `f` call produces:
+
+                    List List b
+
+                But you are trying to use it as:
+
+                    List b
+
+                Tip: The type annotation uses the type variable `b` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `List` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn record_field_mismatch() {
         report_problem_as(
             indoc!(
