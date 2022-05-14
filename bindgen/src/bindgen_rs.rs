@@ -1039,5 +1039,29 @@ fn write_nullable_unwrapped(
         )?;
     }
 
+    // The Debug impl for the tag union
+    {
+        write!(
+            buf,
+            indoc!(
+                r#"
+                    impl core::fmt::Debug for {} {{
+                        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+                            if self.pointer.is_null() {{
+                                f.write_str("{}::{}")
+                            }} else {{
+                                f.write_str("{}::")?;
+
+                                unsafe {{ f.debug_tuple("{}").field(&**self.pointer).finish() }}
+                            }}
+                        }}
+                    }}
+
+                "#
+            ),
+            name, name, null_tag, name, non_null_tag
+        )?;
+    }
+
     Ok(())
 }

@@ -613,6 +613,18 @@ fn cons_list_of_strings() {
                     }
                 }
 
+                impl core::fmt::Debug for StrConsList {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        if self.pointer.is_null() {
+                            f.write_str("StrConsList::Nil")
+                        } else {
+                            f.write_str("StrConsList::")?;
+
+                            unsafe { f.debug_tuple("Cons").field(&**self.pointer).finish() }
+                        }
+                    }
+                }
+
             "#
         )
     );
