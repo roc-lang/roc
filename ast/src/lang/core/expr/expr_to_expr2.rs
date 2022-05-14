@@ -77,7 +77,7 @@ pub fn expr_to_expr2<'a>(
         }
         Num(string) => {
             match finish_parsing_num(string) {
-                Ok(ParsedNumResult::UnknownNum(int, _) | ParsedNumResult::Int(int, _)) => {
+                Ok((parsed, ParsedNumResult::UnknownNum(int, _) | ParsedNumResult::Int(int, _))) => {
                     let expr = Expr2::SmallInt {
                         number: IntVal::I64(match int {
                             IntValue::U128(_) => todo!(),
@@ -86,16 +86,16 @@ pub fn expr_to_expr2<'a>(
                         var: env.var_store.fresh(),
                         // TODO non-hardcode
                         style: IntStyle::Decimal,
-                        text: PoolStr::new(string, env.pool),
+                        text: PoolStr::new(parsed, env.pool),
                     };
 
                     (expr, Output::default())
                 }
-                Ok(ParsedNumResult::Float(float, _)) => {
+                Ok((parsed, ParsedNumResult::Float(float, _))) => {
                     let expr = Expr2::Float {
                         number: FloatVal::F64(float),
                         var: env.var_store.fresh(),
-                        text: PoolStr::new(string, env.pool),
+                        text: PoolStr::new(parsed, env.pool),
                     };
 
                     (expr, Output::default())
