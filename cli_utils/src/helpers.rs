@@ -21,13 +21,13 @@ pub struct Out {
     pub status: ExitStatus,
 }
 
-pub fn path_to_roc_binary() -> PathBuf {
+fn path_to_binary() -> PathBuf {
     // Adapted from https://github.com/volta-cli/volta/blob/cefdf7436a15af3ce3a38b8fe53bb0cfdb37d3dd/tests/acceptance/support/sandbox.rs#L680
     // by the Volta Contributors - license information can be found in
     // the LEGAL_DETAILS file in the root directory of this distribution.
     //
     // Thank you, Volta contributors!
-    let mut path = env::var_os("CARGO_BIN_PATH")
+    env::var_os("CARGO_BIN_PATH")
             .map(PathBuf::from)
             .or_else(|| {
                 env::current_exe().ok().map(|mut path| {
@@ -38,7 +38,27 @@ pub fn path_to_roc_binary() -> PathBuf {
                     path
                 })
             })
-            .unwrap_or_else(|| panic!("CARGO_BIN_PATH wasn't set, and couldn't be inferred from context. Can't run CLI tests."));
+            .unwrap_or_else(|| panic!("CARGO_BIN_PATH wasn't set, and couldn't be inferred from context. Can't run CLI tests."))
+}
+
+pub fn strip_colors(str: &str) -> String {
+    use roc_reporting::report::ANSI_STYLE_CODES;
+
+    str.replace(ANSI_STYLE_CODES.red, "")
+        .replace(ANSI_STYLE_CODES.green, "")
+        .replace(ANSI_STYLE_CODES.yellow, "")
+        .replace(ANSI_STYLE_CODES.blue, "")
+        .replace(ANSI_STYLE_CODES.magenta, "")
+        .replace(ANSI_STYLE_CODES.cyan, "")
+        .replace(ANSI_STYLE_CODES.white, "")
+        .replace(ANSI_STYLE_CODES.bold, "")
+        .replace(ANSI_STYLE_CODES.underline, "")
+        .replace(ANSI_STYLE_CODES.reset, "")
+        .replace(ANSI_STYLE_CODES.color_reset, "")
+}
+
+pub fn path_to_roc_binary() -> PathBuf {
+    let mut path = path_to_binary();
 
     path.push("roc");
 

@@ -11,7 +11,7 @@ extern crate roc_module;
 mod cli_run {
     use cli_utils::helpers::{
         example_file, examples_dir, extract_valgrind_errors, fixture_file, fixtures_dir,
-        known_bad_file, run_cmd, run_roc, run_with_valgrind, Out, ValgrindError,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, strip_colors, Out, ValgrindError,
         ValgrindErrorXWhat,
     };
     use const_format::concatcp;
@@ -66,21 +66,6 @@ mod cli_run {
         input_file: Option<&'a str>,
         expected_ending: &'a str,
         use_valgrind: bool,
-    }
-
-    fn strip_colors(str: &str) -> String {
-        use roc_reporting::report::ANSI_STYLE_CODES;
-        str.replace(ANSI_STYLE_CODES.red, "")
-            .replace(ANSI_STYLE_CODES.green, "")
-            .replace(ANSI_STYLE_CODES.yellow, "")
-            .replace(ANSI_STYLE_CODES.blue, "")
-            .replace(ANSI_STYLE_CODES.magenta, "")
-            .replace(ANSI_STYLE_CODES.cyan, "")
-            .replace(ANSI_STYLE_CODES.white, "")
-            .replace(ANSI_STYLE_CODES.bold, "")
-            .replace(ANSI_STYLE_CODES.underline, "")
-            .replace(ANSI_STYLE_CODES.reset, "")
-            .replace(ANSI_STYLE_CODES.color_reset, "")
     }
 
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
