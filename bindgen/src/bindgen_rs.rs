@@ -847,10 +847,15 @@ fn write_nullable_unwrapped(
     let discriminant_name = write_discriminant(name, tag_names, types, buf)?;
     let payload_type = types.get(non_null_payload);
     let payload_type_name = type_name(non_null_payload, types);
-    let wrapped_payload_type_name = if payload_type.has_pointer(types) {
-        format!("core::mem::ManuallyDrop<{}>", payload_type_name)
+    let has_pointer = payload_type.has_pointer(types);
+    let (wrapped_payload_type_name, init_payload, ref_if_needed) = if has_pointer {
+        (
+            format!("core::mem::ManuallyDrop<{}>", payload_type_name),
+            "core::mem::ManuallyDrop::new(payload)",
+            "&",
+        )
     } else {
-        payload_type_name.clone()
+        (payload_type_name.clone(), "payload", "")
     };
 
     write_derive(types.get(id), types, buf)?;
@@ -916,10 +921,9 @@ fn write_nullable_unwrapped(
         let align = core::mem::align_of::<{}>();
 
         unsafe {{
-            let pointer =
-                crate::roc_alloc(size, align as u32) as *mut {};
+            let pointer = crate::roc_alloc(size, align as u32) as *mut {};
 
-            *pointer = core::mem::ManuallyDrop::new(payload);
+            *pointer = {};
 
             Self {{ pointer }}
         }}
@@ -929,8 +933,15 @@ fn write_nullable_unwrapped(
             payload_type_name,
             payload_type_name,
             payload_type_name,
-            wrapped_payload_type_name
+            wrapped_payload_type_name,
+            init_payload
         )?;
+
+        let assign_payload = if has_pointer {
+            "core::mem::ManuallyDrop::take(&mut *self.pointer)"
+        } else {
+            "*self.pointer"
+        };
 
         writeln!(
             buf,
@@ -939,7 +950,7 @@ fn write_nullable_unwrapped(
     /// Unsafely assume the given {} has a .tag() of {} and convert it to {}'s payload.
     /// (always examine .tag() first to make sure this is the correct variant!)
     pub unsafe fn into_{}(self) -> {} {{
-        let payload = core::mem::ManuallyDrop::take(&mut *self.pointer);
+        let payload = {assign_payload};
         let align = core::mem::align_of::<{}>() as u32;
 
         roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
@@ -955,8 +966,8 @@ fn write_nullable_unwrapped(
             r#"
     /// Unsafely assume the given {} has a .tag() of {} and return its payload.
     /// (always examine .tag() first to make sure this is the correct variant!)
-    pub unsafe fn as_{}(&self) -> &{} {{
-        &*self.pointer
+    pub unsafe fn as_{}(&self) -> {ref_if_needed}{} {{
+        {ref_if_needed}*self.pointer
     }}"#,
             name, non_null_tag, non_null_tag, payload_type_name
         )?;
@@ -1041,6 +1052,8 @@ fn write_nullable_unwrapped(
 
     // The Debug impl for the tag union
     {
+        let extra_deref = if has_pointer { "*" } else { "" };
+
         write!(
             buf,
             indoc!(
@@ -1052,14 +1065,14 @@ fn write_nullable_unwrapped(
                             }} else {{
                                 f.write_str("{}::")?;
 
-                                unsafe {{ f.debug_tuple("{}").field(&**self.pointer).finish() }}
+                                unsafe {{ f.debug_tuple("{}").field(&*{}self.pointer).finish() }}
                             }}
                         }}
                     }}
 
                 "#
             ),
-            name, name, null_tag, name, non_null_tag
+            name, name, null_tag, name, non_null_tag, extra_deref
         )?;
     }
 
