@@ -277,138 +277,157 @@ fn eat_line_comment<'a>(
 ) -> SpaceState<'a> {
     use SpaceState::*;
 
-    let is_doc_comment = if let Some(b'#') = state.bytes().get(0) {
-        match state.bytes().get(1) {
-            Some(b' ') => {
-                state = state.advance(2);
+    let mut index = 0;
+    let bytes = state.bytes();
 
-                true
-            }
-            Some(b'\n') => {
-                // consume the second # and the \n
-                state = state.advance(1);
-                state = state.advance_newline();
+    'outer: loop {
+        let is_doc_comment = if let Some(b'#') = bytes.get(index) {
+            match bytes.get(index + 1) {
+                Some(b' ') => {
+                    state = state.advance(2);
+                    index += 2;
 
-                comments_and_newlines.push(CommentOrNewline::DocComment(""));
-                multiline = true;
+                    true
+                }
+                Some(b'\n') => {
+                    // consume the second # and the \n
+                    state = state.advance(1);
+                    state = state.advance_newline();
+                    index += 2;
 
-                for c in state.bytes() {
-                    match c {
-                        b' ' => {
-                            state = state.advance(1);
+                    comments_and_newlines.push(CommentOrNewline::DocComment(""));
+                    multiline = true;
+
+                    for c in state.bytes() {
+                        match c {
+                            b' ' => {
+                                state = state.advance(1);
+                            }
+                            b'\n' => {
+                                state = state.advance_newline();
+                                index += 1;
+                                multiline = true;
+                                comments_and_newlines.push(CommentOrNewline::Newline);
+                            }
+                            b'\r' => {
+                                state = state.advance_newline();
+                            }
+                            b'\t' => {
+                                return HasTab(state);
+                            }
+                            b'#' => {
+                                state = state.advance(1);
+                                index += 1;
+                                continue 'outer;
+                            }
+                            _ => break,
                         }
-                        b'\n' => {
-                            state = state.advance_newline();
-                            multiline = true;
-                            comments_and_newlines.push(CommentOrNewline::Newline);
-                        }
-                        b'\r' => {
-                            state = state.advance_newline();
-                        }
-                        b'\t' => {
-                            return HasTab(state);
-                        }
-                        b'#' => {
-                            state = state.advance(1);
-                            return eat_line_comment(state, multiline, comments_and_newlines);
-                        }
-                        _ => break,
+
+                        index += 1;
                     }
+
+                    return Good {
+                        state,
+                        multiline,
+                        comments_and_newlines,
+                    };
+                }
+                None => {
+                    // consume the second #
+                    state = state.advance(1);
+
+                    return Good {
+                        state,
+                        multiline,
+                        comments_and_newlines,
+                    };
                 }
 
-                return Good {
-                    state,
-                    multiline,
-                    comments_and_newlines,
-                };
+                _ => false,
             }
-            None => {
-                // consume the second #
-                state = state.advance(1);
+        } else {
+            false
+        };
 
-                return Good {
-                    state,
-                    multiline,
-                    comments_and_newlines,
-                };
-            }
+        let loop_start = index;
 
-            _ => false,
-        }
-    } else {
-        false
-    };
+        let initial = state.bytes();
+        let mut it = initial.iter();
 
-    let initial = state.bytes();
-    let mut it = initial.iter();
+        while let Some(c) = it.next() {
+            match c {
+                b'\t' => return HasTab(state),
+                b'\n' => {
+                    let delta = initial.len() - state.bytes().len();
+                    let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
 
-    while let Some(c) = it.next() {
-        match c {
-            b'\t' => return HasTab(state),
-            b'\n' => {
-                let delta = initial.len() - state.bytes().len();
-                let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
-
-                if is_doc_comment {
-                    comments_and_newlines.push(CommentOrNewline::DocComment(comment));
-                } else {
-                    comments_and_newlines.push(CommentOrNewline::LineComment(comment));
-                }
-                state = state.advance_newline();
-                multiline = true;
-
-                while let Some(c) = it.next() {
-                    match c {
-                        b' ' => {
-                            state = state.advance(1);
-                        }
-                        b'\n' => {
-                            state = state.advance_newline();
-                            multiline = true;
-                            comments_and_newlines.push(CommentOrNewline::Newline);
-                        }
-                        b'\r' => {
-                            state = state.advance_newline();
-                        }
-                        b'\t' => {
-                            return HasTab(state);
-                        }
-                        b'#' => {
-                            state = state.advance(1);
-                            return eat_line_comment(state, multiline, comments_and_newlines);
-                        }
-                        _ => break,
+                    if is_doc_comment {
+                        comments_and_newlines.push(CommentOrNewline::DocComment(comment));
+                    } else {
+                        comments_and_newlines.push(CommentOrNewline::LineComment(comment));
                     }
+                    state = state.advance_newline();
+                    multiline = true;
+
+                    index += 1;
+                    while let Some(c) = it.next() {
+                        match c {
+                            b' ' => {
+                                state = state.advance(1);
+                            }
+                            b'\n' => {
+                                state = state.advance_newline();
+                                multiline = true;
+                                comments_and_newlines.push(CommentOrNewline::Newline);
+                            }
+                            b'\r' => {
+                                state = state.advance_newline();
+                            }
+                            b'\t' => {
+                                return HasTab(state);
+                            }
+                            b'#' => {
+                                state = state.advance(1);
+                                index += 1;
+                                continue 'outer;
+                            }
+                            _ => break,
+                        }
+
+                        index += 1;
+                    }
+
+                    return Good {
+                        state,
+                        multiline,
+                        comments_and_newlines,
+                    };
                 }
+                b'\r' => {
+                    state = state.advance_newline();
+                }
+                _ => {
+                    state = state.advance(1);
+                }
+            }
 
-                return Good {
-                    state,
-                    multiline,
-                    comments_and_newlines,
-                };
-            }
-            b'\r' => {
-                state = state.advance_newline();
-            }
-            _ => {
-                state = state.advance(1);
-            }
+            index += 1;
         }
-    }
 
-    // We made it to the end of the bytes. This means there's a comment without a trailing newline.
-    let delta = initial.len() - state.bytes().len();
-    let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
+        // We made it to the end of the bytes. This means there's a comment without a trailing newline.
+        let delta = initial.len() - state.bytes().len();
+        let comment = unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..delta]) };
 
-    if is_doc_comment {
-        comments_and_newlines.push(CommentOrNewline::DocComment(comment));
-    } else {
-        comments_and_newlines.push(CommentOrNewline::LineComment(comment));
-    }
+        if is_doc_comment {
+            comments_and_newlines.push(CommentOrNewline::DocComment(comment));
+        } else {
+            comments_and_newlines.push(CommentOrNewline::LineComment(comment));
+        }
 
-    Good {
-        state,
-        multiline,
-        comments_and_newlines,
+        return Good {
+            state,
+            multiline,
+            comments_and_newlines,
+        };
     }
 }
