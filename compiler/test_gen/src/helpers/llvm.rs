@@ -60,7 +60,7 @@ fn create_llvm_module<'a>(
         Default::default(),
         target_info,
         RenderTarget::ColorTerminal,
-        Threading::AllAvailable,
+        Threading::Single,
     );
 
     let mut loaded = match loaded {
