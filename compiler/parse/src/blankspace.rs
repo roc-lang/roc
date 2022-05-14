@@ -279,6 +279,7 @@ fn eat_line_comment<'a>(
 
     let mut index = 0;
     let bytes = state.bytes();
+    let length = bytes.len();
 
     'outer: loop {
         let is_doc_comment = if let Some(b'#') = bytes.get(index) {
@@ -351,15 +352,12 @@ fn eat_line_comment<'a>(
 
         let loop_start = index;
 
-        let initial = state.bytes();
-        let mut it = initial.iter();
-
-        while let Some(c) = it.next() {
-            match c {
+        while index < length {
+            match bytes[index] {
                 b'\t' => return HasTab(state),
                 b'\n' => {
-                    let delta = initial.len() - state.bytes().len();
-                    let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
+                    let comment =
+                        unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..index]) };
 
                     if is_doc_comment {
                         comments_and_newlines.push(CommentOrNewline::DocComment(comment));
@@ -370,8 +368,8 @@ fn eat_line_comment<'a>(
                     multiline = true;
 
                     index += 1;
-                    while let Some(c) = it.next() {
-                        match c {
+                    while index < length {
+                        match bytes[index] {
                             b' ' => {
                                 state = state.advance(1);
                             }
@@ -415,8 +413,7 @@ fn eat_line_comment<'a>(
         }
 
         // We made it to the end of the bytes. This means there's a comment without a trailing newline.
-        let delta = initial.len() - state.bytes().len();
-        let comment = unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..delta]) };
+        let comment = unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..index]) };
 
         if is_doc_comment {
             comments_and_newlines.push(CommentOrNewline::DocComment(comment));
