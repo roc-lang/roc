@@ -14,76 +14,90 @@ const INDENT: &str = "    ";
 
 pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
     for id in types.sorted_ids() {
-        match types.get(id) {
-            RocType::Struct { name, fields } => write_struct(name, fields, id, types, buf)?,
-            RocType::TagUnion(tag_union) => {
-                match tag_union {
-                    RocTagUnion::Enumeration { tags, name } => {
-                        if tags.len() == 1 {
-                            // An enumeration with one tag is a zero-sized unit type, so
-                            // represent it as a zero-sized struct (e.g. "struct Foo()").
-                            write_deriving(types.get(id), types, buf)?;
-                            writeln!(buf, "\nstruct {}();", type_name(id, types))?;
-                        } else {
-                            write_enumeration(name, types.get(id), tags.iter(), types, buf)?;
-                        }
-                    }
-                    RocTagUnion::NonRecursive { tags, name } => {
-                        // Empty tag unions can never come up at runtime,
-                        // and so don't need declared types.
-                        if !tags.is_empty() {
-                            write_tag_union(name, id, tags, types, buf)?;
-                        }
-                    }
-                    RocTagUnion::Recursive { .. } => {
-                        todo!();
-                    }
-                    RocTagUnion::NullableWrapped { .. } => {
-                        todo!();
-                    }
-                    RocTagUnion::NullableUnwrapped {
-                        name,
-                        null_tag,
-                        non_null_tag,
-                        non_null_payload,
-                    } => {
-                        todo!("Write nullable unwrapped tag union.")
-                    }
-                    RocTagUnion::NonNullableUnwrapped { .. } => {
-                        todo!();
+        write_type(id, types, buf)?;
+    }
+
+    Ok(())
+}
+
+fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
+    match types.get(id) {
+        RocType::Struct { name, fields } => write_struct(name, fields, id, types, buf),
+        RocType::TagUnion(tag_union) => {
+            match tag_union {
+                RocTagUnion::Enumeration { tags, name } => {
+                    if tags.len() == 1 {
+                        // An enumeration with one tag is a zero-sized unit type, so
+                        // represent it as a zero-sized struct (e.g. "struct Foo()").
+                        write_deriving(types.get(id), types, buf)?;
+                        writeln!(buf, "\nstruct {}();", type_name(id, types))
+                    } else {
+                        write_enumeration(name, types.get(id), tags.iter(), types, buf)
                     }
                 }
-            }
-            // These types don't need to be declared in Rust.
-            RocType::U8
-            | RocType::U16
-            | RocType::U32
-            | RocType::U64
-            | RocType::U128
-            | RocType::I8
-            | RocType::I16
-            | RocType::I32
-            | RocType::I64
-            | RocType::I128
-            | RocType::F32
-            | RocType::F64
-            | RocType::F128
-            | RocType::Bool
-            | RocType::RocDec
-            | RocType::RocStr
-            | RocType::RocDict(_, _)
-            | RocType::RocSet(_)
-            | RocType::RocList(_)
-            | RocType::RocBox(_) => {}
-            RocType::TransparentWrapper { name, content } => {
-                write_deriving(types.get(id), types, buf)?;
-                writeln!(
-                    buf,
-                    "#[repr(transparent)]\npub struct {}({});",
+                RocTagUnion::NonRecursive { tags, name } => {
+                    // Empty tag unions can never come up at runtime,
+                    // and so don't need declared types.
+                    if !tags.is_empty() {
+                        write_tag_union(name, id, tags, types, buf)
+                    } else {
+                        Ok(())
+                    }
+                }
+                RocTagUnion::Recursive { .. } => {
+                    todo!();
+                }
+                RocTagUnion::NullableWrapped { .. } => {
+                    todo!();
+                }
+                RocTagUnion::NullableUnwrapped {
                     name,
-                    type_name(*content, types)
-                )?;
+                    null_tag,
+                    non_null_tag,
+                    non_null_payload,
+                } => write_nullable_unwrapped(
+                    name,
+                    id,
+                    null_tag.clone(),
+                    non_null_tag.clone(),
+                    *non_null_payload,
+                    types,
+                    buf,
+                ),
+                RocTagUnion::NonNullableUnwrapped { .. } => {
+                    todo!();
+                }
             }
+        }
+        // These types don't need to be declared in Rust.
+        RocType::U8
+        | RocType::U16
+        | RocType::U32
+        | RocType::U64
+        | RocType::U128
+        | RocType::I8
+        | RocType::I16
+        | RocType::I32
+        | RocType::I64
+        | RocType::I128
+        | RocType::F32
+        | RocType::F64
+        | RocType::F128
+        | RocType::Bool
+        | RocType::RocDec
+        | RocType::RocStr
+        | RocType::RocDict(_, _)
+        | RocType::RocSet(_)
+        | RocType::RocList(_)
+        | RocType::RocBox(_) => Ok(()),
+        RocType::TransparentWrapper { name, content } => {
+            write_deriving(types.get(id), types, buf)?;
+            writeln!(
+                buf,
+                "#[repr(transparent)]\npub struct {}({});",
+                name,
+                type_name(*content, types)
+            )
         }
     }
 
