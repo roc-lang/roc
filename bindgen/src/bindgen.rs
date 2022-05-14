@@ -74,12 +74,12 @@ pub fn add_type_help<'a>(
         Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 
-            add_tag_union(env, opt_name, tags, var, None, types)
+            add_tag_union(env, opt_name, tags, var, types)
         }
-        Content::Structure(FlatType::RecursiveTagUnion(rec_var, tag_vars, ext_var)) => {
+        Content::Structure(FlatType::RecursiveTagUnion(_rec_var, tag_vars, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 
-            add_tag_union(env, opt_name, tag_vars, var, Some(*rec_var), types)
+            add_tag_union(env, opt_name, tag_vars, var, types)
         }
         Content::Structure(FlatType::Apply(_symbol, _)) => match layout {
             Layout::Builtin(builtin) => add_builtin_type(env, builtin, var, opt_name, types),
@@ -263,7 +263,6 @@ fn add_tag_union(
     opt_name: Option<Symbol>,
     union_tags: &UnionTags,
     var: Variable,
-    opt_rec_var: Option<Variable>,
     types: &mut Types,
 ) -> TypeId {
     let subs = env.subs;
