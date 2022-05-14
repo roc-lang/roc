@@ -1118,7 +1118,42 @@ impl<'a> Layout<'a> {
         // For this calculation, we don't need an accurate
         // stack size, we just need to know whether it's zero,
         // so it's fine to use a pointer size of 1.
-        false
+        false // TODO this should use is_zero_sized once doing so doesn't break things!
+    }
+
+    /// Like stack_size, but doesn't require target info because
+    /// whether something is zero sized is not target-dependent.
+    #[allow(dead_code)]
+    fn is_zero_sized(&self) -> bool {
+        match self {
+            // There are no zero-sized builtins
+            Layout::Builtin(_) => false,
+            // Functions are never zero-sized
+            Layout::LambdaSet(_) => false,
+            // Empty structs, or structs with all zero-sized fields, are zero-sized
+            Layout::Struct { field_layouts, .. } => field_layouts.iter().all(Self::is_zero_sized),
+            // A Box that points to nothing should be unwrapped
+            Layout::Boxed(content) => content.is_zero_sized(),
+            Layout::Union(union_layout) => match union_layout {
+                UnionLayout::NonRecursive(tags)
+                | UnionLayout::Recursive(tags)
+                | UnionLayout::NullableWrapped {
+                    other_tags: tags, ..
+                } => tags
+                    .iter()
+                    .all(|payloads| payloads.iter().all(Self::is_zero_sized)),
+                UnionLayout::NonNullableUnwrapped(tags)
+                | UnionLayout::NullableUnwrapped {
+                    other_fields: tags, ..
+                } => tags.iter().all(Self::is_zero_sized),
+            },
+            // Recursive pointers are considered zero-sized because
+            // if you have a recursive data structure where everything
+            // else but the recutsive pointer is zero-sized, then
+            // the whole thing is unnecessary at runtime and should
+            // be zero-sized.
+            Layout::RecursivePointer => true,
+        }
     }
 
     pub fn is_passed_by_reference(&self, target_info: TargetInfo) -> bool {
