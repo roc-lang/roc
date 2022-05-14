@@ -29,7 +29,7 @@ fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
                     if tags.len() == 1 {
                         // An enumeration with one tag is a zero-sized unit type, so
                         // represent it as a zero-sized struct (e.g. "struct Foo()").
-                        write_deriving(types.get(id), types, buf)?;
+                        write_derive(types.get(id), types, buf)?;
                         writeln!(buf, "\nstruct {}();", type_name(id, types))
                     } else {
                         write_enumeration(name, types.get(id), tags.iter(), types, buf)
@@ -91,7 +91,7 @@ fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
         | RocType::RocList(_)
         | RocType::RocBox(_) => Ok(()),
         RocType::TransparentWrapper { name, content } => {
-            write_deriving(types.get(id), types, buf)?;
+            write_derive(types.get(id), types, buf)?;
             writeln!(
                 buf,
                 "#[repr(transparent)]\npub struct {}({});",
@@ -117,7 +117,7 @@ fn write_nullable_unwrapped(
 
     let discriminant_name = write_discriminant(name, tag_names, types, buf)?;
 
-    write_deriving(types.get(id), types, buf)?;
+    write_derive(types.get(id), types, buf)?;
 
     Ok(())
 }
@@ -744,7 +744,7 @@ fn write_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str>>(
         .try_into()
         .unwrap();
 
-    write_deriving(typ, types, buf)?;
+    write_derive(typ, types, buf)?;
 
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
     writeln!(buf, "#[repr(u{})]\npub enum {} {{", tag_bytes * 8, name)?;
@@ -773,7 +773,7 @@ fn write_struct(
             write_type(fields.first().unwrap().1, types, buf)
         }
         _ => {
-            write_deriving(types.get(struct_id), types, buf)?;
+            write_derive(types.get(struct_id), types, buf)?;
 
             writeln!(buf, "#[repr(C)]\npub struct {} {{", name)?;
 
@@ -829,20 +829,24 @@ fn type_name(id: TypeId, types: &Types) -> String {
     }
 }
 
-fn write_deriving(typ: &RocType, types: &Types, buf: &mut String) -> fmt::Result {
-    buf.write_str("\n#[derive(Clone, PartialEq, PartialOrd, ")?;
+fn write_derive(typ: &RocType, types: &Types, buf: &mut String) -> fmt::Result {
+    buf.write_str("\n#[derive(Clone, ")?;
 
     if !typ.has_pointer(types) {
         buf.write_str("Copy, ")?;
     }
 
     if !typ.has_enumeration(types) {
-        buf.write_str("Default, ")?;
+        buf.write_str("Debug, Default, ")?;
+    } else if matches!(typ, RocType::TagUnion(RocTagUnion::Enumeration { .. })) {
+        // Actual enumerations get Debug (but still not Default),
+        // but other tag unions do not.
+        buf.write_str("Debug, ")?;
     }
 
     if !typ.has_float(types) {
         buf.write_str("Eq, Ord, Hash, ")?;
     }
 
-    buf.write_str("Debug)]\n")
+    buf.write_str("PartialEq, PartialOrd)]\n")
 }

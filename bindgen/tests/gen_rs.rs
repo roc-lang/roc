@@ -70,7 +70,7 @@ fn record_aliased() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
+                #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct MyRcd {
                     b: u128,
@@ -100,7 +100,7 @@ fn nested_record_aliased() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Default, Debug)]
+                #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Outer {
                     y: roc_std::RocStr,
@@ -108,7 +108,7 @@ fn nested_record_aliased() {
                     x: Inner,
                 }
 
-                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Debug)]
+                #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Inner {
                     b: f32,
@@ -129,7 +129,7 @@ fn record_anonymous() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Eq, Ord, Hash, Debug)]
+                #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
                     b: u128,
@@ -150,7 +150,7 @@ fn nested_record_anonymous() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Default, Debug)]
+                #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
                     y: roc_std::RocStr,
@@ -158,7 +158,7 @@ fn nested_record_anonymous() {
                     x: R2,
                 }
 
-                #[derive(Clone, PartialEq, PartialOrd, Copy, Default, Debug)]
+                #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R2 {
                     b: f32,
@@ -186,7 +186,7 @@ fn tag_union_aliased() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Copy, Eq, Ord, Hash, Debug)]
+                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_MyTagUnion {
                     Bar = 0,
@@ -442,7 +442,7 @@ fn tag_union_enumeration() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Copy, Eq, Ord, Hash, Debug)]
+                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum MyTagUnion {
                     Bar = 0,
@@ -471,7 +471,7 @@ fn single_tag_union_with_payloads() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Default, Eq, Ord, Hash, Debug)]
+                #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct UserId {
                     f1: roc_std::RocStr,
@@ -499,7 +499,7 @@ fn single_tag_union_with_one_payload_field() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Default, Eq, Ord, Hash, Debug)]
+                #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(transparent)]
                 pub struct UserId(roc_std::RocStr);
             "#
@@ -524,15 +524,15 @@ fn cons_list_of_strings() {
             .unwrap_or_default(),
         indoc!(
             r#"
-                #[derive(Clone, PartialEq, PartialOrd, Copy, Eq, Ord, Hash, Debug)]
+                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_StrConsList {
                     Cons = 0,
                     Nil = 1,
                 }
 
+                #[derive(Clone, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
-                #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
                 pub struct StrConsList {
                     pointer: *mut core::mem::ManuallyDrop<roc_std::RocStr>,
                 }
