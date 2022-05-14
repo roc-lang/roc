@@ -311,8 +311,9 @@ fn eat_line_comment<'a>(
     };
 
     let initial = state.bytes();
+    let mut it = initial.iter();
 
-    for c in state.bytes() {
+    while let Some(c) = it.next() {
         match c {
             b'\t' => return HasTab(state),
             b'\n' => {
@@ -327,7 +328,7 @@ fn eat_line_comment<'a>(
                 state = state.advance_newline();
                 multiline = true;
 
-                for c in state.bytes() {
+                while let Some(c) = it.next() {
                     match c {
                         b' ' => {
                             state = state.advance(1);
