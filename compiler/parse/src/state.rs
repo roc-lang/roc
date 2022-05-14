@@ -43,18 +43,18 @@ impl<'a> State<'a> {
     }
 
     #[must_use]
-    pub(crate) fn advance(&self, offset: usize) -> State<'a> {
-        let mut state = self.clone();
-        state.offset += offset;
-        state
+    #[inline(always)]
+    pub(crate) const fn advance(mut self, offset: usize) -> State<'a> {
+        self.offset += offset;
+        self
     }
 
     #[must_use]
-    pub(crate) fn advance_newline(&self) -> State<'a> {
-        let mut state = self.clone();
-        state.offset += 1;
-        state.line_start = state.pos();
-        state
+    #[inline(always)]
+    pub(crate) const fn advance_newline(mut self) -> State<'a> {
+        self.offset += 1;
+        self.line_start = self.pos();
+        self
     }
 
     /// Returns the current position
