@@ -10,6 +10,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::io::Read;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use tempfile::NamedTempFile;
@@ -21,13 +22,37 @@ pub struct Out {
     pub status: ExitStatus,
 }
 
-fn path_to_binary() -> PathBuf {
+pub fn run_roc<I, S>(args: I, stdin_vals: &[&str]) -> Out
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run_with_stdin(&path_to_roc_binary(), args, stdin_vals)
+}
+
+pub fn run_bindgen<I, S>(args: I, stdin_vals: &[&str]) -> Out
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run_with_stdin(&path_to_bindgen_binary(), args, stdin_vals)
+}
+
+pub fn path_to_roc_binary() -> PathBuf {
+    path_to_binary("roc")
+}
+
+pub fn path_to_bindgen_binary() -> PathBuf {
+    path_to_binary("roc-bindgen")
+}
+
+pub fn path_to_binary(binary_name: &str) -> PathBuf {
     // Adapted from https://github.com/volta-cli/volta/blob/cefdf7436a15af3ce3a38b8fe53bb0cfdb37d3dd/tests/acceptance/support/sandbox.rs#L680
     // by the Volta Contributors - license information can be found in
     // the LEGAL_DETAILS file in the root directory of this distribution.
     //
     // Thank you, Volta contributors!
-    env::var_os("CARGO_BIN_PATH")
+    let mut path = env::var_os("CARGO_BIN_PATH")
             .map(PathBuf::from)
             .or_else(|| {
                 env::current_exe().ok().map(|mut path| {
@@ -38,7 +63,11 @@ fn path_to_binary() -> PathBuf {
                     path
                 })
             })
-            .unwrap_or_else(|| panic!("CARGO_BIN_PATH wasn't set, and couldn't be inferred from context. Can't run CLI tests."))
+            .unwrap_or_else(|| panic!("CARGO_BIN_PATH wasn't set, and couldn't be inferred from context. Can't run CLI tests."));
+
+    path.push(binary_name);
+
+    path
 }
 
 pub fn strip_colors(str: &str) -> String {
@@ -57,16 +86,12 @@ pub fn strip_colors(str: &str) -> String {
         .replace(ANSI_STYLE_CODES.color_reset, "")
 }
 
-pub fn path_to_roc_binary() -> PathBuf {
-    let mut path = path_to_binary();
-
-    path.push("roc");
-
-    path
-}
-
-pub fn run_roc<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I, stdin_vals: &[&str]) -> Out {
-    let mut cmd = Command::new(path_to_roc_binary());
+pub fn run_with_stdin<I, S>(path: &Path, args: I, stdin_vals: &[&str]) -> Out
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut cmd = Command::new(path);
 
     for arg in args {
         cmd.arg(arg);
@@ -77,7 +102,7 @@ pub fn run_roc<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I, stdin_vals: 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to execute compiled `roc` binary in CLI test");
+        .expect("failed to execute compiled binary in CLI test");
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
@@ -91,7 +116,7 @@ pub fn run_roc<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I, stdin_vals: 
 
     let output = child
         .wait_with_output()
-        .expect("failed to get output for compiled `roc` binary in CLI test");
+        .expect("failed to get output for compiled binary in CLI test");
 
     Out {
         stdout: String::from_utf8(output.stdout).unwrap(),
