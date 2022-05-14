@@ -34,3 +34,6 @@ clap = { version = "3.1.15", default-features = false, features = ["std", "color
 pretty_assertions = "1.0.0"
 tempfile = "3.2.0"
 indoc = "1.0.3"
+serial_test = "0.5.1"
+cli_utils = { path = "../cli_utils" }
+roc_test_utils = { path = "../test_utils" }
