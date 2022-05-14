@@ -187,13 +187,35 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
     types: &mut Types,
 ) -> TypeId {
     let subs = env.subs;
-    let fields_iter = fields.into_iter();
+    let fields_iter = &mut fields.into_iter();
+    let first_field = match fields_iter.next() {
+        Some(field) => field,
+        None => {
+            // This is an empty record; there's no more work to do!
+            return types.add(RocType::Struct {
+                name,
+                fields: Vec::new(),
+            });
+        }
+    };
+    let second_field = match fields_iter.next() {
+        Some(field) => field,
+        None => {
+            // This is a single-field record; put it in a transparent wrapper.
+            let content = add_type(env, first_field.1, types);
+
+            return types.add(RocType::TransparentWrapper { name, content });
+        }
+    };
     let mut sortables = bumpalo::collections::Vec::with_capacity_in(
-        fields_iter.size_hint().1.unwrap_or_default(),
+        2 + fields_iter.size_hint().1.unwrap_or_default(),
         env.arena,
     );
 
-    for (label, field_var) in fields_iter {
+    for (label, field_var) in std::iter::once(first_field)
+        .chain(std::iter::once(second_field))
+        .chain(fields_iter)
+    {
         sortables.push((
             label,
             field_var,
