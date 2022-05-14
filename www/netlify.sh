@@ -6,11 +6,15 @@ set -euxo pipefail
 
 rustup update
 rustup default stable
+rustup target add wasm32-unknown-unknown wasm32-wasi
 
-# TODO remove this once we actually build the web repl!
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-REPL_WASM_DATA=${SCRIPT_DIR}/../repl_wasm/data/
-mkdir -p ${REPL_WASM_DATA}
-touch ${REPL_WASM_DATA}/pre_linked_binary.o
+ZIG_DIR="zig-linux-x86_64-0.9.1"
+wget https://ziglang.org/download/0.9.1/${ZIG_DIR}.tar.xz
+
+uname -a
+
+xz --decompress ${ZIG_DIR}.tar.xz
+tar xvf ${ZIG_DIR}.tar
+export PATH="${ZIG_DIR}:${PATH}"
 
 bash build.sh
