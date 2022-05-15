@@ -68,6 +68,7 @@ mod bindgen_cli_run {
 
     fixtures! {
         basic_record:"basic-record" => "Record was: MyRcd { b: 42, a: 1995 }\n",
+        nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
     }
 
     fn check_for_tests(all_fixtures: &mut roc_collections::VecSet<String>) {
