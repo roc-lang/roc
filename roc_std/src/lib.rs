@@ -5,6 +5,7 @@ use core::fmt;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 
 mod rc;
@@ -358,5 +359,141 @@ impl fmt::Display for RocDec {
         let last_idx = self.to_str_helper(&mut bytes);
         let result = unsafe { str::from_utf8_unchecked(&bytes[0..last_idx]) };
         write!(fmtr, "{}", result)
+    }
+}
+
+#[repr(align(16))]
+#[repr(C)]
+#[derive(Clone, Copy, Eq, Default)]
+pub struct I128([u8; 16]);
+
+impl From<i128> for I128 {
+    fn from(other: i128) -> Self {
+        Self(other.to_ne_bytes())
+    }
+}
+
+impl From<I128> for i128 {
+    fn from(other: I128) -> Self {
+        unsafe { core::mem::transmute::<I128, i128>(other) }
+    }
+}
+
+impl fmt::Debug for I128 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let i128: i128 = (*self).into();
+
+        i128.fmt(f)
+    }
+}
+
+impl fmt::Display for I128 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let i128: i128 = (*self).into();
+
+        i128.fmt(f)
+    }
+}
+
+impl PartialEq for I128 {
+    fn eq(&self, other: &Self) -> bool {
+        let i128_self: i128 = (*self).into();
+        let i128_other: i128 = (*other).into();
+
+        i128_self.eq(&i128_other)
+    }
+}
+
+impl PartialOrd for I128 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let i128_self: i128 = (*self).into();
+        let i128_other: i128 = (*other).into();
+
+        i128_self.partial_cmp(&i128_other)
+    }
+}
+
+impl Ord for I128 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let i128_self: i128 = (*self).into();
+        let i128_other: i128 = (*other).into();
+
+        i128_self.cmp(&i128_other)
+    }
+}
+
+impl Hash for I128 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let i128: i128 = (*self).into();
+
+        i128.hash(state);
+    }
+}
+
+#[repr(align(16))]
+#[repr(C)]
+#[derive(Clone, Copy, Eq, Default)]
+pub struct U128([u8; 16]);
+
+impl From<u128> for U128 {
+    fn from(other: u128) -> Self {
+        Self(other.to_ne_bytes())
+    }
+}
+
+impl From<U128> for u128 {
+    fn from(other: U128) -> Self {
+        unsafe { core::mem::transmute::<U128, u128>(other) }
+    }
+}
+
+impl fmt::Debug for U128 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let u128: u128 = (*self).into();
+
+        u128.fmt(f)
+    }
+}
+
+impl fmt::Display for U128 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let u128: u128 = (*self).into();
+
+        u128.fmt(f)
+    }
+}
+
+impl PartialEq for U128 {
+    fn eq(&self, other: &Self) -> bool {
+        let u128_self: u128 = (*self).into();
+        let u128_other: u128 = (*other).into();
+
+        u128_self.eq(&u128_other)
+    }
+}
+
+impl PartialOrd for U128 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let u128_self: u128 = (*self).into();
+        let u128_other: u128 = (*other).into();
+
+        u128_self.partial_cmp(&u128_other)
+    }
+}
+
+impl Ord for U128 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let u128_self: u128 = (*self).into();
+        let u128_other: u128 = (*other).into();
+
+        u128_self.cmp(&u128_other)
+    }
+}
+
+impl Hash for U128 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let u128: u128 = (*self).into();
+
+        u128.hash(state);
     }
 }
