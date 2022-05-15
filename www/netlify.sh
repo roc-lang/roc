@@ -8,6 +8,7 @@ rustup update
 rustup default stable
 rustup target add wasm32-unknown-unknown wasm32-wasi
 
+mkdir -p netlify-install
 cd netlify-install
 
 ZIG_DIRNAME="zig-linux-x86_64-0.9.1"
