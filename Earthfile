@@ -42,6 +42,9 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup target add wasm32-unknown-unknown wasm32-wasi
     RUN apt -y install libssl-dev
     RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack
+    RUN wget https://github.com/WebAssembly/binaryen/releases/download/version_108/binaryen-version_108-x86_64-linux.tar.gz
+    RUN tar -xzf binaryen-version_108-x86_64-linux.tar.gz
+    RUN ln -s /earthbuild/binaryen-version_108-x86_64-linux/bin/wasm-opt /bin/wasm-opt
     # criterion
     RUN cargo install cargo-criterion
     # sccache
@@ -105,7 +108,7 @@ test-rust:
     # RUN echo "4" | cargo run --locked --release --features="target-x86" -- --target=x86_32 examples/benchmarks/NQueens.roc
     # RUN --mount=type=cache,target=$SCCACHE_DIR \
     #    cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
-    # make sure doc generation works (that is, make sure build.sh returns status code 0)
+    # make sure website deployment works (that is, make sure build.sh returns status code 0)
     RUN bash www/build.sh
 
 
