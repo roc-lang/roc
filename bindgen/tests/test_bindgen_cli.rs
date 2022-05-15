@@ -19,9 +19,12 @@ mod bindgen_cli_run {
     ///
     /// First, it generates and runs a separate test for each of the given
     /// expected stdout endings. Each of these should test a particular .roc file
-    /// in the fixtures/ directory.
+    /// in the fixtures/ directory. The fixtures themselves run assertions too, but
+    /// the stdout check verifies that we're actually running the code we think we are;
+    /// without it, it would be possible that the fixtures are just exiting without running
+    /// any assertions, and we would have no way to find out!
     ///
-    /// Second, it generates an extra test which (non-recursively) traverses the
+    /// Second, this generates an extra test which (non-recursively) traverses the
     /// fixtures/ directory and verifies that each of the .roc files in there
     /// has had a corresponding test generated in the previous step. This test
     /// will fail if we ever add a new .roc file to fixtures/ and forget to
