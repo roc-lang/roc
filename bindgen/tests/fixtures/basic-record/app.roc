@@ -1,4 +1,4 @@
-app "basic-record"
+app "app"
     packages { pf: "platform" }
     imports []
     provides [ main ] to pf
