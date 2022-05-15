@@ -13,7 +13,7 @@ pub struct State<'a> {
     offset: usize,
 
     /// Position of the start of the current line
-    line_start: Position,
+    pub line_start: Position,
 
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)

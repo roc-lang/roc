@@ -180,42 +180,40 @@ fn spaces_help_help<'a, E>(
 where
     E: 'a + SpaceProblem,
 {
-    use SpaceState::*;
-
     move |arena, state: State<'a>| {
-        let comments_and_newlines = Vec::new_in(arena);
-        match eat_spaces(state.clone(), false, comments_and_newlines) {
-            HasTab(state) => Err((
+        match fast_eat_spaces(&state) {
+            FastSpaceState::HasTab(position) => Err((
                 MadeProgress,
-                E::space_problem(BadInputError::HasTab, state.pos()),
+                E::space_problem(BadInputError::HasTab, position),
                 state,
             )),
-            Good {
-                state: mut new_state,
-                multiline,
-                comments_and_newlines,
+            FastSpaceState::Good {
+                newlines,
+                consumed,
+                column,
             } => {
-                if new_state.bytes() == state.bytes() {
+                if consumed == 0 {
                     Ok((NoProgress, &[] as &[_], state))
-                } else if multiline {
-                    // we parsed at least one newline
-
-                    new_state.indent_column = new_state.column();
-
-                    if new_state.column() >= min_indent {
-                        Ok((
-                            MadeProgress,
-                            comments_and_newlines.into_bump_slice(),
-                            new_state,
-                        ))
-                    } else {
-                        Err((MadeProgress, indent_problem(state.pos()), state))
-                    }
+                } else if column < min_indent {
+                    Err((MadeProgress, indent_problem(state.pos()), state))
                 } else {
+                    let comments_and_newlines =
+                        Vec::with_capacity_in(newlines.saturating_sub(1), arena);
+                    let spaces = eat_spaces(state, false, comments_and_newlines);
+                    let mut state = spaces.state;
+
+                    if spaces.multiline {
+                        // we parsed at least one newline
+
+                        state.indent_column = state.column();
+
+                        debug_assert!(state.column() >= min_indent);
+                    }
+
                     Ok((
                         MadeProgress,
-                        comments_and_newlines.into_bump_slice(),
-                        new_state,
+                        spaces.comments_and_newlines.into_bump_slice(),
+                        state,
                     ))
                 }
             }
@@ -223,13 +221,73 @@ where
     }
 }
 
-enum SpaceState<'a> {
+enum FastSpaceState {
     Good {
-        state: State<'a>,
-        multiline: bool,
-        comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
+        newlines: usize,
+        consumed: usize,
+        column: u32,
     },
-    HasTab(State<'a>),
+    HasTab(Position),
+}
+
+fn fast_eat_spaces(state: &State) -> FastSpaceState {
+    use FastSpaceState::*;
+
+    let mut newlines = 0;
+    let mut index = 0;
+    let mut line_start = state.line_start.offset as usize;
+    let base_offset = state.pos().offset as usize;
+
+    let bytes = state.bytes();
+    let length = bytes.len();
+
+    'outer: while index < length {
+        match bytes[index] {
+            b' ' => {
+                index += 1;
+            }
+            b'\n' => {
+                newlines += 1;
+                index += 1;
+                line_start = base_offset + index;
+            }
+            b'\r' => {
+                index += 1;
+                line_start = base_offset + index;
+            }
+            b'\t' => {
+                return HasTab(Position::new(index as u32));
+            }
+            b'#' => {
+                index += 1;
+
+                while index < length {
+                    match bytes[index] {
+                        b'\n' | b'\t' | b'\r' => {
+                            continue 'outer;
+                        }
+
+                        _ => {
+                            index += 1;
+                        }
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+
+    Good {
+        newlines,
+        consumed: index,
+        column: ((base_offset + index) - line_start) as u32,
+    }
+}
+
+struct SpaceState<'a> {
+    state: State<'a>,
+    multiline: bool,
+    comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 }
 
 fn eat_spaces<'a>(
@@ -237,8 +295,6 @@ fn eat_spaces<'a>(
     mut multiline: bool,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
-    use SpaceState::*;
-
     for c in state.bytes() {
         match c {
             b' ' => {
@@ -252,9 +308,8 @@ fn eat_spaces<'a>(
             b'\r' => {
                 state = state.advance_newline();
             }
-            b'\t' => {
-                return HasTab(state);
-            }
+            b'\t' => unreachable!(),
+
             b'#' => {
                 state = state.advance(1);
                 return eat_line_comment(state, multiline, comments_and_newlines);
@@ -263,7 +318,7 @@ fn eat_spaces<'a>(
         }
     }
 
-    Good {
+    SpaceState {
         state,
         multiline,
         comments_and_newlines,
@@ -275,8 +330,6 @@ fn eat_line_comment<'a>(
     mut multiline: bool,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
-    use SpaceState::*;
-
     let mut index = 0;
     let bytes = state.bytes();
     let length = bytes.len();
@@ -313,9 +366,7 @@ fn eat_line_comment<'a>(
                             b'\r' => {
                                 state = state.advance_newline();
                             }
-                            b'\t' => {
-                                return HasTab(state);
-                            }
+                            b'\t' => unreachable!(),
                             b'#' => {
                                 state = state.advance(1);
                                 index += 1;
@@ -327,7 +378,7 @@ fn eat_line_comment<'a>(
                         index += 1;
                     }
 
-                    return Good {
+                    return SpaceState {
                         state,
                         multiline,
                         comments_and_newlines,
@@ -337,7 +388,7 @@ fn eat_line_comment<'a>(
                     // consume the second #
                     state = state.advance(1);
 
-                    return Good {
+                    return SpaceState {
                         state,
                         multiline,
                         comments_and_newlines,
@@ -354,7 +405,7 @@ fn eat_line_comment<'a>(
 
         while index < length {
             match bytes[index] {
-                b'\t' => return HasTab(state),
+                b'\t' => unreachable!(),
                 b'\n' => {
                     let comment =
                         unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..index]) };
@@ -381,9 +432,7 @@ fn eat_line_comment<'a>(
                             b'\r' => {
                                 state = state.advance_newline();
                             }
-                            b'\t' => {
-                                return HasTab(state);
-                            }
+                            b'\t' => unreachable!(),
                             b'#' => {
                                 state = state.advance(1);
                                 index += 1;
@@ -395,7 +444,7 @@ fn eat_line_comment<'a>(
                         index += 1;
                     }
 
-                    return Good {
+                    return SpaceState {
                         state,
                         multiline,
                         comments_and_newlines,
@@ -421,7 +470,7 @@ fn eat_line_comment<'a>(
             comments_and_newlines.push(CommentOrNewline::LineComment(comment));
         }
 
-        return Good {
+        return SpaceState {
             state,
             multiline,
             comments_and_newlines,
