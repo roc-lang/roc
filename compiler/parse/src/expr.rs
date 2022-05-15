@@ -2789,10 +2789,11 @@ fn chomp_ops(bytes: &[u8]) -> &str {
     let mut chomped = 0;
 
     for c in bytes.iter() {
-        if !BINOP_CHAR_MASK[*c as usize] {
+        if let Some(true) = BINOP_CHAR_MASK.get(*c as usize) {
+            chomped += 1;
+        } else {
             break;
         }
-        chomped += 1;
     }
 
     unsafe {

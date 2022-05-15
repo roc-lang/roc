@@ -180,41 +180,30 @@ fn spaces_help_help<'a, E>(
 where
     E: 'a + SpaceProblem,
 {
-    move |arena, state: State<'a>| {
-        match fast_eat_spaces(&state) {
-            FastSpaceState::HasTab(position) => Err((
-                MadeProgress,
-                E::space_problem(BadInputError::HasTab, position),
-                state,
-            )),
-            FastSpaceState::Good {
-                newlines,
-                consumed,
-                column,
-            } => {
-                if consumed == 0 {
-                    Ok((NoProgress, &[] as &[_], state))
-                } else if column < min_indent {
-                    Err((MadeProgress, indent_problem(state.pos()), state))
-                } else {
-                    let comments_and_newlines = Vec::with_capacity_in(newlines, arena);
-                    let spaces = eat_spaces(state, false, comments_and_newlines);
-                    let mut state = spaces.state;
+    move |arena, state: State<'a>| match fast_eat_spaces(&state) {
+        FastSpaceState::HasTab(position) => Err((
+            MadeProgress,
+            E::space_problem(BadInputError::HasTab, position),
+            state,
+        )),
+        FastSpaceState::Good {
+            newlines,
+            consumed,
+            column,
+        } => {
+            if consumed == 0 {
+                Ok((NoProgress, &[] as &[_], state))
+            } else if column < min_indent {
+                Err((MadeProgress, indent_problem(state.pos()), state))
+            } else {
+                let comments_and_newlines = Vec::with_capacity_in(newlines, arena);
+                let spaces = eat_spaces(state, false, comments_and_newlines);
 
-                    if spaces.multiline {
-                        // we parsed at least one newline
-
-                        state.indent_column = state.column();
-
-                        debug_assert!(state.column() >= min_indent);
-                    }
-
-                    Ok((
-                        MadeProgress,
-                        spaces.comments_and_newlines.into_bump_slice(),
-                        state,
-                    ))
-                }
+                Ok((
+                    MadeProgress,
+                    spaces.comments_and_newlines.into_bump_slice(),
+                    spaces.state,
+                ))
             }
         }
     }
