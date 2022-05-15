@@ -47,7 +47,11 @@ pub struct Env<'a> {
     pub exposed_to_host: MutSet<Symbol>,
 }
 
-/// Entry point for Roc CLI
+/// Generate a Wasm module in binary form, ready to write to a file. Entry point from roc_build.
+///   env            environment data from previous compiler stages
+///   interns        names of functions and variables (as memory-efficient interned strings)
+///   preload_bytes  preloaded bytes from a Wasm object file containing all non-Roc code
+///   procedures     Roc code in monomorphized intermediate representation
 pub fn build_module<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
@@ -55,7 +59,7 @@ pub fn build_module<'a>(
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> std::vec::Vec<u8> {
     let (mut wasm_module, called_preload_fns, _) =
-        build_module_without_wrapper(env, interns, preload_bytes, procedures);
+        build_module_unserialized(env, interns, preload_bytes, procedures);
 
     wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
 
@@ -64,8 +68,11 @@ pub fn build_module<'a>(
     buffer
 }
 
-/// Entry point for REPL (repl_wasm) and integration tests (test_gen)
-pub fn build_module_without_wrapper<'a>(
+/// Generate an unserialized Wasm module
+/// Shared by all consumers of gen_wasm: roc_build, roc_repl_wasm, and test_gen
+/// (roc_repl_wasm and test_gen will add more generated code for a wrapper function
+/// that defines a common interface to `main`, independent of return type.)
+pub fn build_module_unserialized<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
     preload_bytes: &[u8],

@@ -154,6 +154,7 @@ fn report_problems_help(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn gen_from_mono_module(
     arena: &bumpalo::Bump,
     loaded: MonomorphizedModule,
@@ -162,6 +163,7 @@ pub fn gen_from_mono_module(
     app_o_file: &Path,
     opt_level: OptLevel,
     emit_debug_info: bool,
+    preprocessed_host_path: &Path,
 ) -> CodeGenTiming {
     match opt_level {
         OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => gen_from_mono_module_llvm(
@@ -173,7 +175,9 @@ pub fn gen_from_mono_module(
             opt_level,
             emit_debug_info,
         ),
-        OptLevel::Development => gen_from_mono_module_dev(arena, loaded, target, app_o_file),
+        OptLevel::Development => {
+            gen_from_mono_module_dev(arena, loaded, target, app_o_file, preprocessed_host_path)
+        }
     }
 }
 
@@ -400,11 +404,14 @@ pub fn gen_from_mono_module_dev(
     loaded: MonomorphizedModule,
     target: &target_lexicon::Triple,
     app_o_file: &Path,
+    preprocessed_host_path: &Path,
 ) -> CodeGenTiming {
     use target_lexicon::Architecture;
 
     match target.architecture {
-        Architecture::Wasm32 => gen_from_mono_module_dev_wasm32(arena, loaded, app_o_file),
+        Architecture::Wasm32 => {
+            gen_from_mono_module_dev_wasm32(arena, loaded, app_o_file, preprocessed_host_path)
+        }
         Architecture::X86_64 | Architecture::Aarch64(_) => {
             gen_from_mono_module_dev_assembly(arena, loaded, target, app_o_file)
         }
@@ -418,6 +425,7 @@ pub fn gen_from_mono_module_dev(
     loaded: MonomorphizedModule,
     target: &target_lexicon::Triple,
     app_o_file: &Path,
+    _host_input_path: &Path,
 ) -> CodeGenTiming {
     use target_lexicon::Architecture;
 
@@ -434,7 +442,15 @@ fn gen_from_mono_module_dev_wasm32(
     arena: &bumpalo::Bump,
     loaded: MonomorphizedModule,
     app_o_file: &Path,
+    preprocessed_host_path: &Path,
 ) -> CodeGenTiming {
+    if true {
+        // WIP: gen_wasm is not yet able to link roc__mainForHost_1_exposed
+        // It works fine in tests and in the web REPL, but not with a real host!
+        // This code path is not part of test_gen or repl_wasm
+        todo!("WebAssembly development backend is not ready to use yet!")
+    }
+
     let code_gen_start = SystemTime::now();
     let MonomorphizedModule {
         module_id,
@@ -456,23 +472,17 @@ fn gen_from_mono_module_dev_wasm32(
         exposed_to_host,
     };
 
-    let platform_and_builtins_object_file_bytes: &[u8] = if true {
-        todo!("The WebAssembly dev backend is a work in progress. Coming soon!")
-    } else {
-        &[] // This `if` gets rid of "unreachable code" warnings. When we're ready to use it, we'll notice!
-    };
+    let preloaded_host_bytes = std::fs::read(preprocessed_host_path)
+        .expect("Failed to read host object file! Try setting --precompiled-host=false");
 
-    let bytes = roc_gen_wasm::build_module(
-        &env,
-        &mut interns,
-        platform_and_builtins_object_file_bytes,
-        procedures,
-    );
+    let final_binary_bytes =
+        roc_gen_wasm::build_module(&env, &mut interns, &preloaded_host_bytes, procedures);
 
     let code_gen = code_gen_start.elapsed().unwrap();
     let emit_o_file_start = SystemTime::now();
 
-    std::fs::write(&app_o_file, &bytes).expect("failed to write object to file");
+    // The app_o_file is actually the final binary
+    std::fs::write(&app_o_file, &final_binary_bytes).expect("failed to write object to file");
 
     let emit_o_file = emit_o_file_start.elapsed().unwrap();
 
