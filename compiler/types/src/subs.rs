@@ -926,15 +926,15 @@ pub struct OptVariable(u32);
 impl OptVariable {
     pub const NONE: OptVariable = OptVariable(Variable::NULL.0);
 
-    pub fn is_none(self) -> bool {
-        self == OptVariable::NONE
+    pub const fn is_none(self) -> bool {
+        self.0 == Self::NONE.0
     }
 
-    pub fn is_some(self) -> bool {
-        self != OptVariable::NONE
+    pub const fn is_some(self) -> bool {
+        self.0 != Self::NONE.0
     }
 
-    pub fn into_variable(self) -> Option<Variable> {
+    pub const fn into_variable(self) -> Option<Variable> {
         if self.is_none() {
             None
         } else {
@@ -944,7 +944,7 @@ impl OptVariable {
 
     pub fn unwrap_or_else<F>(self, or_else: F) -> Variable
     where
-        F: Fn() -> Variable,
+        F: FnOnce() -> Variable,
     {
         if self.is_none() {
             or_else()
@@ -1039,23 +1039,31 @@ pub fn new_marks(var_store: &mut VarStore) -> (RedundantMark, ExhaustiveMark) {
 
 /// Marks whether a recursive let-cycle was determined to be illegal during solving.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct IllegalCycleMark(Variable);
+pub struct IllegalCycleMark(OptVariable);
 
 impl IllegalCycleMark {
     pub fn new(var_store: &mut VarStore) -> Self {
-        Self(var_store.fresh())
+        Self(OptVariable(var_store.fresh().index()))
     }
 
-    pub fn variable_for_introduction(&self) -> Variable {
-        self.0
+    /// used for recursive blocks with just one function; invalid recursion in such blocks is
+    /// always a type error, so we don't need to generate a custom error message in such cases
+    pub const fn empty() -> Self {
+        Self(OptVariable::NONE)
     }
 
     pub fn set_illegal(&self, subs: &mut Subs) {
-        subs.set_content(self.0, Content::Error);
+        if let Some(var) = self.0.into_variable() {
+            subs.set_content(var, Content::Error);
+        }
     }
 
     pub fn is_illegal(&self, subs: &Subs) -> bool {
-        matches!(subs.get_content_without_compacting(self.0), Content::Error)
+        if let Some(var) = self.0.into_variable() {
+            matches!(subs.get_content_without_compacting(var), Content::Error)
+        } else {
+            false
+        }
     }
 }
 
