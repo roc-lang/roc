@@ -10068,6 +10068,44 @@ I need all branches in an `if` to have the same type!
     }
 
     #[test]
+    fn cycle_through_non_function_top_level() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                app "test" provides [ t2 ] to "./platform"
+
+                force : ({} -> I64) -> I64
+                force = \eval -> eval {}
+
+                t1 = \_ -> force (\_ -> t2)
+
+                t2 = t1 {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+
+                The `t1` definition is causing a very tricky infinite loop:
+
+                6│  t1 = \_ -> force (\_ -> t2)
+                    ^^
+
+                The `t1` value depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     t1
+                    │     ↓
+                    │     t2
+                    └─────┘
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn shadowing_top_level_scope() {
         new_report_problem_as(
             "shadowing_top_level_scope",

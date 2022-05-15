@@ -3491,8 +3491,8 @@ fn mutual_recursion_top_level_defs() {
 
             isOdd = \n ->
                 when n is
-                    0 -> True
-                    1 -> False
+                    0 -> False
+                    1 -> True
                     _ -> isEven (n - 1)
 
             main = isOdd 11
