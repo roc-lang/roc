@@ -39,4 +39,7 @@ echo "Building Web REPL..."
 repl_www/build.sh
 cp -r repl_www/public/* www/build
 
+echo "Asset sizes:"
+ls -lh www/build/*
+
 popd
