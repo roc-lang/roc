@@ -30,12 +30,12 @@ where
     run_with_stdin(&path_to_roc_binary(), args, stdin_vals)
 }
 
-pub fn run_bindgen<I, S>(args: I, stdin_vals: &[&str]) -> Out
+pub fn run_bindgen<I, S>(args: I) -> Out
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_with_stdin(&path_to_bindgen_binary(), args, stdin_vals)
+    run_with_stdin(&path_to_bindgen_binary(), args, &[])
 }
 
 pub fn path_to_roc_binary() -> PathBuf {

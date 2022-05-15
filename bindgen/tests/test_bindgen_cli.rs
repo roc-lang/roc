@@ -1,20 +1,22 @@
 #[macro_use]
 extern crate pretty_assertions;
 
-extern crate bumpalo;
+#[macro_use]
 extern crate indoc;
+
+#[cfg(not(debug_assertions))]
 extern crate roc_collections;
-extern crate roc_load;
-extern crate roc_module;
+
+mod helpers;
 
 #[cfg(test)]
 mod bindgen_cli_run {
+    use crate::helpers::fixtures_dir;
     use cli_utils::helpers::{
-        example_file, examples_dir, extract_valgrind_errors, fixture_file, fixtures_dir,
-        known_bad_file, path_to_binary, run_cmd, run_roc, run_with_stdin, run_with_valgrind,
+        example_file, examples_dir, extract_valgrind_errors, fixture_file, known_bad_file,
+        path_to_binary, run_bindgen, run_cmd, run_roc, run_with_stdin, run_with_valgrind,
         strip_colors, Out, ValgrindError, ValgrindErrorXWhat,
     };
-    use indoc::indoc;
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
@@ -33,61 +35,25 @@ mod bindgen_cli_run {
         use_valgrind: bool,
     }
 
-    fn run_bindgen_on<'a, I: IntoIterator<Item = &'a str>>(
-        file: &'a Path,
-        args: I,
-        stdin: &[&str],
-        input_file: Option<PathBuf>,
-    ) -> Out {
-        let compile_out = match input_file {
-            Some(input_file) => run_roc(
-                // converting these all to String avoids lifetime issues
-                args.into_iter().map(|arg| arg.to_string()).chain([
-                    file.to_str().unwrap().to_string(),
-                    input_file.to_str().unwrap().to_string(),
-                ]),
-                stdin,
-            ),
-            None => run_roc(
-                args.into_iter().chain(iter::once(file.to_str().unwrap())),
-                stdin,
-            ),
-        };
+    // fn check_output_with_stdin(
+    //     file: &Path,
+    //     stdin: &[&str],
+    //     executable_filename: &str,
+    //     input_file: Option<PathBuf>,
+    //     expected_ending: &str,
+    // ) {
+    //     let args = vec!["TODO_arg"];
+    //     let out = run_bindgen_on(file, args.into_iter(), stdin, input_file.clone());
 
-        // If there is any stderr, it should be reporting the runtime and that's it!
-        if !(compile_out.stderr.is_empty()
-            || compile_out.stderr.starts_with("runtime: ") && compile_out.stderr.ends_with("ms\n"))
-        {
-            panic!(
-                "`roc` command had unexpected stderr: {}",
-                compile_out.stderr
-            );
-        }
+    //     if !&out.stdout.ends_with(expected_ending) {
+    //         panic!(
+    //             "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
+    //             expected_ending, out.stdout, out.stderr
+    //         );
+    //     }
 
-        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
-
-        compile_out
-    }
-
-    fn check_output_with_stdin(
-        file: &Path,
-        stdin: &[&str],
-        executable_filename: &str,
-        input_file: Option<PathBuf>,
-        expected_ending: &str,
-    ) {
-        let args = vec!["TODO_arg"];
-        let out = run_bindgen_on(file, args.into_iter(), stdin, input_file.clone());
-
-        if !&out.stdout.ends_with(expected_ending) {
-            panic!(
-                "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
-                expected_ending, out.stdout, out.stderr
-            );
-        }
-
-        assert!(out.status.success());
-    }
+    //     assert!(out.status.success());
+    // }
 
     /// This macro does two things.
     ///
@@ -145,154 +111,154 @@ mod bindgen_cli_run {
     //         ...
     //     },
     // ]
-    examples! {
-        helloWorld:"hello-world" => Example {
-            filename: "helloWorld.roc",
-            executable_filename: "helloWorld",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Hello, World!\n",
-            use_valgrind: true,
-        },
-        helloC:"hello-world/c-platform" => Example {
-            filename: "helloC.roc",
-            executable_filename: "helloC",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Hello, World!\n",
-            use_valgrind: true,
-        },
-        helloZig:"hello-world/zig-platform" => Example {
-            filename: "helloZig.roc",
-            executable_filename: "helloZig",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Hello, World!\n",
-            use_valgrind: true,
-        },
-        helloRust:"hello-world/rust-platform" => Example {
-            filename: "helloRust.roc",
-            executable_filename: "helloRust",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Hello, World!\n",
-            use_valgrind: true,
-        },
-        helloSwift:"hello-world/swift-platform" => Example {
-            filename: "helloSwift.roc",
-            executable_filename: "helloSwift",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Hello, World!\n",
-            use_valgrind: true,
-        },
-        helloWeb:"hello-world/web-platform" => Example {
-            filename: "helloWeb.roc",
-            executable_filename: "helloWeb",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Hello, World!\n",
-            use_valgrind: true,
-        },
-        fib:"algorithms" => Example {
-            filename: "fibonacci.roc",
-            executable_filename: "fibonacci",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"55\n",
-            use_valgrind: true,
-        },
-        gui:"gui" => Example {
-            filename: "Hello.roc",
-            executable_filename: "hello-gui",
-            stdin: &[],
-            input_file: None,
-            expected_ending: "",
-            use_valgrind: false,
-        },
-        breakout:"breakout" => Example {
-            filename: "breakout.roc",
-            executable_filename: "breakout",
-            stdin: &[],
-            input_file: None,
-            expected_ending: "",
-            use_valgrind: false,
-        },
-        quicksort:"algorithms" => Example {
-            filename: "quicksort.roc",
-            executable_filename: "quicksort",
-            stdin: &[],
-            input_file: None,
-            expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            use_valgrind: true,
-        },
-        // shared_quicksort:"shared-quicksort" => Example {
-        //     filename: "Quicksort.roc",
-        //     executable_filename: "quicksort",
-        //     stdin: &[],
-        //     input_file: None,
-        //     expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-        //     use_valgrind: true,
-        // },
-        effects:"interactive" => Example {
-            filename: "effects.roc",
-            executable_filename: "effects",
-            stdin: &["hi there!"],
-            input_file: None,
-            expected_ending: "hi there!\nIt is known\n",
-            use_valgrind: true,
-        },
-        // tea:"tea" => Example {
-        //     filename: "Main.roc",
-        //     executable_filename: "tea-example",
-        //     stdin: &[],
-        //     input_file: None,
-        //     expected_ending: "",
-        //     use_valgrind: true,
-        // },
-        cli:"interactive" => Example {
-            filename: "form.roc",
-            executable_filename: "form",
-            stdin: &["Giovanni\n", "Giorgio\n"],
-            input_file: None,
-            expected_ending: "Hi, Giovanni Giorgio! 👋\n",
-            use_valgrind: false,
-        },
-        tui:"interactive" => Example {
-            filename: "tui.roc",
-            executable_filename: "tui",
-            stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
-            input_file: None,
-            expected_ending: "Hello Worldfoo!\n",
-            use_valgrind: true,
-        },
-        // custom_malloc:"custom-malloc" => Example {
-        //     filename: "Main.roc",
-        //     executable_filename: "custom-malloc-example",
-        //     stdin: &[],
-        //     input_file: None,
-        //     expected_ending: "ms!\nThe list was small!\n",
-        //     use_valgrind: true,
-        // },
-        // task:"task" => Example {
-        //     filename: "Main.roc",
-        //     executable_filename: "task-example",
-        //     stdin: &[],
-        //     input_file: None,
-        //     expected_ending: "successfully wrote to file\n",
-        //     use_valgrind: true,
-        // },
-        false_interpreter:"false-interpreter" => {
-            Example {
-                filename: "False.roc",
-                executable_filename: "false",
-                stdin: &[],
-                input_file: Some("examples/hello.false"),
-                expected_ending:"Hello, World!\n",
-                use_valgrind: false,
-            }
-        },
-    }
+    // examples! {
+    //     helloWorld:"hello-world" => Example {
+    //         filename: "helloWorld.roc",
+    //         executable_filename: "helloWorld",
+    //         stdin: &[],
+    //         input_file: None,
+    //         expected_ending:"Hello, World!\n",
+    //         use_valgrind: true,
+    //     },
+    //     helloC:"hello-world/c-platform" => Example {
+    //         filename: "helloC.roc",
+    //         executable_filename: "helloC",
+    //         stdin: &[],
+    //         input_file: None,
+    //         expected_ending:"Hello, World!\n",
+    //         use_valgrind: true,
+    //     },
+    //     helloZig:"hello-world/zig-platform" => Example {
+    //         filename: "helloZig.roc",
+    //         executable_filename: "helloZig",
+    //         stdin: &[],
+    //         input_file: None,
+    //         expected_ending:"Hello, World!\n",
+    //         use_valgrind: true,
+    //     },
+    //     helloRust:"hello-world/rust-platform" => Example {
+    //         filename: "helloRust.roc",
+    //         executable_filename: "helloRust",
+    //         stdin: &[],
+    //         input_file: None,
+    //         expected_ending:"Hello, World!\n",
+    //         use_valgrind: true,
+    //     },
+    //     helloSwift:"hello-world/swift-platform" => Example {
+    //         filename: "helloSwift.roc",
+    //         executable_filename: "helloSwift",
+    //         stdin: &[],
+    //         input_file: None,
+    //         expected_ending:"Hello, World!\n",
+    //         use_valgrind: true,
+    //     },
+    //     helloWeb:"hello-world/web-platform" => Example {
+    //         filename: "helloWeb.roc",
+    //         executable_filename: "helloWeb",
+    //         stdin: &[],
+    //         input_file: None,
+    //         expected_ending:"Hello, World!\n",
+    //         use_valgrind: true,
+    //     },
+    //     fib:"algorithms" => Example {
+    //         filename: "fibonacci.roc",
+    //         executable_filename: "fibonacci",
+    //         stdin: &[],
+    //         input_file: None,
+    //         expected_ending:"55\n",
+    //         use_valgrind: true,
+    //     },
+    //     gui:"gui" => Example {
+    //         filename: "Hello.roc",
+    //         executable_filename: "hello-gui",
+    //         stdin: &[],
+    //         input_file: None,
+    //         expected_ending: "",
+    //         use_valgrind: false,
+    //     },
+    //     breakout:"breakout" => Example {
+    //         filename: "breakout.roc",
+    //         executable_filename: "breakout",
+    //         stdin: &[],
+    //         input_file: None,
+    //         expected_ending: "",
+    //         use_valgrind: false,
+    //     },
+    //     quicksort:"algorithms" => Example {
+    //         filename: "quicksort.roc",
+    //         executable_filename: "quicksort",
+    //         stdin: &[],
+    //         input_file: None,
+    //         expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+    //         use_valgrind: true,
+    //     },
+    //     // shared_quicksort:"shared-quicksort" => Example {
+    //     //     filename: "Quicksort.roc",
+    //     //     executable_filename: "quicksort",
+    //     //     stdin: &[],
+    //     //     input_file: None,
+    //     //     expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+    //     //     use_valgrind: true,
+    //     // },
+    //     effects:"interactive" => Example {
+    //         filename: "effects.roc",
+    //         executable_filename: "effects",
+    //         stdin: &["hi there!"],
+    //         input_file: None,
+    //         expected_ending: "hi there!\nIt is known\n",
+    //         use_valgrind: true,
+    //     },
+    //     // tea:"tea" => Example {
+    //     //     filename: "Main.roc",
+    //     //     executable_filename: "tea-example",
+    //     //     stdin: &[],
+    //     //     input_file: None,
+    //     //     expected_ending: "",
+    //     //     use_valgrind: true,
+    //     // },
+    //     cli:"interactive" => Example {
+    //         filename: "form.roc",
+    //         executable_filename: "form",
+    //         stdin: &["Giovanni\n", "Giorgio\n"],
+    //         input_file: None,
+    //         expected_ending: "Hi, Giovanni Giorgio! 👋\n",
+    //         use_valgrind: false,
+    //     },
+    //     tui:"interactive" => Example {
+    //         filename: "tui.roc",
+    //         executable_filename: "tui",
+    //         stdin: &["foo\n"], // NOTE: adding more lines leads to memory leaks
+    //         input_file: None,
+    //         expected_ending: "Hello Worldfoo!\n",
+    //         use_valgrind: true,
+    //     },
+    //     // custom_malloc:"custom-malloc" => Example {
+    //     //     filename: "Main.roc",
+    //     //     executable_filename: "custom-malloc-example",
+    //     //     stdin: &[],
+    //     //     input_file: None,
+    //     //     expected_ending: "ms!\nThe list was small!\n",
+    //     //     use_valgrind: true,
+    //     // },
+    //     // task:"task" => Example {
+    //     //     filename: "Main.roc",
+    //     //     executable_filename: "task-example",
+    //     //     stdin: &[],
+    //     //     input_file: None,
+    //     //     expected_ending: "successfully wrote to file\n",
+    //     //     use_valgrind: true,
+    //     // },
+    //     false_interpreter:"false-interpreter" => {
+    //         Example {
+    //             filename: "False.roc",
+    //             executable_filename: "false",
+    //             stdin: &[],
+    //             input_file: Some("examples/hello.false"),
+    //             expected_ending:"Hello, World!\n",
+    //             use_valgrind: false,
+    //         }
+    //     },
+    // }
 
     #[cfg(not(debug_assertions))]
     fn check_for_tests(examples_dir: &str, all_examples: &mut MutMap<&str, Example<'_>>) {
@@ -337,15 +303,80 @@ mod bindgen_cli_run {
         assert_eq!(all_examples, &mut MutMap::default());
     }
 
+    fn generate_bindings_for<'a, I: IntoIterator<Item = &'a str>>(
+        platform_dir: &'a Path,
+        args: I,
+    ) -> Out {
+        // Generate bindings.rs for this platform
+        let package_config = platform_dir.join("Package-Config.roc");
+        let bindings_file = platform_dir.join("src").join("bindings.rs");
+        let bindgen_out = run_bindgen(
+            // converting these all to String avoids lifetime issues
+            args.into_iter().map(|arg| arg.to_string()).chain([
+                package_config.to_str().unwrap().to_string(),
+                bindings_file.to_str().unwrap().to_string(),
+            ]),
+        );
+
+        // If there is any stderr, it should be reporting the runtime and that's it!
+        if !(bindgen_out.stderr.is_empty()
+            || bindgen_out.stderr.starts_with("runtime: ") && bindgen_out.stderr.ends_with("ms\n"))
+        {
+            panic!(
+                "`roc-bindgen` command had unexpected stderr: {}",
+                bindgen_out.stderr
+            );
+        }
+
+        assert!(bindgen_out.status.success(), "bad status {:?}", bindgen_out);
+
+        bindgen_out
+    }
+
+    fn run_app<'a, I: IntoIterator<Item = &'a str>>(
+        app_file: &'a Path,
+        args: I,
+        stdin: &[&str],
+    ) -> Out {
+        // Generate bindings.rs for this platform
+        let compile_out = run_roc(
+            // converting these all to String avoids lifetime issues
+            args.into_iter()
+                .map(|arg| arg.to_string())
+                .chain([app_file.to_str().unwrap().to_string()]),
+            stdin,
+        );
+
+        // If there is any stderr, it should be reporting the runtime and that's it!
+        if !(compile_out.stderr.is_empty()
+            || compile_out.stderr.starts_with("runtime: ") && compile_out.stderr.ends_with("ms\n"))
+        {
+            panic!(
+                "`roc` command had unexpected stderr: {}",
+                compile_out.stderr
+            );
+        }
+
+        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+
+        compile_out
+    }
+
     #[test]
-    #[serial(multi_dep_str)]
-    fn run_multi_dep_str_unoptimized() {
-        check_output_with_stdin(
-            &fixture_file("multi-dep-str", "Main.roc"),
-            &[],
-            "multi-dep-str",
-            None,
-            "I am Dep2.str2\n",
+    #[serial(basic_record)]
+    fn basic_record() {
+        let dir = fixtures_dir("basic-record");
+
+        generate_bindings_for(&dir.join("platform"), std::iter::empty());
+        let out = run_app(&dir.join("app.roc"), std::iter::empty(), &[]);
+
+        assert_eq!(out.stderr, "");
+        assert_eq!(out.status.code(), Some(0));
+        assert!(
+            out.stdout
+                .ends_with("Record was: MyRcd { b: 42, a: 1995 }\n"),
+            "Unexpected {:?}",
+            out.stdout
         );
     }
 }
