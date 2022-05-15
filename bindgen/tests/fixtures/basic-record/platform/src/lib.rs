@@ -11,15 +11,37 @@ extern "C" {
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
+    use std::cmp::Ordering;
+    use std::collections::hash_set::HashSet;
+
     let record = unsafe {
         let mut ret: core::mem::MaybeUninit<bindings::MyRcd> = core::mem::MaybeUninit::uninit();
 
         roc_main(ret.as_mut_ptr());
 
-        unsafe { ret.assume_init() }
+        ret.assume_init()
     };
 
-    println!("Record was: {:?}", record);
+    // Verify that the record has all the expected traits.
+
+    assert!(record == record); // PartialEq
+    assert!(record.clone() == record.clone()); // Clone
+
+    // Since this is a move, later uses of `record` will fail unless `record` has Copy
+    let rec2 = record; // Copy
+
+    assert!(rec2 != Default::default()); // Default
+    assert!(record.cmp(&record) == Ordering::Equal); // PartialOrd
+    assert!(record.cmp(&record) == Ordering::Equal); // Ord
+
+    let mut set = HashSet::new();
+
+    set.insert(record); // Eq, Hash
+    set.insert(rec2);
+
+    assert_eq!(set.len(), 1);
+
+    println!("Record was: {:?}", record); // Debug
 
     // Exit code
     0
