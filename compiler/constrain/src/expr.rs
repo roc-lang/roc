@@ -1411,7 +1411,9 @@ fn constrain_destructure_def(
 
     let destructure_def = &declarations.destructs[destructure_def_index.index()];
     let loc_pattern = &destructure_def.loc_pattern;
-    let pattern_vars = &destructure_def.pattern_vars;
+
+    // TODO what is this for?
+    // let pattern_vars = &destructure_def.pattern_vars;
 
     let mut def_pattern_state =
         constrain_def_pattern(constraints, env, loc_pattern, Type::Variable(expr_var));

@@ -891,8 +891,6 @@ pub(crate) fn sort_can_defs_new(
             group_length => {
                 let group_defs = defs.split_off(defs.len() - group_length);
 
-                let length = declarations.declarations.len();
-
                 let cycle_mark = IllegalCycleMark::new(var_store);
                 declarations.push_recursive_group(group_length as u16, cycle_mark);
 

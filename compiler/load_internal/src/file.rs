@@ -8,7 +8,6 @@ use roc_builtins::roc::module_source;
 use roc_builtins::std::borrow_stdlib;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
-use roc_can::def::Declaration;
 use roc_can::expr::Declarations;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecSet};

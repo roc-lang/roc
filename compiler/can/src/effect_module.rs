@@ -1,5 +1,5 @@
 use crate::annotation::IntroducedVariables;
-use crate::def::{Declaration, Def};
+use crate::def::Def;
 use crate::expr::{AnnotatedMark, ClosureData, Declarations, Expr, Recursive};
 use crate::pattern::Pattern;
 use crate::scope::Scope;

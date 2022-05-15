@@ -2,7 +2,6 @@ use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 use roc_builtins::std::StdLib;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
-use roc_can::def::Declaration;
 use roc_can::expected::Expected;
 use roc_can::expr::Declarations;
 use roc_can::pattern::Pattern;
