@@ -1756,11 +1756,11 @@ pub fn constrain_decls(
             }
             Recursive(_) | TailRecursive(_) => {
                 // for the type it does not matter that a recursive call is a tail call
-                constraint = constrain_recursive_defs_simple(
+                constraint = constrain_recursive_declarations(
                     constraints,
                     &mut env,
                     declarations,
-                    index..index,
+                    index..index + 1,
                     constraint,
                     IllegalCycleMark::empty(),
                 );
@@ -1779,7 +1779,7 @@ pub fn constrain_decls(
                 // the next `length` defs belong to this group
                 let length = length as usize;
 
-                constraint = constrain_recursive_defs_simple(
+                constraint = constrain_recursive_declarations(
                     constraints,
                     &mut env,
                     declarations,
@@ -2578,7 +2578,7 @@ fn instantiate_rigids_simple(
     }
 }
 
-fn constrain_recursive_defs_simple(
+fn constrain_recursive_declarations(
     constraints: &mut Constraints,
     env: &mut Env,
     declarations: &Declarations,
@@ -2601,7 +2601,7 @@ fn constrain_recursive_defs_simple(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn rec_defs_help_simple_function(
+fn constraint_recursive_function(
     constraints: &mut Constraints,
     env: &mut Env,
     declarations: &Declarations,
@@ -2668,7 +2668,7 @@ pub fn rec_defs_help_simple_function(
             flex_info.vars.extend(new_infer_variables);
 
             let annotation_expected = FromAnnotation(
-                loc_pattern.clone(),
+                loc_pattern,
                 arity,
                 AnnotationSource::TypedBody {
                     region: annotation.region,
@@ -2766,12 +2766,7 @@ pub fn rec_defs_help_simple_function(
                     state_constraints,
                     expr_con,
                 ),
-                constraints.equal_types(
-                    fn_type.clone(),
-                    expected.clone(),
-                    Category::Lambda,
-                    region,
-                ),
+                constraints.equal_types(fn_type, expected, Category::Lambda, region),
                 // "fn_var is equal to the closure's type" - fn_var is used in code gen
                 // Store type into AST vars. We use Store so errors aren't reported twice
                 constraints.store_index(signature_index, expr_var, std::file!(), std::line!()),
@@ -2918,7 +2913,7 @@ pub fn rec_defs_help_simple(
             DeclarationTag::Recursive(f_index) | DeclarationTag::TailRecursive(f_index) => {
                 expr_regions.push(declarations.function_bodies[f_index.index()].region);
 
-                rec_defs_help_simple_function(
+                constraint_recursive_function(
                     constraints,
                     env,
                     declarations,

@@ -4,5 +4,3 @@ app "helloZig"
     provides [ main ] to pf
 
 main = "Hello, World!\n"
-
-main = \{} -> "foo"
