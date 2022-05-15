@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use roc_build::{
-    link::{link, rebuild_host, LinkType},
+    link::{link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy},
     program::{self, Problems},
 };
 use roc_builtins::bitcode;
@@ -8,8 +8,8 @@ use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
-use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
+use std::{path::PathBuf, thread::JoinHandle};
 use target_lexicon::Triple;
 use tempfile::Builder;
 
@@ -37,7 +37,7 @@ pub fn build_file<'a>(
     emit_debug_info: bool,
     emit_timings: bool,
     link_type: LinkType,
-    surgically_link: bool,
+    linking_strategy: LinkingStrategy,
     precompiled: bool,
     target_valgrind: bool,
     threading: Threading,
@@ -68,8 +68,24 @@ pub fn build_file<'a>(
     // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
     //
     // and zig does not currently emit `.a` webassembly static libraries
-    let host_extension = if emit_wasm { "zig" } else { "o" };
-    let app_extension = if emit_wasm { "bc" } else { "o" };
+    let host_extension = if emit_wasm {
+        if matches!(opt_level, OptLevel::Development) {
+            "wasm"
+        } else {
+            "zig"
+        }
+    } else {
+        "o"
+    };
+    let app_extension = if emit_wasm {
+        if matches!(opt_level, OptLevel::Development) {
+            "wasm"
+        } else {
+            "bc"
+        }
+    } else {
+        "o"
+    };
 
     let cwd = roc_file_path.parent().unwrap();
     let mut binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
@@ -103,11 +119,18 @@ pub fn build_file<'a>(
         .map(|x| x.as_str(&loaded.interns).to_string())
         .collect();
 
+    let preprocessed_host_path = if emit_wasm {
+        host_input_path.with_file_name("preprocessedhost.o")
+    } else {
+        host_input_path.with_file_name("preprocessedhost")
+    };
+
     let rebuild_thread = spawn_rebuild_thread(
         opt_level,
-        surgically_link,
+        linking_strategy,
         precompiled,
         host_input_path.clone(),
+        preprocessed_host_path.clone(),
         binary_path.clone(),
         target,
         exposed_values,
@@ -173,6 +196,24 @@ pub fn build_file<'a>(
     let problems = program::report_problems_monomorphized(&mut loaded);
     let loaded = loaded;
 
+    enum HostRebuildTiming {
+        BeforeApp(u128),
+        ConcurrentWithApp(JoinHandle<u128>),
+    }
+
+    let rebuild_timing = if linking_strategy == LinkingStrategy::Additive {
+        let rebuild_duration = rebuild_thread.join().unwrap();
+        if emit_timings && !precompiled {
+            println!(
+                "Finished rebuilding and preprocessing the host in {} ms\n",
+                rebuild_duration
+            );
+        }
+        HostRebuildTiming::BeforeApp(rebuild_duration)
+    } else {
+        HostRebuildTiming::ConcurrentWithApp(rebuild_thread)
+    };
+
     let code_gen_timing = program::gen_from_mono_module(
         arena,
         loaded,
@@ -181,6 +222,7 @@ pub fn build_file<'a>(
         app_o_file,
         opt_level,
         emit_debug_info,
+        &preprocessed_host_path,
     );
 
     buf.push('\n');
@@ -219,65 +261,72 @@ pub fn build_file<'a>(
         );
     }
 
-    let rebuild_duration = rebuild_thread.join().unwrap();
-    if emit_timings && !precompiled {
-        println!(
-            "Finished rebuilding and preprocessing the host in {} ms\n",
-            rebuild_duration
-        );
+    if let HostRebuildTiming::ConcurrentWithApp(thread) = rebuild_timing {
+        let rebuild_duration = thread.join().unwrap();
+        if emit_timings && !precompiled {
+            println!(
+                "Finished rebuilding and preprocessing the host in {} ms\n",
+                rebuild_duration
+            );
+        }
     }
 
     // Step 2: link the precompiled host and compiled app
     let link_start = SystemTime::now();
-    let problems = if surgically_link {
-        roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path)
-            .map_err(|err| {
-                todo!(
-                    "gracefully handle failing to surgically link with error: {:?}",
-                    err
-                );
-            })?;
-        problems
-    } else if matches!(link_type, LinkType::None) {
-        // Just copy the object file to the output folder.
-        binary_path.set_extension(app_extension);
-        std::fs::copy(app_o_file, &binary_path).unwrap();
-        problems
-    } else {
-        let mut inputs = vec![
-            host_input_path.as_path().to_str().unwrap(),
-            app_o_file.to_str().unwrap(),
-        ];
-        if matches!(opt_level, OptLevel::Development) {
-            inputs.push(bitcode::BUILTINS_HOST_OBJ_PATH);
+    let problems = match (linking_strategy, link_type) {
+        (LinkingStrategy::Surgical, _) => {
+            roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path)
+                .map_err(|err| {
+                    todo!(
+                        "gracefully handle failing to surgically link with error: {:?}",
+                        err
+                    );
+                })?;
+            problems
         }
+        (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
+            // Just copy the object file to the output folder.
+            binary_path.set_extension(app_extension);
+            std::fs::copy(app_o_file, &binary_path).unwrap();
+            problems
+        }
+        (LinkingStrategy::Legacy, _) => {
+            let mut inputs = vec![
+                host_input_path.as_path().to_str().unwrap(),
+                app_o_file.to_str().unwrap(),
+            ];
+            if matches!(opt_level, OptLevel::Development) {
+                inputs.push(bitcode::BUILTINS_HOST_OBJ_PATH);
+            }
 
-        let (mut child, _) =  // TODO use lld
-            link(
-                target,
-                binary_path.clone(),
-                &inputs,
-                link_type
-            )
-            .map_err(|_| {
-                todo!("gracefully handle `ld` failing to spawn.");
+            let (mut child, _) =  // TODO use lld
+                link(
+                    target,
+                    binary_path.clone(),
+                    &inputs,
+                    link_type
+                )
+                .map_err(|_| {
+                    todo!("gracefully handle `ld` failing to spawn.");
+                })?;
+
+            let exit_status = child.wait().map_err(|_| {
+                todo!("gracefully handle error after `ld` spawned");
             })?;
 
-        let exit_status = child.wait().map_err(|_| {
-            todo!("gracefully handle error after `ld` spawned");
-        })?;
+            if exit_status.success() {
+                problems
+            } else {
+                let mut problems = problems;
 
-        if exit_status.success() {
-            problems
-        } else {
-            let mut problems = problems;
+                // Add an error for `ld` failing
+                problems.errors += 1;
 
-            // Add an error for `ld` failing
-            problems.errors += 1;
-
-            problems
+                problems
+            }
         }
     };
+
     let linking_time = link_start.elapsed().unwrap();
 
     if emit_timings {
@@ -296,9 +345,10 @@ pub fn build_file<'a>(
 #[allow(clippy::too_many_arguments)]
 fn spawn_rebuild_thread(
     opt_level: OptLevel,
-    surgically_link: bool,
+    linking_strategy: LinkingStrategy,
     precompiled: bool,
     host_input_path: PathBuf,
+    preprocessed_host_path: PathBuf,
     binary_path: PathBuf,
     target: &Triple,
     exported_symbols: Vec<String>,
@@ -312,31 +362,46 @@ fn spawn_rebuild_thread(
         }
 
         let rebuild_host_start = SystemTime::now();
+
         if !precompiled {
-            if surgically_link {
-                roc_linker::build_and_preprocess_host(
-                    opt_level,
-                    &thread_local_target,
-                    host_input_path.as_path(),
-                    exported_symbols,
-                    exported_closure_types,
-                    target_valgrind,
-                )
-                .unwrap();
-            } else {
-                rebuild_host(
-                    opt_level,
-                    &thread_local_target,
-                    host_input_path.as_path(),
-                    None,
-                    target_valgrind,
-                );
+            match linking_strategy {
+                LinkingStrategy::Additive => {
+                    let host_dest = rebuild_host(
+                        opt_level,
+                        &thread_local_target,
+                        host_input_path.as_path(),
+                        None,
+                        target_valgrind,
+                    );
+
+                    preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
+                }
+                LinkingStrategy::Surgical => {
+                    roc_linker::build_and_preprocess_host(
+                        opt_level,
+                        &thread_local_target,
+                        host_input_path.as_path(),
+                        preprocessed_host_path.as_path(),
+                        exported_symbols,
+                        exported_closure_types,
+                        target_valgrind,
+                    )
+                    .unwrap();
+                }
+                LinkingStrategy::Legacy => {
+                    rebuild_host(
+                        opt_level,
+                        &thread_local_target,
+                        host_input_path.as_path(),
+                        None,
+                        target_valgrind,
+                    );
+                }
             }
         }
-        if surgically_link {
+        if linking_strategy == LinkingStrategy::Surgical {
             // Copy preprocessed host to executable location.
-            let prehost = host_input_path.with_file_name("preprocessedhost");
-            std::fs::copy(prehost, binary_path.as_path()).unwrap();
+            std::fs::copy(preprocessed_host_path, binary_path.as_path()).unwrap();
         }
         let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
 

@@ -204,7 +204,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         };
 
         let (mut module, called_preload_fns, main_fn_index) = {
-            roc_gen_wasm::build_module_without_wrapper(
+            roc_gen_wasm::build_module_unserialized(
                 &env,
                 &mut interns, // NOTE: must drop this mutable ref before jit_to_ast
                 pre_linked_binary,
