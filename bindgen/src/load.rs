@@ -68,42 +68,20 @@ pub fn load_types(
 
     let mut types = Types::default();
 
-    let decls = vec![];
-    for decl in decls.into_iter() {
-        let defs = match decl {
-            Declaration::Declare(def) => {
-                vec![def]
-            }
-            Declaration::DeclareRec(defs, cycle_mark) => {
-                if cycle_mark.is_illegal(subs) {
-                    vec![]
-                } else {
-                    defs
-                }
-            }
-            Declaration::Builtin(..) => {
-                unreachable!("Builtin decl in userspace module?")
-            }
-            Declaration::InvalidCycle(..) => {
-                vec![]
-            }
-        };
+    for index in 0..decls.len() {
+        use roc_can::expr::DeclarationTag::*;
 
-        for Def {
-            loc_pattern,
-            pattern_vars,
-            ..
-        } in defs.into_iter()
-        {
-            if let Pattern::Identifier(sym) = loc_pattern.value {
-                let var = pattern_vars
-                    .get(&sym)
-                    .expect("Indetifier known but it has no var?");
-
-                bindgen::add_type(&mut env, *var, &mut types);
-            } else {
+        match decls.declarations[index] {
+            Value | Function(_) | Recursive(_) | TailRecursive(_) => {
+                let var = decls.variables[index];
+                bindgen::add_type(&mut env, var, &mut types);
+            }
+            Destructure(_) => {
                 // figure out if we need to export non-identifier defs - when would that
                 // happen?
+            }
+            MutualRecursion { .. } => {
+                // handled by future iterations
             }
         }
     }
