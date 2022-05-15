@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
+#[allow(dead_code)]
 pub fn generate_bindings(decl_src: &str) -> String {
     use tempfile::tempdir;
 
