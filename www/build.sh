@@ -31,15 +31,11 @@ RUSTFLAGS=-Awarnings
 # is set up to serve them.
 export ROC_DOCS_URL_ROOT=/builtins
 
-# These just need to be defined so that some env! macros don't fail.
-BUILTINS_WASM32_O=""
-BUILTINS_HOST_O=""
-
 cargo run --bin roc-docs compiler/builtins/roc/*.roc
 mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
 mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 
-# Web REPL
+echo "Building Web REPL..."
 repl_www/build.sh
 cp -r repl_www/public/* www/build
 
