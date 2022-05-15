@@ -31,7 +31,7 @@ pub extern "C" fn rust_main() -> i32 {
     let rec2 = record; // Copy
 
     assert!(rec2 != Default::default()); // Default
-    assert!(record.cmp(&record) == Ordering::Equal); // PartialOrd
+    assert!(record.partial_cmp(&record) == Some(Ordering::Equal)); // PartialOrd
     assert!(record.cmp(&record) == Ordering::Equal); // Ord
 
     let mut set = HashSet::new();
