@@ -197,8 +197,7 @@ where
                 } else if column < min_indent {
                     Err((MadeProgress, indent_problem(state.pos()), state))
                 } else {
-                    let comments_and_newlines =
-                        Vec::with_capacity_in(newlines.saturating_sub(1), arena);
+                    let comments_and_newlines = Vec::with_capacity_in(newlines, arena);
                     let spaces = eat_spaces(state, false, comments_and_newlines);
                     let mut state = spaces.state;
 
