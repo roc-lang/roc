@@ -682,7 +682,7 @@ fn write_struct(
             for (label, field_id) in fields {
                 writeln!(
                     buf,
-                    "{INDENT}{}: {},",
+                    "{INDENT}pub {}: {},",
                     label.as_str(),
                     type_name(*field_id, types)
                 )?;

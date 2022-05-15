@@ -30,8 +30,8 @@ mod test_gen_rs {
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct MyRcd {
-                    b: u128,
-                    a: u64,
+                    pub b: u128,
+                    pub a: u64,
                 }
             "#
             )
@@ -60,16 +60,16 @@ mod test_gen_rs {
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Outer {
-                    y: roc_std::RocStr,
-                    z: roc_std::RocList<u8>,
-                    x: Inner,
+                    pub y: roc_std::RocStr,
+                    pub z: roc_std::RocList<u8>,
+                    pub x: Inner,
                 }
 
                 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Inner {
-                    b: f32,
-                    a: u16,
+                    pub b: f32,
+                    pub a: u16,
                 }
             "#
             )
@@ -89,8 +89,8 @@ mod test_gen_rs {
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
-                    b: u128,
-                    a: u64,
+                    pub b: u128,
+                    pub a: u64,
                 }
             "#
             )
@@ -110,16 +110,16 @@ mod test_gen_rs {
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
-                    y: roc_std::RocStr,
-                    z: roc_std::RocList<u8>,
-                    x: R2,
+                    pub y: roc_std::RocStr,
+                    pub z: roc_std::RocList<u8>,
+                    pub x: R2,
                 }
 
                 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R2 {
-                    b: f32,
-                    a: u16,
+                    pub b: f32,
+                    pub a: u16,
                 }
             "#
             )
@@ -431,8 +431,8 @@ mod test_gen_rs {
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct UserId {
-                    f1: roc_std::RocStr,
-                    f0: u32,
+                    pub f1: roc_std::RocStr,
+                    pub f0: u32,
                 }
             "#
             )
