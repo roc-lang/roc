@@ -1,5 +1,5 @@
 app "app"
-    packages { pf: "platform" }
+    packages { pf: "." }
     imports []
     provides [ main ] to pf
 

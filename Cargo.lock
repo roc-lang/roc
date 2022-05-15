@@ -1167,6 +1167,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dircpy"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70b2666334bac0698c34f849a823a049800f9fe86a950cfd192e2d2a817da920"
+dependencies = [
+ "jwalk",
+ "log",
+ "walkdir",
+]
+
+[[package]]
 name = "directories-next"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1991,6 +2002,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "671a26f820db17c2a2750743f1dd03bafd15b98c9f30c7c2628c024c05d73397"
 dependencies = [
  "wasm-bindgen",
+]
+
+[[package]]
+name = "jwalk"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "172752e853a067cbce46427de8470ddf308af7fd8ceaf9b682ef31a5021b6bb9"
+dependencies = [
+ "crossbeam",
+ "rayon",
 ]
 
 [[package]]
@@ -3436,6 +3457,7 @@ dependencies = [
  "bumpalo",
  "clap 3.1.17",
  "cli_utils",
+ "dircpy",
  "indoc",
  "pretty_assertions",
  "roc_builtins",

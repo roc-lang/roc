@@ -1,2 +1,6 @@
+Cargo.lock
+Cargo.toml
+build.rs
+host.c
 bindings.rs
 app

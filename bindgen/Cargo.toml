@@ -37,3 +37,4 @@ indoc = "1.0.3"
 serial_test = "0.5.1"
 cli_utils = { path = "../cli_utils" }
 roc_test_utils = { path = "../test_utils" }
+dircpy = "0.3.9"

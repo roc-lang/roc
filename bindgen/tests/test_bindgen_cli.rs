@@ -4,6 +4,7 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 
+extern crate dircpy;
 extern crate roc_collections;
 
 mod helpers;
@@ -37,7 +38,7 @@ mod bindgen_cli_run {
                 fn $test_name() {
                     let dir = fixtures_dir($fixture_dir);
 
-                    generate_bindings_for(&dir.join("platform"), std::iter::empty());
+                    generate_bindings_for(&dir, std::iter::empty());
                     let out = run_app(&dir.join("app.roc"), std::iter::empty());
 
                     assert!(out.status.success());
@@ -74,6 +75,8 @@ mod bindgen_cli_run {
     fn check_for_tests(all_fixtures: &mut roc_collections::VecSet<String>) {
         use roc_collections::VecSet;
 
+        // todo!("Remove a bunch of duplication - don't have a ton of files in there.");
+
         let fixtures = fixtures_dir("");
         let entries = std::fs::read_dir(fixtures.as_path()).unwrap_or_else(|err| {
             panic!(
@@ -107,6 +110,18 @@ mod bindgen_cli_run {
     ) -> Out {
         let package_config = platform_dir.join("Package-Config.roc");
         let bindings_file = platform_dir.join("src").join("bindings.rs");
+        let fixture_templates_dir = platform_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("fixture-templates");
+
+        // Copy the rust template from the templates directory into the fixture dir.
+        dircpy::CopyBuilder::new(fixture_templates_dir.join("rust"), platform_dir)
+            .overwrite(true) // overwrite any files that were already present
+            .run()
+            .unwrap();
 
         // Delete the bindings file to make sure we're actually regenerating it!
         if bindings_file.exists() {
