@@ -17,12 +17,12 @@ async function roc_web_platform_run(wasm_filename, callback) {
         }
         exit_code = code;
       },
-        roc_panic: (_pointer, _tag_id) => {
-            throw 'Roc panicked!';
-        }
     },
     env: {
       js_display_roc_string,
+      roc_panic: (_pointer, _tag_id) => {
+        throw "Roc panicked!";
+      },
     },
   };
 
@@ -50,7 +50,7 @@ async function roc_web_platform_run(wasm_filename, callback) {
   }
 }
 
-if (typeof module !== 'undefined') {
+if (typeof module !== "undefined") {
   module.exports = {
     roc_web_platform_run,
   };
