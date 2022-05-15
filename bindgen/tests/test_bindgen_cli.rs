@@ -4,7 +4,6 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 
-#[cfg(not(debug_assertions))]
 extern crate roc_collections;
 
 mod helpers;
@@ -15,16 +14,6 @@ mod bindgen_cli_run {
     use cli_utils::helpers::{run_bindgen, run_roc, Out};
     use std::fs;
     use std::path::Path;
-
-    #[derive(Debug, PartialEq, Eq)]
-    struct Example<'a> {
-        filename: &'a str,
-        executable_filename: &'a str,
-        stdin: &'a [&'a str],
-        input_file: Option<&'a str>,
-        expected_ending: &'a str,
-        use_valgrind: bool,
-    }
 
     /// This macro does two things.
     ///
@@ -60,17 +49,16 @@ mod bindgen_cli_run {
             )*
 
             #[test]
-            #[cfg(not(debug_assertions))]
-            fn all_examples_have_tests() {
-                use roc_collections::all::VecSet;
+            fn all_fixtures_have_tests() {
+                use roc_collections::VecSet;
 
-                let mut all_examples: VecSet<&str, &str> = VecSet::default();
+                let mut all_fixtures: VecSet<String> = VecSet::default();
 
                 $(
-                    all_examples.insert($fixture_dir);
+                    all_fixtures.insert($fixture_dir.to_string());
                 )*
 
-                check_for_tests(&mut all_examples);
+                check_for_tests(&mut all_fixtures);
             }
         }
     }
@@ -79,14 +67,15 @@ mod bindgen_cli_run {
         basic_record:"basic-record" => "Record was: MyRcd { b: 42, a: 1995 }\n",
     }
 
-    #[cfg(not(debug_assertions))]
-    fn check_for_tests(all_examples: &mut roc_collections::all::VecSet<&str>) {
-        use roc_collections::all::VecSet;
-        let fixtures_dir = fixtures_dir(".").with_file_name("");
-        let entries = std::fs::read_dir(fixtures_dir).unwrap_or_else(|err| {
+    fn check_for_tests(all_fixtures: &mut roc_collections::VecSet<String>) {
+        use roc_collections::VecSet;
+
+        let fixtures = fixtures_dir("");
+        let entries = std::fs::read_dir(fixtures.as_path()).unwrap_or_else(|err| {
             panic!(
-                "Error trying to read {} as an examples directory: {}",
-                examples_dir, err
+                "Error trying to read {} as a fixtures directory: {}",
+                fixtures.to_string_lossy(),
+                err
             );
         });
 
@@ -96,13 +85,16 @@ mod bindgen_cli_run {
             if entry.file_type().unwrap().is_dir() {
                 let fixture_dir_name = entry.file_name().into_string().unwrap();
 
-                all_examples.remove(fixture_dir_name).unwrap_or_else(|| {
-                    panic!("The bindgen fixture directory {} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", entry.path());
-                });
+                if !all_fixtures.remove(&fixture_dir_name) {
+                    panic!(
+                        "The bindgen fixture directory {} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!",
+                        entry.path().to_string_lossy()
+                    );
+                }
             }
         }
 
-        assert_eq!(all_examples, &mut VecSet::default());
+        assert_eq!(all_fixtures, &mut VecSet::default());
     }
 
     fn generate_bindings_for<'a, I: IntoIterator<Item = &'a str>>(
