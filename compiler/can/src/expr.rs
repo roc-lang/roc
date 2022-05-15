@@ -1953,6 +1953,21 @@ impl Declarations {
         }
     }
 
+    pub fn push_recursive_group(&mut self, length: u16, cycle_mark: IllegalCycleMark) -> usize {
+        let index = self.declarations.len();
+
+        let tag = DeclarationTag::MutualRecursion { length, cycle_mark };
+        self.declarations.push(tag);
+
+        // dummy values
+        self.variables.push(Variable::NULL);
+        self.symbols.push(Loc::at_zero(Symbol::ATTR_ATTR));
+        self.annotations.push(None);
+        self.expressions.push(Loc::at_zero(Expr::EmptyRecord));
+
+        index
+    }
+
     pub fn push_recursive_def(
         &mut self,
         symbol: Loc<Symbol>,
@@ -2162,7 +2177,7 @@ impl Declarations {
     }
 
     pub fn len(&self) -> usize {
-        self.declarations.iter().map(|d| d.len()).sum()
+        self.declarations.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -2202,7 +2217,10 @@ pub enum DeclarationTag {
     Recursive(Index<Loc<FunctionDef>>),
     TailRecursive(Index<Loc<FunctionDef>>),
     Destructure(Index<DestructureDef>),
-    MutualRecursion { length: u16, cycle_mark: u32 },
+    MutualRecursion {
+        length: u16,
+        cycle_mark: IllegalCycleMark,
+    },
 }
 
 impl DeclarationTag {

@@ -3476,7 +3476,6 @@ fn list_map2_conslist() {
 }
 
 #[test]
-#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn mutual_recursion_top_level_defs() {
     assert_evals_to!(

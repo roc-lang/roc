@@ -832,7 +832,6 @@ pub(crate) fn sort_can_defs_new(
                         _ => todo!("{:?}", &def.loc_pattern.value),
                     }
                 } else {
-                    // Declaration::Declare(def)
                     match def.loc_pattern.value {
                         Pattern::Identifier(symbol) => match def.loc_expr.value {
                             Closure(closure_data) => {
@@ -892,8 +891,61 @@ pub(crate) fn sort_can_defs_new(
             group_length => {
                 let group_defs = defs.split_off(defs.len() - group_length);
 
-                dbg!(&group_defs);
-                todo!();
+                let length = declarations.declarations.len();
+
+                let cycle_mark = IllegalCycleMark::new(var_store);
+                declarations.push_recursive_group(group_length as u16, cycle_mark);
+
+                for def in group_defs {
+                    match def.loc_pattern.value {
+                        Pattern::Identifier(symbol) => match def.loc_expr.value {
+                            Closure(closure_data) => {
+                                declarations.push_recursive_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    Loc::at(def.loc_expr.region, closure_data),
+                                    def.expr_var,
+                                    def.annotation,
+                                    None,
+                                );
+                            }
+                            _ => {
+                                declarations.push_value_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    def.loc_expr,
+                                    def.expr_var,
+                                    def.annotation,
+                                    None,
+                                );
+                            }
+                        },
+                        Pattern::AbilityMemberSpecialization {
+                            ident: symbol,
+                            specializes,
+                        } => match def.loc_expr.value {
+                            Closure(closure_data) => {
+                                declarations.push_recursive_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    Loc::at(def.loc_expr.region, closure_data),
+                                    def.expr_var,
+                                    def.annotation,
+                                    Some(specializes),
+                                );
+                            }
+                            _ => {
+                                declarations.push_value_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    def.loc_expr,
+                                    def.expr_var,
+                                    def.annotation,
+                                    Some(specializes),
+                                );
+                            }
+                        },
+                        _ => {
+                            panic!("destructures cannot participate in a recursive group; it's always a type error")
+                        }
+                    }
+                }
             }
         }
     }
