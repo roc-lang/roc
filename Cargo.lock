@@ -3472,7 +3472,6 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "roc_types",
- "serial_test",
  "target-lexicon",
  "tempfile",
  "ven_graph",
