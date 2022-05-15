@@ -16,7 +16,6 @@ mod helpers;
 mod test_load {
     use crate::helpers::fixtures_dir;
     use bumpalo::Bump;
-    use roc_can::def::Declaration::*;
     use roc_can::def::Def;
     use roc_constrain::module::ExposedByModule;
     use roc_load_internal::file::Threading;
@@ -229,26 +228,6 @@ mod test_load {
         loaded_module
     }
 
-    fn expect_def(
-        interns: &Interns,
-        subs: &mut Subs,
-        home: ModuleId,
-        def: &Def,
-        expected_types: &mut HashMap<&str, &str>,
-    ) {
-        for (symbol, expr_var) in &def.pattern_vars {
-            let actual_str = name_and_print_var(*expr_var, subs, home, interns);
-            let fully_qualified = symbol.fully_qualified(interns, home).to_string();
-            let expected_type = expected_types
-                .remove(fully_qualified.as_str())
-                .unwrap_or_else(|| {
-                    panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
-                });
-
-            assert_eq!((&symbol, expected_type), (&symbol, actual_str.as_str()));
-        }
-    }
-
     fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&str, &str>) {
         let home = loaded_module.module_id;
         let mut subs = loaded_module.solved.into_inner();
@@ -263,32 +242,44 @@ mod test_load {
             .unwrap_or_default()
             .is_empty());
 
-        for decl in loaded_module.declarations_by_id.remove(&home).unwrap() {
-            match decl {
-                Declare(def) => expect_def(
-                    &loaded_module.interns,
-                    &mut subs,
-                    home,
-                    &def,
-                    &mut expected_types,
-                ),
-                DeclareRec(defs, cycle_mark) => {
-                    assert!(!cycle_mark.is_illegal(&subs));
-                    for def in defs {
-                        expect_def(
-                            &loaded_module.interns,
-                            &mut subs,
-                            home,
-                            &def,
-                            &mut expected_types,
-                        );
+        let interns = &loaded_module.interns;
+        let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();
+        for index in 0..declarations.len() {
+            use roc_can::expr::DeclarationTag::*;
+
+            match declarations.declarations[index] {
+                Value | Function(_) | Recursive(_) | TailRecursive(_) => {
+                    let symbol = declarations.symbols[index].value;
+                    let expr_var = declarations.variables[index];
+
+                    let actual_str = name_and_print_var(expr_var, &mut subs, home, interns);
+                    let fully_qualified = symbol.fully_qualified(interns, home).to_string();
+                    let expected_type = expected_types
+                        .remove(fully_qualified.as_str())
+                        .unwrap_or_else(|| {
+                            panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
+                        });
+
+                    assert_eq!((&symbol, expected_type), (&symbol, actual_str.as_str()));
+                }
+                Destructure(d_index) => {
+                    let pattern_vars = &declarations.destructs[d_index.index()].pattern_vars;
+                    for (symbol, expr_var) in pattern_vars.iter() {
+                        let actual_str = name_and_print_var(*expr_var, &mut subs, home, interns);
+                        let fully_qualified = symbol.fully_qualified(interns, home).to_string();
+                        let expected_type = expected_types
+                            .remove(fully_qualified.as_str())
+                            .unwrap_or_else(|| {
+                                panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
+                            });
+
+                        assert_eq!((&symbol, expected_type), (&symbol, actual_str.as_str()));
                     }
                 }
-                Builtin(_) => {}
-                cycle @ InvalidCycle(_) => {
-                    panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
+                MutualRecursion { cycle_mark, .. } => {
+                    assert!(!cycle_mark.is_illegal(&subs));
                 }
-            };
+            }
         }
 
         assert_eq!(
@@ -366,13 +357,21 @@ mod test_load {
             .unwrap_or_default()
             .is_empty(),);
 
-        let def_count: usize = loaded_module
-            .declarations_by_id
-            .remove(&loaded_module.module_id)
-            .unwrap()
-            .into_iter()
-            .map(|decl| decl.def_count())
-            .sum();
+        let mut def_count = 0;
+        let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();
+        for index in 0..declarations.len() {
+            use roc_can::expr::DeclarationTag::*;
+
+            match declarations.declarations[index] {
+                Value | Function(_) | Recursive(_) | TailRecursive(_) => {
+                    def_count += 1;
+                }
+                Destructure(_) => {
+                    def_count += 1;
+                }
+                MutualRecursion { .. } => { /* do nothing, not a def */ }
+            }
+        }
 
         let expected_name = loaded_module
             .interns
