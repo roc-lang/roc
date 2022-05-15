@@ -14,10 +14,10 @@ mod test_gen_rs {
     fn record_aliased() {
         let module = indoc!(
             r#"
-            MyRcd : { a : U64, b : U128 }
+            MyRcd : { a : U64, b : I128 }
 
             main : MyRcd
-            main = { a: 1u64, b: 2u128 }
+            main = { a: 1u64, b: 2i128 }
         "#
         );
 
@@ -30,7 +30,7 @@ mod test_gen_rs {
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct MyRcd {
-                    pub b: u128,
+                    pub b: roc_std::I128,
                     pub a: u64,
                 }
             "#
@@ -89,7 +89,7 @@ mod test_gen_rs {
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
-                    pub b: u128,
+                    pub b: roc_std::U128,
                     pub a: u64,
                 }
             "#
@@ -154,7 +154,7 @@ mod test_gen_rs {
 
                 #[repr(C)]
                 pub union union_NonRecursive {
-                    Bar: u128,
+                    Bar: roc_std::U128,
                     Blah: i32,
                     Foo: core::mem::ManuallyDrop<roc_std::RocStr>,
                 }
@@ -171,7 +171,7 @@ mod test_gen_rs {
                     }
 
                     /// Construct a tag named Bar, with the appropriate payload
-                    pub fn Bar(payload: u128) -> Self {
+                    pub fn Bar(payload: roc_std::U128) -> Self {
                         Self {
                             tag: tag_NonRecursive::Bar,
                             variant: union_NonRecursive {
@@ -182,13 +182,13 @@ mod test_gen_rs {
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Bar and convert it to Bar's payload.
                     /// (always examine .tag() first to make sure this is the correct variant!)
-                    pub unsafe fn into_Bar(self) -> u128 {
+                    pub unsafe fn into_Bar(self) -> roc_std::U128 {
                         self.variant.Bar
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Bar and return its payload.
                     /// (always examine .tag() first to make sure this is the correct variant!)
-                    pub unsafe fn as_Bar(&self) -> u128 {
+                    pub unsafe fn as_Bar(&self) -> roc_std::U128 {
                         self.variant.Bar
                     }
 
