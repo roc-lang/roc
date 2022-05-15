@@ -6,25 +6,27 @@ extern crate indoc;
 
 mod helpers;
 
-use crate::helpers::generate_bindings;
+#[cfg(test)]
+mod test_gen_rs {
+    use crate::helpers::generate_bindings;
 
-#[test]
-fn record_aliased() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn record_aliased() {
+        let module = indoc!(
+            r#"
             MyRcd : { a : U64, b : U128 }
 
             main : MyRcd
             main = { a: 1u64, b: 2u128 }
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct MyRcd {
@@ -32,14 +34,14 @@ fn record_aliased() {
                     a: u64,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn nested_record_aliased() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn nested_record_aliased() {
+        let module = indoc!(
+            r#"
             Outer : { x : Inner, y : Str, z : List U8 }
 
             Inner : { a : U16, b : F32 }
@@ -47,14 +49,14 @@ fn nested_record_aliased() {
             main : Outer
             main = { x: { a: 5, b: 24 }, y: "foo", z: [ 1, 2 ] }
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Outer {
@@ -70,20 +72,20 @@ fn nested_record_aliased() {
                     a: u16,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn record_anonymous() {
-    let module = "main = { a: 1u64, b: 2u128 }";
+    #[test]
+    fn record_anonymous() {
+        let module = "main = { a: 1u64, b: 2u128 }";
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
@@ -91,20 +93,20 @@ fn record_anonymous() {
                     a: u64,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn nested_record_anonymous() {
-    let module = r#"main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }"#;
+    #[test]
+    fn nested_record_anonymous() {
+        let module = r#"main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }"#;
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
@@ -120,27 +122,27 @@ fn nested_record_anonymous() {
                     a: u16,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn tag_union_aliased() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn tag_union_aliased() {
+        let module = indoc!(
+            r#"
             NonRecursive : [ Foo Str, Bar U128, Blah I32, Baz ]
 
             main : NonRecursive
             main = Foo "blah"
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_NonRecursive {
@@ -376,27 +378,27 @@ fn tag_union_aliased() {
                 }
 
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn tag_union_enumeration() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn tag_union_enumeration() {
+        let module = indoc!(
+            r#"
             NonRecursive : [ Blah, Foo, Bar, ]
 
             main : NonRecursive
             main = Foo
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum NonRecursive {
@@ -405,27 +407,27 @@ fn tag_union_enumeration() {
                     Foo = 2,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn single_tag_union_with_payloads() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn single_tag_union_with_payloads() {
+        let module = indoc!(
+            r#"
             UserId : [ Id U32 Str ]
 
             main : UserId
             main = Id 42 "blah"
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct UserId {
@@ -433,52 +435,52 @@ fn single_tag_union_with_payloads() {
                     f0: u32,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn single_tag_union_with_one_payload_field() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn single_tag_union_with_one_payload_field() {
+        let module = indoc!(
+            r#"
             UserId : [ Id Str ]
 
             main : UserId
             main = Id "blah"
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(transparent)]
                 pub struct UserId(roc_std::RocStr);
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn cons_list_of_strings() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn cons_list_of_strings() {
+        let module = indoc!(
+            r#"
             StrConsList : [ Nil, Cons Str StrConsList ]
 
             main : StrConsList
             main = Cons "Hello, " (Cons "World!" Nil)
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_StrConsList {
@@ -580,27 +582,27 @@ fn cons_list_of_strings() {
                 }
 
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn cons_list_of_ints() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn cons_list_of_ints() {
+        let module = indoc!(
+            r#"
             IntConsList : [ Empty, Prepend U16 IntConsList ]
 
             main : IntConsList
             main = Prepend 42 (Prepend 26 Empty)
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_IntConsList {
@@ -702,6 +704,7 @@ fn cons_list_of_ints() {
                 }
 
             "#
-        )
-    );
+            )
+        );
+    }
 }
