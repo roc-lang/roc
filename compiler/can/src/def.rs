@@ -1019,10 +1019,7 @@ pub(crate) fn sort_can_defs(
                 debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {:?} now, that's a bug!", def);
 
                 // this function calls itself, and must be typechecked as a recursive def
-                Declaration::DeclareRec(
-                    vec![mark_def_recursive(def)],
-                    IllegalCycleMark::new(var_store),
-                )
+                Declaration::DeclareRec(vec![mark_def_recursive(def)], IllegalCycleMark::empty())
             } else {
                 Declaration::Declare(def)
             };
