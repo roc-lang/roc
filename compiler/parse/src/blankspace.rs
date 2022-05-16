@@ -248,7 +248,7 @@ fn fast_eat_spaces(state: &State) -> FastSpaceState {
                 line_start = base_offset + index;
             }
             b'\t' => {
-                return HasTab(Position::new(index as u32));
+                return HasTab(Position::new((base_offset + index) as u32));
             }
             b'#' => {
                 index += 1;
