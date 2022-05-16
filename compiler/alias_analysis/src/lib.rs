@@ -28,7 +28,11 @@ pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
 
 #[inline(always)]
 fn debug() -> bool {
-    use roc_debug_flags::{dbg_do, ROC_DEBUG_ALIAS_ANALYSIS};
+    use roc_debug_flags::dbg_do;
+
+    #[cfg(debug_assertions)]
+    use roc_debug_flags::ROC_DEBUG_ALIAS_ANALYSIS;
+
     dbg_do!(ROC_DEBUG_ALIAS_ANALYSIS, {
         return true;
     });
