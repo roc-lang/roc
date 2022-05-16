@@ -2360,6 +2360,7 @@ pub(crate) fn constrain_def_make_constraint(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn constrain_value_def_make_constraint(
     constraints: &mut Constraints,
     new_rigid_variables: Vec<Variable>,

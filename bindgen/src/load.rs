@@ -1,10 +1,6 @@
 use crate::bindgen::{self, Env};
 use crate::types::Types;
 use bumpalo::Bump;
-use roc_can::{
-    def::{Declaration, Def},
-    pattern::Pattern,
-};
 use roc_load::{LoadedModule, Threading};
 use roc_mono::layout::LayoutCache;
 use roc_reporting::report::RenderTarget;
