@@ -1,6 +1,5 @@
 target
 generated-docs
-netlify-install
 zig-cache
 .direnv
 .envrc

@@ -40,11 +40,8 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add rustfmt
     # wasm repl & tests
     RUN rustup target add wasm32-unknown-unknown wasm32-wasi
-    RUN apt -y install libssl-dev
+    RUN apt -y install libssl-dev binaryen
     RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack
-    RUN wget https://github.com/WebAssembly/binaryen/releases/download/version_108/binaryen-version_108-x86_64-linux.tar.gz
-    RUN tar -xzf binaryen-version_108-x86_64-linux.tar.gz
-    RUN ln -s /earthbuild/binaryen-version_108-x86_64-linux/bin/wasm-opt /bin/wasm-opt
     # criterion
     RUN cargo install cargo-criterion
     # sccache
