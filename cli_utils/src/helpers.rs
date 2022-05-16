@@ -40,10 +40,17 @@ where
             .parent()
             .unwrap();
 
-        // cargo build --release --bin roc
+        // cargo build --bin roc
+        // (with --release iff the test is being built with --release)
+        let args = if cfg!(debug_assertions) {
+            vec!["build", "--bin", "roc"]
+        } else {
+            vec!["build", "--release", "--bin", "roc"]
+        };
+
         let output = Command::new("cargo")
             .current_dir(root_project_dir)
-            .args(["build", "--release", "--bin", "roc"])
+            .args(args)
             .output()
             .unwrap();
 
