@@ -26,7 +26,7 @@ then
     wasm-bindgen --target web --keep-debug target/wasm32-unknown-unknown/release/roc_repl_wasm.wasm --out-dir repl_wasm/pkg/
 else
     # A `--profiling` build is optimized and has debug info, so we get stack traces for compiler `todo!()`
-    wasm-pack build --profiling --target web repl_wasm -- --features console_error_panic_hook
+    wasm-pack build --profiling --target web repl_wasm -- --features console_error_panic_hook -v
 fi
 
 cp repl_wasm/pkg/*.wasm $WWW_ROOT
