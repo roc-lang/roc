@@ -175,61 +175,6 @@ pub enum DestructType {
     Guard(Variable, Loc<Pattern>),
 }
 
-pub fn symbols_from_pattern(pattern: &Pattern) -> Vec<Symbol> {
-    let mut symbols = Vec::new();
-    symbols_from_pattern_help(pattern, &mut symbols);
-
-    symbols
-}
-
-pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
-    use Pattern::*;
-
-    match pattern {
-        Identifier(symbol) | Shadowed(_, _, symbol) => {
-            symbols.push(*symbol);
-        }
-
-        AbilityMemberSpecialization { ident, specializes } => {
-            symbols.push(*ident);
-            symbols.push(*specializes);
-        }
-
-        AppliedTag { arguments, .. } => {
-            for (_, nested) in arguments {
-                symbols_from_pattern_help(&nested.value, symbols);
-            }
-        }
-        UnwrappedOpaque {
-            opaque, argument, ..
-        } => {
-            symbols.push(*opaque);
-            let (_, nested) = &**argument;
-            symbols_from_pattern_help(&nested.value, symbols);
-        }
-        RecordDestructure { destructs, .. } => {
-            for destruct in destructs {
-                // when a record field has a pattern guard, only symbols in the guard are introduced
-                if let DestructType::Guard(_, subpattern) = &destruct.value.typ {
-                    symbols_from_pattern_help(&subpattern.value, symbols);
-                } else {
-                    symbols.push(destruct.value.symbol);
-                }
-            }
-        }
-
-        NumLiteral(..)
-        | IntLiteral(..)
-        | FloatLiteral(..)
-        | StrLiteral(_)
-        | SingleQuote(_)
-        | Underscore
-        | MalformedPattern(_, _)
-        | UnsupportedPattern(_)
-        | OpaqueNotInScope(..) => {}
-    }
-}
-
 pub fn canonicalize_def_header_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,

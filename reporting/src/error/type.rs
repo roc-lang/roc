@@ -1,3 +1,4 @@
+use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
@@ -200,6 +201,18 @@ pub fn type_problem<'b>(
             Some(report)
         }
         Exhaustive(problem) => Some(exhaustive_problem(alloc, lines, filename, problem)),
+        CircularDef(entries) => {
+            let doc = to_circular_def_doc(alloc, lines, &entries);
+            let title = CIRCULAR_DEF.to_string();
+            let severity = Severity::RuntimeError;
+
+            Some(Report {
+                title,
+                filename,
+                doc,
+                severity,
+            })
+        }
     }
 }
 

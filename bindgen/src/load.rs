@@ -73,7 +73,13 @@ pub fn load_types(
             Declaration::Declare(def) => {
                 vec![def]
             }
-            Declaration::DeclareRec(defs) => defs,
+            Declaration::DeclareRec(defs, cycle_mark) => {
+                if cycle_mark.is_illegal(subs) {
+                    vec![]
+                } else {
+                    defs
+                }
+            }
             Declaration::Builtin(..) => {
                 unreachable!("Builtin decl in userspace module?")
             }

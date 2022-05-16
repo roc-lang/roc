@@ -658,22 +658,24 @@ mod test_can {
     // TAIL CALLS
     fn get_closure(expr: &Expr, i: usize) -> roc_can::expr::Recursive {
         match expr {
-            LetRec(assignments, body) => match &assignments.get(i).map(|def| &def.loc_expr.value) {
-                Some(Closure(ClosureData {
-                    recursive: recursion,
-                    ..
-                })) => *recursion,
-                Some(other) => {
-                    panic!("assignment at {} is not a closure, but a {:?}", i, other)
-                }
-                None => {
-                    if i > 0 {
-                        get_closure(&body.value, i - 1)
-                    } else {
-                        panic!("Looking for assignment at {} but the list is too short", i)
+            LetRec(assignments, body, _) => {
+                match &assignments.get(i).map(|def| &def.loc_expr.value) {
+                    Some(Closure(ClosureData {
+                        recursive: recursion,
+                        ..
+                    })) => *recursion,
+                    Some(other) => {
+                        panic!("assignment at {} is not a closure, but a {:?}", i, other)
+                    }
+                    None => {
+                        if i > 0 {
+                            get_closure(&body.value, i - 1)
+                        } else {
+                            panic!("Looking for assignment at {} but the list is too short", i)
+                        }
                     }
                 }
-            },
+            }
             LetNonRec(def, body) => {
                 if i > 0 {
                     // recurse in the body (not the def!)

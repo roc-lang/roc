@@ -272,7 +272,8 @@ mod test_load {
                     &def,
                     &mut expected_types,
                 ),
-                DeclareRec(defs) => {
+                DeclareRec(defs, cycle_mark) => {
+                    assert!(!cycle_mark.is_illegal(&subs));
                     for def in defs {
                         expect_def(
                             &loaded_module.interns,

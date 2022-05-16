@@ -351,7 +351,7 @@ pub fn canonicalize_module_defs<'a>(
         ..Default::default()
     };
 
-    let (mut declarations, mut output) = sort_can_defs(&mut env, defs, new_output);
+    let (mut declarations, mut output) = sort_can_defs(&mut env, var_store, defs, new_output);
 
     let symbols_from_requires = symbols_from_requires
         .iter()
@@ -463,7 +463,7 @@ pub fn canonicalize_module_defs<'a>(
                     }
                 }
             }
-            DeclareRec(defs) => {
+            DeclareRec(defs, _) => {
                 for def in defs {
                     for (symbol, _) in def.pattern_vars.iter() {
                         if exposed_but_not_defined.contains(symbol) {
@@ -559,7 +559,9 @@ pub fn canonicalize_module_defs<'a>(
     for declaration in declarations.iter_mut() {
         match declaration {
             Declare(def) => fix_values_captured_in_closure_def(def, &mut VecSet::default()),
-            DeclareRec(defs) => fix_values_captured_in_closure_defs(defs, &mut VecSet::default()),
+            DeclareRec(defs, _) => {
+                fix_values_captured_in_closure_defs(defs, &mut VecSet::default())
+            }
             InvalidCycle(_) | Builtin(_) => {}
         }
     }
@@ -594,7 +596,9 @@ fn fix_values_captured_in_closure_defs(
 ) {
     // recursive defs cannot capture each other
     for def in defs.iter() {
-        no_capture_symbols.extend(crate::pattern::symbols_from_pattern(&def.loc_pattern.value));
+        no_capture_symbols.extend(
+            crate::traverse::symbols_introduced_from_pattern(&def.loc_pattern).map(|ls| ls.value),
+        );
     }
 
     // TODO mutually recursive functions should both capture the union of both their capture sets
@@ -665,7 +669,7 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_def(def, no_capture_symbols);
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
-        LetRec(defs, loc_expr) => {
+        LetRec(defs, loc_expr, _) => {
             // LetRec(Vec<Def>, Box<Located<Expr>>, Variable, Aliases),
             fix_values_captured_in_closure_defs(defs, no_capture_symbols);
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);

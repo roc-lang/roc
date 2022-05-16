@@ -15,4 +15,4 @@ extern "C" {
 // If a non-Wasm target is using this crate, we assume it is a build script that wants to emit Wasm
 // For Wasm target, it won't ever be used, but we expose it just to keep things simple
 mod generated;
-pub use generated::WASI_LIBC_PATH;
+pub use generated::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
