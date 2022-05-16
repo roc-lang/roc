@@ -40,7 +40,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add rustfmt
     # wasm repl & tests
     RUN rustup target add wasm32-unknown-unknown wasm32-wasi
-    RUN apt -y install libssl-dev binaryen
+    RUN apt -y install libssl-dev
     RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack
     # criterion
     RUN cargo install cargo-criterion
@@ -106,6 +106,7 @@ test-rust:
     # RUN --mount=type=cache,target=$SCCACHE_DIR \
     #    cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
     # make sure website deployment works (that is, make sure build.sh returns status code 0)
+    ENV REPL_DEBUG=1
     RUN bash www/build.sh
 
 
