@@ -3,7 +3,7 @@ name = "roc_constrain"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 roc_collections = { path = "../collections" }
