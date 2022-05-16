@@ -2705,6 +2705,21 @@ fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
 
 const BINOP_CHAR_SET: &[u8] = b"+-/*=.<>:&|^?%!";
 
+const BINOP_CHAR_MASK: [bool; 125] = {
+    let mut result = [false; 125];
+
+    let mut i = 0;
+    while i < BINOP_CHAR_SET.len() {
+        let index = BINOP_CHAR_SET[i] as usize;
+
+        result[index] = true;
+
+        i += 1;
+    }
+
+    result
+};
+
 fn operator<'a>() -> impl Parser<'a, BinOp, EExpr<'a>> {
     |_, state| operator_help(EExpr::Start, EExpr::BadOperator, state)
 }
@@ -2774,10 +2789,11 @@ fn chomp_ops(bytes: &[u8]) -> &str {
     let mut chomped = 0;
 
     for c in bytes.iter() {
-        if !BINOP_CHAR_SET.contains(c) {
+        if let Some(true) = BINOP_CHAR_MASK.get(*c as usize) {
+            chomped += 1;
+        } else {
             break;
         }
-        chomped += 1;
     }
 
     unsafe {
