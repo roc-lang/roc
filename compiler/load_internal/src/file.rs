@@ -16,7 +16,6 @@ use roc_constrain::module::{
     ExposedModuleTypes,
 };
 use roc_debug_flags::dbg_do;
-#[cfg(debug_assertions)]
 use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
     ROC_PRINT_LOAD_LOG,
@@ -58,6 +57,12 @@ use std::{env, fs};
 
 use crate::work::Dependencies;
 pub use crate::work::Phase;
+
+#[cfg(debug_assertions)]
+use roc_debug_flags::{
+    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
+    ROC_PRINT_LOAD_LOG,
+};
 
 #[cfg(target_family = "wasm")]
 use crate::wasm_system_time::{Duration, SystemTime};
