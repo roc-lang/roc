@@ -197,7 +197,11 @@ where
                 Err((MadeProgress, indent_problem(state.pos()), state))
             } else {
                 let comments_and_newlines = Vec::with_capacity_in(newlines, arena);
-                let spaces = eat_spaces(state, false, comments_and_newlines);
+                let mut spaces = eat_spaces(state, false, comments_and_newlines);
+
+                if spaces.multiline {
+                    spaces.state.indent_column = spaces.state.column();
+                }
 
                 Ok((
                     MadeProgress,

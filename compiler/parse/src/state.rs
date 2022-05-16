@@ -13,11 +13,11 @@ pub struct State<'a> {
     offset: usize,
 
     /// Position of the start of the current line
-    pub line_start: Position,
+    pub(crate) line_start: Position,
 
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)
-    pub indent_column: u32,
+    pub(crate) indent_column: u32,
 }
 
 impl<'a> State<'a> {
