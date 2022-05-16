@@ -31,4 +31,5 @@ wasmer = ["futures"]
 
 # Tell wasm-pack not to run wasm-opt automatically. We run it explicitly when we need to.
 # (Workaround for a CI install issue with wasm-pack https://github.com/rustwasm/wasm-pack/issues/864)
+[package.metadata.wasm-pack.profile.profiling]
 wasm-opt = false
