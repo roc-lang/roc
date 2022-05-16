@@ -690,9 +690,14 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
             ),
             TypeAnnotation::Apply(a, b, c) => TypeAnnotation::Apply(a, b, c.remove_spaces(arena)),
             TypeAnnotation::BoundVariable(a) => TypeAnnotation::BoundVariable(a),
-            TypeAnnotation::As(a, _, c) => {
-                TypeAnnotation::As(arena.alloc(a.remove_spaces(arena)), &[], c)
-            }
+            TypeAnnotation::As(a, _, TypeHeader { name, vars }) => TypeAnnotation::As(
+                arena.alloc(a.remove_spaces(arena)),
+                &[],
+                TypeHeader {
+                    name: name.remove_spaces(arena),
+                    vars: vars.remove_spaces(arena),
+                },
+            ),
             TypeAnnotation::Record { fields, ext } => TypeAnnotation::Record {
                 fields: fields.remove_spaces(arena),
                 ext: ext.remove_spaces(arena),
