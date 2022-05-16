@@ -35,11 +35,11 @@ fn main() {
     let cwd = std::env::current_dir().unwrap();
     let find_libc_output = run_command(&cwd, "find", [&zig_cache_dir, "-name", "libc.a"]);
     // If `find` printed multiple results, take the first.
-    let zig_libc_path = find_libc_output.split("\n").next().unwrap();
+    let zig_libc_path = find_libc_output.split('\n').next().unwrap();
 
     let find_crt_output = run_command(&cwd, "find", [&zig_cache_dir, "-name", "compiler_rt.o"]);
     // If `find` printed multiple results, take the first.
-    let zig_crt_path = find_crt_output.split("\n").next().unwrap();
+    let zig_crt_path = find_crt_output.split('\n').next().unwrap();
 
     // Copy libc to where Cargo expects the output of this crate
     fs::copy(&zig_libc_path, &out_file).unwrap();
