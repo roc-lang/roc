@@ -6,7 +6,7 @@ Task ok err : Effect.Effect (Result ok err)
 
 forever : Task val err -> Task * err
 forever = \task ->
-    looper = \{  } ->
+    looper = \{} ->
         task
             |> Effect.map
                 \res ->
