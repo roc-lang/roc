@@ -1422,7 +1422,7 @@ impl Type {
     pub fn expect_variable(&self, reason: &'static str) -> Variable {
         match self {
             Type::Variable(v) => *v,
-            _ => internal_error!(reason),
+            _ => internal_error!("{}", reason),
         }
     }
 }

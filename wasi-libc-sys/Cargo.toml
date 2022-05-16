@@ -1,7 +1,7 @@
 [package]
 authors = ["The Roc Contributors"]
 description = "Rust wrapper for a WebAssembly test platform built on libc"
-edition = "2018"
+edition = "2021"
 license = "UPL-1.0"
 name = "wasi_libc_sys"
 repository = "https://github.com/rtfeldman/roc"
