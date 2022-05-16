@@ -9,8 +9,8 @@ fn main() {
     println!("cargo:rerun-if-changed=src/dummy.c");
 
     let out_dir = env::var("OUT_DIR").unwrap();
-    let zig_cache_dir = format!("{}/zig-cache", out_dir);
-    let out_file = format!("{}/wasi-libc.a", out_dir);
+    let zig_cache_dir = format!("{out_dir}/zig-cache");
+    let out_file = format!("{out_dir}/wasi-libc.a");
 
     // Compile a dummy C program with Zig, with our own private cache directory
     let zig = zig_executable();
