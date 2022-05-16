@@ -10,8 +10,8 @@ main =
         \line ->
             Effect.after
                 (Effect.putLine "You entered: \(line)")
-                \{  } ->
+                \{} ->
                     Effect.after
                         (Effect.putLine "It is known")
-                        \{  } ->
+                        \{} ->
                             Effect.always {}

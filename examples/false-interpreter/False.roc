@@ -200,7 +200,7 @@ interpretCtxLoop = \ctx ->
                         # `"` end of string
                         when Str.fromUtf8 bytes is
                             Ok str ->
-                                {  } <- Task.await (Stdout.raw str)
+                                {} <- Task.await (Stdout.raw str)
                                 Task.succeed (Step { newCtx & state: Executing })
 
                             Err _ ->
@@ -481,7 +481,7 @@ stepExecCtx = \ctx, char ->
                 Ok (T popCtx num) ->
                     when Str.fromUtf8 [ Num.intCast num ] is
                         Ok str ->
-                            {  } <- Task.await (Stdout.raw str)
+                            {} <- Task.await (Stdout.raw str)
                             Task.succeed popCtx
 
                         Err _ ->
@@ -494,7 +494,7 @@ stepExecCtx = \ctx, char ->
             # `.` write int
             when popNumber ctx is
                 Ok (T popCtx num) ->
-                    {  } <- Task.await (Stdout.raw (Num.toStr (Num.intCast num)))
+                    {} <- Task.await (Stdout.raw (Num.toStr (Num.intCast num)))
                     Task.succeed popCtx
 
                 Err e ->

@@ -78,7 +78,7 @@ updateCost = \current, neighbor, model ->
 astar : (position, position -> F64), (position -> Set position), position, Model position -> Result (List position) {}
 astar = \costFn, moveFn, goal, model ->
     when cheapestOpen (\source -> costFn source goal) model is
-        Err {  } ->
+        Err {} ->
             Err {}
 
         Ok current ->

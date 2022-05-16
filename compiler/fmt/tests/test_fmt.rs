@@ -2727,6 +2727,61 @@ mod test_fmt {
     #[test]
     fn empty_record() {
         expr_formats_same("{}");
+        expr_formats_to("{ }", "{}");
+    }
+
+    #[test]
+    fn empty_record_patterns() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                    f = \{  } -> "Hello World"
+
+                    f
+                "#
+            ),
+            indoc!(
+                r#"
+                    f = \{} -> "Hello World"
+
+                    f
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    f = \a, b -> {  }
+
+                    f
+                "#
+            ),
+            indoc!(
+                r#"
+                    f = \a, b -> {}
+
+                    f
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    { } <- f a b
+
+                    {}
+                "#
+            ),
+            indoc!(
+                r#"
+                    {} <- f a b
+
+                    {}
+                "#
+            ),
+        );
     }
 
     #[test]
