@@ -27,7 +27,35 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_with_stdin(&path_to_roc_binary(), args, stdin_vals)
+    let roc_binary_path = path_to_roc_binary();
+
+    // If we don't have a /target/release/roc, rebuild it!
+    if !roc_binary_path.exists() {
+        // Remove the /target/release/roc part
+        let root_project_dir = roc_binary_path
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+
+        // cargo build --release --bin roc
+        let output = Command::new("cargo")
+            .current_dir(root_project_dir)
+            .args(["build", "--release", "--bin", "roc"])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            panic!("cargo build --release --bin roc failed. stdout was:\n\n{:?}\n\nstderr was:\n\n{:?}\n",
+                output.stdout,
+                output.stderr
+            );
+        }
+    }
+
+    run_with_stdin(&roc_binary_path, args, stdin_vals)
 }
 
 pub fn run_bindgen<I, S>(args: I) -> Out
@@ -102,7 +130,12 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to execute compiled binary in CLI test");
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to execute compiled binary {} in CLI test: {err}",
+                path.to_string_lossy()
+            )
+        });
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
