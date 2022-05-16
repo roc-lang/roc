@@ -11,9 +11,10 @@ use roc_can::abilities::{AbilitiesStore, SpecializationId};
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::{MutSet, VecMap};
+use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
 use roc_debug_flags::{
-    dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
-    ROC_PRINT_IR_AFTER_SPECIALIZATION,
+    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
 };
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
