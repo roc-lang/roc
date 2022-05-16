@@ -1,5 +1,7 @@
 use bitflags::bitflags;
 use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
+use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -9,9 +11,6 @@ use roc_types::subs::{
     RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField};
-
-#[cfg(debug_assertions)]
-use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 
 macro_rules! mismatch {
     () => {{
@@ -350,6 +349,8 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
     #[cfg(debug_assertions)]
     debug_print_unified_types(subs, &ctx, None);
 
+    // This #[allow] is needed in release builds, where `result` is no longer used.
+    #[allow(clippy::let_and_return)]
     let result = match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, None, &ctx.second_desc.content),
         FlexAbleVar(opt_name, ability) => unify_flex(
@@ -476,7 +477,7 @@ fn unify_two_aliases(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    // NOTE: symbol is unused in release builds; the underscore prefix prevents a warning.
+    // _symbol has an underscore because it's unused in --release builds
     _symbol: Symbol,
     args: AliasVariables,
     real_var: Variable,
@@ -633,7 +634,7 @@ fn unify_opaque(
                 outcome
             }
         }
-        // NOTE: This is prefixed with underscore because it's unused in release builds.
+        // _other has an underscore because it's unused in --release builds
         _other => {
             // The type on the left is an opaque, but the one on the right is not!
             mismatch!("Cannot unify opaque {:?} with {:?}", symbol, _other)
@@ -673,7 +674,7 @@ fn unify_structure(
             }
             outcome
         }
-        // NOTE: This is prefixed with underscore because it's unused in release builds.
+        // _name has an underscore because it's unused in --release builds
         RigidVar(_name) => {
             // Type mismatch! Rigid can only unify with flex.
             mismatch!(
@@ -724,7 +725,8 @@ fn unify_structure(
             // Unify the two flat types
             unify_flat_type(subs, pool, ctx, flat_type, other_flat_type)
         }
-        // NOTE: _sym is prefixed with underscore because it's unused in release builds.
+
+        // _sym has an underscore because it's unused in --release builds
         Alias(_sym, _, real_var, kind) => match kind {
             AliasKind::Structural => {
                 // NB: not treating this as a presence constraint seems pivotal! I
@@ -1703,7 +1705,8 @@ fn unify_flat_type(
 
             unify_tag_union_new(subs, pool, ctx, tags1, *ext1, *tags2, *ext2, rec)
         }
-        // NOTE: These are prefixed with underscores because they're unused in release builds.
+
+        // these have underscores because they're unused in --release builds
         (_other1, _other2) => {
             // any other combination is a mismatch
             mismatch!(
@@ -1795,7 +1798,8 @@ fn unify_rigid(
                     output.must_implement_ability.push(must_implement_ability);
                     output
                 }
-                // NOTE: These are prefixed with underscores because they're unused in release builds.
+
+                // these have underscores because they're unused in --release builds
                 (Some(_ability), _other) => {
                     // For now, only allow opaque types with no type variables to implement abilities.
                     mismatch!(
@@ -1935,7 +1939,7 @@ fn unify_recursion(
             },
         ),
 
-        // NOTE: _opaque is prefixed with underscore because it's unused in release builds.
+        // _opaque has an underscore because it's unused in --release builds
         Alias(_opaque, _, _, AliasKind::Opaque) => {
             mismatch!(
                 "RecursionVar {:?} cannot be equal to opaque {:?}",
