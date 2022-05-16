@@ -209,10 +209,8 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
             return types.add(RocType::TransparentWrapper { name, content });
         }
     };
-    let mut sortables = bumpalo::collections::Vec::with_capacity_in(
-        2 + fields_iter.size_hint().1.unwrap_or_default(),
-        env.arena,
-    );
+    let mut sortables =
+        bumpalo::collections::Vec::with_capacity_in(2 + fields_iter.size_hint().0, env.arena);
 
     for (label, field_var) in std::iter::once(first_field)
         .chain(std::iter::once(second_field))
