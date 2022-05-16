@@ -15,9 +15,11 @@ use roc_constrain::module::{
     constrain_builtin_imports, constrain_module, ExposedByModule, ExposedForModule,
     ExposedModuleTypes,
 };
+use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
 use roc_debug_flags::{
-    dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
-    ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_LOAD_LOG,
+    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
+    ROC_PRINT_LOAD_LOG,
 };
 use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
@@ -3873,7 +3875,8 @@ fn canonicalize_and_constrain<'a>(
         ..
     } = parsed;
 
-    let before = roc_types::types::get_type_clone_count();
+    // _before has an underscore because it's unused in --release builds
+    let _before = roc_types::types::get_type_clone_count();
 
     let mut var_store = VarStore::default();
     let module_output = canonicalize_module_defs(
@@ -3891,14 +3894,15 @@ fn canonicalize_and_constrain<'a>(
         &mut var_store,
     );
 
-    let after = roc_types::types::get_type_clone_count();
+    // _after has an underscore because it's unused in --release builds
+    let _after = roc_types::types::get_type_clone_count();
 
     log!(
         "canonicalize of {:?} cloned Type {} times ({} -> {})",
         module_id,
-        after - before,
-        before,
-        after
+        _after - _before,
+        _before,
+        _after
     );
 
     let canonicalize_end = SystemTime::now();
@@ -3921,7 +3925,8 @@ fn canonicalize_and_constrain<'a>(
         }
     };
 
-    let before = roc_types::types::get_type_clone_count();
+    // _before has an underscore because it's unused in --release builds
+    let _before = roc_types::types::get_type_clone_count();
 
     let mut constraints = Constraints::new();
 
@@ -3937,14 +3942,15 @@ fn canonicalize_and_constrain<'a>(
         )
     };
 
-    let after = roc_types::types::get_type_clone_count();
+    // _after has an underscore because it's unused in --release builds
+    let _after = roc_types::types::get_type_clone_count();
 
     log!(
         "constraint gen of {:?} cloned Type {} times ({} -> {})",
         module_id,
-        after - before,
-        before,
-        after
+        _after - _before,
+        _before,
+        _after
     );
 
     // scope has imported aliases, but misses aliases from inner scopes
