@@ -6,11 +6,6 @@ license = "UPL-1.0"
 edition = "2021"
 links = "app"
 
-# Needed to be able to run on non-Windows systems for some reason. Without this, cargo panics with:
-#
-# error: DX12 API enabled on non-Windows OS. If your project is not using resolver="2" in Cargo.toml, it should.
-resolver = "2"
-
 [lib]
 name = "host"
 path = "src/lib.rs"
