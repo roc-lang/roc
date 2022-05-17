@@ -254,8 +254,8 @@ fn fast_eat_spaces(state: &State) -> FastSpaceState {
                 index += 1;
 
                 // try to use SIMD instructions explicitly
-                if cfg!(target_arch = "x86_64") {
-                    #[cfg(target_arch = "x86_64")]
+                #[cfg(target_arch = "x86_64")]
+                {
                     use std::arch::x86_64::*;
 
                     // a bytestring with the three characters we're looking for (the rest is ignored)
@@ -285,7 +285,10 @@ fn fast_eat_spaces(state: &State) -> FastSpaceState {
                             continue 'outer;
                         }
                     }
-                } else {
+                }
+
+                #[cfg(not(target_arch = "x86_64"))]
+                {
                     while index < length {
                         match bytes[index] {
                             b'\n' | b'\t' | b'\r' => {
