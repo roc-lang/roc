@@ -423,23 +423,17 @@ pub fn module_from_builtins<'ctx>(
             Triple {
                 architecture: Architecture::Wasm32,
                 ..
-            } => {
-                bitcode::BUILTINS_WASM32_BC
-            }
+            } => bitcode::BUILTINS_WASM32_BC,
             Triple {
                 architecture: Architecture::X86_32(_),
                 operating_system: OperatingSystem::Linux,
                 ..
-            } => {
-                bitcode::BUILTINS_I386_BC
-            }
+            } => bitcode::BUILTINS_I386_BC,
             Triple {
                 architecture: Architecture::X86_64,
                 operating_system: OperatingSystem::Linux,
                 ..
-            } => {
-                bitcode::BUILTINS_X86_64_BC
-            }
+            } => bitcode::BUILTINS_X86_64_BC,
             _ => panic!(
                 "The zig builtins are not currently built for this target: {:?}",
                 target

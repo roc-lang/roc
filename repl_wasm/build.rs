@@ -103,8 +103,14 @@ fn build_wasm_libc_compilerrt(out_dir: &str, source_path: &str) -> (String, Stri
     );
 
     (
-        run_command("find", &[&zig_cache_dir, "-name", "libc.a", "-print", "-quit"]), // -print -quit to print at most 1 result
-        run_command("find", &[&zig_cache_dir, "-name", "compiler_rt.o", "-print", "-quit"]),
+        run_command(
+            "find",
+            &[&zig_cache_dir, "-name", "libc.a", "-print", "-quit"],
+        ), // -print -quit to print at most 1 result
+        run_command(
+            "find",
+            &[&zig_cache_dir, "-name", "compiler_rt.o", "-print", "-quit"],
+        ),
     )
 }
 

@@ -93,12 +93,14 @@
         workspaceShell = rustPkgs.workspaceShell {
           NIXPKGS_ALLOW_UNFREE = 1; # to run the editor with NVIDIA's closed source drivers
           LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
+          NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else ""; # see https://github.com/rtfeldman/roc/pull/1841
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
             ([ 
                vulkan-loader # linux-only
                xorg.libXcursor # linux-only
                xorg.libXrandr #linux-only
+               xorg.libX11 # linux-only
               ]);
         };
 
