@@ -1,0 +1,19 @@
+on: [pull_request]
+
+name: nix build
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nix-build:
+    name: fmt, clippy, test --release
+    runs-on: [self-hosted, i7-6700K]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          clean: "true"
+      - uses: cachix/install-nix-action@v15
+      - run: nix build
