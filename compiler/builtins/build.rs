@@ -127,6 +127,13 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     bc_path.set_extension("bc");
     let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
+    /*dbg!(bitcode_path);
+    let output = std::process::Command::new("ls")
+                            .arg("-l")
+                            .arg(bitcode_path)
+                            .output()
+                            .unwrap();
+    dbg!(output);*/
 
     run_command(
         &bitcode_path,

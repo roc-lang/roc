@@ -4786,7 +4786,6 @@ in
     dependencies = {
       bumpalo = rustPackages."registry+https://github.com/rust-lang/crates.io-index".bumpalo."3.9.1" { inherit profileName; };
       clap = rustPackages."registry+https://github.com/rust-lang/crates.io-index".clap."3.1.17" { inherit profileName; };
-      indoc = buildRustPackages."registry+https://github.com/rust-lang/crates.io-index".indoc."1.0.6" { profileName = "__noProfile"; };
       roc_builtins = rustPackages."unknown".roc_builtins."0.1.0" { inherit profileName; };
       roc_can = rustPackages."unknown".roc_can."0.1.0" { inherit profileName; };
       roc_collections = rustPackages."unknown".roc_collections."0.1.0" { inherit profileName; };
@@ -4802,6 +4801,7 @@ in
       ven_graph = rustPackages."unknown".ven_graph."2.0.5-pre" { inherit profileName; };
     };
     devDependencies = {
+      indoc = buildRustPackages."registry+https://github.com/rust-lang/crates.io-index".indoc."1.0.6" { profileName = "__noProfile"; };
       pretty_assertions = rustPackages."registry+https://github.com/rust-lang/crates.io-index".pretty_assertions."1.2.1" { inherit profileName; };
       tempfile = rustPackages."registry+https://github.com/rust-lang/crates.io-index".tempfile."3.3.0" { inherit profileName; };
     };
@@ -5597,6 +5597,7 @@ in
       roc_error_macros = rustPackages."unknown".roc_error_macros."0.1.0" { inherit profileName; };
       roc_exhaustive = rustPackages."unknown".roc_exhaustive."0.1.0" { inherit profileName; };
       roc_module = rustPackages."unknown".roc_module."0.1.0" { inherit profileName; };
+      roc_problem = rustPackages."unknown".roc_problem."0.1.0" { inherit profileName; };
       roc_region = rustPackages."unknown".roc_region."0.1.0" { inherit profileName; };
       roc_types = rustPackages."unknown".roc_types."0.1.0" { inherit profileName; };
       roc_unify = rustPackages."unknown".roc_unify."0.1.0" { inherit profileName; };
@@ -7972,25 +7973,8 @@ in
     registry = "registry+https://github.com/rust-lang/crates.io-index";
     src = fetchCratesIo { inherit name version; sha256 = "af28b29ef0b44cd22dd9895d4349b9d5a687df42f58da234871198637eabe328"; };
     features = builtins.concatLists [
-      [ "ash" ]
-      [ "bit-set" ]
-      [ "block" ]
-      [ "default" ]
-      [ "dx12" ]
-      [ "egl" ]
-      [ "foreign-types" ]
-      [ "gles" ]
-      [ "glow" ]
-      [ "gpu-alloc" ]
-      [ "gpu-descriptor" ]
-      [ "inplace_it" ]
-      [ "libloading" ]
-      [ "metal" ]
-      [ "native" ]
-      [ "range-alloc" ]
-      [ "renderdoc" ]
-      [ "renderdoc-sys" ]
       [ "vulkan" ]
+      [ "gles" ]
     ];
     dependencies = {
       arrayvec = rustPackages."registry+https://github.com/rust-lang/crates.io-index".arrayvec."0.7.2" { inherit profileName; };

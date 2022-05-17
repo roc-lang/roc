@@ -3,7 +3,7 @@ use roc_cli::build::check_file;
 use roc_cli::{
     build_app, format, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DOCS, CMD_EDIT,
     CMD_FORMAT, CMD_REPL, CMD_RUN, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB,
-    FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, ROC_FILE,
+    FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, ROC_FILE, VERSION,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
@@ -241,7 +241,7 @@ fn main() -> io::Result<()> {
             Ok(format_exit_code)
         }
         Some((CMD_VERSION, _)) => {
-            println!("roc {}", concatcp!(include_str!("../../version.txt"), "\n"));
+            println!("roc {}", concatcp!(VERSION, "\n"));
 
             Ok(0)
         }

@@ -53,7 +53,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir bindgen cli cli_utils compiler docs docs_cli editor ast code_markup error_macros highlight utils test_utils reporting repl_cli repl_eval repl_test repl_wasm repl_www roc_std vendor examples linker Cargo.toml Cargo.lock version.txt www wasi-libc-sys ./
+    COPY --dir bindgen cli cli_utils compiler docs docs_cli editor ast code_markup error_macros highlight utils test_utils reporting repl_cli repl_eval repl_test repl_wasm repl_www roc_std vendor examples linker Cargo.toml Cargo.lock www wasi-libc-sys ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -78,7 +78,7 @@ check-rustfmt:
 
 check-typos:
     RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
-    COPY --dir .github ci cli cli_utils compiler docs editor examples ast code_markup highlight utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix version.txt ./
+    COPY --dir .github ci cli cli_utils compiler docs editor examples ast code_markup highlight utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix ./
     RUN typos
 
 test-rust:
@@ -88,25 +88,25 @@ test-rust:
     ENV ROC_NUM_WORKERS=1
     # run one of the benchmarks to make sure the host is compiled
     # not pre-compiling the host can cause race conditions
-    RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
-    RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --features with_sound --workspace && sccache --show-stats
+    #RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
+    #RUN --mount=type=cache,target=$SCCACHE_DIR \
+    #    cargo test --locked --release --features with_sound --workspace && sccache --show-stats
     # test the dev and wasm backend: they require an explicit feature flag.
-    RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
+    #RUN --mount=type=cache,target=$SCCACHE_DIR \
+    #    cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
     # gen-wasm has some multithreading problems to do with the wasmer runtime. Run it single-threaded as a separate job
-    RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
+    #RUN --mount=type=cache,target=$SCCACHE_DIR \
+    #    cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
     # repl_test: build the compiler for wasm target, then run the tests on native target
-    RUN --mount=type=cache,target=$SCCACHE_DIR \
-        repl_test/test_wasm.sh && sccache --show-stats
+    #RUN --mount=type=cache,target=$SCCACHE_DIR \
+    #    repl_test/test_wasm.sh && sccache --show-stats
     # run i386 (32-bit linux) cli tests
     # NOTE: disabled until zig 0.9
     # RUN echo "4" | cargo run --locked --release --features="target-x86" -- --target=x86_32 examples/benchmarks/NQueens.roc
     # RUN --mount=type=cache,target=$SCCACHE_DIR \
     #    cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
     # make sure doc generation works (that is, make sure build.sh returns status code 0)
-    RUN bash www/build.sh
+    #RUN bash www/build.sh
 
 
 verify-no-git-changes:
@@ -131,10 +131,10 @@ build-nightly-release:
     FROM +test-rust
     COPY --dir .git LICENSE LEGAL_DETAILS ./
     # version.txt is used by the CLI: roc --version
-    RUN printf "nightly pre-release, built from commit " > version.txt
-    RUN git log --pretty=format:'%h' -n 1 >> version.txt
-    RUN printf " on: " >> version.txt
-    RUN date >> version.txt
+    RUN printf "nightly pre-release, built from commit " > ./cli/version.txt
+    RUN git log --pretty=format:'%h' -n 1 >> ./cli/version.txt
+    RUN printf " on: " >> ./cli/version.txt
+    RUN date >> ./cli/version.txt
     RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release
     RUN cd ./target/release && tar -czvf roc_linux_x86_64.tar.gz ./roc ../../LICENSE ../../LEGAL_DETAILS ../../examples/hello-world ../../compiler/builtins/bitcode/src/ ../../roc_std
     SAVE ARTIFACT ./target/release/roc_linux_x86_64.tar.gz AS LOCAL roc_linux_x86_64.tar.gz
