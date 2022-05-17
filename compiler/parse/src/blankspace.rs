@@ -255,6 +255,7 @@ fn fast_eat_spaces(state: &State) -> FastSpaceState {
 
                 // try to use SIMD instructions explicitly
                 if cfg!(target_arch = "x86_64") {
+                    #[cfg(target_arch = "x86_64")]
                     use std::arch::x86_64::*;
 
                     // a bytestring with the three characters we're looking for (the rest is ignored)
