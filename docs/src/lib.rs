@@ -734,7 +734,7 @@ fn doc_url<'a>(
     if module_name.is_empty() {
         // This is an unqualified lookup, so look for the ident
         // in scope!
-        match scope.lookup(&ident.into(), Region::zero()) {
+        match scope.lookup_str(ident, Region::zero()) {
             Ok(symbol) => {
                 // Get the exact module_name from scope. It could be the
                 // current module's name, but it also could be a different
