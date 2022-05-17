@@ -76,7 +76,31 @@
           ];
         };
 
-        workspaceShell = rustPkgs.workspaceShell {};
+        linuxInputs = with pkgs; [
+          valgrind # used in cli tests, see cli/tests/cli_run.rs
+          vulkan-headers
+          vulkan-loader
+          vulkan-tools
+          vulkan-validation-layers
+          xorg.libX11
+          xorg.libXcursor
+          xorg.libXrandr
+          xorg.libXi
+          xorg.libxcb
+          alsa-lib
+        ];
+
+        workspaceShell = rustPkgs.workspaceShell {
+          NIXPKGS_ALLOW_UNFREE = 1; # to run the editor with NVIDIA's closed source drivers
+          LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
+          LD_LIBRARY_PATH = with pkgs;
+            lib.makeLibraryPath
+            ([ 
+               vulkan-loader # linux-only
+               xorg.libXcursor # linux-only
+               xorg.libXrandr #linux-only
+              ]);
+        };
 
       in rec {
         devShell = workspaceShell;

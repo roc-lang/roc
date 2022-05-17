@@ -35,6 +35,7 @@ fn main() {
     let (libc_archive, compiler_rt_obj) = build_wasm_libc_compilerrt(&out_dir, &source_path);
     let mut libc_pathbuf = PathBuf::from(&libc_archive);
     libc_pathbuf.pop();
+
     let libc_dir = libc_pathbuf.to_str().unwrap();
 
     let args = &[
@@ -102,8 +103,8 @@ fn build_wasm_libc_compilerrt(out_dir: &str, source_path: &str) -> (String, Stri
     );
 
     (
-        run_command("find", &[&zig_cache_dir, "-name", "libc.a"]),
-        run_command("find", &[&zig_cache_dir, "-name", "compiler_rt.o"]),
+        run_command("find", &[&zig_cache_dir, "-name", "libc.a", "-print", "-quit"]), // -print -quit to print at most 1 result
+        run_command("find", &[&zig_cache_dir, "-name", "compiler_rt.o", "-print", "-quit"]),
     )
 }
 
