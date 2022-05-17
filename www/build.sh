@@ -36,8 +36,7 @@ mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
 mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 
 echo "Building Web REPL..."
-repl_www/build.sh
-cp -r repl_www/public/* www/build
+repl_www/build.sh www/build
 
 echo "Asset sizes:"
 ls -lh www/build/*

@@ -31,12 +31,15 @@ echo $PATH | tr ':' '\n'
 # We want a release build, but with debug info (to get stack traces for Wasm backend `todo!()`)
 # This configuration is called `--profiling`
 wasm-pack build --profiling --target web repl_wasm -- --features console_error_panic_hook -v
-cp repl_wasm/pkg/roc_repl_wasm_bg.wasm $WWW_ROOT
+cp -v repl_wasm/pkg/roc_repl_wasm.js $WWW_ROOT
 
 # To disable optimizations while debugging, run `REPL_DEBUG=1 repl_www/build.sh`
 if [ "${REPL_DEBUG:-}" == "" ] && which wasm-opt
 then
     wasm-opt -Os --debuginfo repl_wasm/pkg/roc_repl_wasm_bg.wasm -o $WWW_ROOT/roc_repl_wasm_bg.wasm
+else
+    echo "wasm-opt is not installed. Skipping .wasm optimization."
+    cp -v repl_wasm/pkg/roc_repl_wasm_bg.wasm $WWW_ROOT
 fi
 
 # Copy the JS from wasm_bindgen, replacing its invalid `import` statement with a `var`.
