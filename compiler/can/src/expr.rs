@@ -1320,7 +1320,7 @@ fn canonicalize_var_lookup(
     let can_expr = if module_name.is_empty() {
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
-        match scope.lookup(&(*ident).into(), region) {
+        match scope.lookup_str(ident, region) {
             Ok(symbol) => {
                 output.references.insert_value_lookup(symbol);
 

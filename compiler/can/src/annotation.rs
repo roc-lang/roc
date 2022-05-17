@@ -330,13 +330,13 @@ fn make_apply_symbol(
     if module_name.is_empty() {
         // Since module_name was empty, this is an unqualified type.
         // Look it up in scope!
-        let ident: Ident = (*ident).into();
 
-        match scope.lookup(&ident, region) {
+        match scope.lookup_str(ident, region) {
             Ok(symbol) => Ok(symbol),
             Err(problem) => {
                 env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
+                let ident: Ident = (*ident).into();
                 Err(Type::Erroneous(Problem::UnrecognizedIdent(ident)))
             }
         }
