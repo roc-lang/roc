@@ -18,13 +18,22 @@ fi
 WWW_ROOT="${1:-repl_www/public}"
 mkdir -p $WWW_ROOT
 
+# Debugging build scripts on CI
+lsb_release -a
+cargo --version
+rustc --version
+wasm-pack --version
+which wasm-opt && wasm-opt --version
+
+echo $PATH | tr ':' '\n'
+
 # We want a release build, but with debug info (to get stack traces for Wasm backend `todo!()`)
 # This configuration is called `--profiling`
 wasm-pack build --profiling --target web repl_wasm -- --features console_error_panic_hook -v
 cp repl_wasm/pkg/roc_repl_wasm_bg.wasm $WWW_ROOT
 
 # To disable optimizations while debugging, run `REPL_DEBUG=1 repl_www/build.sh`
-if [ "${REPL_DEBUG:-}" == "" ]
+if [ "${REPL_DEBUG:-}" == "" ] && which wasm-opt
 then
     wasm-opt -Os --debuginfo repl_wasm/pkg/roc_repl_wasm_bg.wasm -o $WWW_ROOT/roc_repl_wasm_bg.wasm
 fi

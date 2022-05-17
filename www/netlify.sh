@@ -20,5 +20,7 @@ wget https://github.com/WebAssembly/binaryen/releases/download/version_108/${BIN
 tar --extract --gzip --file=${BINARYEN_DIRNAME}.tar.gz
 PATH="$(pwd)/${BINARYEN_DIRNAME}/bin:${PATH}"
 
+echo $PATH | tr ':' '\n'
+
 export PATH
 bash build.sh
