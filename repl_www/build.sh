@@ -22,6 +22,7 @@ mkdir -p $WWW_ROOT
 lsb_release -a
 cargo --version
 rustc --version
+rustup show
 wasm-pack --version
 which wasm-opt && wasm-opt --version
 
