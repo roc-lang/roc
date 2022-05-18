@@ -85,6 +85,7 @@ check-typos:
 
 test-rust:
     FROM +build-rust-test
+    ENV ROC_WORKSPACE_DIR=/earthbuild
     ENV RUST_BACKTRACE=1
     # for race condition problem with cli test
     ENV ROC_NUM_WORKERS=1
