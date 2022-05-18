@@ -70,7 +70,7 @@ impl ExposedForModule {
 
         for symbol in it {
             let module = exposed_by_module.exposed.get(&symbol.module_id());
-            if let Some(ExposedModuleTypes::Valid { .. }) = module {
+            if let Some(ExposedModuleTypes { .. }) = module {
                 imported_values.push(*symbol);
             } else {
                 continue;
@@ -86,12 +86,9 @@ impl ExposedForModule {
 
 /// The types of all exposed values/functions of a module
 #[derive(Clone, Debug)]
-pub enum ExposedModuleTypes {
-    Invalid,
-    Valid {
-        stored_vars_by_symbol: Vec<(Symbol, Variable)>,
-        storage_subs: roc_types::subs::StorageSubs,
-    },
+pub struct ExposedModuleTypes {
+    pub stored_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub storage_subs: roc_types::subs::StorageSubs,
 }
 
 pub fn constrain_module(
