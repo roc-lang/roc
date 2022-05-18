@@ -2121,7 +2121,7 @@ fn update<'a>(
             } else {
                 state.exposed_types.insert(
                     module_id,
-                    ExposedModuleTypes::Valid {
+                    ExposedModuleTypes {
                         stored_vars_by_symbol: solved_module.stored_vars_by_symbol,
                         storage_subs: solved_module.storage_subs,
                     },
@@ -3589,51 +3589,39 @@ fn add_imports(
     for symbol in exposed_for_module.imported_values {
         let module_id = symbol.module_id();
         match exposed_for_module.exposed_by_module.get_mut(&module_id) {
-            Some(t) => match t {
-                ExposedModuleTypes::Invalid => {
-                    // make the type a flex var, so it unifies with anything
-                    // this way the error is only reported in the module it originates in
-                    let variable = subs.fresh_unnamed_flex_var();
+            Some(ExposedModuleTypes {
+                stored_vars_by_symbol,
+                storage_subs,
+            }) => {
+                let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
+                    None => {
+                        // Today we define builtins in each module that uses them
+                        // so even though they have a different module name from
+                        // the surrounding module, they are not technically imported
+                        debug_assert!(symbol.is_builtin());
+                        continue;
+                    }
+                    Some((_, x)) => *x,
+                };
 
-                    def_types.push((
-                        symbol,
-                        Loc::at_zero(roc_types::types::Type::Variable(variable)),
-                    ));
-                }
-                ExposedModuleTypes::Valid {
-                    stored_vars_by_symbol,
-                    storage_subs,
-                } => {
-                    let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
-                        None => {
-                            // Today we define builtins in each module that uses them
-                            // so even though they have a different module name from
-                            // the surrounding module, they are not technically imported
-                            debug_assert!(symbol.is_builtin());
-                            continue;
-                        }
-                        Some((_, x)) => *x,
-                    };
+                let copied_import = storage_subs.export_variable_to(subs, variable);
 
-                    let copied_import = storage_subs.export_variable_to(subs, variable);
+                // not a typo; rigids are turned into flex during type inference, but when imported we must
+                // consider them rigid variables
+                rigid_vars.extend(copied_import.rigid);
+                rigid_vars.extend(copied_import.flex);
 
-                    // not a typo; rigids are turned into flex during type inference, but when imported we must
-                    // consider them rigid variables
-                    rigid_vars.extend(copied_import.rigid);
-                    rigid_vars.extend(copied_import.flex);
+                // Rigid vars bound to abilities are also treated like rigids.
+                rigid_vars.extend(copied_import.rigid_able);
+                rigid_vars.extend(copied_import.flex_able);
 
-                    // Rigid vars bound to abilities are also treated like rigids.
-                    rigid_vars.extend(copied_import.rigid_able);
-                    rigid_vars.extend(copied_import.flex_able);
+                import_variables.extend(copied_import.registered);
 
-                    import_variables.extend(copied_import.registered);
-
-                    def_types.push((
-                        symbol,
-                        Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
-                    ));
-                }
-            },
+                def_types.push((
+                    symbol,
+                    Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+                ));
+            }
             None => {
                 internal_error!("Imported module {:?} is not available", module_id)
             }
