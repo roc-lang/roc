@@ -16,6 +16,11 @@ use roc_constrain::module::{
     ExposedModuleTypes,
 };
 use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
+use roc_debug_flags::{
+    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
+    ROC_PRINT_LOAD_LOG,
+};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -53,12 +58,6 @@ use std::{env, fs};
 
 use crate::work::Dependencies;
 pub use crate::work::Phase;
-
-#[cfg(debug_assertions)]
-use roc_debug_flags::{
-    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
-    ROC_PRINT_LOAD_LOG,
-};
 
 #[cfg(target_family = "wasm")]
 use crate::wasm_system_time::{Duration, SystemTime};
@@ -3854,8 +3853,7 @@ fn canonicalize_and_constrain<'a>(
         ..
     } = parsed;
 
-    // NOTE: This is prefixed with underscore because it
-    // is unused in release builds.
+    // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
 
     let mut var_store = VarStore::default();
@@ -3874,8 +3872,7 @@ fn canonicalize_and_constrain<'a>(
         &mut var_store,
     );
 
-    // NOTE: This is prefixed with underscore because it
-    // is unused in release builds.
+    // _after has an underscore because it's unused in --release builds
     let _after = roc_types::types::get_type_clone_count();
 
     log!(
@@ -3906,8 +3903,7 @@ fn canonicalize_and_constrain<'a>(
         }
     };
 
-    // NOTE: This is prefixed with underscore because it
-    // is unused in release builds.
+    // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
 
     let mut constraints = Constraints::new();
@@ -3924,8 +3920,7 @@ fn canonicalize_and_constrain<'a>(
         )
     };
 
-    // NOTE: This is prefixed with underscore because it
-    // is unused in release builds.
+    // _after has an underscore because it's unused in --release builds
     let _after = roc_types::types::get_type_clone_count();
 
     log!(
