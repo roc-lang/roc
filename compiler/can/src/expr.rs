@@ -204,10 +204,13 @@ pub enum Expr {
         lambda_set_variables: Vec<LambdaSet>,
     },
 
-    // Test
+    /// Test
     Expect(Box<Loc<Expr>>, Box<Loc<Expr>>),
 
-    // Compiles, but will crash if reached
+    /// Rendered as empty box in editor
+    TypedHole(Variable),
+
+    /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
 
@@ -247,7 +250,9 @@ impl Expr {
             },
             &Self::OpaqueRef { name, .. } => Category::OpaqueWrap(name),
             Self::Expect(..) => Category::Expect,
-            Self::RuntimeError(..) => Category::Unknown,
+
+            // these nodes place no constraints on the expression's type
+            Self::TypedHole(_) | Self::RuntimeError(..) => Category::Unknown,
         }
     }
 }
@@ -1391,6 +1396,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Var(_)
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
+        | other @ TypedHole { .. }
         | other @ ForeignCall { .. } => other,
 
         List {

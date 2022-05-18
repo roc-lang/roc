@@ -5235,6 +5235,7 @@ pub fn with_hole<'a>(
                 }
             }
         }
+        TypedHole(_) => Stmt::RuntimeError("Hit a blank"),
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
     }
 }
