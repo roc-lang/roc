@@ -14,7 +14,7 @@ mod test_fmt {
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::Parser;
     use roc_parse::state::State;
-    use roc_test_utils::assert_multiline_str_eq;
+    use roc_test_utils::{assert_multiline_str_eq, workspace_root};
 
     // Not intended to be used directly in tests; please use expr_formats_to or expr_formats_same
     fn expr_formats_to(input: &str, expected: &str) {
@@ -4633,14 +4633,35 @@ mod test_fmt {
     /// `cargo run -- format $(find examples -name \*.roc)`
     fn test_fmt_examples() {
         let mut count = 0;
-        let mut root = std::env::current_dir()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_owned();
+        let mut root = workspace_root();
         root.push("examples");
+        for entry in walkdir::WalkDir::new(&root) {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension() == Some(std::ffi::OsStr::new("roc")) {
+                count += 1;
+                let src = std::fs::read_to_string(path).unwrap();
+                println!("Now trying to format {}", path.display());
+                module_formats_same(&src);
+            }
+        }
+        assert!(
+            count > 0,
+            "Expecting to find at least 1 .roc file to format under {}",
+            root.display()
+        );
+    }
+
+    #[test]
+    #[ignore]
+    /// Test that builtins are formatted correctly
+    /// If this test fails on your diff, it probably means you need to re-format a builtin.
+    /// Try this:
+    /// `cargo run -- format $(find compiler/builtins/roc -name \*.roc)`
+    fn test_fmt_builtins() {
+        let mut count = 0;
+        let mut root = workspace_root();
+        root.push("compiler/builtins/roc");
         for entry in walkdir::WalkDir::new(&root) {
             let entry = entry.unwrap();
             let path = entry.path();
