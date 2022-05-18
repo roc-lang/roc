@@ -555,26 +555,94 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 
         libc::write(fd, binary_bytes.as_ptr().cast(), binary_bytes.len());
 
-        // use std::path::PathBuf;
-        let path = format!("/proc/self/fd/{}\0", fd);
+        let name = "roc_expect_buffer";
+        let path_string = format!("/dev/shm/{}", name);
+        let p = std::path::PathBuf::from(&path_string);
+        let cstring = CString::new(name).unwrap();
 
-        let array_with_null_pointer = &[0usize];
+        if true {
+            dbg!(libc::shm_unlink(cstring.as_ptr().cast()));
+        }
 
-        let c = libc::execve(
-            path.as_ptr().cast(),
-            array_with_null_pointer.as_ptr().cast(),
-            array_with_null_pointer.as_ptr().cast(),
-        );
+        let shared = libc::shm_open(cstring.as_ptr().cast(), libc::O_CREAT, 0o666);
 
-        // Get the current value of errno
+        dbg!(std::fs::metadata(&p));
+
         let e = errno::errno();
 
-        // Extract the error code as an i32
-        let code = e.0;
+        dbg!(shared, e);
 
-        // Display a human-friendly error message
-        println!("Error {}: {}", code, e);
-        println!("after {:?}", c);
+        let parent_pid = std::process::id();
+
+        use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
+
+        let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+
+        // TODO
+        // 1. add some enum/thing to either 1) generate expects and put the current PID into the
+        //      generated binary or 2) don't emit expect's at all
+        //
+        // 2. get zig to write data upone failed expect into the shared memory
+        // 3. get zig to send SIGUSR1 to the parent
+        //
+        // think about: what if libc is not linked
+
+        match libc::fork() {
+            0 => {
+                // we are the child
+                println!("we are the child {}", std::process::id());
+
+                let mut file = std::fs::OpenOptions::new().write(true).open(p).unwrap();
+                use std::io::Write;
+                file.write_all(b"42").unwrap();
+
+                libc::kill(parent_pid as _, SIGUSR1);
+
+                let array_with_null_pointer = &[0usize];
+                let c = libc::execve(
+                    format!("/proc/self/fd/{}\0", fd).as_ptr().cast(),
+                    array_with_null_pointer.as_ptr().cast(),
+                    array_with_null_pointer.as_ptr().cast(),
+                );
+
+                // Get the current value of errno
+                let e = errno::errno();
+
+                // Extract the error code as an i32
+                let code = e.0;
+
+                // Display a human-friendly error message
+                println!("Error {}: {}", code, e);
+                println!("after {:?}", c);
+            }
+            -1 => {
+                // something failed
+
+                // Get the current value of errno
+                let e = errno::errno();
+
+                // Extract the error code as an i32
+                let code = e.0;
+
+                // Display a human-friendly error message
+                println!("Error {}: {}", code, e);
+            }
+            1.. => {
+                // parent
+                println!("we are the parent {}", std::process::id());
+
+                for sig in &mut signals {
+                    match sig {
+                        SIGCHLD => std::process::exit(0),
+                        SIGUSR1 => {
+                            dbg!(std::fs::read(&p).unwrap());
+                        }
+                        _ => println!("received signal {}", sig),
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
     }
 
     unreachable!()
