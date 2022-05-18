@@ -775,9 +775,9 @@ fn to_expr_report<'b>(
                         alloc.text(" branch has the type:"),
                     ]),
                     Some(alloc.concat([
-                        alloc.text("I need all branches in an "),
+                        alloc.text("All branches in an "),
                         alloc.keyword("if"),
-                        alloc.text(" to have the same type!"),
+                        alloc.text(" must have the same type!"),
                     ])),
                 ),
                 _ => report_mismatch(
@@ -799,9 +799,9 @@ fn to_expr_report<'b>(
                     alloc.string(format!("The {} branch is", index.ordinal())),
                     alloc.reflow("But all the previous branches have type:"),
                     Some(alloc.concat([
-                        alloc.reflow("I need all branches in an "),
+                        alloc.reflow("All branches in an "),
                         alloc.keyword("if"),
-                        alloc.reflow(" to have the same type!"),
+                        alloc.reflow(" must have the same type!"),
                     ])),
                 ),
             },
@@ -828,9 +828,9 @@ fn to_expr_report<'b>(
                 ]),
                 alloc.reflow("But all the previous branches have type:"),
                 Some(alloc.concat([
-                    alloc.reflow("I need all branches of a "),
+                    alloc.reflow("All branches of a "),
                     alloc.keyword("when"),
-                    alloc.reflow(" to have the same type!"),
+                    alloc.reflow(" must have the same type!"),
                 ])),
             ),
             Reason::ElemInList { index } => {
@@ -856,7 +856,7 @@ fn to_expr_report<'b>(
                     alloc.reflow("This list contains elements with different types:"),
                     alloc.string(format!("Its {} element is", ith)),
                     alloc.reflow(prev_elems_msg),
-                    Some(alloc.reflow("I need every element in a list to have the same type!")),
+                    Some(alloc.reflow("Every element in a list must have the same type!")),
                 )
             }
             Reason::RecordUpdateValue(field) => report_mismatch(
