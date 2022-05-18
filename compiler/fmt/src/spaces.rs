@@ -159,7 +159,7 @@ where
 
 fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
     buf.push_str("##");
-    if !docs.starts_with(' ') {
+    if !docs.is_empty() {
         buf.spaces(1);
     }
     buf.push_str(docs);
