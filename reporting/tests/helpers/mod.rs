@@ -82,7 +82,7 @@ where
 #[inline(always)]
 pub fn with_larger_debug_stack<F>(run_test: F)
 where
-    F: FnOnce() -> (),
+    F: FnOnce(),
     F: Send,
     F: 'static,
 {
