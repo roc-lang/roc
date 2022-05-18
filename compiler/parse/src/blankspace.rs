@@ -278,7 +278,7 @@ fn fast_eat_spaces(state: &State) -> FastSpaceState {
                         };
 
                         // we've made `first_special_char` characters of progress
-                        index += first_special_char as usize;
+                        index += usize::min(first_special_char as usize, remaining);
 
                         // if we found a special char, let the outer loop handle it
                         if first_special_char != 16 {
@@ -454,8 +454,9 @@ fn eat_line_comment<'a>(
                     unsafe { _mm_cmpestri(needle, 3, haystack, chunk, _SIDD_CMP_EQUAL_ANY) };
 
                 // we've made `first_special_char` characters of progress
-                index += first_special_char as usize;
-                state = state.advance(first_special_char as usize);
+                let progress = usize::min(first_special_char as usize, remaining);
+                index += progress;
+                state = state.advance(progress);
 
                 // if we found a special char, let the outer loop handle it
                 if first_special_char != 16 {
