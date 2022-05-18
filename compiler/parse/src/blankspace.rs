@@ -359,8 +359,8 @@ fn eat_line_comment<'a>(
     mut multiline: bool,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
-    let mut index = 0;
-    let bytes = state.bytes();
+    let mut index = state.pos().offset as usize;
+    let bytes = state.original_bytes();
     let length = bytes.len();
 
     'outer: loop {
@@ -432,6 +432,95 @@ fn eat_line_comment<'a>(
 
         let loop_start = index;
 
+        #[cfg(target_arch = "x86_64")]
+        {
+            use std::arch::x86_64::*;
+
+            // a bytestring with the three characters we're looking for (the rest is ignored)
+            let needle = b"\r\n\t=============";
+            let needle = unsafe { _mm_loadu_si128(needle.as_ptr() as *const _) };
+
+            while index < length {
+                let remaining = length - index;
+                let chunk = if remaining < 16 { remaining as i32 } else { 16 };
+
+                // the source bytes we'll be looking at
+                let haystack = unsafe { _mm_loadu_si128(bytes.as_ptr().add(index) as *const _) };
+
+                // use first 3 characters of needle, first  chunk` characters of haystack
+                // finds the first index where one of the `needle` characters occurs
+                // or 16 when none of the needle characters occur
+                let first_special_char =
+                    unsafe { _mm_cmpestri(needle, 3, haystack, chunk, _SIDD_CMP_EQUAL_ANY) };
+
+                // we've made `first_special_char` characters of progress
+                index += first_special_char as usize;
+                state = state.advance(first_special_char as usize);
+
+                // if we found a special char, let the outer loop handle it
+                if first_special_char != 16 {
+                    match bytes[index] {
+                        b'\t' => unreachable!(),
+                        b'\n' => {
+                            let comment =
+                                unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..index]) };
+
+                            if is_doc_comment {
+                                comments_and_newlines.push(CommentOrNewline::DocComment(comment));
+                            } else {
+                                comments_and_newlines.push(CommentOrNewline::LineComment(comment));
+                            }
+                            state = state.advance_newline();
+                            multiline = true;
+
+                            index += 1;
+                            while index < length {
+                                match bytes[index] {
+                                    b' ' => {
+                                        state = state.advance(1);
+                                    }
+                                    b'\n' => {
+                                        state = state.advance_newline();
+                                        multiline = true;
+                                        comments_and_newlines.push(CommentOrNewline::Newline);
+                                    }
+                                    b'\r' => {
+                                        state = state.advance_newline();
+                                    }
+                                    b'\t' => unreachable!(),
+                                    b'#' => {
+                                        state = state.advance(1);
+                                        index += 1;
+                                        continue 'outer;
+                                    }
+                                    _ => break,
+                                }
+
+                                index += 1;
+                            }
+
+                            return SpaceState {
+                                state,
+                                multiline,
+                                comments_and_newlines,
+                            };
+                        }
+                        b'\r' => {
+                            state = state.advance_newline();
+                            index += 1;
+                        }
+                        odd_character => {
+                            unreachable!(
+                                "unexpected_character {} {}",
+                                odd_character, odd_character as char
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
         while index < length {
             match bytes[index] {
                 b'\t' => unreachable!(),
