@@ -2727,6 +2727,61 @@ mod test_fmt {
     #[test]
     fn empty_record() {
         expr_formats_same("{}");
+        expr_formats_to("{ }", "{}");
+    }
+
+    #[test]
+    fn empty_record_patterns() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                    f = \{  } -> "Hello World"
+
+                    f
+                "#
+            ),
+            indoc!(
+                r#"
+                    f = \{} -> "Hello World"
+
+                    f
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    f = \a, b -> {  }
+
+                    f
+                "#
+            ),
+            indoc!(
+                r#"
+                    f = \a, b -> {}
+
+                    f
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    { } <- f a b
+
+                    {}
+                "#
+            ),
+            indoc!(
+                r#"
+                    {} <- f a b
+
+                    {}
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -4487,6 +4542,19 @@ mod test_fmt {
             "#
         ));
 
+        expr_formats_same(indoc!(
+            r#"
+            foo :
+                (Str -> Bool),
+                Str
+                -> Bool
+            foo = \bar, baz ->
+                42
+
+            42
+            "#
+        ));
+
         expr_formats_to(
             indoc!(
                 r#"
@@ -4501,6 +4569,56 @@ mod test_fmt {
                 foo :
                     (Str -> Bool)
                     -> Bool
+
+                42
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool), Str -> Bool
+                foo = \bar, baz ->
+                    42
+
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool),
+                    Str
+                    -> Bool
+                foo = \bar, baz ->
+                    42
+
+                42
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool), Str -> Bool # comment
+                foo = \bar, baz ->
+                    42
+
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool),
+                    Str
+                    -> Bool # comment
+                foo = \bar, baz ->
+                    42
 
                 42
                 "#

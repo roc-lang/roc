@@ -193,7 +193,7 @@ pub fn to_pattern2<'a>(
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(ParsedNumResult::UnknownNum(int, _bound)) => {
+                Ok((_, ParsedNumResult::UnknownNum(int, _bound))) => {
                     Pattern2::NumLiteral(
                         env.var_store.fresh(),
                         match int {
@@ -202,13 +202,13 @@ pub fn to_pattern2<'a>(
                         },
                     )
                 }
-                Ok(ParsedNumResult::Int(int, _bound)) => {
+                Ok((_, ParsedNumResult::Int(int, _bound))) => {
                     Pattern2::IntLiteral(IntVal::I64(match int {
                         IntValue::U128(_) => todo!(),
                         IntValue::I128(n) => n as i64, // FIXME
                     }))
                 }
-                Ok(ParsedNumResult::Float(int, _bound)) => {
+                Ok((_, ParsedNumResult::Float(int, _bound))) => {
                     Pattern2::FloatLiteral(FloatVal::F64(int))
                 }
             },

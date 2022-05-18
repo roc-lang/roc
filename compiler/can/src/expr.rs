@@ -422,12 +422,7 @@ pub fn canonicalize_expr<'a>(
 
     let (expr, output) = match expr {
         &ast::Expr::Num(str) => {
-            let answer = num_expr_from_result(
-                var_store,
-                finish_parsing_num(str).map(|result| (str, result)),
-                region,
-                env,
-            );
+            let answer = num_expr_from_result(var_store, finish_parsing_num(str), region, env);
 
             (answer, Output::default())
         }
@@ -1325,7 +1320,7 @@ fn canonicalize_var_lookup(
     let can_expr = if module_name.is_empty() {
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
-        match scope.lookup(&(*ident).into(), region) {
+        match scope.lookup_str(ident, region) {
             Ok(symbol) => {
                 output.references.insert_value_lookup(symbol);
 

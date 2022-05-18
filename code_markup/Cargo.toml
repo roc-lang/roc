@@ -3,7 +3,7 @@ name = "roc_code_markup"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 description = "Our own markup language for Roc code. Used by the editor and the docs."
 
 [dependencies]

@@ -56,7 +56,9 @@ use morphic_lib::{
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth, IntrinsicName};
 use roc_builtins::{float_intrinsic, llvm_int_intrinsic};
 use roc_collections::all::{ImMap, MutMap, MutSet};
-use roc_debug_flags::{dbg_do, ROC_PRINT_LLVM_FN_VERIFICATION};
+use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
+use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};

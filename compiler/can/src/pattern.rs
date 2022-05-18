@@ -360,20 +360,20 @@ pub fn canonicalize_pattern<'a>(
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(ParsedNumResult::UnknownNum(int, bound)) => {
-                    Pattern::NumLiteral(var_store.fresh(), (str).into(), int, bound)
+                Ok((parsed, ParsedNumResult::UnknownNum(int, bound))) => {
+                    Pattern::NumLiteral(var_store.fresh(), (parsed).into(), int, bound)
                 }
-                Ok(ParsedNumResult::Int(int, bound)) => Pattern::IntLiteral(
+                Ok((parsed, ParsedNumResult::Int(int, bound))) => Pattern::IntLiteral(
                     var_store.fresh(),
                     var_store.fresh(),
-                    (str).into(),
+                    (parsed).into(),
                     int,
                     bound,
                 ),
-                Ok(ParsedNumResult::Float(float, bound)) => Pattern::FloatLiteral(
+                Ok((parsed, ParsedNumResult::Float(float, bound))) => Pattern::FloatLiteral(
                     var_store.fresh(),
                     var_store.fresh(),
-                    (str).into(),
+                    (parsed).into(),
                     float,
                     bound,
                 ),
