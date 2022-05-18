@@ -1221,9 +1221,9 @@ mod test_reporting {
                 r#"
                 ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                I'm inferring a weird self-referential type for `f`:
+                I'm inferring a weird self-referential type for `g`:
 
-                1│  f = \x -> g x
+                2│  g = \x -> f [x]
                     ^
 
                 Here is my best effort at writing down the type. You will see ∞ for
@@ -1234,9 +1234,9 @@ mod test_reporting {
 
                 ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                I'm inferring a weird self-referential type for `g`:
+                I'm inferring a weird self-referential type for `f`:
 
-                2│  g = \x -> f [x]
+                1│  f = \x -> g x
                     ^
 
                 Here is my best effort at writing down the type. You will see ∞ for
@@ -9998,19 +9998,6 @@ All branches in an `if` must have the same type!
                 infinitely.
 
                     { set : Set ∞ }
-
-                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                I'm inferring a weird self-referential type for `model`:
-
-                6│  go = \goal, model ->
-                                ^^^^^
-
-                Here is my best effort at writing down the type. You will see ∞ for
-                parts of the type that repeat something already printed out
-                infinitely.
-
-                    S (Set ∞)
 
                 ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
