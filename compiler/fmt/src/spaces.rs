@@ -162,7 +162,7 @@ fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
     if !docs.is_empty() {
         buf.spaces(1);
     }
-    buf.push_str(docs);
+    buf.push_str(docs.trim_end());
 }
 
 /// RemoveSpaces normalizes the ast to something that we _expect_ to be invariant under formatting.
