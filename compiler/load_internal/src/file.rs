@@ -136,6 +136,7 @@ struct ModuleCache<'a> {
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
     top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
+    ability_specializations: MutMap<ModuleId, VecMap<Symbol, PartialProc<'a>>>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
@@ -181,6 +182,7 @@ impl Default for ModuleCache<'_> {
             external_specializations_requested: Default::default(),
             imports: Default::default(),
             top_level_thunks: Default::default(),
+            ability_specializations: Default::default(),
             documentation: Default::default(),
             can_problems: Default::default(),
             type_problems: Default::default(),
@@ -437,7 +439,7 @@ fn start_phase<'a>(
                     module_id,
                     ident_ids,
                     subs,
-                    procs_base,
+                    mut procs_base,
                     layout_cache,
                     module_timing,
                     mut abilities_store,
@@ -462,6 +464,13 @@ fn start_phase<'a>(
                             Some(existing) => debug_assert_eq!(existing, specialization),
                         }
                     }
+                }
+                for (_, ability_specializations) in
+                    state.module_cache.ability_specializations.iter()
+                {
+                    procs_base
+                        .partial_procs
+                        .extend(ability_specializations.iter().map(|(s, p)| (*s, p.clone())));
                 }
 
                 BuildTask::MakeSpecializations {
@@ -2207,6 +2216,30 @@ fn update<'a>(
                 .entry(module_id)
                 .or_default()
                 .extend(procs_base.module_thunks.iter().copied());
+
+            let ability_specialization_procs: VecMap<_, _> = state
+                .exposed_types
+                .get(&module_id)
+                .expect("Module solved, but no exposed types")
+                .solved_specializations
+                .iter()
+                .map(|(_, specialization)| {
+                    (
+                        specialization.symbol,
+                        procs_base
+                            .partial_procs
+                            .get(&specialization.symbol)
+                            .expect("Specialization known, but not exposed")
+                            .clone(),
+                    )
+                })
+                .collect();
+
+            let old = state
+                .module_cache
+                .ability_specializations
+                .insert(module_id, ability_specialization_procs);
+            debug_assert!(old.is_none(), "Found specializations for module twice");
 
             let found_specializations_module = FoundSpecializationsModule {
                 module_id,

@@ -2850,25 +2850,29 @@ fn resolve_abilities_in_specialized_body<'a>(
                             // since `var` may only have partial specialization information - enough to
                             // figure out what specialization we need, but not the types of all arguments
                             // and return types. So, unify with the variable with the specialization's type.
-                            let specialization_def = if !self.env.is_imported_symbol(specialization)
-                            {
-                                let specialization_def = self
-                                    .procs
-                                    .partial_procs
-                                    .get_symbol(specialization)
-                                    .expect("Specialization found, but it's not in procs");
-                                let specialization_var = specialization_def.annotation;
+                            // let specialization_def = if !self.env.is_imported_symbol(specialization)
+                            // {
+                            let specialization_def = self
+                                .procs
+                                .partial_procs
+                                .get_symbol(specialization)
+                                .unwrap_or_else(|| {
+                                    internal_error!(
+                                        "Specialization for {:?} found, but it's not in procs",
+                                        specialization
+                                    )
+                                });
+                            let specialization_var = specialization_def.annotation;
 
-                                let unified =
-                                    unify(self.env.subs, var, specialization_var, Mode::EQ);
-                                unified.expect_success(
-                                    "Specialization does not unify - this is a typechecker bug!",
-                                );
+                            let unified = unify(self.env.subs, var, specialization_var, Mode::EQ);
+                            unified.expect_success(
+                                "Specialization does not unify - this is a typechecker bug!",
+                            );
 
-                                Some(specialization_def)
-                            } else {
-                                None
-                            };
+                            let specialization_def = Some(specialization_def);
+                            // } else {
+                            //     None
+                            // };
 
                             (specialization, specialization_def)
                         }
