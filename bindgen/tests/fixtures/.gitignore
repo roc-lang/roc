@@ -6,3 +6,7 @@ bindings.rs
 roc_externs.rs
 main.rs
 app
+dynhost
+libapp.so
+metadata
+preprocessedhost
