@@ -549,19 +549,23 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     args: I,
     binary_bytes: &mut [u8],
 ) -> ! {
-    let protection = libc::PROT_EXEC | libc::PROT_READ;
     unsafe {
         let flags = 0;
         let fd = libc::memfd_create("roc_file_descriptor\0".as_ptr().cast(), flags);
 
         libc::write(fd, binary_bytes.as_ptr().cast(), binary_bytes.len());
 
+        // use std::path::PathBuf;
+        let path = format!("/proc/self/fd/{}\0", fd);
+
         let array_with_null_pointer = &[0usize];
-        let c = libc::fexecve(
-            fd,
+
+        let c = libc::execve(
+            path.as_ptr().cast(),
             array_with_null_pointer.as_ptr().cast(),
             array_with_null_pointer.as_ptr().cast(),
         );
+
         // Get the current value of errno
         let e = errno::errno();
 
