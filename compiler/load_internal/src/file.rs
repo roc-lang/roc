@@ -3596,6 +3596,11 @@ fn add_imports(
 
                 let copied_import = storage_subs.export_variable_to(subs, variable);
 
+                def_types.push((
+                    symbol,
+                    Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+                ));
+
                 // not a typo; rigids are turned into flex during type inference, but when imported we must
                 // consider them rigid variables
                 rigid_vars.extend(copied_import.rigid);
@@ -3606,11 +3611,6 @@ fn add_imports(
                 rigid_vars.extend(copied_import.flex_able);
 
                 import_variables.extend(copied_import.registered);
-
-                def_types.push((
-                    symbol,
-                    Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
-                ));
             }
             None => {
                 internal_error!("Imported module {:?} is not available", module_id)
