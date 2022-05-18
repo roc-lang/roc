@@ -6455,4 +6455,62 @@ mod solve_expr {
             "Str",
         )
     }
+
+    #[test]
+    #[ignore]
+    fn encode_record() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test"
+                    imports [ Encode.{ toEncoder } ]
+                    provides [ main ] to "./platform"
+
+                main = toEncoder { a: "" }
+                     # ^^^^^^^^^
+                "#
+            ),
+            &[],
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn encode_record_with_nested_able_var() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test"
+                    imports [ Encode.{ toEncoder, Encoding } ]
+                    provides [ main ] to "./platform"
+
+                main : a -> _ | a has Encoding
+                main = \a -> toEncoder { a: a }
+                           # ^^^^^^^^^
+                "#
+            ),
+            &[],
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn encode_record_with_nested_custom_impl() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test"
+                    imports [ Encode.{ toEncoder, Encoding, custom } ]
+                    provides [ main ] to "./platform"
+
+                A := {}
+                toEncoder = \@A _ -> custom \b, _ -> b
+
+                main = toEncoder { a: @A {} }
+                     # ^^^^^^^^^
+                "#
+            ),
+            &[],
+        )
+    }
 }

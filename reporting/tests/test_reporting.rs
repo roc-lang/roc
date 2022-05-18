@@ -10053,4 +10053,56 @@ All branches in an `if` must have the same type!
             ),
         )
     }
+
+    #[test]
+    #[ignore]
+    fn function_does_not_implement_encoding() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                Encode.toEncoder (\x -> x)
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn unbound_type_in_record_does_not_implement_encoding() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                \x -> Encode.toEncoder { x: x }
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn nested_opaque_does_not_implement_encoding() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                A := {}
+                Encode.toEncoder { x: @A {} }
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
 }
