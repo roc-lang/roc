@@ -139,7 +139,6 @@ struct ModuleCache<'a> {
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
-    mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
@@ -202,7 +201,6 @@ impl Default for ModuleCache<'_> {
             documentation: Default::default(),
             can_problems: Default::default(),
             type_problems: Default::default(),
-            mono_problems: Default::default(),
             sources: Default::default(),
         }
     }
@@ -642,7 +640,6 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
         procs_base: ProcsBase<'a>,
-        problems: Vec<roc_mono::ir::MonoProblem>,
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
@@ -653,7 +650,6 @@ enum Msg<'a> {
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-        problems: Vec<roc_mono::ir::MonoProblem>,
         update_mode_ids: UpdateModeIds,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -2163,13 +2159,10 @@ fn update<'a>(
             solved_subs,
             ident_ids,
             layout_cache,
-            problems,
             module_timing,
             abilities_store,
         } => {
             log!("found specializations for {:?}", module_id);
-
-            debug_assert!(problems.is_empty());
 
             let subs = solved_subs.into_inner();
 
@@ -2210,7 +2203,6 @@ fn update<'a>(
             subs,
             procedures,
             external_specializations_requested,
-            problems,
             module_timing,
             layout_cache,
             ..
@@ -2219,8 +2211,6 @@ fn update<'a>(
 
             // in the future, layouts will be in SoA form and we'll want to hold on to this data
             let _ = layout_cache;
-
-            state.module_cache.mono_problems.insert(module_id, problems);
 
             state.procedures.extend(procedures);
             state.timings.insert(module_id, module_timing);
@@ -4109,12 +4099,10 @@ fn make_specializations<'a>(
     mut abilities_store: AbilitiesStore,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
-    let mut mono_problems = Vec::new();
     let mut update_mode_ids = UpdateModeIds::new();
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
         arena,
-        problems: &mut mono_problems,
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
@@ -4162,7 +4150,6 @@ fn make_specializations<'a>(
         ident_ids,
         layout_cache,
         procedures,
-        problems: mono_problems,
         update_mode_ids,
         subs,
         external_specializations_requested,
@@ -4207,12 +4194,10 @@ fn build_pending_specializations<'a>(
         imported_module_thunks,
     };
 
-    let mut mono_problems = std::vec::Vec::new();
     let mut update_mode_ids = UpdateModeIds::new();
     let mut subs = solved_subs.into_inner();
     let mut mono_env = roc_mono::ir::Env {
         arena,
-        problems: &mut mono_problems,
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
@@ -4259,8 +4244,6 @@ fn build_pending_specializations<'a>(
 
     procs_base.module_thunks = module_thunks.into_bump_slice();
 
-    let problems = mono_env.problems.to_vec();
-
     let find_specializations_end = SystemTime::now();
     module_timing.find_specializations = find_specializations_end
         .duration_since(find_specializations_start)
@@ -4272,7 +4255,6 @@ fn build_pending_specializations<'a>(
         ident_ids,
         layout_cache,
         procs_base,
-        problems,
         module_timing,
         abilities_store,
     }
