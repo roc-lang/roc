@@ -46,6 +46,7 @@ impl AbilityMemberData {
     }
 }
 
+/// (member, specialization type) -> specialization
 pub type SolvedSpecializations = VecMap<(Symbol, Symbol), MemberSpecialization>;
 
 /// A particular specialization of an ability member.

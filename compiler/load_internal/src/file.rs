@@ -136,7 +136,6 @@ struct ModuleCache<'a> {
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
     top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
-    ability_specializations: MutMap<ModuleId, VecMap<Symbol, PartialProc<'a>>>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
@@ -182,7 +181,6 @@ impl Default for ModuleCache<'_> {
             external_specializations_requested: Default::default(),
             imports: Default::default(),
             top_level_thunks: Default::default(),
-            ability_specializations: Default::default(),
             documentation: Default::default(),
             can_problems: Default::default(),
             type_problems: Default::default(),
@@ -439,39 +437,11 @@ fn start_phase<'a>(
                     module_id,
                     ident_ids,
                     subs,
-                    mut procs_base,
+                    procs_base,
                     layout_cache,
                     module_timing,
-                    mut abilities_store,
+                    abilities_store,
                 } = found_specializations;
-
-                // At this point, we know what specializations our dependents want and what
-                // ability specializations our dependencies have. But we also need to know what
-                // ability specializations our dependents have, because those might be used by the
-                // specializations we've been asked to make.
-                for (_module_id, exposed_types) in state.exposed_types.iter_all() {
-                    let ExposedModuleTypes {
-                        solved_specializations,
-                        ..
-                    } = exposed_types;
-                    for (&(member, typ), &specialization) in solved_specializations.iter() {
-                        match abilities_store.get_specialization(member, typ) {
-                            None => abilities_store.register_specialization_for_type(
-                                member,
-                                typ,
-                                specialization,
-                            ),
-                            Some(existing) => debug_assert_eq!(existing, specialization),
-                        }
-                    }
-                }
-                for (_, ability_specializations) in
-                    state.module_cache.ability_specializations.iter()
-                {
-                    procs_base
-                        .partial_procs
-                        .extend(ability_specializations.iter().map(|(s, p)| (*s, p.clone())));
-                }
 
                 BuildTask::MakeSpecializations {
                     module_id,
@@ -2217,30 +2187,6 @@ fn update<'a>(
                 .or_default()
                 .extend(procs_base.module_thunks.iter().copied());
 
-            let ability_specialization_procs: VecMap<_, _> = state
-                .exposed_types
-                .get(&module_id)
-                .expect("Module solved, but no exposed types")
-                .solved_specializations
-                .iter()
-                .map(|(_, specialization)| {
-                    (
-                        specialization.symbol,
-                        procs_base
-                            .partial_procs
-                            .get(&specialization.symbol)
-                            .expect("Specialization known, but not exposed")
-                            .clone(),
-                    )
-                })
-                .collect();
-
-            let old = state
-                .module_cache
-                .ability_specializations
-                .insert(module_id, ability_specialization_procs);
-            debug_assert!(old.is_none(), "Found specializations for module twice");
-
             let found_specializations_module = FoundSpecializationsModule {
                 module_id,
                 ident_ids,
@@ -3686,19 +3632,6 @@ fn run_solve_solve(
 
     let mut subs = Subs::new_from_varstore(var_store);
 
-    // We don't know what types we're about to solve for in our module, so we need to include the
-    // solved abilities across all dependencies.
-    // TODO: there's got to be a better way to do this. Maybe keep a cache of module -> solved
-    // abilities?
-    // let mut exposed_for_module = exposed_for_module;
-    // let mut imported_modules = VecSet::with_capacity(2);
-    // for imported in exposed_for_module.imported_values.iter() {
-    //     imported_modules.insert(imported.module_id());
-    // }
-    // for module in imported_modules.into_iter() {
-    //     let typechecked =
-    // }
-
     let import_variables = add_imports(
         &mut subs,
         &mut abilities_store,
@@ -3726,8 +3659,8 @@ fn run_solve_solve(
             abilities_store,
         );
 
-        // STORE ABILITIES
         let module_id = module.module_id;
+        // Figure out what specializations belong to this module
         let solved_specializations: SolvedSpecializations = abilities_store
             .iter_specializations()
             .filter(|((member, typ), _)| {
@@ -3737,17 +3670,14 @@ fn run_solve_solve(
             })
             .collect();
 
-        let specialization_symbols: VecSet<_> = solved_specializations
-            .values()
-            .map(|ms| ms.symbol)
-            .collect();
-        // END STORE ABILITIES
+        let is_specialization_symbol =
+            |sym| solved_specializations.values().any(|ms| ms.symbol == sym);
 
         // Expose anything that is explicitly exposed by the header, or is a specialization of an
         // ability.
         let exposed_vars_by_symbol: Vec<_> = solved_env
             .vars_by_symbol()
-            .filter(|(k, _)| exposed_symbols.contains(k) || specialization_symbols.contains(k))
+            .filter(|(k, _)| exposed_symbols.contains(k) || is_specialization_symbol(*k))
             .collect();
 
         (
@@ -3803,11 +3733,11 @@ fn run_solve<'a>(
                 Some((subs, exposed_vars_by_symbol)) => {
                     (
                         Solved(subs),
-                        // TODO(abilities) replace when we have abilities for builtins
+                        // TODO(abilities) cache abilities for builtins
                         VecMap::default(),
                         exposed_vars_by_symbol.to_vec(),
                         vec![],
-                        // TODO(abilities) replace when we have abilities for builtins
+                        // TODO(abilities) cache abilities for builtins
                         AbilitiesStore::default(),
                     )
                 }
