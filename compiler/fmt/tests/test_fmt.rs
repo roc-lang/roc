@@ -4653,7 +4653,6 @@ mod test_fmt {
     }
 
     #[test]
-    #[ignore]
     /// Test that builtins are formatted correctly
     /// If this test fails on your diff, it probably means you need to re-format a builtin.
     /// Try this:
