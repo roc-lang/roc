@@ -448,20 +448,18 @@ fn start_phase<'a>(
                 // ability specializations our dependents have, because those might be used by the
                 // specializations we've been asked to make.
                 for (_module_id, exposed_types) in state.exposed_types.iter_all() {
-                    if let ExposedModuleTypes::Valid {
+                    let ExposedModuleTypes {
                         solved_specializations,
                         ..
-                    } = exposed_types
-                    {
-                        for (&(member, typ), &specialization) in solved_specializations.iter() {
-                            match abilities_store.get_specialization(member, typ) {
-                                None => abilities_store.register_specialization_for_type(
-                                    member,
-                                    typ,
-                                    specialization,
-                                ),
-                                Some(existing) => debug_assert_eq!(existing, specialization),
-                            }
+                    } = exposed_types;
+                    for (&(member, typ), &specialization) in solved_specializations.iter() {
+                        match abilities_store.get_specialization(member, typ) {
+                            None => abilities_store.register_specialization_for_type(
+                                member,
+                                typ,
+                                specialization,
+                            ),
+                            Some(existing) => debug_assert_eq!(existing, specialization),
                         }
                     }
                 }
@@ -3532,18 +3530,12 @@ impl<'a> BuildTask<'a> {
             let exposed = exposed_by_module
                 .get(module)
                 .unwrap_or_else(|| internal_error!("No exposed types for {:?}", module));
-            if let ExposedModuleTypes::Valid {
+            let ExposedModuleTypes {
                 solved_specializations,
                 ..
-            } = exposed
-            {
-                for ((member, typ), specialization) in solved_specializations.iter() {
-                    abilities_store.register_specialization_for_type(
-                        *member,
-                        *typ,
-                        *specialization,
-                    );
-                }
+            } = exposed;
+            for ((member, typ), specialization) in solved_specializations.iter() {
+                abilities_store.register_specialization_for_type(*member, *typ, *specialization);
             }
         }
 
@@ -3589,6 +3581,7 @@ fn add_imports(
             Some(ExposedModuleTypes {
                 stored_vars_by_symbol,
                 storage_subs,
+                solved_specializations: _,
             }) => {
                 let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
                     None => {
