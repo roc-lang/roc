@@ -1,6 +1,6 @@
 use crate::ability::{
     resolve_ability_specialization, type_implementing_member, AbilityImplError,
-    DeferredMustImplementAbility,
+    DeferredMustImplementAbility, Unfulfilled,
 };
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
@@ -78,15 +78,6 @@ use roc_unify::unify::{unify, Mode, Unified::*};
 // Ranks are used to limit the number of type variables considered for generalization. Only those inside
 // of the let (so those used in inferring the type of `\x -> x`) are considered.
 
-#[derive(PartialEq, Debug, Clone)]
-pub struct IncompleteAbilityImplementation {
-    // TODO(abilities): have general types here, not just opaques
-    pub typ: Symbol,
-    pub ability: Symbol,
-    pub specialized_members: Vec<Loc<Symbol>>,
-    pub missing_members: Vec<Loc<Symbol>>,
-}
-
 #[derive(Debug, Clone)]
 pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
@@ -95,19 +86,9 @@ pub enum TypeError {
     CircularDef(Vec<CycleEntry>),
     BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
-    IncompleteAbilityImplementation(IncompleteAbilityImplementation),
-    BadExprMissingAbility(
-        Region,
-        Category,
-        ErrorType,
-        Vec<IncompleteAbilityImplementation>,
-    ),
-    BadPatternMissingAbility(
-        Region,
-        PatternCategory,
-        ErrorType,
-        Vec<IncompleteAbilityImplementation>,
-    ),
+    UnfulfilledAbility(Unfulfilled),
+    BadExprMissingAbility(Region, Category, ErrorType, Vec<Unfulfilled>),
+    BadPatternMissingAbility(Region, PatternCategory, ErrorType, Vec<Unfulfilled>),
     Exhaustive(roc_exhaustive::Error),
 }
 
@@ -544,7 +525,7 @@ fn run_in_place(
 
     // Now that the module has been solved, we can run through and check all
     // types claimed to implement abilities.
-    problems.extend(deferred_must_implement_abilities.check(subs, abilities_store));
+    problems.extend(deferred_must_implement_abilities.check_all(subs, abilities_store));
 
     state.env
 }

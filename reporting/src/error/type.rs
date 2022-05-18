@@ -7,7 +7,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_solve::solve::{self, IncompleteAbilityImplementation};
+use roc_solve::ability::{UnderivableReason, Unfulfilled};
+use roc_solve::solve;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
     AliasKind, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
@@ -125,18 +126,18 @@ pub fn type_problem<'b>(
                 other => panic!("unhandled bad type: {:?}", other),
             }
         }
-        IncompleteAbilityImplementation(incomplete) => {
+        UnfulfilledAbility(incomplete) => {
             let title = "INCOMPLETE ABILITY IMPLEMENTATION".to_string();
 
-            let doc = report_incomplete_ability(alloc, lines, incomplete);
+            let doc = report_unfulfilled_ability(alloc, lines, incomplete);
 
             report(title, doc, filename)
         }
         BadExprMissingAbility(region, category, found, incomplete) => {
             let note = alloc.stack([
                 alloc.reflow("The ways this expression is used requires that the following types implement the following abilities, which they do not:"),
-                alloc.type_block(alloc.stack(incomplete.iter().map(|incomplete| {
-                    symbol_does_not_implement(alloc, incomplete.typ, incomplete.ability)
+                alloc.type_block(alloc.stack(incomplete.into_iter().map(|incomplete| {
+                    unfulfilled_does_not_implement(alloc, incomplete)
                 }))),
             ]);
             let snippet = alloc.region(lines.convert_region(region));
@@ -155,7 +156,7 @@ pub fn type_problem<'b>(
                 ),
             ];
             incomplete.into_iter().for_each(|incomplete| {
-                stack.push(report_incomplete_ability(alloc, lines, incomplete))
+                stack.push(report_unfulfilled_ability(alloc, lines, incomplete))
             });
 
             let report = Report {
@@ -169,8 +170,8 @@ pub fn type_problem<'b>(
         BadPatternMissingAbility(region, category, found, incomplete) => {
             let note = alloc.stack([
                 alloc.reflow("The ways this expression is used requires that the following types implement the following abilities, which they do not:"),
-                alloc.type_block(alloc.stack(incomplete.iter().map(|incomplete| {
-                    symbol_does_not_implement(alloc, incomplete.typ, incomplete.ability)
+                alloc.type_block(alloc.stack(incomplete.into_iter().map(|incomplete| {
+                    unfulfilled_does_not_implement(alloc, incomplete)
                 }))),
             ]);
             let snippet = alloc.region(lines.convert_region(region));
@@ -189,7 +190,7 @@ pub fn type_problem<'b>(
                 ),
             ];
             incomplete.into_iter().for_each(|incomplete| {
-                stack.push(report_incomplete_ability(alloc, lines, incomplete))
+                stack.push(report_unfulfilled_ability(alloc, lines, incomplete))
             });
 
             let report = Report {
@@ -216,56 +217,118 @@ pub fn type_problem<'b>(
     }
 }
 
-fn report_incomplete_ability<'a>(
+fn report_unfulfilled_ability<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
-    incomplete: IncompleteAbilityImplementation,
+    unfulfilled: Unfulfilled,
 ) -> RocDocBuilder<'a> {
-    let IncompleteAbilityImplementation {
-        typ,
-        ability,
-        specialized_members,
-        missing_members,
-    } = incomplete;
+    match unfulfilled {
+        Unfulfilled::Incomplete {
+            typ,
+            ability,
+            specialized_members,
+            missing_members,
+        } => {
+            debug_assert!(!missing_members.is_empty());
 
-    debug_assert!(!missing_members.is_empty());
+            let mut stack = vec![alloc.concat([
+                alloc.reflow("The type "),
+                alloc.symbol_unqualified(typ),
+                alloc.reflow(" does not fully implement the ability "),
+                alloc.symbol_unqualified(ability),
+                alloc.reflow(". The following specializations are missing:"),
+            ])];
 
-    let mut stack = vec![alloc.concat([
-        alloc.reflow("The type "),
-        alloc.symbol_unqualified(typ),
-        alloc.reflow(" does not fully implement the ability "),
-        alloc.symbol_unqualified(ability),
-        alloc.reflow(". The following specializations are missing:"),
-    ])];
+            for member in missing_members.into_iter() {
+                stack.push(alloc.concat([
+                    alloc.reflow("A specialization for "),
+                    alloc.symbol_unqualified(member.value),
+                    alloc.reflow(", which is defined here:"),
+                ]));
+                stack.push(alloc.region(lines.convert_region(member.region)));
+            }
 
-    for member in missing_members.into_iter() {
-        stack.push(alloc.concat([
-            alloc.reflow("A specialization for "),
-            alloc.symbol_unqualified(member.value),
-            alloc.reflow(", which is defined here:"),
-        ]));
-        stack.push(alloc.region(lines.convert_region(member.region)));
-    }
+            if !specialized_members.is_empty() {
+                stack.push(alloc.concat([
+                    alloc.note(""),
+                    alloc.symbol_unqualified(typ),
+                    alloc.reflow(" specializes the following members of "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(":"),
+                ]));
 
-    if !specialized_members.is_empty() {
-        stack.push(alloc.concat([
-            alloc.note(""),
-            alloc.symbol_unqualified(typ),
-            alloc.reflow(" specializes the following members of "),
-            alloc.symbol_unqualified(ability),
-            alloc.reflow(":"),
-        ]));
+                for spec in specialized_members {
+                    stack.push(alloc.concat([
+                        alloc.symbol_unqualified(spec.value),
+                        alloc.reflow(", specialized here:"),
+                    ]));
+                    stack.push(alloc.region(lines.convert_region(spec.region)));
+                }
+            }
 
-        for spec in specialized_members {
-            stack.push(alloc.concat([
-                alloc.symbol_unqualified(spec.value),
-                alloc.reflow(", specialized here:"),
-            ]));
-            stack.push(alloc.region(lines.convert_region(spec.region)));
+            alloc.stack(stack)
+        }
+        Unfulfilled::Underivable {
+            typ,
+            ability,
+            reason,
+        } => {
+            let reason = match reason {
+                UnderivableReason::NotABuiltin => {
+                    alloc.reflow("Only builtin abilities can have generated implementations!")
+                }
+                UnderivableReason::SurfaceNotDerivable => underivable_hint(alloc, ability, &typ),
+                UnderivableReason::NestedNotDerivable(nested_typ) => {
+                    let hint = underivable_hint(alloc, ability, &typ);
+                    alloc.stack([
+                        alloc.reflow("In particular, an implementation for "),
+                        alloc.type_block(error_type_to_doc(alloc, nested_typ)),
+                        alloc.reflow(" cannot be generated."),
+                        hint,
+                    ])
+                }
+            };
+
+            let mut stack = vec![
+                alloc.concat([
+                    alloc.reflow("Roc can't generate an implementation of the "),
+                    alloc.symbol_qualified(ability),
+                    alloc.reflow(" ability for"),
+                ]),
+                alloc.type_block(error_type_to_doc(alloc, typ)),
+                reason,
+            ];
+
+            alloc.stack(stack)
         }
     }
+}
 
-    alloc.stack(stack)
+fn underivable_hint<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    ability: Symbol,
+    typ: &ErrorType,
+) -> RocDocBuilder<'b> {
+    match typ {
+        ErrorType::Function(..) => alloc.note("").append(alloc.concat([
+            alloc.symbol_unqualified(ability),
+            alloc.reflow(" cannot be generated for functions."),
+        ])),
+        ErrorType::FlexVar(v) | ErrorType::RigidVar(v) => alloc.tip().append(alloc.concat([
+            alloc.reflow("This type variable is not bound to "),
+            alloc.symbol_unqualified(ability),
+            alloc.reflow(". Consider adding a "),
+            alloc.keyword("has"),
+            alloc.reflow(" clause to bind the type variable, like "),
+            alloc.string("| ".to_string()),
+            alloc.type_variable(v.clone()),
+            alloc.space(),
+            alloc.keyword("has"),
+            alloc.space(),
+            alloc.symbol_qualified(ability),
+        ])),
+        _ => alloc.nil(),
+    }
 }
 
 fn report_shadowing<'b>(
@@ -1318,6 +1381,18 @@ fn symbol_does_not_implement<'a>(
     ])
 }
 
+fn unfulfilled_does_not_implement<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    unfulfilled: Unfulfilled,
+) -> RocDocBuilder<'a> {
+    match unfulfilled {
+        Unfulfilled::Incomplete { typ, ability, .. } => {
+            symbol_does_not_implement(alloc, typ, ability)
+        }
+        Unfulfilled::Underivable { typ, ability, .. } => does_not_implement(alloc, typ, ability),
+    }
+}
+
 fn count_arguments(tipe: &ErrorType) -> usize {
     use ErrorType::*;
 
@@ -2232,6 +2307,14 @@ fn type_with_able_vars<'b>(
     }
 
     alloc.concat(doc)
+}
+
+fn error_type_to_doc<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    error_type: ErrorType,
+) -> RocDocBuilder<'b> {
+    let (typ, able_vars) = to_doc(alloc, Parens::Unnecessary, error_type);
+    type_with_able_vars(alloc, typ, able_vars)
 }
 
 fn to_diff<'b>(

@@ -169,12 +169,22 @@ impl Unified {
     }
 }
 
+/// Type obligated to implement an ability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Obligated {
+    /// Opaque types can either define custom implementations for an ability, or ask the compiler
+    /// to generate an implementation of a builtin ability for them. In any case they have unique
+    /// obligation rules for abilities.
+    Opaque(Symbol),
+    /// A structural type for which the compiler can at most generate an adhoc implementation of
+    /// a builtin ability.
+    Adhoc(Variable),
+}
+
 /// Specifies that `type` must implement the ability `ability`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MustImplementAbility {
-    // This only points to opaque type names currently.
-    // TODO(abilities) support structural types in general
-    pub typ: Symbol,
+    pub typ: Obligated,
     pub ability: Symbol,
 }
 
@@ -594,12 +604,11 @@ fn unify_opaque(
             // Alias wins
             merge(subs, ctx, Alias(symbol, args, real_var, kind))
         }
-        // RigidVar(_) | RigidAbleVar(..) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
         FlexAbleVar(_, ability) if args.is_empty() => {
             // Opaque type wins
             let mut outcome = merge(subs, ctx, Alias(symbol, args, real_var, kind));
             outcome.must_implement_ability.push(MustImplementAbility {
-                typ: symbol,
+                typ: Obligated::Opaque(symbol),
                 ability: *ability,
             });
             outcome
@@ -674,6 +683,15 @@ fn unify_structure(
             }
             outcome
         }
+        FlexAbleVar(_, ability) => {
+            let mut outcome = merge(subs, ctx, *other);
+            let must_implement_ability = MustImplementAbility {
+                typ: Obligated::Adhoc(ctx.first),
+                ability: *ability,
+            };
+            outcome.must_implement_ability.push(must_implement_ability);
+            outcome
+        }
         // _name has an underscore because it's unused in --release builds
         RigidVar(_name) => {
             // Type mismatch! Rigid can only unify with flex.
@@ -681,6 +699,14 @@ fn unify_structure(
                 "trying to unify {:?} with rigid var {:?}",
                 &flat_type,
                 _name
+            )
+        }
+        RigidAbleVar(_, _ability) => {
+            mismatch!(
+                %not_able, ctx.first, *_ability,
+                "trying to unify {:?} with RigidAble {:?}",
+                &flat_type,
+                &other
             )
         }
         RecursionVar { structure, .. } => match flat_type {
@@ -749,24 +775,6 @@ fn unify_structure(
             }
         }
         Error => merge(subs, ctx, Error),
-
-        FlexAbleVar(_, ability) => {
-            // TODO(abilities) support structural types in ability bounds
-            mismatch!(
-                %not_able, ctx.first, *ability,
-                "trying to unify {:?} with FlexAble {:?}",
-                &flat_type,
-                &other
-            )
-        }
-        RigidAbleVar(_, ability) => {
-            mismatch!(
-                %not_able, ctx.first, *ability,
-                "trying to unify {:?} with RigidAble {:?}",
-                &flat_type,
-                &other
-            )
-        }
     }
 }
 
@@ -1791,7 +1799,7 @@ fn unify_rigid(
                 {
                     let mut output = merge(subs, ctx, *other);
                     let must_implement_ability = MustImplementAbility {
-                        typ: *opaque_name,
+                        typ: Obligated::Opaque(*opaque_name),
                         ability,
                     };
                     output.must_implement_ability.push(must_implement_ability);
