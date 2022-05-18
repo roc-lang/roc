@@ -388,7 +388,6 @@ fn eat_line_comment<'a>(
                             }
                             b'\n' => {
                                 state = state.advance_newline();
-                                index += 1;
                                 multiline = true;
                                 comments_and_newlines.push(CommentOrNewline::Newline);
                             }
@@ -424,7 +423,7 @@ fn eat_line_comment<'a>(
                     };
                 }
 
-                _ => false,
+                Some(_) => false,
             }
         } else {
             false
