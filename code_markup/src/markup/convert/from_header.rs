@@ -14,7 +14,7 @@ use crate::{
     syntax_highlight::HighlightStyle,
 };
 
-use super::from_def2::add_node;
+use super::from_def::add_node;
 
 pub fn header_to_markup(
     app_header: &AppHeader,

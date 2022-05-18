@@ -502,7 +502,7 @@ pub enum BuildProblem<'a> {
 }
 
 #[derive(Debug)]
-struct ModuleHeader<'a> {
+pub struct ModuleHeader<'a> {
     module_id: ModuleId,
     module_name: ModuleNameEnum<'a>,
     module_path: PathBuf,

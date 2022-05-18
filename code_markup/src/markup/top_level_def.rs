@@ -15,7 +15,7 @@ use crate::{
 };
 
 use super::{
-    common_nodes::new_assign_mn, convert::from_def2::add_node, mark_id_ast_id_map::MarkIdAstIdMap,
+    common_nodes::new_assign_mn, convert::from_def::add_node, mark_id_ast_id_map::MarkIdAstIdMap,
 };
 
 // represents for example: `main = "Hello, World!"`

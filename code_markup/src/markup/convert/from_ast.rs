@@ -6,7 +6,7 @@ use roc_module::symbol::Interns;
 
 use crate::{
     markup::{
-        convert::{from_def2::def2_to_markup, from_header::header_to_markup},
+        convert::{from_def::def2_to_markup, from_header::header_to_markup},
         mark_id_ast_id_map::MarkIdAstIdMap,
         nodes::set_parent_for_all,
     },
@@ -26,11 +26,9 @@ pub fn ast_to_mark_nodes<'a>(
         &mut mark_id_ast_id_map,
     )];
 
-    for &def_id in ast.def_ids.iter() {
+    for &def in ast.defs.iter() {
         // for debugging
         //println!("{}", def2_to_string(def_id, env.pool));
-
-        let def2 = env.pool.get(def_id);
 
         let expr2_markup_id = def2_to_markup(
             env,

@@ -54,8 +54,8 @@ pub struct Annotation {
 }
 
 #[derive(Debug)]
-pub(crate) struct CanDefs {
-    defs: Vec<Option<Def>>,
+pub struct CanDefs {
+    pub defs: Vec<Option<Def>>,
     def_ordering: DefOrdering,
     pub(crate) abilities_in_scope: Vec<Symbol>,
     aliases: VecMap<Symbol, Alias>,

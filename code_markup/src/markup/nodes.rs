@@ -5,7 +5,7 @@ use crate::{
 };
 
 use super::{
-    attribute::Attributes, common_nodes::new_comma_mn, convert::from_def2::add_node,
+    attribute::Attributes, common_nodes::new_comma_mn, convert::from_def::add_node,
     mark_id_ast_id_map::MarkIdAstIdMap,
 };
 

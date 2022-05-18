@@ -8,19 +8,20 @@ use crate::{
     slow_pool::{MarkNodeId, SlowPool},
 };
 
-use super::from_expr2::expr2_to_markup;
+use super::from_expr::expr2_to_markup;
 
 use roc_ast::{
     ast_error::ASTResult,
     lang::{
         core::{
             ast::ASTNodeId,
-            def::def2::{Def2, DefId},
+            def::{def2::{Def2, DefId}},
         },
         env::Env,
     },
 };
 use roc_module::symbol::Interns;
+use roc_parse::ast::Def;
 
 pub fn add_node(
     mark_node: MarkupNode,
@@ -35,20 +36,16 @@ pub fn add_node(
     mark_node_id
 }
 
-pub fn def2_to_markup<'a>(
+pub fn def_to_markup<'a>(
     env: &mut Env<'a>,
-    def2: &Def2,
-    def2_node_id: DefId,
-    mark_node_pool: &mut SlowPool,
+    def: &Def<'a>,
     mark_id_ast_id_map: &mut MarkIdAstIdMap,
     interns: &Interns,
 ) -> ASTResult<MarkNodeId> {
-    let ast_node_id = ASTNodeId::ADefId(def2_node_id);
 
-    let mark_node_id = match def2 {
-        Def2::ValueDef {
-            identifier_id,
-            expr_id,
+    let mark_node_id = match def {
+        Def::Value {
+            value_def
         } => {
             let expr_mn_id = expr2_to_markup(
                 env,

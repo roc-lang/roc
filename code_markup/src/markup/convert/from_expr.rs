@@ -33,7 +33,7 @@ use roc_ast::{
 };
 use roc_module::{module_err::ModuleResult, symbol::Interns};
 
-use super::from_def2::add_node;
+use super::from_def::add_node;
 
 // make Markup Nodes: generate String representation, assign Highlighting Style
 pub fn expr2_to_markup<'a>(
