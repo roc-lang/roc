@@ -3268,7 +3268,6 @@ mod test_fmt {
             when b is
                 1 ->
                     1
-
                 _ ->
                     2
             "#
@@ -3298,7 +3297,6 @@ mod test_fmt {
                 when year is
                     1999 ->
                         1
-
                     _ ->
                         0
                 "#
@@ -3315,7 +3313,6 @@ mod test_fmt {
                 1 ->
                     # when 1
                     1
-
                 # important
                 # fall through
                 _ ->
@@ -3349,7 +3346,6 @@ mod test_fmt {
                     when c is
                         6 | 7 ->
                             8
-
                 3 | 4 ->
                     5
         "#
@@ -3423,20 +3419,15 @@ mod test_fmt {
                  | 2
                  | 3 ->
                     4
-
                 5 | 6 | 7 ->
                     8
-
                 9
                  | 10 -> 11
-
                 12 | 13 ->
                     when c is
                         14 | 15 -> 16
-
                         17
                          | 18 -> 19
-
                 20 -> 21
                 "#
             ),
@@ -3457,7 +3448,6 @@ mod test_fmt {
                 r#"
             when b is
                 3 -> 4
-
                 9
                  | 8 -> 9
             "#
@@ -3484,7 +3474,6 @@ mod test_fmt {
                 when b is
                     1 ->
                         1
-
                     # when 1
                     # fall through
                     _ ->
@@ -3503,7 +3492,6 @@ mod test_fmt {
             is
                 1 ->
                     Nothing
-
                 _ ->
                     Just True
             "#
@@ -3521,7 +3509,6 @@ mod test_fmt {
             is
                 Complex x y ->
                     simplify x y
-
                 Simple z ->
                     z
             "#
@@ -3556,7 +3543,6 @@ mod test_fmt {
             is
                 2 ->
                     x
-
                 _ ->
                     y
             "#
@@ -3593,7 +3579,6 @@ mod test_fmt {
             is
                 4 ->
                     x
-
                 _ ->
                     y
             "#
@@ -3615,7 +3600,6 @@ mod test_fmt {
             r#"
             when x is
                 Foo -> 1
-
                 Bar ->
                     2
             "#
@@ -3626,6 +3610,7 @@ mod test_fmt {
                 r#"
                 when x is
                     Foo -> 1
+
                     Bar ->
                         2
                 "#
@@ -3634,7 +3619,6 @@ mod test_fmt {
                 r#"
                 when x is
                     Foo -> 1
-
                     Bar ->
                         2
                 "#
@@ -3742,7 +3726,6 @@ mod test_fmt {
             when maybeScore is
                 Just score if score > 21 ->
                     win
-
                 _ ->
                     nextRound
             "#
@@ -3756,10 +3739,8 @@ mod test_fmt {
             when authenticationResponse is
                 Ok user if hasPermission user ->
                     loadPage route user
-
                 Ok user ->
                     PageNotFound
-
                 Err _ ->
                     ErrorPage
             "#
@@ -3865,7 +3846,6 @@ mod test_fmt {
             when f x == g y == h z is
                 True ->
                     Ok 1
-
                 False ->
                     Err 2
             "#
@@ -4458,7 +4438,6 @@ mod test_fmt {
                 when list is
                     Nil ->
                         Nothing
-
                     Cons first _ ->
                         Just first
 

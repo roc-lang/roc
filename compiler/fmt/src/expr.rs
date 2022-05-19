@@ -636,9 +636,6 @@ fn fmt_when<'a, 'buf>(
     indent: u16,
 ) {
     let is_multiline_condition = loc_condition.is_multiline();
-    let has_multiline_branches = branches
-        .iter()
-        .any(|branch| is_when_patterns_multiline(branch) || branch.value.is_multiline());
     buf.indent(indent);
     buf.push_str(
         "\
@@ -744,9 +741,6 @@ fn fmt_when<'a, 'buf>(
 
         if it.peek().is_some() {
             buf.newline();
-            if has_multiline_branches {
-                buf.newline();
-            }
         }
     }
 }

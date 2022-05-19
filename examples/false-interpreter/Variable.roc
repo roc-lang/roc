@@ -19,7 +19,6 @@ toStr = \@Variable char ->
     when Str.fromUtf8 [ char ] is
         Ok str ->
             str
-
         _ ->
             "_"
 

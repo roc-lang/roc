@@ -28,7 +28,6 @@ cheapestOpen = \costFn, model ->
                     when Dict.get model.costs position is
                         Err _ ->
                             Err {}
-
                         Ok cost ->
                             Ok { cost: cost + costFn position, position }
             )
@@ -42,7 +41,6 @@ reconstructPath = \cameFrom, goal ->
     when Dict.get cameFrom goal is
         Err _ ->
             []
-
         Ok next ->
             List.append (reconstructPath cameFrom next) goal
 
@@ -68,7 +66,6 @@ updateCost = \current, neighbor, model ->
     when Dict.get model.costs neighbor is
         Err _ ->
             newModel
-
         Ok previousDistance ->
             if distanceTo < previousDistance then
                 newModel
@@ -80,7 +77,6 @@ astar = \costFn, moveFn, goal, model ->
     when cheapestOpen (\source -> costFn source goal) model is
         Err {} ->
             Err {}
-
         Ok current ->
             if current == goal then
                 Ok (reconstructPath model.cameFrom goal)

@@ -544,7 +544,6 @@ min = \list ->
     when List.first list is
         Ok initial ->
             Ok (minHelp list initial)
-
         Err ListWasEmpty ->
             Err ListWasEmpty
 
@@ -561,7 +560,6 @@ max = \list ->
     when List.first list is
         Ok initial ->
             Ok (maxHelp list initial)
-
         Err ListWasEmpty ->
             Err ListWasEmpty
 
