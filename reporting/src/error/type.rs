@@ -133,27 +133,18 @@ pub fn type_problem<'b>(
 
             report(title, doc, filename)
         }
-        BadExprMissingAbility(region, category, found, incomplete) => {
-            let note = alloc.stack([
-                alloc.reflow("The ways this expression is used requires that the following types implement the following abilities, which they do not:"),
-                alloc.type_block(alloc.stack(incomplete.into_iter().map(|incomplete| {
-                    unfulfilled_does_not_implement(alloc, incomplete)
-                }))),
-            ]);
+        BadExprMissingAbility(region, _category, _found, incomplete) => {
+            let incomplete = incomplete
+                .into_iter()
+                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled));
+            let note = alloc.stack(incomplete);
             let snippet = alloc.region(lines.convert_region(region));
             let stack = [
                 alloc.text(
                     "This expression has a type that does not implement the abilities it's expected to:",
                 ),
                 snippet,
-                lone_type(
-                    alloc,
-                    found.clone(),
-                    found,
-                    ExpectationContext::Arbitrary,
-                    add_category(alloc, alloc.text("Right now it's"), &category),
-                    note,
-                ),
+                note
             ];
 
             let report = Report {
@@ -164,27 +155,18 @@ pub fn type_problem<'b>(
             };
             Some(report)
         }
-        BadPatternMissingAbility(region, category, found, incomplete) => {
-            let note = alloc.stack([
-                alloc.reflow("The ways this expression is used requires that the following types implement the following abilities, which they do not:"),
-                alloc.type_block(alloc.stack(incomplete.into_iter().map(|incomplete| {
-                    unfulfilled_does_not_implement(alloc, incomplete)
-                }))),
-            ]);
+        BadPatternMissingAbility(region, _category, _found, incomplete) => {
+            let incomplete = incomplete
+                .into_iter()
+                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled));
+            let note = alloc.stack(incomplete);
             let snippet = alloc.region(lines.convert_region(region));
             let stack = [
                 alloc.text(
                     "This expression has a type does not implement the abilities it's expected to:",
                 ),
                 snippet,
-                lone_type(
-                    alloc,
-                    found.clone(),
-                    found,
-                    ExpectationContext::Arbitrary,
-                    add_pattern_category(alloc, alloc.text("Right now it's"), &category),
-                    note,
-                ),
+                note,
             ];
 
             let report = Report {
@@ -299,17 +281,21 @@ fn report_unfulfilled_ability<'a>(
         } => {
             let reason = match reason {
                 UnderivableReason::NotABuiltin => {
-                    alloc.reflow("Only builtin abilities can have generated implementations!")
+                    Some(alloc.reflow("Only builtin abilities can have generated implementations!"))
                 }
                 UnderivableReason::SurfaceNotDerivable => underivable_hint(alloc, ability, &typ),
                 UnderivableReason::NestedNotDerivable(nested_typ) => {
-                    let hint = underivable_hint(alloc, ability, &typ);
-                    alloc.stack([
-                        alloc.reflow("In particular, an implementation for "),
-                        alloc.type_block(error_type_to_doc(alloc, nested_typ)),
-                        alloc.reflow(" cannot be generated."),
-                        hint,
-                    ])
+                    let hint = underivable_hint(alloc, ability, &nested_typ);
+                    let reason = alloc.stack(
+                        [
+                            alloc.reflow("In particular, an implementation for"),
+                            alloc.type_block(error_type_to_doc(alloc, nested_typ)),
+                            alloc.reflow("cannot be generated."),
+                        ]
+                        .into_iter()
+                        .chain(hint),
+                    );
+                    Some(reason)
                 }
             };
 
@@ -320,8 +306,9 @@ fn report_unfulfilled_ability<'a>(
                     alloc.reflow(" ability for"),
                 ]),
                 alloc.type_block(error_type_to_doc(alloc, typ)),
-                reason,
-            ];
+            ]
+            .into_iter()
+            .chain(reason);
 
             alloc.stack(stack)
         }
@@ -332,26 +319,58 @@ fn underivable_hint<'b>(
     alloc: &'b RocDocAllocator<'b>,
     ability: Symbol,
     typ: &ErrorType,
-) -> RocDocBuilder<'b> {
+) -> Option<RocDocBuilder<'b>> {
     match typ {
-        ErrorType::Function(..) => alloc.note("").append(alloc.concat([
+        ErrorType::Function(..) => Some(alloc.note("").append(alloc.concat([
             alloc.symbol_unqualified(ability),
             alloc.reflow(" cannot be generated for functions."),
-        ])),
-        ErrorType::FlexVar(v) | ErrorType::RigidVar(v) => alloc.tip().append(alloc.concat([
+        ]))),
+        ErrorType::FlexVar(v) | ErrorType::RigidVar(v) => Some(alloc.tip().append(alloc.concat([
             alloc.reflow("This type variable is not bound to "),
             alloc.symbol_unqualified(ability),
             alloc.reflow(". Consider adding a "),
             alloc.keyword("has"),
             alloc.reflow(" clause to bind the type variable, like "),
-            alloc.string("| ".to_string()),
-            alloc.type_variable(v.clone()),
-            alloc.space(),
-            alloc.keyword("has"),
-            alloc.space(),
-            alloc.symbol_qualified(ability),
-        ])),
-        _ => alloc.nil(),
+            alloc.inline_type_block(alloc.concat([
+                alloc.string("| ".to_string()),
+                alloc.type_variable(v.clone()),
+                alloc.space(),
+                alloc.keyword("has"),
+                alloc.space(),
+                alloc.symbol_qualified(ability),
+            ])),
+        ]))),
+        ErrorType::Alias(symbol, _, _, AliasKind::Opaque) => {
+            Some(alloc.tip().append(alloc.concat([
+                alloc.symbol_unqualified(*symbol),
+                alloc.reflow(" does not implement "),
+                alloc.symbol_unqualified(ability),
+                alloc.reflow("."),
+                if symbol.module_id() == alloc.home {
+                    alloc.concat([
+                        alloc.reflow(" Consider adding a custom implementation"),
+                        if ability.is_builtin() {
+                            alloc.concat([
+                                alloc.reflow(" or "),
+                                alloc.inline_type_block(alloc.concat([
+                                    alloc.keyword("has"),
+                                    alloc.space(),
+                                    alloc.symbol_qualified(ability),
+                                ])),
+                                alloc.reflow(" to the definition of "),
+                                alloc.symbol_unqualified(*symbol),
+                            ])
+                        } else {
+                            alloc.nil()
+                        },
+                        alloc.reflow("."),
+                    ])
+                } else {
+                    alloc.nil()
+                },
+            ])))
+        }
+        _ => None,
     }
 }
 
@@ -1391,30 +1410,6 @@ fn does_not_implement<'a>(
         alloc.reflow(" does not implement "),
         alloc.symbol_unqualified(ability),
     ])
-}
-
-fn symbol_does_not_implement<'a>(
-    alloc: &'a RocDocAllocator<'a>,
-    symbol: Symbol,
-    ability: Symbol,
-) -> RocDocBuilder<'a> {
-    alloc.concat([
-        alloc.symbol_unqualified(symbol),
-        alloc.reflow(" does not implement "),
-        alloc.symbol_unqualified(ability),
-    ])
-}
-
-fn unfulfilled_does_not_implement<'a>(
-    alloc: &'a RocDocAllocator<'a>,
-    unfulfilled: Unfulfilled,
-) -> RocDocBuilder<'a> {
-    match unfulfilled {
-        Unfulfilled::Incomplete { typ, ability, .. } => {
-            symbol_does_not_implement(alloc, typ, ability)
-        }
-        Unfulfilled::Underivable { typ, ability, .. } => does_not_implement(alloc, typ, ability),
-    }
 }
 
 fn count_arguments(tipe: &ErrorType) -> usize {
