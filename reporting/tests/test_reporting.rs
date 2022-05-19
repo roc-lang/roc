@@ -9296,25 +9296,20 @@ All branches in an `if` must have the same type!
             ),
             indoc!(
                 r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+                ── ILLEGAL SPECIALIZATION ──────────────────────────────── /code/proj/Main.roc ─
 
-                Something is off with this specialization of `hash`:
+                This specialization of `hash` is for a non-opaque type:
 
                 5│  hash = \{} -> 0u64
                     ^^^^
 
-                This value is a declared specialization of type:
+                It is specialized for
 
-                    {}a -> U64
+                    {}a
 
-                But the type annotation on `hash` says it must match:
+                but structural types can never specialize abilities!
 
-                    a -> U64 | a has Hash
-
-                Note: Some types in this specialization don't implement the abilities
-                they are expected to. I found the following missing implementations:
-
-                    {}a does not implement Hash
+                Note: `hash` is a member of `#UserApp.Hash`
                 "#
             ),
         )
@@ -9563,18 +9558,19 @@ All branches in an `if` must have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st argument to `hash` is not what I expect:
+                This expression has a type that does not implement the abilities it's expected to:
 
                 15│          notYet: hash (A 1),
                                            ^^^
 
                 This `A` tag application has the type:
 
-                    [ A (Num a) ]b
+                    [ A Num a ]b
 
-                But `hash` needs the 1st argument to be:
+                The ways this expression is used requires that the following types
+                implement the following abilities, which they do not:
 
-                    a | a has Hash
+                    [ A (Num a) ]b does not implement Hash
 
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -9591,14 +9587,6 @@ All branches in an `if` must have the same type!
                 implement the following abilities, which they do not:
 
                     User does not implement Hash
-
-                The type `User` does not fully implement the ability `Hash`. The following
-                specializations are missing:
-
-                A specialization for `hash`, which is defined here:
-
-                4│      hash : a -> U64 | a has Hash
-                        ^^^^
                 "#
             ),
         )

@@ -16,13 +16,14 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
 };
+use roc_error_macros::todo_abilities;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
-use roc_solve::ability::resolve_ability_specialization;
+use roc_solve::ability::{resolve_ability_specialization, Resolved};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
@@ -2831,6 +2832,13 @@ fn resolve_abilities_in_specialized_body<'a>(
                             )
                             .expect("Ability specialization is unknown - code generation cannot proceed!");
 
+                            let specialization = match specialization {
+                                Resolved::Specialization(symbol) => symbol,
+                                Resolved::NeedsGenerated => {
+                                    todo_abilities!("Generate impls for structural types")
+                                }
+                            };
+
                             self.abilities_store
                                 .insert_resolved(*specialization_id, specialization);
 
@@ -4873,14 +4881,21 @@ pub fn with_hole<'a>(
                         UnspecializedExpr(symbol) => {
                             match procs.ability_member_aliases.get(symbol).unwrap() {
                                 &self::AbilityMember(member) => {
-                                    let proc_name = resolve_ability_specialization(env.subs, env.abilities_store, member, fn_var).expect("Recorded as an ability member, but it doesn't have a specialization");
+                                    let resolved_proc = resolve_ability_specialization(env.subs, env.abilities_store, member, fn_var).expect("Recorded as an ability member, but it doesn't have a specialization");
+
+                                    let resolved_proc = match resolved_proc {
+                                        Resolved::Specialization(symbol) => symbol,
+                                        Resolved::NeedsGenerated => {
+                                            todo_abilities!("Generate impls for structural types")
+                                        }
+                                    };
 
                                     // a call by a known name
                                     return call_by_name(
                                         env,
                                         procs,
                                         fn_var,
-                                        proc_name,
+                                        resolved_proc,
                                         loc_args,
                                         layout_cache,
                                         assigned,

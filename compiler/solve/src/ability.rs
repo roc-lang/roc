@@ -335,10 +335,10 @@ impl ObligationCache<'_> {
 
 /// Determines what type implements an ability member of a specialized signature, given the
 /// [MustImplementAbility] constraints of the signature.
-pub fn type_implementing_member(
+pub fn type_implementing_specialization(
     specialization_must_implement_constraints: &MustImplementConstraints,
     ability: Symbol,
-) -> Option<Symbol> {
+) -> Option<Obligated> {
     debug_assert!({
             specialization_must_implement_constraints
                 .clone()
@@ -354,10 +354,16 @@ pub fn type_implementing_member(
     specialization_must_implement_constraints
         .iter_for_ability(ability)
         .next()
-        .map(|mia| match mia.typ {
-            Obligated::Opaque(symbol) => symbol,
-            Obligated::Adhoc(_) => internal_error!("Variable ended up in specialization signature"),
-        })
+        .map(|mia| mia.typ)
+}
+
+/// Result of trying to resolve an ability specialization.
+#[derive(Clone, Copy)]
+pub enum Resolved {
+    /// A user-defined specialization should be used.
+    Specialization(Symbol),
+    /// A specialization must be generated.
+    NeedsGenerated,
 }
 
 pub fn resolve_ability_specialization(
@@ -365,7 +371,7 @@ pub fn resolve_ability_specialization(
     abilities_store: &AbilitiesStore,
     ability_member: Symbol,
     specialization_var: Variable,
-) -> Option<Symbol> {
+) -> Option<Resolved> {
     use roc_unify::unify::{unify, Mode};
 
     let member_def = abilities_store
@@ -386,10 +392,20 @@ pub fn resolve_ability_specialization(
 
     subs.rollback_to(snapshot);
 
-    let specializing_type =
-        type_implementing_member(&must_implement_ability, member_def.parent_ability)?;
+    let obligated =
+        type_implementing_specialization(&must_implement_ability, member_def.parent_ability)?;
 
-    let specialization = abilities_store.get_specialization(ability_member, specializing_type)?;
+    let resolved = match obligated {
+        Obligated::Opaque(symbol) => {
+            let specialization = abilities_store.get_specialization(ability_member, symbol)?;
 
-    Some(specialization.symbol)
+            Resolved::Specialization(specialization.symbol)
+        }
+        Obligated::Adhoc(_) => {
+            // TODO: more rules need to be validated here, like is this a builtin ability?
+            Resolved::NeedsGenerated
+        }
+    };
+
+    Some(resolved)
 }

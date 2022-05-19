@@ -141,7 +141,7 @@ pub fn type_problem<'b>(
                 }))),
             ]);
             let snippet = alloc.region(lines.convert_region(region));
-            let mut stack = vec![
+            let stack = [
                 alloc.text(
                     "This expression has a type that does not implement the abilities it's expected to:",
                 ),
@@ -155,9 +155,6 @@ pub fn type_problem<'b>(
                     note,
                 ),
             ];
-            incomplete.into_iter().for_each(|incomplete| {
-                stack.push(report_unfulfilled_ability(alloc, lines, incomplete))
-            });
 
             let report = Report {
                 title: "TYPE MISMATCH".to_string(),
@@ -175,7 +172,7 @@ pub fn type_problem<'b>(
                 }))),
             ]);
             let snippet = alloc.region(lines.convert_region(region));
-            let mut stack = vec![
+            let stack = [
                 alloc.text(
                     "This expression has a type does not implement the abilities it's expected to:",
                 ),
@@ -189,9 +186,6 @@ pub fn type_problem<'b>(
                     note,
                 ),
             ];
-            incomplete.into_iter().for_each(|incomplete| {
-                stack.push(report_unfulfilled_ability(alloc, lines, incomplete))
-            });
 
             let report = Report {
                 title: "TYPE MISMATCH".to_string(),
@@ -212,6 +206,36 @@ pub fn type_problem<'b>(
                 filename,
                 doc,
                 severity,
+            })
+        }
+        StructuralSpecialization {
+            region,
+            typ,
+            ability,
+            member,
+        } => {
+            let stack = [
+                alloc.concat([
+                    alloc.reflow("This specialization of "),
+                    alloc.symbol_unqualified(member),
+                    alloc.reflow(" is for a non-opaque type:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("It is specialized for"),
+                alloc.type_block(error_type_to_doc(alloc, typ)),
+                alloc.reflow("but structural types can never specialize abilities!"),
+                alloc.note("").append(alloc.concat([
+                    alloc.symbol_unqualified(member),
+                    alloc.reflow(" is a member of "),
+                    alloc.symbol_qualified(ability),
+                ])),
+            ];
+
+            Some(Report {
+                title: "ILLEGAL SPECIALIZATION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity: Severity::RuntimeError,
             })
         }
     }
@@ -289,7 +313,7 @@ fn report_unfulfilled_ability<'a>(
                 }
             };
 
-            let mut stack = vec![
+            let stack = [
                 alloc.concat([
                     alloc.reflow("Roc can't generate an implementation of the "),
                     alloc.symbol_qualified(ability),

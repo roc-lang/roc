@@ -684,7 +684,7 @@ fn unify_structure(
             outcome
         }
         FlexAbleVar(_, ability) => {
-            let mut outcome = merge(subs, ctx, *other);
+            let mut outcome = merge(subs, ctx, Structure(*flat_type));
             let must_implement_ability = MustImplementAbility {
                 typ: Obligated::Adhoc(ctx.first),
                 ability: *ability,
