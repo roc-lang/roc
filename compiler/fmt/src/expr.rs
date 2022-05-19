@@ -866,7 +866,9 @@ fn fmt_if<'a, 'buf>(
                     }
                 }
                 _ => {
-                    loc_condition.format(buf, return_indent);
+                    buf.newline();
+                    loc_then.format(buf, return_indent);
+                    buf.newline();
                 }
             }
         } else {
