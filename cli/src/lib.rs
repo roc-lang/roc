@@ -557,38 +557,32 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     binary_bytes: &mut [u8],
 ) -> ! {
     unsafe {
-        use std::mem::MaybeUninit;
-        use std::os::raw::c_char;
+        use std::os::unix::ffi::OsStrExt;
 
-        let flags = 0;
-        let app_filename: *const c_char = "roc_file_descriptor\0".as_ptr().cast();
-        let fd = libc::shm_open(app_filename, libc::O_CREAT, 0o777);
+        let app_path_buf = std::env::current_dir().unwrap().join("roc_app_binary");
+        let app_path = CString::new(app_path_buf.as_os_str().as_bytes()).unwrap();
 
-        let mut stat_struct: MaybeUninit<libc::stat> = MaybeUninit::uninit();
-        dbg!(libc::fstat(fd, stat_struct.as_mut_ptr()));
+        // write the app bytes to the file
+        {
+            dbg!(&app_path_buf);
+            let fd = libc::open(
+                app_path.as_ptr().cast(),
+                libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC,
+                0o777,
+            );
 
-        dbg!(stat_struct.assume_init());
+            dbg!(fd);
 
-        libc::write(fd, binary_bytes.as_ptr().cast(), binary_bytes.len());
+            dbg!(libc::write(
+                fd,
+                binary_bytes.as_ptr().cast(),
+                binary_bytes.len()
+            ));
 
-        let name = "roc_expect_buffer";
-        let path_string = format!("/dev/shm/{}", name);
-        let p = std::path::PathBuf::from(&path_string);
-        let cstring = CString::new(name).unwrap();
-
-        if true {
-            dbg!(libc::shm_unlink(cstring.as_ptr().cast()));
-            dbg!(libc::shm_unlink(app_filename));
+            dbg!(libc::close(fd));
         }
 
-        let shared = libc::shm_open(cstring.as_ptr().cast(), libc::O_CREAT, 0o666);
-
-        dbg!(std::fs::metadata(&p));
-
-        let e = errno::errno();
-
-        dbg!(shared, e);
-
+        // let shared_fd = libc::shm_open(cstring.as_ptr().cast(), libc::O_CREAT, 0o666);
         let parent_pid = std::process::id();
 
         use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
@@ -609,28 +603,80 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
                 // we are the child
                 println!("we are the child {}", std::process::id());
 
-                let mut file = std::fs::OpenOptions::new().write(true).open(p).unwrap();
-                use std::io::Write;
-                file.write_all(b"42").unwrap();
+                let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+                let cstring = CString::new(name).unwrap();
+                let shared_fd =
+                    libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o666);
+                let bytes_to_write = b"42";
 
-                libc::kill(parent_pid as _, SIGUSR1);
+                dbg!(shared_fd);
+
+                // by default, shared memory has length 0; expand it before writing to it.
+                dbg!(libc::ftruncate(shared_fd, 4096));
+
+                let shared_ptr = libc::mmap(
+                    std::ptr::null_mut(),
+                    4096,
+                    libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    shared_fd,
+                    0,
+                );
+
+                libc::memcpy(
+                    shared_ptr,
+                    bytes_to_write.as_ptr().cast(),
+                    bytes_to_write.len(),
+                );
+
+                dbg!(libc::munmap(shared_ptr, 4096,));
+
+                // let bytes_written = libc::write(
+                //     shared_fd,
+                //     bytes_to_write.as_ptr().cast(),
+                //     bytes_to_write.len(),
+                // );
+
+                // dbg!(bytes_written);
+
+                // if bytes_written < 0 {
+                //     // Get the current value of errno
+                //     let e = errno::errno();
+
+                //     // Extract the error code as an i32
+                //     let code = e.0;
+
+                //     // Display a human-friendly error message
+                //     println!("Error writing bytes to shared memory {}: {}", code, e);
+                // }
+
+                dbg!(libc::close(shared_fd));
+
+                dbg!(libc::kill(parent_pid as _, SIGUSR1));
 
                 let array_with_null_pointer = &[0usize];
+                let app_path_buf = std::env::current_dir().unwrap().join("roc_app_binary");
+                let app_path = CString::new(app_path_buf.as_os_str().as_bytes()).unwrap();
+
+                println!("child is running execve({:?})", app_path);
+
                 let c = libc::execve(
-                    format!("/proc/self/fd/{}\0", fd).as_ptr().cast(),
+                    app_path.as_ptr().cast(),
                     array_with_null_pointer.as_ptr().cast(),
                     array_with_null_pointer.as_ptr().cast(),
                 );
 
-                // Get the current value of errno
-                let e = errno::errno();
+                if dbg!(c) < 0 {
+                    // Get the current value of errno
+                    let e = errno::errno();
 
-                // Extract the error code as an i32
-                let code = e.0;
+                    // Extract the error code as an i32
+                    let code = e.0;
 
-                // Display a human-friendly error message
-                println!("Error {}: {}", code, e);
-                println!("after {:?}", c);
+                    // Display a human-friendly error message
+                    println!("💥 Error {}: {}", code, e);
+                    println!("after {:?}", c);
+                }
             }
             -1 => {
                 // something failed
@@ -643,16 +689,68 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 
                 // Display a human-friendly error message
                 println!("Error {}: {}", code, e);
+
+                process::exit(1)
             }
             1.. => {
                 // parent
                 println!("we are the parent {}", std::process::id());
 
+                let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+                let cstring = CString::new(name).unwrap();
+
                 for sig in &mut signals {
                     match sig {
-                        SIGCHLD => std::process::exit(0),
+                        SIGCHLD => {
+                            // clean up
+                            dbg!(libc::shm_unlink(cstring.as_ptr().cast()));
+
+                            dbg!(libc::unlink(app_path.as_ptr().cast()));
+
+                            // done!
+                            process::exit(0);
+                        }
                         SIGUSR1 => {
-                            dbg!(std::fs::read(&p).unwrap());
+                            let shared_fd =
+                                libc::shm_open(cstring.as_ptr().cast(), libc::O_RDONLY, 0o666);
+                            // let mut buf: Vec<u8> = Vec::new();
+
+                            // // Grow the length so we can shrink down to it later
+                            // buf.resize(4096, 0);
+
+                            // let bytes_read = libc::read(shared_fd, buf.as_mut_ptr().cast(), 4096);
+
+                            // dbg!(bytes_read);
+
+                            let shared_ptr = libc::mmap(
+                                std::ptr::null_mut(),
+                                4096,
+                                libc::PROT_READ,
+                                libc::MAP_SHARED,
+                                shared_fd,
+                                0,
+                            );
+
+                            // if bytes_read > 0 {
+                            //     // Shrink down to the number of bytes that were actually read
+                            //     buf.resize(bytes_read.try_into().unwrap(), 0);
+
+                            //     dbg!(&buf);
+                            // } else {
+                            //     // Get the current value of errno
+                            //     let e = errno::errno();
+
+                            //     // Extract the error code as an i32
+                            //     let code = e.0;
+
+                            //     // Display a human-friendly error message
+                            //     println!("Error reading shared  memory {}: {}", code, e);
+                            // }
+
+                            let slice: &[u8] = std::slice::from_raw_parts(shared_ptr.cast(), 3);
+                            let cstr = std::ffi::CStr::from_bytes_with_nul_unchecked(slice);
+
+                            println!("The child process said: {:?}", cstr);
                         }
                         _ => println!("received signal {}", sig),
                     }
@@ -660,9 +758,9 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             }
             _ => unreachable!(),
         }
-    }
 
-    unreachable!()
+        unreachable!();
+    }
 }
 
 fn roc_run_non_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
