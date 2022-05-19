@@ -3607,7 +3607,6 @@ mod test_fmt {
             r#"
             when x is
                 Foo -> 1
-
                 Bar -> 2
             "#
         ));
@@ -3647,6 +3646,7 @@ mod test_fmt {
                 r#"
                 when x is
                     Foo -> 1
+
                     Bar -> 2
                 "#
             ),
@@ -3654,7 +3654,6 @@ mod test_fmt {
                 r#"
                 when x is
                     Foo -> 1
-
                     Bar -> 2
                 "#
             ),
