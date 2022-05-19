@@ -611,6 +611,24 @@ fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
     }
 }
 
+fn is_when_patterns_multiline(when_branch: &WhenBranch) -> bool {
+    let patterns = when_branch.patterns;
+    let (first_pattern, rest) = patterns.split_first().unwrap();
+
+    let is_multiline_patterns = if let Some((last_pattern, inner_patterns)) = rest.split_last() {
+        !first_pattern.value.extract_spaces().after.is_empty()
+            || !last_pattern.value.extract_spaces().before.is_empty()
+            || inner_patterns.iter().any(|p| {
+                let spaces = p.value.extract_spaces();
+                !spaces.before.is_empty() || !spaces.after.is_empty()
+            })
+    } else {
+        false
+    };
+
+    is_multiline_patterns
+}
+
 fn fmt_when<'a, 'buf>(
     buf: &mut Buf<'buf>,
     loc_condition: &'a Loc<Expr<'a>>,
@@ -668,34 +686,22 @@ fn fmt_when<'a, 'buf>(
 
     let mut it = branches.iter().peekable();
     while let Some(branch) = it.next() {
-        let patterns = &branch.patterns;
         let expr = &branch.value;
-        let (first_pattern, rest) = patterns.split_first().unwrap();
-        let is_multiline = if let Some((last_pattern, inner_patterns)) = rest.split_last() {
-            !first_pattern.value.extract_spaces().after.is_empty()
-                || !last_pattern.value.extract_spaces().before.is_empty()
-                || inner_patterns.iter().any(|p| {
-                    let spaces = p.value.extract_spaces();
-                    !spaces.before.is_empty() || !spaces.after.is_empty()
-                })
-        } else {
-            false
-        };
+        let patterns = &branch.patterns;
+        let is_multiline_patterns = is_when_patterns_multiline(branch);
 
-        fmt_pattern(
-            buf,
-            &first_pattern.value,
-            indent + INDENT,
-            Parens::NotNeeded,
-        );
-        for when_pattern in rest {
-            if is_multiline {
-                buf.newline();
-                buf.indent(indent + INDENT);
+        for (index, pattern) in patterns.iter().enumerate() {
+            if index != 0 {
+                if is_multiline_patterns {
+                    buf.newline();
+                    buf.indent(indent + INDENT);
+                }
+
+                buf.push_str(" |");
+                buf.spaces(1);
             }
-            buf.push_str(" |");
-            buf.spaces(1);
-            fmt_pattern(buf, &when_pattern.value, indent + INDENT, Parens::NotNeeded);
+
+            fmt_pattern(buf, &pattern.value, indent + INDENT, Parens::NotNeeded);
         }
 
         if let Some(guard_expr) = &branch.guard {
