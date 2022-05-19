@@ -710,6 +710,7 @@ fn fix_values_captured_in_closure_expr(
         | Var(_)
         | AbilityMember(..)
         | EmptyRecord
+        | TypedHole { .. }
         | RuntimeError(_)
         | ZeroArgumentTag { .. }
         | Accessor { .. } => {}

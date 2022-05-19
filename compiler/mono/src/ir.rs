@@ -111,11 +111,6 @@ pub enum OptLevel {
     Optimize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum MonoProblem {
-    PatternProblem(roc_exhaustive::Error),
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct EntryPoint<'a> {
     pub symbol: Symbol,
@@ -1248,7 +1243,6 @@ impl<'a> Specializations<'a> {
 pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'i mut Subs,
-    pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub target_info: TargetInfo,
@@ -5235,6 +5229,7 @@ pub fn with_hole<'a>(
                 }
             }
         }
+        TypedHole(_) => Stmt::RuntimeError("Hit a blank"),
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
     }
 }

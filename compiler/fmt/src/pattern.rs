@@ -85,20 +85,22 @@ impl<'a> Formattable for Pattern<'a> {
             RecordDestructure(loc_patterns) => {
                 buf.indent(indent);
                 buf.push_str("{");
-                buf.spaces(1);
 
-                let mut it = loc_patterns.iter().peekable();
+                if !loc_patterns.is_empty() {
+                    buf.spaces(1);
+                    let mut it = loc_patterns.iter().peekable();
+                    while let Some(loc_pattern) = it.next() {
+                        loc_pattern.format(buf, indent);
 
-                while let Some(loc_pattern) = it.next() {
-                    loc_pattern.format(buf, indent);
-
-                    if it.peek().is_some() {
-                        buf.push_str(",");
-                        buf.spaces(1);
+                        if it.peek().is_some() {
+                            buf.push_str(",");
+                            buf.spaces(1);
+                        }
                     }
+                    buf.spaces(1);
                 }
 
-                buf.push_str(" }");
+                buf.push_str("}");
             }
 
             RequiredField(name, loc_pattern) => {

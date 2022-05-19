@@ -56,11 +56,11 @@ macro_rules! run_jit_function {
         }
 
         unsafe {
-            let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<$ty>) -> ()> =
-                $lib.get($main_fn_name.as_bytes())
-                    .ok()
-                    .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
-                    .expect("errored");
+            let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<$ty>)> = $lib
+                .get($main_fn_name.as_bytes())
+                .ok()
+                .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
+                .expect("errored");
 
             #[repr(C)]
             struct Failures {

@@ -241,8 +241,6 @@ impl Subs {
     }
 
     pub fn deserialize(bytes: &[u8]) -> (Self, &[(Symbol, Variable)]) {
-        use std::convert::TryInto;
-
         let mut offset = 0;
         let header_slice = &bytes[..std::mem::size_of::<SubsHeader>()];
         offset += header_slice.len();

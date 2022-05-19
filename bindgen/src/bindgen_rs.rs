@@ -318,7 +318,7 @@ impl {name} {{
                     r#"
     /// Other `into_` methods return a payload, but since the {tag_name} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_{tag_name}(self) -> () {{
+    pub fn into_{tag_name}(self) {{
         ()
     }}"#,
                 )?;
@@ -329,7 +329,7 @@ impl {name} {{
                     r#"
     /// Other `as` methods return a payload, but since the {tag_name} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_{tag_name}(&self) -> () {{
+    pub unsafe fn as_{tag_name}(&self) {{
         ()
     }}"#,
                 )?;
@@ -904,7 +904,7 @@ impl {name} {{
             r#"
     /// Other `into_` methods return a payload, but since the {null_tag} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_{null_tag}(self) -> () {{
+    pub fn into_{null_tag}(self) {{
         ()
     }}"#,
         )?;
@@ -915,7 +915,7 @@ impl {name} {{
             r#"
     /// Other `as` methods return a payload, but since the {null_tag} tag
     /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_{null_tag}(&self) -> () {{
+    pub unsafe fn as_{null_tag}(&self) {{
         ()
     }}"#,
         )?;

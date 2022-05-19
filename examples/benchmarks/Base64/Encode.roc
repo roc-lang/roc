@@ -26,16 +26,12 @@ folder = \{ output, accum }, char ->
     when accum is
         Unreachable n ->
             coerce n { output, accum: Unreachable n }
-
         None ->
             { output, accum: One char }
-
         One a ->
             { output, accum: Two a char }
-
         Two a b ->
             { output, accum: Three a b char }
-
         Three a b c ->
             when encodeCharacters a b c char is
                 Ok encoder ->
@@ -43,7 +39,6 @@ folder = \{ output, accum }, char ->
                         output: List.append output encoder,
                         accum: None,
                     }
-
                 Err _ ->
                     { output, accum: None }
 
@@ -53,26 +48,20 @@ encodeResidual = \{ output, accum } ->
     when accum is
         Unreachable _ ->
             output
-
         None ->
             output
-
         One _ ->
             output
-
         Two a b ->
             when encodeCharacters a b equals equals is
                 Ok encoder ->
                     List.append output encoder
-
                 Err _ ->
                     output
-
         Three a b c ->
             when encodeCharacters a b c equals is
                 Ok encoder ->
                     List.append output encoder
-
                 Err _ ->
                     output
 
@@ -157,11 +146,9 @@ isValidChar = \c ->
             43 ->
                 # '+'
                 True
-
             47 ->
                 # '/'
                 True
-
             _ ->
                 False
 
@@ -187,10 +174,8 @@ unsafeConvertChar = \key ->
             43 ->
                 # '+'
                 62
-
             47 ->
                 # '/'
                 63
-
             _ ->
                 0

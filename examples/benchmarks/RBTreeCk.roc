@@ -20,7 +20,6 @@ makeMapHelp = \freq, n, m, acc ->
     when n is
         0 ->
             Cons m acc
-
         _ ->
             powerOf10 =
                 n % 10 == 0
@@ -39,7 +38,6 @@ fold = \f, tree, b ->
     when tree is
         Leaf ->
             b
-
         Node _ l k v r ->
             fold f r (f k v (fold f l b))
 
@@ -59,7 +57,6 @@ main =
                     val
                         |> Num.toStr
                         |> Task.putLine
-
                 Nil ->
                     Task.putLine "fail"
 
@@ -71,7 +68,6 @@ setBlack = \tree ->
     when tree is
         Node _ l k v r ->
             Node Black l k v r
-
         _ ->
             tree
 
@@ -80,7 +76,6 @@ isRed = \tree ->
     when tree is
         Node Red _ _ _ _ ->
             True
-
         _ ->
             False
 
@@ -91,7 +86,6 @@ ins = \tree, kx, vx ->
     when tree is
         Leaf ->
             Node Red Leaf kx vx Leaf
-
         Node Red a ky vy b ->
             if lt kx ky then
                 Node Red (ins a kx vx) ky vy b
@@ -99,7 +93,6 @@ ins = \tree, kx, vx ->
                 Node Red a ky vy (ins b kx vx)
             else
                 Node Red a ky vy (ins b kx vx)
-
         Node Black a ky vy b ->
             if lt kx ky then
                 (if isRed a then balance1 (Node Black Leaf ky vy b) (ins a kx vx) else Node Black (ins a kx vx) ky vy b)
@@ -113,18 +106,14 @@ balance1 = \tree1, tree2 ->
     when tree1 is
         Leaf ->
             Leaf
-
         Node _ _ kv vv t ->
             when tree2 is
                 Node _ (Node Red l kx vx r1) ky vy r2 ->
                     Node Red (Node Black l kx vx r1) ky vy (Node Black r2 kv vv t)
-
                 Node _ l1 ky vy (Node Red l2 kx vx r) ->
                     Node Red (Node Black l1 ky vy l2) kx vx (Node Black r kv vv t)
-
                 Node _ l ky vy r ->
                     Node Black (Node Red l ky vy r) kv vv t
-
                 Leaf ->
                     Leaf
 
@@ -133,17 +122,13 @@ balance2 = \tree1, tree2 ->
     when tree1 is
         Leaf ->
             Leaf
-
         Node _ t kv vv _ ->
             when tree2 is
                 Node _ (Node Red l kx1 vx1 r1) ky vy r2 ->
                     Node Red (Node Black t kv vv l) kx1 vx1 (Node Black r1 ky vy r2)
-
                 Node _ l1 ky vy (Node Red l2 kx2 vx2 r2) ->
                     Node Red (Node Black t kv vv l1) ky vy (Node Black l2 kx2 vx2 r2)
-
                 Node _ l ky vy r ->
                     Node Black t kv vv (Node Red l ky vy r)
-
                 Leaf ->
                     Leaf

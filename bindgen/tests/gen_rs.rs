@@ -207,13 +207,13 @@ mod test_gen_rs {
 
                     /// Other `into_` methods return a payload, but since the Baz tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub fn into_Baz(self) -> () {
+                    pub fn into_Baz(self) {
                         ()
                     }
 
                     /// Other `as` methods return a payload, but since the Baz tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub unsafe fn as_Baz(&self) -> () {
+                    pub unsafe fn as_Baz(&self) {
                         ()
                     }
 
@@ -543,13 +543,13 @@ mod test_gen_rs {
 
                     /// Other `into_` methods return a payload, but since the Nil tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub fn into_Nil(self) -> () {
+                    pub fn into_Nil(self) {
                         ()
                     }
 
                     /// Other `as` methods return a payload, but since the Nil tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub unsafe fn as_Nil(&self) -> () {
+                    pub unsafe fn as_Nil(&self) {
                         ()
                     }
                 }
@@ -665,13 +665,13 @@ mod test_gen_rs {
 
                     /// Other `into_` methods return a payload, but since the Empty tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub fn into_Empty(self) -> () {
+                    pub fn into_Empty(self) {
                         ()
                     }
 
                     /// Other `as` methods return a payload, but since the Empty tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub unsafe fn as_Empty(&self) -> () {
+                    pub unsafe fn as_Empty(&self) {
                         ()
                     }
                 }

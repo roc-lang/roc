@@ -204,10 +204,13 @@ pub enum Expr {
         lambda_set_variables: Vec<LambdaSet>,
     },
 
-    // Test
+    /// Test
     Expect(Box<Loc<Expr>>, Box<Loc<Expr>>),
 
-    // Compiles, but will crash if reached
+    /// Rendered as empty box in editor
+    TypedHole(Variable),
+
+    /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
 
@@ -247,7 +250,9 @@ impl Expr {
             },
             &Self::OpaqueRef { name, .. } => Category::OpaqueWrap(name),
             Self::Expect(..) => Category::Expect,
-            Self::RuntimeError(..) => Category::Unknown,
+
+            // these nodes place no constraints on the expression's type
+            Self::TypedHole(_) | Self::RuntimeError(..) => Category::Unknown,
         }
     }
 }
@@ -422,12 +427,7 @@ pub fn canonicalize_expr<'a>(
 
     let (expr, output) = match expr {
         &ast::Expr::Num(str) => {
-            let answer = num_expr_from_result(
-                var_store,
-                finish_parsing_num(str).map(|result| (str, result)),
-                region,
-                env,
-            );
+            let answer = num_expr_from_result(var_store, finish_parsing_num(str), region, env);
 
             (answer, Output::default())
         }
@@ -1325,7 +1325,7 @@ fn canonicalize_var_lookup(
     let can_expr = if module_name.is_empty() {
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
-        match scope.lookup(&(*ident).into(), region) {
+        match scope.lookup_str(ident, region) {
             Ok(symbol) => {
                 output.references.insert_value_lookup(symbol);
 
@@ -1396,6 +1396,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Var(_)
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
+        | other @ TypedHole { .. }
         | other @ ForeignCall { .. } => other,
 
         List {

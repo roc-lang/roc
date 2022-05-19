@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 repository = "https://github.com/rtfeldman/roc"
-edition = "2018"
+edition = "2021"
 description = "Shared code for cli tests and benchmarks"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

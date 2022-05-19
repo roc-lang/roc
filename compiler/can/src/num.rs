@@ -107,10 +107,14 @@ pub enum ParsedNumResult {
 }
 
 #[inline(always)]
-pub fn finish_parsing_num(raw: &str) -> Result<ParsedNumResult, (&str, IntErrorKind)> {
+pub fn finish_parsing_num(raw: &str) -> Result<(&str, ParsedNumResult), (&str, IntErrorKind)> {
     // Ignore underscores.
     let radix = 10;
-    from_str_radix(raw.replace('_', "").as_str(), radix).map_err(|e| (raw, e))
+    let (_, raw_without_suffix) = parse_literal_suffix(raw);
+    match from_str_radix(raw.replace('_', "").as_str(), radix) {
+        Ok(result) => Ok((raw_without_suffix, result)),
+        Err(e) => Err((raw, e)),
+    }
 }
 
 #[inline(always)]
