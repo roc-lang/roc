@@ -6,7 +6,6 @@ fromBytes = \bytes ->
     when Base64.Decode.fromBytes bytes is
         Ok v ->
             Ok v
-
         Err _ ->
             Err InvalidInput
 
@@ -27,9 +26,7 @@ toStr = \str ->
             when Str.fromUtf8 bytes is
                 Ok v ->
                     Ok v
-
                 Err _ ->
                     Err InvalidInput
-
         Err _ ->
             Err InvalidInput

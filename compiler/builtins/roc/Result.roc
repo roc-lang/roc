@@ -14,7 +14,6 @@ isOk = \result ->
     when result is
         Ok _ ->
             True
-
         Err _ ->
             False
 
@@ -26,7 +25,6 @@ isErr = \result ->
     when result is
         Ok _ ->
             False
-
         Err _ ->
             True
 
@@ -41,7 +39,6 @@ withDefault = \result, default ->
     when result is
         Ok value ->
             value
-
         Err _ ->
             default
 
@@ -61,7 +58,6 @@ map = \result, transform ->
     when result is
         Ok v ->
             Ok (transform v)
-
         Err e ->
             Err e
 
@@ -78,7 +74,6 @@ mapErr = \result, transform ->
     when result is
         Ok v ->
             Ok v
-
         Err e ->
             Err (transform e)
 
@@ -95,6 +90,5 @@ after = \result, transform ->
     when result is
         Ok v ->
             transform v
-
         Err e ->
             Err e
