@@ -192,14 +192,18 @@ mod test_gen_rs {
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Bar and convert it to Bar's payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Bar.
                     pub unsafe fn into_Bar(self) -> roc_std::U128 {
+                        debug_assert_eq!(self.tag(), Self::Bar);
                         self.variant.Bar
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Bar and return its payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Bar.
                     pub unsafe fn as_Bar(&self) -> roc_std::U128 {
+                        debug_assert_eq!(self.tag(), Self::Bar);
                         self.variant.Bar
                     }
 
@@ -239,14 +243,18 @@ mod test_gen_rs {
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Blah and convert it to Blah's payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Blah.
                     pub unsafe fn into_Blah(self) -> i32 {
+                        debug_assert_eq!(self.tag(), Self::Blah);
                         self.variant.Blah
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Blah and return its payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Blah.
                     pub unsafe fn as_Blah(&self) -> i32 {
+                        debug_assert_eq!(self.tag(), Self::Blah);
                         self.variant.Blah
                     }
 
@@ -261,14 +269,18 @@ mod test_gen_rs {
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Foo and convert it to Foo's payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Foo.
                     pub unsafe fn into_Foo(mut self) -> roc_std::RocStr {
+                        debug_assert_eq!(self.tag(), Self::Foo);
                         core::mem::ManuallyDrop::take(&mut self.variant.Foo)
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Foo and return its payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Foo.
                     pub unsafe fn as_Foo(&self) -> &roc_std::RocStr {
+                        debug_assert_eq!(self.tag(), Self::Foo);
                         &self.variant.Foo
                     }
                 }
@@ -548,8 +560,11 @@ mod test_gen_rs {
                     }
 
                     /// Unsafely assume the given StrConsList has a .tag() of Cons and convert it to Cons's payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Cons.
                     pub unsafe fn into_Cons(self) -> roc_std::RocStr {
+                        debug_assert_eq!(self.tag(), Self::Cons);
+
                         let payload = core::mem::ManuallyDrop::take(&mut *self.pointer);
                         let align = core::mem::align_of::<roc_std::RocStr>() as u32;
 
@@ -559,8 +574,10 @@ mod test_gen_rs {
                     }
 
                     /// Unsafely assume the given StrConsList has a .tag() of Cons and return its payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Cons.
                     pub unsafe fn as_Cons(&self) -> &roc_std::RocStr {
+                        debug_assert_eq!(self.tag(), Self::Cons);
                         &*self.pointer
                     }
 
@@ -679,8 +696,11 @@ mod test_gen_rs {
                     }
 
                     /// Unsafely assume the given IntConsList has a .tag() of Prepend and convert it to Prepend's payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Prepend.
                     pub unsafe fn into_Prepend(self) -> u16 {
+                        debug_assert_eq!(self.tag(), Self::Prepend);
+
                         let payload = *self.pointer;
                         let align = core::mem::align_of::<u16>() as u32;
 
@@ -690,8 +710,10 @@ mod test_gen_rs {
                     }
 
                     /// Unsafely assume the given IntConsList has a .tag() of Prepend and return its payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Prepend.
                     pub unsafe fn as_Prepend(&self) -> u16 {
+                        debug_assert_eq!(self.tag(), Self::Prepend);
                         *self.pointer
                     }
 

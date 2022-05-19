@@ -277,8 +277,10 @@ impl {name} {{
                     // Don't use indoc because this must be indented once!
                     r#"
     /// Unsafely assume the given {name} has a .tag() of {tag_name} and convert it to {tag_name}'s payload.
-    /// (always examine .tag() first to make sure this is the correct variant!)
+    /// (Always examine .tag() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .tag() doesn't return {tag_name}.
     pub unsafe fn into_{tag_name}({self_for_into}) -> {payload_type_name} {{
+        debug_assert_eq!(self.tag(), Self::{tag_name});
         {get_payload}
     }}"#,
                 )?;
@@ -288,8 +290,10 @@ impl {name} {{
                     // Don't use indoc because this must be indented once!
                     r#"
     /// Unsafely assume the given {name} has a .tag() of {tag_name} and return its payload.
-    /// (always examine .tag() first to make sure this is the correct variant!)
+    /// (Always examine .tag() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .tag() doesn't return {tag_name}.
     pub unsafe fn as_{tag_name}(&self) -> {ref_if_needed}{payload_type_name} {{
+        debug_assert_eq!(self.tag(), Self::{tag_name});
         {ref_if_needed}self.variant.{tag_name}
     }}"#,
                 )?;
@@ -867,8 +871,11 @@ impl {name} {{
             // Don't use indoc because this must be indented once!
             r#"
     /// Unsafely assume the given {name} has a .tag() of {non_null_tag} and convert it to {non_null_tag}'s payload.
-    /// (always examine .tag() first to make sure this is the correct variant!)
+    /// (Always examine .tag() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .tag() doesn't return {non_null_tag}.
     pub unsafe fn into_{non_null_tag}(self) -> {payload_type_name} {{
+        debug_assert_eq!(self.tag(), Self::{non_null_tag});
+
         let payload = {assign_payload};
         let align = core::mem::align_of::<{payload_type_name}>() as u32;
 
@@ -883,8 +890,10 @@ impl {name} {{
             // Don't use indoc because this must be indented once!
             r#"
     /// Unsafely assume the given {name} has a .tag() of {non_null_tag} and return its payload.
-    /// (always examine .tag() first to make sure this is the correct variant!)
+    /// (Always examine .tag() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .tag() doesn't return {non_null_tag}.
     pub unsafe fn as_{non_null_tag}(&self) -> {ref_if_needed}{payload_type_name} {{
+        debug_assert_eq!(self.tag(), Self::{non_null_tag});
         {ref_if_needed}*self.pointer
     }}"#,
         )?;
