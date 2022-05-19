@@ -2087,7 +2087,13 @@ fn update<'a>(
                     solved_module
                         .exposed_vars_by_symbol
                         .iter()
-                        .map(|(k, v)| (*k, *v)),
+                        .filter_map(|(k, v)| {
+                            if abilities_store.is_specialization_name(*k) {
+                                None
+                            } else {
+                                Some((*k, *v))
+                            }
+                        }),
                 );
 
                 state
