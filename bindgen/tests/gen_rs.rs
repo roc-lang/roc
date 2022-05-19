@@ -4,87 +4,44 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 
-use roc_bindgen::bindgen_rs;
-use roc_bindgen::load::load_types;
-use roc_load::Threading;
-use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
+mod helpers;
 
-fn generate_bindings(decl_src: &str) -> String {
-    use tempfile::tempdir;
+#[cfg(test)]
+mod test_gen_rs {
+    use crate::helpers::generate_bindings;
 
-    let mut src = indoc!(
-        r#"
-            platform "main"
-                requires {} { nothing : {} }
-                exposes []
-                packages {}
-                imports []
-                provides [ main ]
-
-        "#
-    )
-    .to_string();
-
-    src.push_str(decl_src);
-
-    let types = {
-        let dir = tempdir().expect("Unable to create tempdir");
-        let filename = PathBuf::from("Package-Config.roc");
-        let file_path = dir.path().join(filename);
-        let full_file_path = file_path.clone();
-        let mut file = File::create(file_path).unwrap();
-        writeln!(file, "{}", &src).unwrap();
-
-        let result = load_types(full_file_path, dir.path(), Threading::Single);
-
-        dir.close().expect("Unable to close tempdir");
-
-        result.expect("had problems loading")
-    };
-
-    // Reuse the `src` allocation since we're done with it.
-    let mut buf = src;
-    buf.clear();
-
-    bindgen_rs::write_types(&types, &mut buf).expect("I/O error when writing bindgen string");
-
-    buf
-}
-
-#[test]
-fn record_aliased() {
-    let module = indoc!(
-        r#"
-            MyRcd : { a : U64, b : U128 }
+    #[test]
+    fn record_aliased() {
+        let module = indoc!(
+            r#"
+            MyRcd : { a : U64, b : I128 }
 
             main : MyRcd
-            main = { a: 1u64, b: 2u128 }
+            main = { a: 1u64, b: 2i128 }
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct MyRcd {
-                    b: u128,
-                    a: u64,
+                    pub b: roc_std::I128,
+                    pub a: u64,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn nested_record_aliased() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn nested_record_aliased() {
+        let module = indoc!(
+            r#"
             Outer : { x : Inner, y : Str, z : List U8 }
 
             Inner : { a : U16, b : F32 }
@@ -92,100 +49,100 @@ fn nested_record_aliased() {
             main : Outer
             main = { x: { a: 5, b: 24 }, y: "foo", z: [ 1, 2 ] }
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Outer {
-                    y: roc_std::RocStr,
-                    z: roc_std::RocList<u8>,
-                    x: Inner,
+                    pub y: roc_std::RocStr,
+                    pub z: roc_std::RocList<u8>,
+                    pub x: Inner,
                 }
 
                 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Inner {
-                    b: f32,
-                    a: u16,
+                    pub b: f32,
+                    pub a: u16,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn record_anonymous() {
-    let module = "main = { a: 1u64, b: 2u128 }";
+    #[test]
+    fn record_anonymous() {
+        let module = "main = { a: 1u64, b: 2u128 }";
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
-                    b: u128,
-                    a: u64,
+                    pub b: roc_std::U128,
+                    pub a: u64,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn nested_record_anonymous() {
-    let module = r#"main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }"#;
+    #[test]
+    fn nested_record_anonymous() {
+        let module = r#"main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }"#;
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
-                    y: roc_std::RocStr,
-                    z: roc_std::RocList<u8>,
-                    x: R2,
+                    pub y: roc_std::RocStr,
+                    pub z: roc_std::RocList<u8>,
+                    pub x: R2,
                 }
 
                 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R2 {
-                    b: f32,
-                    a: u16,
+                    pub b: f32,
+                    pub a: u16,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn tag_union_aliased() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn tag_union_aliased() {
+        let module = indoc!(
+            r#"
             NonRecursive : [ Foo Str, Bar U128, Blah I32, Baz ]
 
             main : NonRecursive
             main = Foo "blah"
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_NonRecursive {
@@ -197,7 +154,7 @@ fn tag_union_aliased() {
 
                 #[repr(C)]
                 pub union union_NonRecursive {
-                    Bar: u128,
+                    Bar: roc_std::U128,
                     Blah: i32,
                     Foo: core::mem::ManuallyDrop<roc_std::RocStr>,
                 }
@@ -214,7 +171,7 @@ fn tag_union_aliased() {
                     }
 
                     /// Construct a tag named Bar, with the appropriate payload
-                    pub fn Bar(payload: u128) -> Self {
+                    pub fn Bar(payload: roc_std::U128) -> Self {
                         Self {
                             tag: tag_NonRecursive::Bar,
                             variant: union_NonRecursive {
@@ -225,13 +182,13 @@ fn tag_union_aliased() {
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Bar and convert it to Bar's payload.
                     /// (always examine .tag() first to make sure this is the correct variant!)
-                    pub unsafe fn into_Bar(self) -> u128 {
+                    pub unsafe fn into_Bar(self) -> roc_std::U128 {
                         self.variant.Bar
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Bar and return its payload.
                     /// (always examine .tag() first to make sure this is the correct variant!)
-                    pub unsafe fn as_Bar(&self) -> u128 {
+                    pub unsafe fn as_Bar(&self) -> roc_std::U128 {
                         self.variant.Bar
                     }
 
@@ -421,27 +378,27 @@ fn tag_union_aliased() {
                 }
 
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn tag_union_enumeration() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn tag_union_enumeration() {
+        let module = indoc!(
+            r#"
             NonRecursive : [ Blah, Foo, Bar, ]
 
             main : NonRecursive
             main = Foo
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum NonRecursive {
@@ -450,80 +407,80 @@ fn tag_union_enumeration() {
                     Foo = 2,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn single_tag_union_with_payloads() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn single_tag_union_with_payloads() {
+        let module = indoc!(
+            r#"
             UserId : [ Id U32 Str ]
 
             main : UserId
             main = Id 42 "blah"
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct UserId {
-                    f1: roc_std::RocStr,
-                    f0: u32,
+                    pub f1: roc_std::RocStr,
+                    pub f0: u32,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn single_tag_union_with_one_payload_field() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn single_tag_union_with_one_payload_field() {
+        let module = indoc!(
+            r#"
             UserId : [ Id Str ]
 
             main : UserId
             main = Id "blah"
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(transparent)]
                 pub struct UserId(roc_std::RocStr);
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn cons_list_of_strings() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn cons_list_of_strings() {
+        let module = indoc!(
+            r#"
             StrConsList : [ Nil, Cons Str StrConsList ]
 
             main : StrConsList
             main = Cons "Hello, " (Cons "World!" Nil)
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_StrConsList {
@@ -625,27 +582,27 @@ fn cons_list_of_strings() {
                 }
 
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn cons_list_of_ints() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn cons_list_of_ints() {
+        let module = indoc!(
+            r#"
             IntConsList : [ Empty, Prepend U16 IntConsList ]
 
             main : IntConsList
             main = Prepend 42 (Prepend 26 Empty)
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_IntConsList {
@@ -747,6 +704,7 @@ fn cons_list_of_ints() {
                 }
 
             "#
-        )
-    );
+            )
+        );
+    }
 }

@@ -55,13 +55,15 @@ impl<T: PartialEq> VecSet<T> {
         self.elements.contains(value)
     }
 
-    pub fn remove(&mut self, value: &T) {
+    /// Performs a swap_remove if the element was present in the set,
+    /// then returns whether the value was present in the set.
+    pub fn remove(&mut self, value: &T) -> bool {
         match self.elements.iter().position(|x| x == value) {
-            None => {
-                // just do nothing
-            }
+            None => false,
             Some(index) => {
                 self.elements.swap_remove(index);
+
+                true
             }
         }
     }

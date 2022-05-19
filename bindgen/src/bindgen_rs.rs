@@ -682,7 +682,7 @@ fn write_struct(
             for (label, field_id) in fields {
                 writeln!(
                     buf,
-                    "{INDENT}{}: {},",
+                    "{INDENT}pub {}: {},",
                     label.as_str(),
                     type_name(*field_id, types)
                 )?;
@@ -699,15 +699,15 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::U16 => "u16".to_string(),
         RocType::U32 => "u32".to_string(),
         RocType::U64 => "u64".to_string(),
-        RocType::U128 => "u128".to_string(),
+        RocType::U128 => "roc_std::U128".to_string(),
         RocType::I8 => "i8".to_string(),
         RocType::I16 => "i16".to_string(),
         RocType::I32 => "i32".to_string(),
         RocType::I64 => "i64".to_string(),
-        RocType::I128 => "i128".to_string(),
+        RocType::I128 => "roc_std::I128".to_string(),
         RocType::F32 => "f32".to_string(),
         RocType::F64 => "f64".to_string(),
-        RocType::F128 => "f128".to_string(),
+        RocType::F128 => "roc_std::F128".to_string(),
         RocType::Bool => "bool".to_string(),
         RocType::RocDec => "roc_std::RocDec".to_string(),
         RocType::RocStr => "roc_std::RocStr".to_string(),

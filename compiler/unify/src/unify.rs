@@ -725,7 +725,6 @@ fn unify_structure(
             // Unify the two flat types
             unify_flat_type(subs, pool, ctx, flat_type, other_flat_type)
         }
-
         // _sym has an underscore because it's unused in --release builds
         Alias(_sym, _, real_var, kind) => match kind {
             AliasKind::Structural => {
