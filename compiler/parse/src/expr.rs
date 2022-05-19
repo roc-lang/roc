@@ -891,6 +891,7 @@ fn parse_defs_end<'a>(
                         Loc::at(name_region, name),
                         args,
                         loc_has,
+                        def_state.spaces_after,
                         arena,
                         state,
                     )?;
@@ -1240,6 +1241,7 @@ fn finish_parsing_ability_def<'a>(
     name: Loc<&'a str>,
     args: &'a [Loc<Pattern<'a>>],
     loc_has: Loc<Has<'a>>,
+    spaces_before: &'a [CommentOrNewline<'a>],
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, &'a Loc<Def<'a>>, EExpr<'a>> {
@@ -1281,13 +1283,21 @@ fn finish_parsing_ability_def<'a>(
     }
 
     let def_region = Region::span_across(&name.region, &demands.last().unwrap().typ.region);
-    let def = TypeDef::Ability {
+    let def = Def::Type(TypeDef::Ability {
         header: TypeHeader { name, vars: args },
         loc_has,
         members: demands.into_bump_slice(),
-    }
-    .into();
-    let loc_def = &*(arena.alloc(Loc::at(def_region, def)));
+    });
+
+    let loc_def = &*(if spaces_before.is_empty() {
+        arena.alloc(Loc::at(def_region, def))
+    } else {
+        arena.alloc(
+            arena
+                .alloc(def)
+                .with_spaces_before(spaces_before, def_region),
+        )
+    });
 
     Ok((MadeProgress, loc_def, state))
 }
@@ -1302,7 +1312,7 @@ fn finish_parsing_ability<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let (_, loc_def, state) =
-        finish_parsing_ability_def(start_column, name, args, loc_has, arena, state)?;
+        finish_parsing_ability_def(start_column, name, args, loc_has, &[], arena, state)?;
 
     let def_state = DefState {
         defs: bumpalo::vec![in arena; loc_def],
