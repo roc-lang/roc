@@ -557,8 +557,17 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     binary_bytes: &mut [u8],
 ) -> ! {
     unsafe {
+        use std::mem::MaybeUninit;
+        use std::os::raw::c_char;
+
         let flags = 0;
-        let fd = libc::memfd_create("roc_file_descriptor\0".as_ptr().cast(), flags);
+        let app_filename: *const c_char = "roc_file_descriptor\0".as_ptr().cast();
+        let fd = libc::shm_open(app_filename, libc::O_CREAT, 0o777);
+
+        let mut stat_struct: MaybeUninit<libc::stat> = MaybeUninit::uninit();
+        dbg!(libc::fstat(fd, stat_struct.as_mut_ptr()));
+
+        dbg!(stat_struct.assume_init());
 
         libc::write(fd, binary_bytes.as_ptr().cast(), binary_bytes.len());
 
@@ -569,6 +578,7 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 
         if true {
             dbg!(libc::shm_unlink(cstring.as_ptr().cast()));
+            dbg!(libc::shm_unlink(app_filename));
         }
 
         let shared = libc::shm_open(cstring.as_ptr().cast(), libc::O_CREAT, 0o666);
