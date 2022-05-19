@@ -816,7 +816,7 @@ fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<
                 space0_before_e(
                     specialize(
                         ETypedIdent::Type,
-                        type_annotation::located_help(min_indent, true)
+                        type_annotation::located(min_indent, true)
                     ),
                     min_indent,
                     ETypedIdent::IndentType,

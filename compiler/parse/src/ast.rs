@@ -297,6 +297,7 @@ pub enum TypeDef<'a> {
     Opaque {
         header: TypeHeader<'a>,
         typ: Loc<TypeAnnotation<'a>>,
+        derived: Option<Loc<Derived<'a>>>,
     },
 
     /// An ability definition. E.g.
@@ -380,11 +381,23 @@ impl<'a> From<ValueDef<'a>> for Def<'a> {
     }
 }
 
+/// Should always be a zero-argument `Apply`; we'll check this in canonicalization
+pub type AbilityName<'a> = Loc<TypeAnnotation<'a>>;
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct HasClause<'a> {
     pub var: Loc<Spaced<'a, &'a str>>,
-    // Should always be a zero-argument `Apply`; we'll check this in canonicalization
-    pub ability: Loc<TypeAnnotation<'a>>,
+    pub ability: AbilityName<'a>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum Derived<'a> {
+    /// `has [ Eq, Hash ]`
+    Has(Collection<'a, AbilityName<'a>>),
+
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a Derived<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Derived<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -898,6 +911,15 @@ impl<'a> Spaceable<'a> for Has<'a> {
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Has::SpaceAfter(self, spaces)
+    }
+}
+
+impl<'a> Spaceable<'a> for Derived<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Derived::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Derived::SpaceAfter(self, spaces)
     }
 }
 
