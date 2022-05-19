@@ -277,7 +277,7 @@ impl ObligationCache<'_> {
                         Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
                         vars,
                     ) => push_var_slice!(*vars),
-                    Apply(_, ..) => return Err(var),
+                    Apply(..) => return Err(var),
                     Func(..) => {
                         return Err(var);
                     }
