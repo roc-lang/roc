@@ -6457,7 +6457,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn encode_record() {
         infer_queries(
             indoc!(
@@ -6470,31 +6469,11 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            &[],
+            &["Encoding#toEncoder : { a : Str } -> Encoder fmt | fmt has EncoderFormatting"],
         )
     }
 
     #[test]
-    #[ignore]
-    fn encode_record_with_nested_able_var() {
-        infer_queries(
-            indoc!(
-                r#"
-                app "test"
-                    imports [ Encode.{ toEncoder, Encoding } ]
-                    provides [ main ] to "./platform"
-
-                main : a -> _ | a has Encoding
-                main = \a -> toEncoder { a: a }
-                           # ^^^^^^^^^
-                "#
-            ),
-            &[],
-        )
-    }
-
-    #[test]
-    #[ignore]
     fn encode_record_with_nested_custom_impl() {
         infer_queries(
             indoc!(
@@ -6510,7 +6489,7 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            &[],
+            &["Encoding#toEncoder : { a : A } -> Encoder fmt | fmt has EncoderFormatting"],
         )
     }
 }

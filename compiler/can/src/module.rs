@@ -255,12 +255,12 @@ pub fn canonicalize_module_defs<'a>(
         {
             // These are not aliases but Apply's and we make sure they are always in scope
         } else {
-            // This is a type alias
+            // This is a type alias or ability
 
             // the symbol should already be added to the scope when this module is canonicalized
             debug_assert!(
-                scope.contains_alias(symbol),
-                "The {:?} is not a type alias known in {:?}",
+                scope.contains_alias(symbol) || scope.abilities_store.is_ability(symbol),
+                "The {:?} is not a type alias or ability known in {:?}",
                 symbol,
                 home
             );
