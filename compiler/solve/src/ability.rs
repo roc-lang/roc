@@ -36,7 +36,6 @@ pub enum Unfulfilled {
     Incomplete {
         typ: Symbol,
         ability: Symbol,
-        specialized_members: Vec<Loc<Symbol>>,
         missing_members: Vec<Loc<Symbol>>,
     },
     /// Cannot derive implementation of an ability for a type.
@@ -170,17 +169,15 @@ impl ObligationCache<'_> {
         match typ {
             Obligated::Opaque(typ) => {
                 let members_of_ability = self.abilities_store.members_of_ability(ability).unwrap();
-                let mut specialized_members = Vec::with_capacity(members_of_ability.len());
-                let mut missing_members = Vec::with_capacity(members_of_ability.len());
+                let mut missing_members = Vec::new();
                 for &member in members_of_ability {
-                    match self.abilities_store.get_specialization(member, typ) {
-                        None => {
-                            let root_data = self.abilities_store.member_def(member).unwrap();
-                            missing_members.push(Loc::at(root_data.region, member));
-                        }
-                        Some(specialization) => {
-                            specialized_members.push(Loc::at(specialization.region, member));
-                        }
+                    if self
+                        .abilities_store
+                        .get_specialization(member, typ)
+                        .is_none()
+                    {
+                        let root_data = self.abilities_store.member_def(member).unwrap();
+                        missing_members.push(Loc::at(root_data.region, member));
                     }
                 }
 
@@ -190,7 +187,6 @@ impl ObligationCache<'_> {
                         Unfulfilled::Incomplete {
                             typ,
                             ability,
-                            specialized_members,
                             missing_members,
                         },
                     );

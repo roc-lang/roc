@@ -9379,13 +9379,6 @@ All branches in an `if` must have the same type!
 
                 5│      le : a, a -> Bool | a has Eq
                         ^^
-
-                Note: `Id` specializes the following members of `Eq`:
-
-                `eq`, specialized here:
-
-                9│  eq = \@Id m, @Id n -> m == n
-                    ^^
                 "#
             ),
         )

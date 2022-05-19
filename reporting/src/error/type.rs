@@ -232,7 +232,6 @@ fn report_unfulfilled_ability<'a>(
         Unfulfilled::Incomplete {
             typ,
             ability,
-            specialized_members,
             missing_members,
         } => {
             debug_assert!(!missing_members.is_empty());
@@ -252,24 +251,6 @@ fn report_unfulfilled_ability<'a>(
                     alloc.reflow(", which is defined here:"),
                 ]));
                 stack.push(alloc.region(lines.convert_region(member.region)));
-            }
-
-            if !specialized_members.is_empty() {
-                stack.push(alloc.concat([
-                    alloc.note(""),
-                    alloc.symbol_unqualified(typ),
-                    alloc.reflow(" specializes the following members of "),
-                    alloc.symbol_unqualified(ability),
-                    alloc.reflow(":"),
-                ]));
-
-                for spec in specialized_members {
-                    stack.push(alloc.concat([
-                        alloc.symbol_unqualified(spec.value),
-                        alloc.reflow(", specialized here:"),
-                    ]));
-                    stack.push(alloc.region(lines.convert_region(spec.region)));
-                }
             }
 
             alloc.stack(stack)
