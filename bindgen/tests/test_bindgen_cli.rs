@@ -11,10 +11,40 @@ mod helpers;
 
 #[cfg(test)]
 mod bindgen_cli_run {
-    use crate::helpers::fixtures_dir;
+    use crate::helpers::{fixtures_dir, root_dir};
     use cli_utils::helpers::{run_bindgen, run_roc, Out};
     use std::fs;
     use std::path::Path;
+    use std::process::Command;
+
+    // All of these tests rely on `target/` for the `cli` crate being up-to-date,
+    // so do a `cargo build` on it first!
+    #[ctor::ctor]
+    fn init() {
+        let args = if cfg!(debug_assertions) {
+            vec!["build"]
+        } else {
+            vec!["build", "--release"]
+        };
+
+        println!(
+            "Running `cargo {}` on the `cli` crate before running the tests. This may take a bit!",
+            args.join(" ")
+        );
+
+        let output = Command::new("cargo")
+            .args(args)
+            .current_dir(root_dir().join("cli"))
+            .output()
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Failed to `cargo build` roc CLI for bindgen CLI tests - error was: {:?}",
+                    err
+                )
+            });
+
+        assert!(output.status.success());
+    }
 
     /// This macro does two things.
     ///
