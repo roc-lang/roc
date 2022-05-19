@@ -10138,4 +10138,34 @@ All branches in an `if` must have the same type!
             ),
         )
     }
+
+    #[test]
+    fn derive_non_builtin_ability() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                app "test" provides [ A ] to "./platform"
+
+                Ab has ab : a -> a | a has Ab
+
+                A := {} has [ Ab ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ILLEGAL DERIVE ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                This type cannot be derived:
+
+                5│  A := {} has [ Ab ]
+                                  ^^
+
+                Only builtin abilities can be derived.
+
+                Note: The builtin abilities are `Encode.Encoding`
+                "#
+            ),
+        )
+    }
 }

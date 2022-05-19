@@ -48,6 +48,8 @@ const SYMBOL_HAS_NICHE: () =
 #[cfg(debug_assertions)]
 const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
 
+pub const BUILTIN_ABILITIES: &[Symbol] = &[Symbol::ENCODE_ENCODING];
+
 /// In Debug builds only, Symbol has a name() method that lets
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
@@ -83,6 +85,10 @@ impl Symbol {
 
     pub const fn is_builtin(self) -> bool {
         self.module_id().is_builtin()
+    }
+
+    pub fn is_builtin_ability(self) -> bool {
+        BUILTIN_ABILITIES.contains(&self)
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
