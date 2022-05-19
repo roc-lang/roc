@@ -3428,20 +3428,16 @@ mod test_fmt {
                     8
 
                 9
-                 | 10 ->
-                    11
+                 | 10 -> 11
 
                 12 | 13 ->
                     when c is
-                        14 | 15 ->
-                            16
+                        14 | 15 -> 16
 
                         17
-                         | 18 ->
-                            19
+                         | 18 -> 19
 
-                20 ->
-                    21
+                20 -> 21
                 "#
             ),
         );
@@ -3460,12 +3456,10 @@ mod test_fmt {
             indoc!(
                 r#"
             when b is
-                3 ->
-                    4
+                3 -> 4
 
                 9
-                 | 8 ->
-                    9
+                 | 8 -> 9
             "#
             ),
         );
@@ -3603,6 +3597,66 @@ mod test_fmt {
                 _ ->
                     y
             "#
+            ),
+        );
+    }
+
+    #[test]
+    fn single_line_when_patterns() {
+        expr_formats_same(indoc!(
+            r#"
+            when x is
+                Foo -> 1
+
+                Bar -> 2
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            when x is
+                Foo -> 1
+
+                Bar ->
+                    2
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+                    Bar ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+
+                    Bar ->
+                        2
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+                    Bar -> 2
+                "#
+            ),
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+
+                    Bar -> 2
+                "#
             ),
         );
     }

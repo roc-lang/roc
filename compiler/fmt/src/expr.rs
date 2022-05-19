@@ -688,6 +688,7 @@ fn fmt_when<'a, 'buf>(
     while let Some(branch) = it.next() {
         let expr = &branch.value;
         let patterns = &branch.patterns;
+        let is_multiline_expr = expr.is_multiline();
         let is_multiline_patterns = is_when_patterns_multiline(branch);
 
         for (index, pattern) in patterns.iter().enumerate() {
@@ -711,7 +712,12 @@ fn fmt_when<'a, 'buf>(
         }
 
         buf.push_str(" ->");
-        buf.newline();
+
+        if is_multiline_expr {
+            buf.newline();
+        } else {
+            buf.spaces(1);
+        }
 
         match expr.value {
             Expr::SpaceBefore(nested, spaces) => {
