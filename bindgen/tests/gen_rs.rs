@@ -143,13 +143,24 @@ mod test_gen_rs {
                 .unwrap_or_default(),
             indoc!(
                 r#"
-                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+                #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_NonRecursive {
                     Bar = 0,
                     Baz = 1,
                     Blah = 2,
                     Foo = 3,
+                }
+
+                impl core::fmt::Debug for tag_NonRecursive {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        match self {
+                            Self::Bar => f.write_str("tag_NonRecursive::Bar"),
+                            Self::Baz => f.write_str("tag_NonRecursive::Baz"),
+                            Self::Blah => f.write_str("tag_NonRecursive::Blah"),
+                            Self::Foo => f.write_str("tag_NonRecursive::Foo"),
+                        }
+                    }
                 }
 
                 #[repr(C)]
@@ -399,12 +410,22 @@ mod test_gen_rs {
                 .unwrap_or_default(),
             indoc!(
                 r#"
-                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+                #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum NonRecursive {
                     Bar = 0,
                     Blah = 1,
                     Foo = 2,
+                }
+
+                impl core::fmt::Debug for NonRecursive {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        match self {
+                            Self::Bar => f.write_str("NonRecursive::Bar"),
+                            Self::Blah => f.write_str("NonRecursive::Blah"),
+                            Self::Foo => f.write_str("NonRecursive::Foo"),
+                        }
+                    }
                 }
             "#
             )
@@ -481,11 +502,20 @@ mod test_gen_rs {
                 .unwrap_or_default(),
             indoc!(
                 r#"
-                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+                #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_StrConsList {
                     Cons = 0,
                     Nil = 1,
+                }
+
+                impl core::fmt::Debug for tag_StrConsList {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        match self {
+                            Self::Cons => f.write_str("tag_StrConsList::Cons"),
+                            Self::Nil => f.write_str("tag_StrConsList::Nil"),
+                        }
+                    }
                 }
 
                 #[derive(Clone, Eq, Ord, Hash, PartialEq, PartialOrd)]
@@ -603,11 +633,20 @@ mod test_gen_rs {
                 .unwrap_or_default(),
             indoc!(
                 r#"
-                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+                #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_IntConsList {
                     Empty = 0,
                     Prepend = 1,
+                }
+
+                impl core::fmt::Debug for tag_IntConsList {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        match self {
+                            Self::Empty => f.write_str("tag_IntConsList::Empty"),
+                            Self::Prepend => f.write_str("tag_IntConsList::Prepend"),
+                        }
+                    }
                 }
 
                 #[derive(Clone, Eq, Ord, Hash, PartialEq, PartialOrd)]

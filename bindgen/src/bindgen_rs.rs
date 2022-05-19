@@ -634,7 +634,7 @@ fn write_impl_tags<
     Ok(())
 }
 
-fn write_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str>>(
+fn write_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + fmt::Display>(
     name: &str,
     typ: &RocType,
     tags: I,
@@ -651,11 +651,28 @@ fn write_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str>>(
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
     writeln!(buf, "#[repr(u{})]\npub enum {name} {{", tag_bytes * 8)?;
 
-    for (index, name) in tags.enumerate() {
-        writeln!(buf, "{INDENT}{} = {index},", name.as_ref())?;
+    let mut debug_buf = String::new();
+
+    for (index, tag_name) in tags.enumerate() {
+        writeln!(buf, "{INDENT}{tag_name} = {index},")?;
+
+        debug_buf.push_str(&format!(
+            r#"{INDENT}{INDENT}{INDENT}Self::{tag_name} => f.write_str("{name}::{tag_name}"),
+"#
+        ));
     }
 
-    buf.write_str("}\n")
+    writeln!(
+        buf,
+        r#"}}
+
+impl core::fmt::Debug for {name} {{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+        match self {{
+{debug_buf}        }}
+    }}
+}}"#
+    )
 }
 
 fn write_struct(
@@ -739,10 +756,6 @@ fn write_derive(typ: &RocType, types: &Types, buf: &mut String) -> fmt::Result {
 
     if !typ.has_enumeration(types) {
         buf.write_str("Debug, Default, ")?;
-    } else if matches!(typ, RocType::TagUnion(RocTagUnion::Enumeration { .. })) {
-        // Actual enumerations get Debug (but still not Default),
-        // but other tag unions do not.
-        buf.write_str("Debug, ")?;
     }
 
     if !typ.has_float(types) {
