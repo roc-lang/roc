@@ -303,7 +303,9 @@ impl<'a> Formattable for AbilityMember<'a> {
 
     fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
         buf.push_str(self.name.value.extract_spaces().item);
-        buf.push_str(" : ");
+        buf.spaces(1);
+        buf.push(':');
+        buf.spaces(1);
         self.typ.value.format(buf, indent + INDENT);
     }
 }
