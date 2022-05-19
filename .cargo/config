@@ -10,6 +10,11 @@ test-gen-wasm = "test -p roc_gen_wasm -p test_gen --no-default-features --featur
 rustflags = ["-Copt-level=s", "-Clto=fat"]
 
 [env]
+# Gives us the path of the workspace root for use in cargo tests without having
+# to compute it per-package.
+# https://github.com/rust-lang/cargo/issues/3946#issuecomment-973132993
+ROC_WORKSPACE_DIR = { value = "", relative = true }
+
 # Debug flags. Keep this up-to-date with compiler/debug_flags/src/lib.rs.
 # Set = "1" to turn a debug flag on.
 ROC_PRETTY_PRINT_ALIAS_CONTENTS     = "0"

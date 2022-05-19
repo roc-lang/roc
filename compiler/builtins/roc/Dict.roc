@@ -17,7 +17,7 @@ interface Dict
         ]
     imports
         [
-            Bool.{ Bool }
+            Bool.{ Bool },
         ]
 
 ## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you can associate keys with values.
@@ -38,7 +38,7 @@ interface Dict
 ##             |> Dict.insert "Delhi" 16_787_941
 ##             |> Dict.insert "Amsterdam" 872_680
 ##
-## ### Accessing keys or values 
+## ### Accessing keys or values
 ##
 ## We can use [Dict.keys] and [Dict.values] functions to get only the keys or only the values.
 ##
@@ -68,8 +68,6 @@ interface Dict
 ## When comparing two dictionaries for equality, they are `==` only if their both their contents and their
 ## orderings match. This preserves the property that if `dict1 == dict2`, you should be able to rely on
 ## `fn dict1 == fn dict2` also being `True`, even if `fn` relies on the dictionary's ordering.
-
-
 ## An empty dictionary.
 empty : Dict k v
 single : k, v -> Dict k v
