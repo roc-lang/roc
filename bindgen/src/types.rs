@@ -1,8 +1,10 @@
 use core::mem::align_of;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::VecMap;
+use roc_mono::layout::UnionLayout;
 use roc_std::RocDec;
 use roc_target::TargetInfo;
+use std::convert::TryInto;
 use ven_graph::topological_sort;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -116,15 +118,7 @@ pub enum RocType {
     RocDict(TypeId, TypeId),
     RocSet(TypeId),
     RocBox(TypeId),
-    RecursiveTagUnion {
-        name: String,
-        tags: Vec<(String, Vec<TypeId>)>,
-    },
-    TagUnion {
-        tag_bytes: u8,
-        name: String,
-        tags: Vec<(String, Vec<TypeId>)>,
-    },
+    TagUnion(RocTagUnion),
     Struct {
         name: String,
         fields: Vec<(String, TypeId)>,
@@ -154,14 +148,18 @@ impl RocType {
             | RocType::F32
             | RocType::F64
             | RocType::F128
+            | RocType::TagUnion(RocTagUnion::Enumeration { .. })
             | RocType::RocDec => false,
             RocType::RocStr
             | RocType::RocList(_)
             | RocType::RocDict(_, _)
             | RocType::RocSet(_)
             | RocType::RocBox(_)
-            | RocType::RecursiveTagUnion { .. } => true,
-            RocType::TagUnion { tags, .. } => tags
+            | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { .. })
+            | RocType::TagUnion(RocTagUnion::NullableUnwrapped { .. })
+            | RocType::TagUnion(RocTagUnion::NullableWrapped { .. })
+            | RocType::TagUnion(RocTagUnion::Recursive { .. }) => true,
+            RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => tags
                 .iter()
                 .any(|(_, payloads)| payloads.iter().any(|id| types.get(*id).has_pointer(types))),
             RocType::Struct { fields, .. } => fields
@@ -187,27 +185,37 @@ impl RocType {
             | RocType::U64
             | RocType::I128
             | RocType::U128
-            | RocType::RocDec => false,
+            | RocType::RocDec
+            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
                 types.get(*id).has_float(types)
             }
             RocType::RocDict(key_id, val_id) => {
                 types.get(*key_id).has_float(types) || types.get(*val_id).has_float(types)
             }
-            RocType::RecursiveTagUnion { tags, .. } | RocType::TagUnion { tags, .. } => tags
-                .iter()
-                .any(|(_, payloads)| payloads.iter().any(|id| types.get(*id).has_float(types))),
             RocType::Struct { fields, .. } => {
                 fields.iter().any(|(_, id)| types.get(*id).has_float(types))
             }
-            RocType::TransparentWrapper { content, .. } => types.get(*content).has_float(types),
+            RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
+            | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => tags
+                .iter()
+                .any(|(_, payloads)| payloads.iter().any(|id| types.get(*id).has_float(types))),
+            RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => non_null_tags
+                .iter()
+                .any(|(_, _, payloads)| payloads.iter().any(|id| types.get(*id).has_float(types))),
+            RocType::TagUnion(RocTagUnion::NullableUnwrapped {
+                non_null_payload: content,
+                ..
+            })
+            | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. })
+            | RocType::TransparentWrapper { content, .. } => types.get(*content).has_float(types),
         }
     }
 
     /// Useful when determining whether to derive Default in a Rust type.
-    pub fn has_tag_union(&self, types: &Types) -> bool {
+    pub fn has_enumeration(&self, types: &Types) -> bool {
         match self {
-            RocType::RecursiveTagUnion { .. } | RocType::TagUnion { .. } => true,
+            RocType::TagUnion { .. } => true,
             RocType::RocStr
             | RocType::Bool
             | RocType::I8
@@ -225,15 +233,18 @@ impl RocType {
             | RocType::F128
             | RocType::RocDec => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get(*id).has_tag_union(types)
+                types.get(*id).has_enumeration(types)
             }
             RocType::RocDict(key_id, val_id) => {
-                types.get(*key_id).has_tag_union(types) || types.get(*val_id).has_tag_union(types)
+                types.get(*key_id).has_enumeration(types)
+                    || types.get(*val_id).has_enumeration(types)
             }
             RocType::Struct { fields, .. } => fields
                 .iter()
-                .any(|(_, id)| types.get(*id).has_tag_union(types)),
-            RocType::TransparentWrapper { content, .. } => types.get(*content).has_tag_union(types),
+                .any(|(_, id)| types.get(*id).has_enumeration(types)),
+            RocType::TransparentWrapper { content, .. } => {
+                types.get(*content).has_enumeration(types)
+            }
         }
     }
 
@@ -246,7 +257,7 @@ impl RocType {
             | RocType::RocBox(_) => target_info.ptr_alignment_bytes(),
             RocType::RocDec => align_of::<RocDec>(),
             RocType::Bool => align_of::<bool>(),
-            RocType::TagUnion { tags, .. } => {
+            RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
                 // The smallest alignment this could possibly have is based on the number of tags - e.g.
                 // 0 tags is an empty union (so, alignment 0), 1-255 tags has a u8 tag (so, alignment 1), etc.
                 let mut align = align_for_tag_count(tags.len());
@@ -259,7 +270,7 @@ impl RocType {
 
                 align
             }
-            RocType::RecursiveTagUnion { tags, .. } => {
+            RocType::TagUnion(RocTagUnion::Recursive { tags, .. }) => {
                 // The smallest alignment this could possibly have is based on the number of tags - e.g.
                 // 0 tags is an empty union (so, alignment 0), 1-255 tags has a u8 tag (so, alignment 1), etc.
                 //
@@ -268,6 +279,22 @@ impl RocType {
                 let mut align = ptr_align.max(align_for_tag_count(tags.len()));
 
                 for (_, payloads) in tags {
+                    for id in payloads {
+                        align = align.max(types.get(*id).alignment(types, target_info));
+                    }
+                }
+
+                align
+            }
+            RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => {
+                // The smallest alignment this could possibly have is based on the number of tags - e.g.
+                // 0 tags is an empty union (so, alignment 0), 1-255 tags has a u8 tag (so, alignment 1), etc.
+                //
+                // Unlike a regular tag union, a recursive one also includes a pointer.
+                let ptr_align = target_info.ptr_alignment_bytes();
+                let mut align = ptr_align.max(align_for_tag_count(non_null_tags.len()));
+
+                for (_, _, payloads) in non_null_tags {
                     for id in payloads {
                         align = align.max(types.get(*id).alignment(types, target_info));
                     }
@@ -291,8 +318,19 @@ impl RocType {
             RocType::F32 => FloatWidth::F32.alignment_bytes(target_info) as usize,
             RocType::F64 => FloatWidth::F64.alignment_bytes(target_info) as usize,
             RocType::F128 => FloatWidth::F128.alignment_bytes(target_info) as usize,
-            RocType::TransparentWrapper { content, .. } => {
+            RocType::TransparentWrapper { content, .. }
+            | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
+                non_null_payload: content,
+                ..
+            })
+            | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. }) => {
                 types.get(*content).alignment(types, target_info)
+            }
+            RocType::TagUnion(RocTagUnion::Enumeration { tags, .. }) => {
+                UnionLayout::discriminant_size(tags.len())
+                    .stack_size()
+                    .try_into()
+                    .unwrap()
             }
         }
     }
@@ -316,4 +354,56 @@ fn align_for_tag_count(num_tags: usize) -> usize {
             u64::MAX
         );
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RocTagUnion {
+    Enumeration {
+        name: String,
+        tags: Vec<String>,
+    },
+    /// A non-recursive tag union
+    /// e.g. `Result a e : [ Ok a, Err e ]`
+    NonRecursive {
+        name: String,
+        tags: Vec<(String, Option<TypeId>)>,
+    },
+    /// A recursive tag union (general case)
+    /// e.g. `Expr : [ Sym Str, Add Expr Expr ]`
+    Recursive {
+        name: String,
+        tags: Vec<(String, Option<TypeId>)>,
+    },
+    /// A recursive tag union with just one constructor
+    /// Optimization: No need to store a tag ID (the payload is "unwrapped")
+    /// e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
+    NonNullableUnwrapped {
+        name: String,
+        content: TypeId,
+    },
+
+    /// A recursive tag union that has an empty variant
+    /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
+    /// It has more than one other variant, so they need tag IDs (payloads are "wrapped")
+    /// e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
+    /// see also: https://youtu.be/ip92VMpf_-A?t=164
+    NullableWrapped {
+        name: String,
+        null_tag: String,
+        non_null_tags: Vec<(u16, String, Option<TypeId>)>,
+    },
+
+    /// A recursive tag union with only two variants, where one is empty.
+    /// Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
+    /// e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
+    NullableUnwrapped {
+        name: String,
+        /// e.g. Nil in `StrConsList : [ Nil, Cons Str (ConsList Str) ]`
+        null_tag: String,
+        /// e.g. Cons in `StrConsList : [ Nil, Cons Str (ConsList Str) ]`
+        non_null_tag: String,
+        /// There must be a payload associated with the non-null tag.
+        /// Otherwise, this would have been an Enumeration!
+        non_null_payload: TypeId,
+    },
 }

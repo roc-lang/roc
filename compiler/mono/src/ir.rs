@@ -11,9 +11,10 @@ use roc_can::abilities::{AbilitiesStore, SpecializationId};
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::{MutSet, VecMap};
+use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
 use roc_debug_flags::{
-    dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
-    ROC_PRINT_IR_AFTER_SPECIALIZATION,
+    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
 };
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -108,11 +109,6 @@ pub enum OptLevel {
     Normal,
     Size,
     Optimize,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum MonoProblem {
-    PatternProblem(roc_exhaustive::Error),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1247,7 +1243,6 @@ impl<'a> Specializations<'a> {
 pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'i mut Subs,
-    pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub target_info: TargetInfo,
@@ -2124,7 +2119,7 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
-            Var(original) | AbilityMember(original, _) => {
+            Var(original) | AbilityMember(original, _, _) => {
                 // a variable is aliased, e.g.
                 //
                 //  foo = bar
@@ -2190,7 +2185,7 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, new_outer)
             }
-            LetRec(nested_defs, nested_cont) => {
+            LetRec(nested_defs, nested_cont, cycle_mark) => {
                 use roc_can::expr::Expr::*;
                 // We must transform
                 //
@@ -2223,7 +2218,7 @@ fn from_can_let<'a>(
 
                 let new_inner = LetNonRec(Box::new(new_def), cont);
 
-                let new_outer = LetRec(nested_defs, Box::new(Loc::at_zero(new_inner)));
+                let new_outer = LetRec(nested_defs, Box::new(Loc::at_zero(new_inner)), cycle_mark);
 
                 lower_rest!(variable, new_outer)
             }
@@ -2785,7 +2780,7 @@ fn resolve_abilities_in_specialized_body<'a>(
     body_var: Variable,
 ) -> std::vec::Vec<SpecializationId> {
     use roc_can::expr::Expr;
-    use roc_can::traverse::{walk_expr, PatternVisitor, Visitor};
+    use roc_can::traverse::{walk_expr, Visitor};
     use roc_unify::unify::unify;
 
     struct Resolver<'a> {
@@ -2795,7 +2790,6 @@ fn resolve_abilities_in_specialized_body<'a>(
         seen_defs: MutSet<Symbol>,
         specialized: std::vec::Vec<SpecializationId>,
     }
-    impl PatternVisitor for Resolver<'_> {}
     impl Visitor for Resolver<'_> {
         fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
             match expr {
@@ -2810,39 +2804,58 @@ fn resolve_abilities_in_specialized_body<'a>(
                     // So, we'll resolve any nested abilities when we know their specialized type
                     // during def construction.
                 }
-                Expr::AbilityMember(member_sym, specialization_id) => {
-                    if self
+                Expr::AbilityMember(member_sym, specialization_id, _specialization_var) => {
+                    let (specialization, specialization_def) = match self
                         .abilities_store
                         .get_resolved(*specialization_id)
-                        .is_some()
                     {
-                        // We already know the specialization from type solving; we are good to go.
-                        return;
-                    }
+                        Some(specialization) => (
+                            specialization,
+                            // If we know the specialization at this point, the specialization must
+                            // be static. That means the relevant type state was populated during
+                            // solving, so we don't need additional unification here.
+                            //
+                            // However, we do need to walk the specialization def, because it may
+                            // itself contain unspecialized defs.
+                            self.procs
+                                .partial_procs
+                                .get_symbol(specialization)
+                                .expect("Specialization found, but it's not in procs"),
+                        ),
+                        None => {
+                            let specialization = resolve_ability_specialization(
+                                self.subs,
+                                self.abilities_store,
+                                *member_sym,
+                                var,
+                            )
+                            .expect("Ability specialization is unknown - code generation cannot proceed!");
 
-                    let specialization = resolve_ability_specialization(
-                        self.subs,
-                        self.abilities_store,
-                        *member_sym,
-                        var,
-                    )
-                    .expect("Ability specialization is unknown - code generation cannot proceed!");
+                            self.abilities_store
+                                .insert_resolved(*specialization_id, specialization);
 
-                    // We must now refine the current type state to account for this specialization,
-                    // since `var` may only have partial specialization information - enough to
-                    // figure out what specialization we need, but not the types of all arguments
-                    // and return types. So, unify with the variable with the specialization's type.
-                    let specialization_def = self
-                        .procs
-                        .partial_procs
-                        .get_symbol(specialization)
-                        .expect("Specialization found, but it's not in procs");
-                    let specialization_var = specialization_def.annotation;
+                            debug_assert!(!self.specialized.contains(specialization_id));
+                            self.specialized.push(*specialization_id);
 
-                    let unified = unify(self.subs, var, specialization_var, Mode::EQ);
-                    unified.expect_success(
-                        "Specialization does not unify - this is a typechecker bug!",
-                    );
+                            // We must now refine the current type state to account for this specialization,
+                            // since `var` may only have partial specialization information - enough to
+                            // figure out what specialization we need, but not the types of all arguments
+                            // and return types. So, unify with the variable with the specialization's type.
+                            let specialization_def = self
+                                .procs
+                                .partial_procs
+                                .get_symbol(specialization)
+                                .expect("Specialization found, but it's not in procs");
+                            let specialization_var = specialization_def.annotation;
+
+                            let unified = unify(self.subs, var, specialization_var, Mode::EQ);
+                            unified.expect_success(
+                                "Specialization does not unify - this is a typechecker bug!",
+                            );
+
+                            (specialization, specialization_def)
+                        }
+                    };
 
                     // Now walk the specialization def to pick up any more needed types. Of course,
                     // we only want to pass through it once to avoid unbounded recursion.
@@ -2854,28 +2867,22 @@ fn resolve_abilities_in_specialized_body<'a>(
                         );
                         self.seen_defs.insert(specialization);
                     }
-
-                    self.abilities_store
-                        .insert_resolved(*specialization_id, specialization);
-
-                    debug_assert!(!self.specialized.contains(specialization_id));
-                    self.specialized.push(*specialization_id);
                 }
                 _ => walk_expr(self, expr, var),
             }
         }
     }
 
-    let mut specializer = Resolver {
+    let mut resolver = Resolver {
         subs: env.subs,
         procs,
         abilities_store: env.abilities_store,
         seen_defs: MutSet::default(),
         specialized: vec![],
     };
-    specializer.visit_expr(specialized_body, Region::zero(), body_var);
+    resolver.visit_expr(specialized_body, Region::zero(), body_var);
 
-    specializer.specialized
+    resolver.specialized
 }
 
 fn specialize_external<'a>(
@@ -3821,7 +3828,7 @@ pub fn with_hole<'a>(
             variable,
             Some((assigned, hole)),
         ),
-        LetRec(defs, cont) => {
+        LetRec(defs, cont, _cycle_mark) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -3858,7 +3865,7 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
-        AbilityMember(_member, specialization_id) => {
+        AbilityMember(_member, specialization_id, _) => {
             let specialization_symbol = env
                 .abilities_store
                 .get_resolved(specialization_id)
@@ -4732,7 +4739,7 @@ pub fn with_hole<'a>(
                         hole,
                     )
                 }
-                roc_can::expr::Expr::AbilityMember(_, specialization_id) => {
+                roc_can::expr::Expr::AbilityMember(_, specialization_id, _) => {
                     let proc_name = env.abilities_store.get_resolved(specialization_id).expect(
                         "Ability specialization is unknown - code generation cannot proceed!",
                     );
@@ -5222,6 +5229,7 @@ pub fn with_hole<'a>(
                 }
             }
         }
+        TypedHole(_) => Stmt::RuntimeError("Hit a blank"),
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
     }
 }
@@ -5945,7 +5953,7 @@ pub fn from_can<'a>(
             )
         }
 
-        LetRec(defs, cont) => {
+        LetRec(defs, cont, _cycle_mark) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -6961,7 +6969,7 @@ fn can_reuse_symbol<'a>(
     use ReuseSymbol::*;
 
     let symbol = match expr {
-        AbilityMember(_, specialization_id) => env
+        AbilityMember(_, specialization_id, _) => env
             .abilities_store
             .get_resolved(*specialization_id)
             .expect("Specialization must be known!"),

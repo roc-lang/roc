@@ -67,7 +67,9 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 loc_elems: loc_elems.iter().map(|le| le.map(go_help)).collect(),
             },
             Var(sym) => Var(*sym),
-            AbilityMember(sym, specialization) => AbilityMember(*sym, *specialization),
+            &AbilityMember(sym, specialization, specialization_var) => {
+                AbilityMember(sym, specialization, specialization_var)
+            }
             When {
                 loc_cond,
                 cond_var,
@@ -115,7 +117,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 final_else: Box::new(final_else.map(go_help)),
             },
 
-            LetRec(defs, body) => LetRec(
+            LetRec(defs, body, cycle_mark) => LetRec(
                 defs.iter()
                     .map(
                         |Def {
@@ -137,6 +139,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                     )
                     .collect(),
                 Box::new(body.map(go_help)),
+                *cycle_mark,
             ),
             LetNonRec(def, body) => {
                 let Def {
@@ -362,6 +365,8 @@ pub fn deep_copy_type_vars_into_expr<'a>(
             },
 
             Expect(e1, e2) => Expect(Box::new(e1.map(go_help)), Box::new(e2.map(go_help))),
+
+            TypedHole(v) => TypedHole(sub!(*v)),
 
             RuntimeError(err) => RuntimeError(err.clone()),
         }

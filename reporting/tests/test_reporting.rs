@@ -1009,7 +1009,7 @@ mod test_reporting {
 
                     Num a
 
-                I need all branches in an `if` to have the same type!
+                All branches in an `if` must have the same type!
                 "#
             ),
         )
@@ -1040,7 +1040,7 @@ mod test_reporting {
 
                     Num a
 
-                I need all branches in an `if` to have the same type!
+                All branches in an `if` must have the same type!
                 "#
             ),
         )
@@ -1076,7 +1076,7 @@ mod test_reporting {
 
                     Str
 
-                I need all branches of a `when` to have the same type!
+                All branches of a `when` must have the same type!
                 "#
             ),
         )
@@ -1107,7 +1107,7 @@ mod test_reporting {
 
                     Num a
 
-                I need every element in a list to have the same type!
+                Every element in a list must have the same type!
                 "#
             ),
         )
@@ -1201,6 +1201,128 @@ mod test_reporting {
                 infinitely.
 
                     List ∞ -> a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = \x -> g x
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `f`:
+
+                1│  f = \x -> g x
+                    ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> a
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `g`:
+
+                2│  g = \x -> f [x]
+                    ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion_annotated() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> List a
+                f = \x -> g x
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression is used in an unexpected way:
+
+                2│  f = \x -> g x
+                              ^^^
+
+                This `g` call produces:
+
+                    List List a
+
+                But you are trying to use it as:
+
+                    List a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `List` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion_dually_annotated_lie() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> List a
+                f = \x -> g x
+                g : b -> List b
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression is used in an unexpected way:
+
+                4│  g = \x -> f [x]
+                              ^^^^^
+
+                This `f` call produces:
+
+                    List List b
+
+                But you are trying to use it as:
+
+                    List b
+
+                Tip: The type annotation uses the type variable `b` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `List` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
                 "#
             ),
         )
@@ -5685,7 +5807,7 @@ mod test_reporting {
 
                     Num a
 
-                I need all branches in an `if` to have the same type!
+                All branches in an `if` must have the same type!
                 "#
             ),
         )
@@ -5714,7 +5836,7 @@ but the `then` branch has the type:
 
     Str
 
-I need all branches in an `if` to have the same type!
+All branches in an `if` must have the same type!
 "#,
                         $op, "^".repeat($op.len())
                     ),
@@ -9902,6 +10024,44 @@ I need all branches in an `if` to have the same type!
                 infinitely.
 
                     Set ∞
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn cycle_through_non_function() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                force : ({} -> I64) -> I64
+                force = \eval -> eval {}
+
+                t1 = \_ -> force (\_ -> t2)
+
+                t2 = t1 {}
+
+                t2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+
+                The `t1` definition is causing a very tricky infinite loop:
+
+                7│      t1 = \_ -> force (\_ -> t2)
+                        ^^
+
+                The `t1` value depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     t1
+                    │     ↓
+                    │     t2
+                    └─────┘
                 "#
             ),
         )

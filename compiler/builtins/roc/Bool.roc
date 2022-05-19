@@ -1,6 +1,6 @@
 interface Bool
     exposes [ Bool, and, or, not, isEq, isNotEq ]
-    imports [ ]
+    imports []
 
 Bool : [ True, False ]
 
@@ -56,7 +56,6 @@ and : Bool, Bool -> Bool
 ## In Roc, this is not the case. See the performance notes for [Bool.and] for details.
 or : Bool, Bool -> Bool
 # xor : Bool, Bool -> Bool # currently unimplemented
-
 ## Returns `False` when given `True`, and vice versa.
 not : Bool -> Bool
 

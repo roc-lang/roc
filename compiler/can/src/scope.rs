@@ -50,15 +50,19 @@ impl Scope {
     }
 
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
+        self.lookup_str(ident.as_str(), region)
+    }
+
+    pub fn lookup_str(&self, ident: &str, region: Region) -> Result<Symbol, RuntimeError> {
         use ContainsIdent::*;
 
-        match self.scope_contains_ident(ident.as_str()) {
+        match self.scope_contains_ident(ident) {
             InScope(symbol, _) => Ok(symbol),
             NotInScope(_) | NotPresent => {
                 let error = RuntimeError::LookupNotInScope(
                     Loc {
                         region,
-                        value: ident.clone(),
+                        value: Ident::from(ident),
                     },
                     self.idents_in_scope().map(|v| v.as_ref().into()).collect(),
                 );

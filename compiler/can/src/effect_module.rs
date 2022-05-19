@@ -8,7 +8,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{AliasKind, LambdaSet, OptAbleType, OptAbleVar, Type, TypeExtension};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -72,13 +72,19 @@ pub(crate) fn build_effect_builtins(
     // Effect.forever : Effect a -> Effect b
     if generated_functions.forever {
         let def = helper!(build_effect_forever);
-        declarations.push(Declaration::DeclareRec(vec![def]));
+        declarations.push(Declaration::DeclareRec(
+            vec![def],
+            IllegalCycleMark::empty(),
+        ));
     }
 
     // Effect.loop : a, (a -> Effect [ Step a, Done b ]) -> Effect b
     if generated_functions.loop_ {
         let def = helper!(build_effect_loop);
-        declarations.push(Declaration::DeclareRec(vec![def]));
+        declarations.push(Declaration::DeclareRec(
+            vec![def],
+            IllegalCycleMark::empty(),
+        ));
     }
 
     // Useful when working on functions in this module. By default symbols that we named do now

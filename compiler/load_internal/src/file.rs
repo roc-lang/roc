@@ -15,9 +15,11 @@ use roc_constrain::module::{
     constrain_builtin_imports, constrain_module, ExposedByModule, ExposedForModule,
     ExposedModuleTypes,
 };
+use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
 use roc_debug_flags::{
-    dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
-    ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_LOAD_LOG,
+    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
+    ROC_PRINT_LOAD_LOG,
 };
 use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
@@ -136,7 +138,6 @@ struct ModuleCache<'a> {
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
-    mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
@@ -199,7 +200,6 @@ impl Default for ModuleCache<'_> {
             documentation: Default::default(),
             can_problems: Default::default(),
             type_problems: Default::default(),
-            mono_problems: Default::default(),
             sources: Default::default(),
         }
     }
@@ -639,7 +639,6 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
         procs_base: ProcsBase<'a>,
-        problems: Vec<roc_mono::ir::MonoProblem>,
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
@@ -650,7 +649,6 @@ enum Msg<'a> {
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-        problems: Vec<roc_mono::ir::MonoProblem>,
         update_mode_ids: UpdateModeIds,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -2118,7 +2116,7 @@ fn update<'a>(
             } else {
                 state.exposed_types.insert(
                     module_id,
-                    ExposedModuleTypes::Valid {
+                    ExposedModuleTypes {
                         stored_vars_by_symbol: solved_module.stored_vars_by_symbol,
                         storage_subs: solved_module.storage_subs,
                     },
@@ -2160,13 +2158,10 @@ fn update<'a>(
             solved_subs,
             ident_ids,
             layout_cache,
-            problems,
             module_timing,
             abilities_store,
         } => {
             log!("found specializations for {:?}", module_id);
-
-            debug_assert!(problems.is_empty());
 
             let subs = solved_subs.into_inner();
 
@@ -2207,7 +2202,6 @@ fn update<'a>(
             subs,
             procedures,
             external_specializations_requested,
-            problems,
             module_timing,
             layout_cache,
             ..
@@ -2216,8 +2210,6 @@ fn update<'a>(
 
             // in the future, layouts will be in SoA form and we'll want to hold on to this data
             let _ = layout_cache;
-
-            state.module_cache.mono_problems.insert(module_id, problems);
 
             state.procedures.extend(procedures);
             state.timings.insert(module_id, module_timing);
@@ -3586,51 +3578,39 @@ fn add_imports(
     for symbol in exposed_for_module.imported_values {
         let module_id = symbol.module_id();
         match exposed_for_module.exposed_by_module.get_mut(&module_id) {
-            Some(t) => match t {
-                ExposedModuleTypes::Invalid => {
-                    // make the type a flex var, so it unifies with anything
-                    // this way the error is only reported in the module it originates in
-                    let variable = subs.fresh_unnamed_flex_var();
+            Some(ExposedModuleTypes {
+                stored_vars_by_symbol,
+                storage_subs,
+            }) => {
+                let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
+                    None => {
+                        // Today we define builtins in each module that uses them
+                        // so even though they have a different module name from
+                        // the surrounding module, they are not technically imported
+                        debug_assert!(symbol.is_builtin());
+                        continue;
+                    }
+                    Some((_, x)) => *x,
+                };
 
-                    def_types.push((
-                        symbol,
-                        Loc::at_zero(roc_types::types::Type::Variable(variable)),
-                    ));
-                }
-                ExposedModuleTypes::Valid {
-                    stored_vars_by_symbol,
-                    storage_subs,
-                } => {
-                    let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
-                        None => {
-                            // Today we define builtins in each module that uses them
-                            // so even though they have a different module name from
-                            // the surrounding module, they are not technically imported
-                            debug_assert!(symbol.is_builtin());
-                            continue;
-                        }
-                        Some((_, x)) => *x,
-                    };
+                let copied_import = storage_subs.export_variable_to(subs, variable);
 
-                    let copied_import = storage_subs.export_variable_to(subs, variable);
+                def_types.push((
+                    symbol,
+                    Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+                ));
 
-                    // not a typo; rigids are turned into flex during type inference, but when imported we must
-                    // consider them rigid variables
-                    rigid_vars.extend(copied_import.rigid);
-                    rigid_vars.extend(copied_import.flex);
+                // not a typo; rigids are turned into flex during type inference, but when imported we must
+                // consider them rigid variables
+                rigid_vars.extend(copied_import.rigid);
+                rigid_vars.extend(copied_import.flex);
 
-                    // Rigid vars bound to abilities are also treated like rigids.
-                    rigid_vars.extend(copied_import.rigid_able);
-                    rigid_vars.extend(copied_import.flex_able);
+                // Rigid vars bound to abilities are also treated like rigids.
+                rigid_vars.extend(copied_import.rigid_able);
+                rigid_vars.extend(copied_import.flex_able);
 
-                    import_variables.extend(copied_import.registered);
-
-                    def_types.push((
-                        symbol,
-                        Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
-                    ));
-                }
-            },
+                import_variables.extend(copied_import.registered);
+            }
             None => {
                 internal_error!("Imported module {:?} is not available", module_id)
             }
@@ -3873,7 +3853,8 @@ fn canonicalize_and_constrain<'a>(
         ..
     } = parsed;
 
-    let before = roc_types::types::get_type_clone_count();
+    // _before has an underscore because it's unused in --release builds
+    let _before = roc_types::types::get_type_clone_count();
 
     let mut var_store = VarStore::default();
     let module_output = canonicalize_module_defs(
@@ -3891,14 +3872,15 @@ fn canonicalize_and_constrain<'a>(
         &mut var_store,
     );
 
-    let after = roc_types::types::get_type_clone_count();
+    // _after has an underscore because it's unused in --release builds
+    let _after = roc_types::types::get_type_clone_count();
 
     log!(
         "canonicalize of {:?} cloned Type {} times ({} -> {})",
         module_id,
-        after - before,
-        before,
-        after
+        _after - _before,
+        _before,
+        _after
     );
 
     let canonicalize_end = SystemTime::now();
@@ -3921,7 +3903,8 @@ fn canonicalize_and_constrain<'a>(
         }
     };
 
-    let before = roc_types::types::get_type_clone_count();
+    // _before has an underscore because it's unused in --release builds
+    let _before = roc_types::types::get_type_clone_count();
 
     let mut constraints = Constraints::new();
 
@@ -3937,14 +3920,15 @@ fn canonicalize_and_constrain<'a>(
         )
     };
 
-    let after = roc_types::types::get_type_clone_count();
+    // _after has an underscore because it's unused in --release builds
+    let _after = roc_types::types::get_type_clone_count();
 
     log!(
         "constraint gen of {:?} cloned Type {} times ({} -> {})",
         module_id,
-        after - before,
-        before,
-        after
+        _after - _before,
+        _before,
+        _after
     );
 
     // scope has imported aliases, but misses aliases from inner scopes
@@ -4110,12 +4094,10 @@ fn make_specializations<'a>(
     mut abilities_store: AbilitiesStore,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
-    let mut mono_problems = Vec::new();
     let mut update_mode_ids = UpdateModeIds::new();
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
         arena,
-        problems: &mut mono_problems,
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
@@ -4163,7 +4145,6 @@ fn make_specializations<'a>(
         ident_ids,
         layout_cache,
         procedures,
-        problems: mono_problems,
         update_mode_ids,
         subs,
         external_specializations_requested,
@@ -4208,12 +4189,10 @@ fn build_pending_specializations<'a>(
         imported_module_thunks,
     };
 
-    let mut mono_problems = std::vec::Vec::new();
     let mut update_mode_ids = UpdateModeIds::new();
     let mut subs = solved_subs.into_inner();
     let mut mono_env = roc_mono::ir::Env {
         arena,
-        problems: &mut mono_problems,
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
@@ -4238,7 +4217,7 @@ fn build_pending_specializations<'a>(
                 &exposed_to_host.values,
                 false,
             ),
-            DeclareRec(defs) => {
+            DeclareRec(defs, cycle_mark) if !cycle_mark.is_illegal(mono_env.subs) => {
                 for def in defs {
                     add_def_to_module(
                         &mut layout_cache,
@@ -4251,7 +4230,7 @@ fn build_pending_specializations<'a>(
                     )
                 }
             }
-            InvalidCycle(_entries) => {
+            InvalidCycle(_) | DeclareRec(..) => {
                 // do nothing?
                 // this may mean the loc_symbols are not defined during codegen; is that a problem?
             }
@@ -4259,8 +4238,6 @@ fn build_pending_specializations<'a>(
     }
 
     procs_base.module_thunks = module_thunks.into_bump_slice();
-
-    let problems = mono_env.problems.to_vec();
 
     let find_specializations_end = SystemTime::now();
     module_timing.find_specializations = find_specializations_end
@@ -4273,7 +4250,6 @@ fn build_pending_specializations<'a>(
         ident_ids,
         layout_cache,
         procs_base,
-        problems,
         module_timing,
         abilities_store,
     }

@@ -134,15 +134,42 @@ impl<'a> Formattable for Def<'a> {
                     body_pattern,
                     body_expr,
                 } => {
+                    use roc_parse::ast::TypeAnnotation;
+                    let is_type_multiline = ann_type.is_multiline();
+                    let is_type_function = matches!(
+                        ann_type.value,
+                        TypeAnnotation::Function(..)
+                            | TypeAnnotation::SpaceBefore(TypeAnnotation::Function(..), ..)
+                            | TypeAnnotation::SpaceAfter(TypeAnnotation::Function(..), ..)
+                    );
+
+                    let next_indent = if is_type_multiline {
+                        indent + INDENT
+                    } else {
+                        indent
+                    };
+
                     ann_pattern.format(buf, indent);
                     buf.push_str(" :");
-                    buf.spaces(1);
-                    ann_type.format(buf, indent);
+
+                    if is_type_multiline && is_type_function {
+                        ann_type.format_with_options(
+                            buf,
+                            Parens::NotNeeded,
+                            Newlines::Yes,
+                            next_indent,
+                        );
+                    } else {
+                        buf.spaces(1);
+                        ann_type.format(buf, indent);
+                    }
+
                     if let Some(comment_str) = comment {
                         buf.push_str(" #");
                         buf.spaces(1);
                         buf.push_str(comment_str.trim());
                     }
+
                     buf.newline();
                     fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
                 }

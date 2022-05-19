@@ -1,6 +1,6 @@
 [package]
 authors = ["The Roc Contributors"]
-edition = "2018"
+edition = "2021"
 license = "UPL-1.0"
 name = "roc_alias_analysis"
 version = "0.1.0"

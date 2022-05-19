@@ -13,7 +13,7 @@ main =
         |> Task.putLine
 
 show : RedBlackTree I64 {} -> Str
-show = \tree -> showRBTree tree Num.toStr (\{  } -> "{}")
+show = \tree -> showRBTree tree Num.toStr (\{} -> "{}")
 
 showRBTree : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
 showRBTree = \tree, showKey, showValue ->

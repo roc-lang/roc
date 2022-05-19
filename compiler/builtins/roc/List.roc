@@ -53,11 +53,10 @@ interface List
         ]
     imports
         [
-            Bool.{ Bool }
+            Bool.{ Bool },
         ]
 
 ## Types
-
 ## A sequential list of values.
 ##
 ## >>> [ 1, 2, 3 ] # a list of numbers
@@ -193,10 +192,9 @@ interface List
 ## * Even when copying is faster, other list operations may still be slightly slower with persistent data structures. For example, even if it were a persistent data structure, [List.map], [List.walk], and [List.keepIf] would all need to traverse every element in the list and build up the result from scratch. These operations are all
 ## * Roc's compiler optimizes many list operations into in-place mutations behind the scenes, depending on how the list is being used. For example, [List.map], [List.keepIf], and [List.set] can all be optimized to perform in-place mutations.
 ## * If possible, it is usually best for performance to use large lists in a way where the optimizer can turn them into in-place mutations. If this is not possible, a persistent data structure might be faster - but this is a rare enough scenario that it would not be good for the average Roc program's performance if this were the way [List] worked by default. Instead, you can look outside Roc's standard modules for an implementation of a persistent data structure - likely built using [List] under the hood!
-
 ##  Check if the list is empty.
 ##
-## >>> List.isEmpty [ 1, 2, 3 ] 
+## >>> List.isEmpty [ 1, 2, 3 ]
 ##
 ## >>> List.isEmpty []
 isEmpty : List a -> Bool
@@ -321,7 +319,7 @@ walk : List elem, state, (state, elem -> state) -> state
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
-walkBackwards  : List elem, state, (state, elem -> state) -> state
+walkBackwards : List elem, state, (state, elem -> state) -> state
 
 ## Same as [List.walk], except you can stop walking early.
 ##
@@ -406,7 +404,7 @@ keepOks : List before, (before -> Result after *) -> List after
 ## >>> fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
 ## >>>
 ## >>> List.keepErrs [ "", "a", "bc", "", "d", "ef", "" ]
-keepErrs: List before, (before -> Result * after) -> List after
+keepErrs : List before, (before -> Result * after) -> List after
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
@@ -445,7 +443,7 @@ mapWithIndex : List a, (a, Nat -> b) -> List b
 ##
 ## >>> List.range 2 8
 range : Int a, Int a -> List (Int a)
-sortWith : List a, (a, a -> [ LT, EQ, GT ] ) -> List a
+sortWith : List a, (a, a -> [ LT, EQ, GT ]) -> List a
 
 ## Sorts a list in ascending order (lowest to highest), using a function which
 ## specifies a way to represent each element as a number.
@@ -541,7 +539,7 @@ drop : List elem, Nat -> List elem
 ## To replace the element at a given index, instead of dropping it, see [List.set].
 dropAt : List elem, Nat -> List elem
 
-min :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 min = \list ->
     when List.first list is
         Ok initial ->
@@ -550,17 +548,15 @@ min = \list ->
         Err ListWasEmpty ->
             Err ListWasEmpty
 
-
-minHelp :  List (Num a), Num a -> Num a
+minHelp : List (Num a), Num a -> Num a
 minHelp = \list, initial ->
     List.walk list initial \bestSoFar, current ->
         if current < bestSoFar then
             current
-
         else
             bestSoFar
 
-max :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+max : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 max = \list ->
     when List.first list is
         Ok initial ->
@@ -569,13 +565,11 @@ max = \list ->
         Err ListWasEmpty ->
             Err ListWasEmpty
 
-
-maxHelp :  List (Num a), Num a -> Num a
+maxHelp : List (Num a), Num a -> Num a
 maxHelp = \list, initial ->
     List.walk list initial \bestSoFar, current ->
         if current > bestSoFar then
             current
-
         else
             bestSoFar
 
@@ -616,4 +610,4 @@ intersperse : List elem, elem -> List elem
 ## than the given index, # and the `others` list will be all the others. (This
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
-split : List elem, Nat -> { before: List elem, others: List elem }
+split : List elem, Nat -> { before : List elem, others : List elem }

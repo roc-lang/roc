@@ -4,7 +4,7 @@ extern crate const_format;
 use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command};
-use roc_build::link::LinkType;
+use roc_build::link::{LinkType, LinkingStrategy};
 use roc_error_macros::user_error;
 use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
@@ -288,19 +288,26 @@ pub fn build(
         Some(n) => Threading::AtMost(n),
     };
 
-    // Use surgical linking when supported, or when explicitly requested with --linker surgical
-    let surgically_link = if matches.is_present(FLAG_LINKER) {
-        matches.value_of(FLAG_LINKER) == Some("surgical")
+    let wasm_dev_backend = matches!(opt_level, OptLevel::Development)
+        && matches!(triple.architecture, Architecture::Wasm32);
+
+    let linking_strategy = if wasm_dev_backend {
+        LinkingStrategy::Additive
+    } else if !roc_linker::supported(&link_type, &triple)
+        || matches.value_of(FLAG_LINKER) == Some("legacy")
+    {
+        LinkingStrategy::Legacy
     } else {
-        roc_linker::supported(&link_type, &triple)
+        LinkingStrategy::Surgical
     };
 
     let precompiled = if matches.is_present(FLAG_PRECOMPILED) {
         matches.value_of(FLAG_PRECOMPILED) == Some("true")
     } else {
         // When compiling for a different target, default to assuming a precompiled host.
-        // Otherwise compilation would most likely fail!
-        triple != Triple::host()
+        // Otherwise compilation would most likely fail because many toolchains assume you're compiling for the host
+        // We make an exception for Wasm, because cross-compiling is the norm in that case.
+        triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
     };
     let path = Path::new(filename);
 
@@ -334,7 +341,7 @@ pub fn build(
         emit_debug_info,
         emit_timings,
         link_type,
-        surgically_link,
+        linking_strategy,
         precompiled,
         target_valgrind,
         threading,

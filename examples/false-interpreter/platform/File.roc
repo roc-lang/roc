@@ -23,5 +23,5 @@ withOpen : Str, (Handle -> Task {} a) -> Task {} a
 withOpen = \path, callback ->
     handle <- Task.await (open path)
     result <- Task.attempt (callback handle)
-    {  } <- Task.await (close handle)
+    {} <- Task.await (close handle)
     Task.fromResult result

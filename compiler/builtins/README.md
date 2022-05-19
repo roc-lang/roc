@@ -48,15 +48,15 @@ Since `List.repeat` is implemented entirely as low level functions, its `body` i
 
 ## Connecting the definition to the implementation
 ### module/src/low_level.rs
-This `LowLevel` thing connects the builtin defined in this module to its implementation. Its referenced in `can/src/builtins.rs` and it is used in `gen/src/llvm/build.rs`.
+This `LowLevel` thing connects the builtin defined in this module to its implementation. It's referenced in `can/src/builtins.rs` and it is used in `gen/src/llvm/build.rs`.
 
 ## Bottom level LLVM values and functions
 ### gen/src/llvm/build.rs
-This is where bottom-level functions that need to be written as LLVM are created. If the function leads to a tag thats a good sign it should not be written here in `build.rs`. If its simple fundamental stuff like `INT_ADD` then it certainly should be written here.
+This is where bottom-level functions that need to be written as LLVM are created. If the function leads to a tag thats a good sign it should not be written here in `build.rs`. If it's simple fundamental stuff like `INT_ADD` then it certainly should be written here.
 
 ## Letting the compiler know these functions exist
 ### builtins/src/std.rs
-Its one thing to actually write these functions, its _another_ thing to let the Roc compiler know they exist as part of the standard library. You have to tell the compiler "Hey, this function exists, and it has this type signature". That happens in `std.rs`.
+It's one thing to actually write these functions, it's _another_ thing to let the Roc compiler know they exist as part of the standard library. You have to tell the compiler "Hey, this function exists, and it has this type signature". That happens in `std.rs`.
 
 ## Specifying how we pass args to the function
 ### builtins/mono/src/borrow.rs

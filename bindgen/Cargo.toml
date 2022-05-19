@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 repository = "https://github.com/rtfeldman/roc"
-edition = "2018"
+edition = "2021"
 description = "A CLI for roc-bindgen"
 
 [[bin]]
@@ -32,5 +32,5 @@ clap = { version = "3.1.15", default-features = false, features = ["std", "color
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"
-indoc = "1.0.3"
 tempfile = "3.2.0"
+indoc = "1.0.3"

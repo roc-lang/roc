@@ -140,6 +140,7 @@ pub fn build_and_preprocess_host(
     opt_level: OptLevel,
     target: &Triple,
     host_input_path: &Path,
+    preprocessed_host_path: &Path,
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
     target_valgrind: bool,
@@ -155,11 +156,10 @@ pub fn build_and_preprocess_host(
     );
     let dynhost = host_input_path.with_file_name("dynhost");
     let metadata = host_input_path.with_file_name("metadata");
-    let prehost = host_input_path.with_file_name("preprocessedhost");
     if preprocess_impl(
         dynhost.to_str().unwrap(),
         metadata.to_str().unwrap(),
-        prehost.to_str().unwrap(),
+        preprocessed_host_path.to_str().unwrap(),
         dummy_lib.to_str().unwrap(),
         false,
         false,

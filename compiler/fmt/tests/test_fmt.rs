@@ -14,7 +14,7 @@ mod test_fmt {
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::Parser;
     use roc_parse::state::State;
-    use roc_test_utils::assert_multiline_str_eq;
+    use roc_test_utils::{assert_multiline_str_eq, workspace_root};
 
     // Not intended to be used directly in tests; please use expr_formats_to or expr_formats_same
     fn expr_formats_to(input: &str, expected: &str) {
@@ -2152,6 +2152,111 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_fn_signature() {
+        expr_formats_same(indoc!(
+            r#"
+                foo :
+                    Str,
+                    Nat
+                    -> Bool
+
+                foo
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+                        Str, Int, Nat -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Int,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+
+                        Str,
+                        Nat
+                        
+                        -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+
+                        Str, Nat -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn final_comment_record_annotation() {
         expr_formats_to(
             indoc!(
@@ -2622,6 +2727,61 @@ mod test_fmt {
     #[test]
     fn empty_record() {
         expr_formats_same("{}");
+        expr_formats_to("{ }", "{}");
+    }
+
+    #[test]
+    fn empty_record_patterns() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                    f = \{  } -> "Hello World"
+
+                    f
+                "#
+            ),
+            indoc!(
+                r#"
+                    f = \{} -> "Hello World"
+
+                    f
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    f = \a, b -> {  }
+
+                    f
+                "#
+            ),
+            indoc!(
+                r#"
+                    f = \a, b -> {}
+
+                    f
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    { } <- f a b
+
+                    {}
+                "#
+            ),
+            indoc!(
+                r#"
+                    {} <- f a b
+
+                    {}
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -4375,11 +4535,95 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             foo :
-                (Str -> Bool) -> Bool
+                (Str -> Bool)
+                -> Bool
 
             42
             "#
         ));
+
+        expr_formats_same(indoc!(
+            r#"
+            foo :
+                (Str -> Bool),
+                Str
+                -> Bool
+            foo = \bar, baz ->
+                42
+
+            42
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool) -> Bool
+
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool)
+                    -> Bool
+
+                42
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool), Str -> Bool
+                foo = \bar, baz ->
+                    42
+
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool),
+                    Str
+                    -> Bool
+                foo = \bar, baz ->
+                    42
+
+                42
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool), Str -> Bool # comment
+                foo = \bar, baz ->
+                    42
+
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool),
+                    Str
+                    -> Bool # comment
+                foo = \bar, baz ->
+                    42
+
+                42
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -4389,14 +4633,34 @@ mod test_fmt {
     /// `cargo run -- format $(find examples -name \*.roc)`
     fn test_fmt_examples() {
         let mut count = 0;
-        let mut root = std::env::current_dir()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_owned();
+        let mut root = workspace_root();
         root.push("examples");
+        for entry in walkdir::WalkDir::new(&root) {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension() == Some(std::ffi::OsStr::new("roc")) {
+                count += 1;
+                let src = std::fs::read_to_string(path).unwrap();
+                println!("Now trying to format {}", path.display());
+                module_formats_same(&src);
+            }
+        }
+        assert!(
+            count > 0,
+            "Expecting to find at least 1 .roc file to format under {}",
+            root.display()
+        );
+    }
+
+    #[test]
+    /// Test that builtins are formatted correctly
+    /// If this test fails on your diff, it probably means you need to re-format a builtin.
+    /// Try this:
+    /// `cargo run -- format $(find compiler/builtins/roc -name \*.roc)`
+    fn test_fmt_builtins() {
+        let mut count = 0;
+        let mut root = workspace_root();
+        root.push("compiler/builtins/roc");
         for entry in walkdir::WalkDir::new(&root) {
             let entry = entry.unwrap();
             let path = entry.path();

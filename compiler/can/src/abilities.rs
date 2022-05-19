@@ -32,7 +32,7 @@ pub struct MemberSpecialization {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SpecializationId(u64);
+pub struct SpecializationId(u32);
 
 #[allow(clippy::derivable_impls)] // let's be explicit about this
 impl Default for SpecializationId {
@@ -68,7 +68,7 @@ pub struct AbilitiesStore {
     /// member `member`, to the exact symbol that implements the ability.
     declared_specializations: MutMap<(Symbol, Symbol), MemberSpecialization>,
 
-    next_specialization_id: u64,
+    next_specialization_id: u32,
 
     /// Resolved specializations for a symbol. These might be ephemeral (known due to type solving),
     /// or resolved on-the-fly during mono.
@@ -171,10 +171,12 @@ impl AbilitiesStore {
         self.ability_members.get(&member)
     }
 
-    /// Returns an iterator over pairs (ability member, type) specifying that
-    /// "ability member" has a specialization with type "type".
-    pub fn get_known_specializations(&self) -> impl Iterator<Item = (Symbol, Symbol)> + '_ {
-        self.declared_specializations.keys().copied()
+    /// Returns an iterator over pairs ((ability member, type), specialization) specifying that
+    /// "ability member" has a "specialization" for type "type".
+    pub fn iter_specializations(
+        &self,
+    ) -> impl Iterator<Item = ((Symbol, Symbol), MemberSpecialization)> + '_ {
+        self.declared_specializations.iter().map(|(k, v)| (*k, *v))
     }
 
     /// Retrieves the specialization of `member` for `typ`, if it exists.
@@ -189,7 +191,7 @@ impl AbilitiesStore {
     }
 
     pub fn fresh_specialization_id(&mut self) -> SpecializationId {
-        debug_assert!(self.next_specialization_id != std::u64::MAX);
+        debug_assert!(self.next_specialization_id != std::u32::MAX);
 
         let id = SpecializationId(self.next_specialization_id);
         self.next_specialization_id += 1;

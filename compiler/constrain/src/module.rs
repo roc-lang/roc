@@ -70,7 +70,7 @@ impl ExposedForModule {
 
         for symbol in it {
             let module = exposed_by_module.exposed.get(&symbol.module_id());
-            if let Some(ExposedModuleTypes::Valid { .. }) = module {
+            if let Some(ExposedModuleTypes { .. }) = module {
                 imported_values.push(*symbol);
             } else {
                 continue;
@@ -86,12 +86,9 @@ impl ExposedForModule {
 
 /// The types of all exposed values/functions of a module
 #[derive(Clone, Debug)]
-pub enum ExposedModuleTypes {
-    Invalid,
-    Valid {
-        stored_vars_by_symbol: Vec<(Symbol, Variable)>,
-        storage_subs: roc_types::subs::StorageSubs,
-    },
+pub struct ExposedModuleTypes {
+    pub stored_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub storage_subs: roc_types::subs::StorageSubs,
 }
 
 pub fn constrain_module(
@@ -129,11 +126,17 @@ fn constrain_symbols_from_requires(
                 // namespace. If this is the case, we want to introduce the symbols as if they had
                 // the types they are annotated with.
                 let rigids = Default::default();
-                let env = Env { home, rigids };
+                let mut env = Env {
+                    home,
+                    rigids,
+                    resolutions_to_make: vec![],
+                };
                 let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(loc_symbol.value));
 
                 let def_pattern_state =
-                    constrain_def_pattern(constraints, &env, &pattern, loc_type.value);
+                    constrain_def_pattern(constraints, &mut env, &pattern, loc_type.value);
+
+                debug_assert!(env.resolutions_to_make.is_empty());
 
                 constrain_def_make_constraint(
                     constraints,
@@ -174,15 +177,21 @@ pub fn frontload_ability_constraints(
 ) -> Constraint {
     for (member_name, member_data) in abilities_store.root_ability_members().iter() {
         let rigids = Default::default();
-        let env = Env { home, rigids };
+        let mut env = Env {
+            home,
+            rigids,
+            resolutions_to_make: vec![],
+        };
         let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(*member_name));
 
         let mut def_pattern_state = constrain_def_pattern(
             constraints,
-            &env,
+            &mut env,
             &pattern,
             Type::Variable(member_data.signature_var),
         );
+
+        debug_assert!(env.resolutions_to_make.is_empty());
 
         def_pattern_state.vars.push(member_data.signature_var);
 

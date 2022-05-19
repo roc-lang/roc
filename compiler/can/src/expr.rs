@@ -19,7 +19,7 @@ use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
@@ -87,8 +87,9 @@ pub enum Expr {
     AbilityMember(
         /// Actual member name
         Symbol,
-        /// Specialization to use
+        /// Specialization to use, and its variable
         SpecializationId,
+        Variable,
     ),
 
     // Branching
@@ -114,7 +115,7 @@ pub enum Expr {
     },
 
     // Let
-    LetRec(Vec<Def>, Box<Loc<Expr>>),
+    LetRec(Vec<Def>, Box<Loc<Expr>>, IllegalCycleMark),
     LetNonRec(Box<Def>, Box<Loc<Expr>>),
 
     /// This is *only* for calling functions, not for tag application.
@@ -203,10 +204,13 @@ pub enum Expr {
         lambda_set_variables: Vec<LambdaSet>,
     },
 
-    // Test
+    /// Test
     Expect(Box<Loc<Expr>>, Box<Loc<Expr>>),
 
-    // Compiles, but will crash if reached
+    /// Rendered as empty box in editor
+    TypedHole(Variable),
+
+    /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
 
@@ -220,10 +224,10 @@ impl Expr {
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym) => Category::Lookup(sym),
-            &Self::AbilityMember(sym, _) => Category::Lookup(sym),
+            &Self::AbilityMember(sym, _, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
-            Self::LetRec(_, expr) => expr.value.category(),
+            Self::LetRec(_, expr, _) => expr.value.category(),
             Self::LetNonRec(_, expr) => expr.value.category(),
             &Self::Call(_, _, called_via) => Category::CallResult(None, called_via),
             &Self::RunLowLevel { op, .. } => Category::LowLevelOpResult(op),
@@ -246,7 +250,9 @@ impl Expr {
             },
             &Self::OpaqueRef { name, .. } => Category::OpaqueWrap(name),
             Self::Expect(..) => Category::Expect,
-            Self::RuntimeError(..) => Category::Unknown,
+
+            // these nodes place no constraints on the expression's type
+            Self::TypedHole(_) | Self::RuntimeError(..) => Category::Unknown,
         }
     }
 }
@@ -421,12 +427,7 @@ pub fn canonicalize_expr<'a>(
 
     let (expr, output) = match expr {
         &ast::Expr::Num(str) => {
-            let answer = num_expr_from_result(
-                var_store,
-                finish_parsing_num(str).map(|result| (str, result)),
-                region,
-                env,
-            );
+            let answer = num_expr_from_result(var_store, finish_parsing_num(str), region, env);
 
             (answer, Output::default())
         }
@@ -698,7 +699,7 @@ pub fn canonicalize_expr<'a>(
             }
         }
         ast::Expr::Var { module_name, ident } => {
-            canonicalize_var_lookup(env, scope, module_name, ident, region)
+            canonicalize_var_lookup(env, var_store, scope, module_name, ident, region)
         }
         ast::Expr::Underscore(name) => {
             // we parse underscores, but they are not valid expression syntax
@@ -1312,6 +1313,7 @@ fn canonicalize_field<'a>(
 
 fn canonicalize_var_lookup(
     env: &mut Env<'_>,
+    var_store: &mut VarStore,
     scope: &mut Scope,
     module_name: &str,
     ident: &str,
@@ -1323,12 +1325,16 @@ fn canonicalize_var_lookup(
     let can_expr = if module_name.is_empty() {
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
-        match scope.lookup(&(*ident).into(), region) {
+        match scope.lookup_str(ident, region) {
             Ok(symbol) => {
                 output.references.insert_value_lookup(symbol);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
-                    AbilityMember(symbol, scope.abilities_store.fresh_specialization_id())
+                    AbilityMember(
+                        symbol,
+                        scope.abilities_store.fresh_specialization_id(),
+                        var_store.fresh(),
+                    )
                 } else {
                     Var(symbol)
                 }
@@ -1347,7 +1353,11 @@ fn canonicalize_var_lookup(
                 output.references.insert_value_lookup(symbol);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
-                    AbilityMember(symbol, scope.abilities_store.fresh_specialization_id())
+                    AbilityMember(
+                        symbol,
+                        scope.abilities_store.fresh_specialization_id(),
+                        var_store.fresh(),
+                    )
                 } else {
                     Var(symbol)
                 }
@@ -1386,6 +1396,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Var(_)
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
+        | other @ TypedHole { .. }
         | other @ ForeignCall { .. } => other,
 
         List {
@@ -1506,7 +1517,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             Expect(Box::new(loc_condition), Box::new(loc_expr))
         }
 
-        LetRec(defs, loc_expr) => {
+        LetRec(defs, loc_expr, mark) => {
             let mut new_defs = Vec::with_capacity(defs.len());
 
             for def in defs {
@@ -1527,7 +1538,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 value: inline_calls(var_store, scope, loc_expr.value),
             };
 
-            LetRec(new_defs, Box::new(loc_expr))
+            LetRec(new_defs, Box::new(loc_expr), mark)
         }
 
         LetNonRec(def, loc_expr) => {

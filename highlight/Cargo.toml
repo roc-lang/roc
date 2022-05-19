@@ -3,7 +3,7 @@ name = "roc_highlight"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 description = "For syntax highlighting, starts with a string and returns our markup nodes."
 
 [dependencies]

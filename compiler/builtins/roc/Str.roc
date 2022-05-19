@@ -1,6 +1,6 @@
 interface Str
-    exposes 
-        [ 
+    exposes
+        [
             concat,
             Utf8Problem,
             Utf8ByteProblem,
@@ -18,7 +18,6 @@ interface Str
             trim,
             trimLeft,
             trimRight,
-
             toDec,
             toF64,
             toF32,
@@ -41,7 +40,6 @@ interface Str
 ## Dealing with text is a deep topic, so by design, Roc's `Str` module sticks
 ## to the basics.
 ##
-
 ## ### Unicode
 ##
 ## Unicode can represent text values which span multiple languages, symbols, and emoji.
@@ -111,8 +109,6 @@ interface Str
 ## and you can use it as many times as you like inside a string. The name
 ## between the parentheses must refer to a `Str` value that is currently in
 ## scope, and it must be a name - it can't be an arbitrary expression like a function call.
-
-
 Utf8ByteProblem :
     [
         InvalidStartByte,
@@ -191,7 +187,6 @@ toUtf8 : Str -> List U8
 
 # fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
 # fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem Nat, OutOfBounds ]*
-
 fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*
 fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [ BadUtf8 Utf8ByteProblem Nat, OutOfBounds ]*
 
