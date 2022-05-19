@@ -366,6 +366,8 @@ pub fn deep_copy_type_vars_into_expr<'a>(
 
             Expect(e1, e2) => Expect(Box::new(e1.map(go_help)), Box::new(e2.map(go_help))),
 
+            TypedHole(v) => TypedHole(sub!(*v)),
+
             RuntimeError(err) => RuntimeError(err.clone()),
         }
     }
