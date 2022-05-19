@@ -400,6 +400,20 @@ pub enum Derived<'a> {
     SpaceAfter(&'a Derived<'a>, &'a [CommentOrNewline<'a>]),
 }
 
+impl Derived<'_> {
+    pub fn is_empty(&self) -> bool {
+        let mut it = self;
+        loop {
+            match it {
+                Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => {
+                    it = inner;
+                }
+                Self::Has(collection) => return collection.is_empty(),
+            }
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
     /// A function. The types of its arguments, then the type of its return value.
@@ -1005,6 +1019,7 @@ impl_extract_spaces!(Expr);
 impl_extract_spaces!(Pattern);
 impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
+impl_extract_spaces!(TypeAnnotation);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;

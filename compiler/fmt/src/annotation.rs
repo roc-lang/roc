@@ -4,7 +4,8 @@ use crate::{
     Buf,
 };
 use roc_parse::ast::{
-    AssignedField, Collection, Expr, ExtractSpaces, HasClause, Tag, TypeAnnotation, TypeHeader,
+    AssignedField, Collection, Derived, Expr, ExtractSpaces, HasClause, Tag, TypeAnnotation,
+    TypeHeader,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -41,6 +42,16 @@ pub enum Parens {
 pub enum Newlines {
     No,
     Yes,
+}
+
+impl Newlines {
+    pub fn from_bool(yes: bool) -> Self {
+        if yes {
+            Self::Yes
+        } else {
+            Self::No
+        }
+    }
 }
 
 pub trait Formattable {
@@ -544,5 +555,44 @@ impl<'a> Formattable for HasClause<'a> {
         buf.push_str(" has ");
         self.ability
             .format_with_options(buf, parens, newlines, indent);
+    }
+}
+
+impl<'a> Formattable for Derived<'a> {
+    fn is_multiline(&self) -> bool {
+        match self {
+            Derived::SpaceAfter(..) | Derived::SpaceBefore(..) => true,
+            Derived::Has(derived) => derived.is_multiline(),
+        }
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        parens: Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
+        match self {
+            Derived::Has(derived) => {
+                if newlines == Newlines::Yes {
+                    buf.newline();
+                    buf.indent(indent);
+                }
+                buf.push_str("has");
+                buf.spaces(1);
+                fmt_collection(buf, indent, '[', ']', *derived, newlines);
+            }
+            Derived::SpaceBefore(derived, spaces) => {
+                buf.newline();
+                buf.indent(indent);
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+                derived.format_with_options(buf, parens, Newlines::No, indent)
+            }
+            Derived::SpaceAfter(derived, spaces) => {
+                derived.format_with_options(buf, parens, newlines, indent);
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+            }
+        }
     }
 }

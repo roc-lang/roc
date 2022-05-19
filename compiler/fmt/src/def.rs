@@ -2,7 +2,9 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, INDENT};
 use crate::Buf;
-use roc_parse::ast::{AbilityMember, Def, Expr, ExtractSpaces, Pattern, TypeHeader};
+use roc_parse::ast::{
+    AbilityMember, Def, Expr, ExtractSpaces, Pattern, TypeAnnotation, TypeHeader,
+};
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
@@ -51,10 +53,6 @@ impl<'a> Formattable for Def<'a> {
                 Alias {
                     header: TypeHeader { name, vars },
                     ann,
-                }
-                | Opaque {
-                    header: TypeHeader { name, vars },
-                    typ: ann,
                 } => {
                     buf.indent(indent);
                     buf.push_str(name.value);
@@ -64,14 +62,63 @@ impl<'a> Formattable for Def<'a> {
                         fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
                     }
 
-                    buf.push_str(match def {
-                        Alias { .. } => " :",
-                        Opaque { .. } => " :=",
-                        _ => unreachable!(),
-                    });
+                    buf.push_str(" :");
                     buf.spaces(1);
 
                     ann.format(buf, indent + INDENT)
+                }
+                Opaque {
+                    header: TypeHeader { name, vars },
+                    typ: ann,
+                    derived,
+                } => {
+                    buf.indent(indent);
+                    buf.push_str(name.value);
+
+                    for var in *vars {
+                        buf.spaces(1);
+                        fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
+                    }
+
+                    buf.push_str(" :=");
+                    buf.spaces(1);
+
+                    let ann_is_where_clause =
+                        matches!(ann.extract_spaces().item, TypeAnnotation::Where(..));
+
+                    let ann_has_spaces_before =
+                        matches!(&ann.value, TypeAnnotation::SpaceBefore(..));
+
+                    // Always put the has-derived clause on a newline if it is itself multiline, or
+                    // the annotation has a where-has clause.
+                    let derived_multiline = if let Some(derived) = derived {
+                        !derived.value.is_empty() && (derived.is_multiline() || ann_is_where_clause)
+                    } else {
+                        false
+                    };
+
+                    let make_multiline = ann.is_multiline() || derived_multiline;
+
+                    // If the annotation has spaces before, a newline will already be printed.
+                    if make_multiline && !ann_has_spaces_before {
+                        buf.newline();
+                        buf.indent(indent + INDENT);
+                    }
+
+                    ann.format(buf, indent + INDENT);
+
+                    if let Some(derived) = derived {
+                        if !make_multiline {
+                            buf.spaces(1);
+                        }
+
+                        derived.format_with_options(
+                            buf,
+                            Parens::NotNeeded,
+                            Newlines::from_bool(make_multiline),
+                            indent + INDENT,
+                        );
+                    }
                 }
                 Ability {
                     header: TypeHeader { name, vars },
@@ -134,7 +181,6 @@ impl<'a> Formattable for Def<'a> {
                     body_pattern,
                     body_expr,
                 } => {
-                    use roc_parse::ast::TypeAnnotation;
                     let is_type_multiline = ann_type.is_multiline();
                     let is_type_function = matches!(
                         ann_type.value,

@@ -4659,6 +4659,46 @@ mod test_fmt {
     }
 
     #[test]
+    fn opaque_has_clause() {
+        expr_formats_same(indoc!(
+            r#"
+            A := U8 has [ Eq, Hash ]
+
+            0
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            A :=
+                U8
+                has [ Eq, Hash ]
+
+            0
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                A := a | a has Hash has [ Eq, Hash ]
+
+                0
+                "#
+            ),
+            indoc!(
+                r#"
+                A :=
+                    a | a has Hash
+                    has [ Eq, Hash ]
+
+                0
+                "#
+            ),
+        );
+    }
+
+    #[test]
     /// Test that everything under examples/ is formatted correctly
     /// If this test fails on your diff, it probably means you need to re-format the examples.
     /// Try this:
