@@ -1647,14 +1647,24 @@ impl Subs {
         (self.utable.get_rank(key), self.utable.get_mark(key))
     }
 
+    pub fn get_mark_unchecked(&self, key: Variable) -> Mark {
+        self.utable.get_mark_unchecked(key)
+    }
+
+    pub fn get_content_unchecked(&self, key: Variable) -> &Content {
+        self.utable.get_content_unchecked(key)
+    }
+
+    pub fn get_rank_unchecked(&self, key: Variable) -> Rank {
+        self.utable.get_rank_unchecked(key)
+    }
+
     #[inline(always)]
     pub fn get_without_compacting(&self, key: Variable) -> Descriptor {
-        // self.utable.probe_value_without_compacting(key)
         self.utable.get_descriptor(key)
     }
 
     pub fn get_content_without_compacting(&self, key: Variable) -> &Content {
-        // &self.utable.probe_value_ref(key).value.content
         self.utable.get_content(key)
     }
 
@@ -1677,26 +1687,26 @@ impl Subs {
     }
 
     pub fn set_rank(&mut self, key: Variable, rank: Rank) {
-        // let l_key = self.utable.inlined_get_root_key(key);
-
         self.utable.set_rank(key, rank)
     }
 
     pub fn set_mark(&mut self, key: Variable, mark: Mark) {
-        // let l_key = self.utable.inlined_get_root_key(key);
-
         self.utable.set_mark(key, mark)
     }
 
-    pub fn set_copy(&mut self, key: Variable, copy: OptVariable) {
-        // let l_key = self.utable.inlined_get_root_key(key);
+    pub fn set_rank_unchecked(&mut self, key: Variable, rank: Rank) {
+        self.utable.set_rank_unchecked(key, rank)
+    }
 
+    pub fn set_mark_unchecked(&mut self, key: Variable, mark: Mark) {
+        self.utable.set_mark_unchecked(key, mark)
+    }
+
+    pub fn set_copy(&mut self, key: Variable, copy: OptVariable) {
         self.utable.set_copy(key, copy)
     }
 
     pub fn set_rank_mark(&mut self, key: Variable, rank: Rank, mark: Mark) {
-        // let l_key = self.utable.inlined_get_root_key(key);
-
         self.utable.set_rank(key, rank);
         self.utable.set_mark(key, mark);
     }

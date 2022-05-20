@@ -2612,21 +2612,24 @@ fn adjust_rank(
     group_rank: Rank,
     var: Variable,
 ) -> Rank {
-    let desc_rank = subs.get_rank(var);
-    let desc_mark = subs.get_mark(var);
+    let var = subs.get_root_key(var);
+
+    let desc_rank = subs.get_rank_unchecked(var);
+    let desc_mark = subs.get_mark_unchecked(var);
 
     if desc_mark == young_mark {
         let content = {
-            let ptr = subs.get_content_without_compacting(var) as *const _;
+            let ptr = subs.get_content_unchecked(var) as *const _;
             unsafe { &*ptr }
         };
 
         // Mark the variable as visited before adjusting content, as it may be cyclic.
-        subs.set_mark(var, visit_mark);
+        subs.set_mark_unchecked(var, visit_mark);
 
         let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
 
-        subs.set_rank_mark(var, max_rank, visit_mark);
+        subs.set_rank_unchecked(var, max_rank);
+        subs.set_mark_unchecked(var, visit_mark);
 
         max_rank
     } else if desc_mark == visit_mark {
@@ -2637,8 +2640,8 @@ fn adjust_rank(
         let min_rank = group_rank.min(desc_rank);
 
         // TODO from elm-compiler: how can min_rank ever be group_rank?
-        subs.set_rank(var, min_rank);
-        subs.set_mark(var, visit_mark);
+        subs.set_rank_unchecked(var, min_rank);
+        subs.set_mark_unchecked(var, visit_mark);
 
         min_rank
     }
