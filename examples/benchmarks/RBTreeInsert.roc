@@ -1,7 +1,7 @@
 app "rbtree-insert"
     packages { pf: "platform" }
-    imports [ pf.Task ]
-    provides [ main ] to pf
+    imports [pf.Task]
+    provides [main] to pf
 
 main : Task.Task {} []
 main =
@@ -47,9 +47,9 @@ showColor = \color ->
         Black ->
             "Black"
 
-NodeColor : [ Red, Black ]
+NodeColor : [Red, Black]
 
-RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
+RedBlackTree k v : [Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty]
 
 Key k : Num k
 

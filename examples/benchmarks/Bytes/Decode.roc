@@ -1,10 +1,10 @@
-interface Bytes.Decode exposes [ Decoder, decode, map, map2, u8, loop, Step, succeed, DecodeProblem, after, map3 ] imports []
+interface Bytes.Decode exposes [Decoder, decode, map, map2, u8, loop, Step, succeed, DecodeProblem, after, map3] imports []
 
 State : { bytes : List U8, cursor : Nat }
 
-DecodeProblem : [ OutOfBytes ]
+DecodeProblem : [OutOfBytes]
 
-Decoder a := State -> [ Good State a, Bad DecodeProblem ]
+Decoder a := State -> [Good State a, Bad DecodeProblem]
 
 decode : List U8, Decoder a -> Result a DecodeProblem
 decode = \bytes, @Decoder decoder ->
@@ -80,7 +80,7 @@ u8 = @Decoder
             Err _ ->
                 Bad OutOfBytes
 
-Step state b : [ Loop state, Done b ]
+Step state b : [Loop state, Done b]
 
 loop : (state -> Decoder (Step state a)), state -> Decoder a
 loop = \stepper, initial ->

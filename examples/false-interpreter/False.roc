@@ -1,7 +1,7 @@
 app "false"
     packages { pf: "platform" }
-    imports [ pf.Task.{ Task }, pf.Stdout, pf.Stdin, Context.{ Context }, Variable.{ Variable } ]
-    provides [ main ] to pf
+    imports [pf.Task.{ Task }, pf.Stdout, pf.Stdin, Context.{ Context }, Variable.{ Variable }]
+    provides [main] to pf
 
 # An interpreter for the False programming language: https://strlen.com/false-language/
 # This is just a silly example to test this variety of program.
@@ -16,14 +16,14 @@ app "false"
 # In an imperative language, a few of these pieces would be in while loops and it would basically never overflow.
 # This implementation is easy to overflow, either make the input long enough or make a false while loop run long enough.
 # I assume all of the Task.awaits are the cause of this, but I am not 100% sure.
-InterpreterErrors : [ BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, MaxInputNumber, NoLambdaOnStack, NoNumberOnStack, NoVariableOnStack, NoScope, OutOfBounds, UnexpectedEndOfData ]
+InterpreterErrors : [BadUtf8, DivByZero, EmptyStack, InvalidBooleanValue, InvalidChar Str, MaxInputNumber, NoLambdaOnStack, NoNumberOnStack, NoVariableOnStack, NoScope, OutOfBounds, UnexpectedEndOfData]
 
 main : Str -> Task {} []
 main = \filename ->
     interpretFile filename
         |> Task.onFail (\StringErr e -> Stdout.line "Ran into problem:\n\(e)\n")
 
-interpretFile : Str -> Task {} [ StringErr Str ]
+interpretFile : Str -> Task {} [StringErr Str]
 interpretFile = \filename ->
     ctx <- Context.with filename
     result <- Task.attempt (interpretCtx ctx)
@@ -79,7 +79,7 @@ interpretCtx : Context -> Task Context InterpreterErrors
 interpretCtx = \ctx ->
     Task.loop ctx interpretCtxLoop
 
-interpretCtxLoop : Context -> Task [ Step Context, Done Context ] InterpreterErrors
+interpretCtxLoop : Context -> Task [Step Context, Done Context] InterpreterErrors
 interpretCtxLoop = \ctx ->
     when ctx.state is
         Executing if Context.inWhileScope ctx ->
@@ -412,7 +412,7 @@ stepExecCtx = \ctx, char ->
             # `,` write char
             when popNumber ctx is
                 Ok (T popCtx num) ->
-                    when Str.fromUtf8 [ Num.intCast num ] is
+                    when Str.fromUtf8 [Num.intCast num] is
                         Ok str ->
                             {} <- Task.await (Stdout.raw str)
                             Task.succeed popCtx
@@ -488,7 +488,7 @@ binaryOp = \ctx, op ->
     (T popCtx2 numL) <- Result.after (popNumber popCtx1)
     Ok (Context.pushStack popCtx2 (Number (op numL numR)))
 
-popNumber : Context -> Result [ T Context I32 ] InterpreterErrors
+popNumber : Context -> Result [T Context I32] InterpreterErrors
 popNumber = \ctx ->
     when Context.popStack ctx is
         Ok (T popCtx (Number num)) ->
@@ -498,7 +498,7 @@ popNumber = \ctx ->
         Err EmptyStack ->
             Err EmptyStack
 
-popLambda : Context -> Result [ T Context (List U8) ] InterpreterErrors
+popLambda : Context -> Result [T Context (List U8)] InterpreterErrors
 popLambda = \ctx ->
     when Context.popStack ctx is
         Ok (T popCtx (Lambda bytes)) ->
@@ -508,7 +508,7 @@ popLambda = \ctx ->
         Err EmptyStack ->
             Err EmptyStack
 
-popVariable : Context -> Result [ T Context Variable ] InterpreterErrors
+popVariable : Context -> Result [T Context Variable] InterpreterErrors
 popVariable = \ctx ->
     when Context.popStack ctx is
         Ok (T popCtx (Var var)) ->

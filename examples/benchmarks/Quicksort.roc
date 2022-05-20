@@ -1,4 +1,4 @@
-interface Quicksort exposes [ sortBy, sortWith, show ] imports []
+interface Quicksort exposes [sortBy, sortWith, show] imports []
 
 show : List I64 -> Str
 show = \list ->
@@ -16,9 +16,9 @@ sortBy : List a, (a -> Num *) -> List a
 sortBy = \list, toComparable ->
     sortWith list (\x, y -> Num.compare (toComparable x) (toComparable y))
 
-Order a : a, a -> [ LT, GT, EQ ]
+Order a : a, a -> [LT, GT, EQ]
 
-sortWith : List a, (a, a -> [ LT, GT, EQ ]) -> List a
+sortWith : List a, (a, a -> [LT, GT, EQ]) -> List a
 sortWith = \list, order ->
     n = List.len list
 
@@ -35,7 +35,7 @@ quicksortHelp = \list, order, low, high ->
     else
         list
 
-partition : Nat, Nat, List a, Order a -> [ Pair Nat (List a) ]
+partition : Nat, Nat, List a, Order a -> [Pair Nat (List a)]
 partition = \low, high, initialList, order ->
     when List.get initialList high is
         Ok pivot ->
@@ -45,7 +45,7 @@ partition = \low, high, initialList, order ->
         Err _ ->
             Pair low initialList
 
-partitionHelp : Nat, Nat, List c, Order c, Nat, c -> [ Pair Nat (List c) ]
+partitionHelp : Nat, Nat, List c, Order c, Nat, c -> [Pair Nat (List c)]
 partitionHelp = \i, j, list, order, high, pivot ->
     if j < high then
         when List.get list j is

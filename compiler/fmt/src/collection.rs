@@ -89,16 +89,19 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
         // there is no comment to add
         buf.indent(indent);
         buf.push(start);
-        let mut iter = items.iter().peekable();
-        while let Some(item) = iter.next() {
-            buf.spaces(1);
+        let mut iter = items.iter().enumerate().peekable();
+        while let Some((index, item)) = iter.next() {
+            if braces == Braces::Curly || index != 0 {
+                buf.spaces(1);
+            }
+
             item.format(buf, indent);
             if iter.peek().is_some() {
                 buf.push(',');
             }
         }
 
-        if !items.is_empty() {
+        if !items.is_empty() && braces == Braces::Curly {
             buf.spaces(1);
         }
     }

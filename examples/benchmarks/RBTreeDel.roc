@@ -1,15 +1,15 @@
 app "rbtree-del"
     packages { pf: "platform" }
-    imports [ pf.Task ]
-    provides [ main ] to pf
+    imports [pf.Task]
+    provides [main] to pf
 
-Color : [ Red, Black ]
+Color : [Red, Black]
 
-Tree a b : [ Leaf, Node Color (Tree a b) a b (Tree a b) ]
+Tree a b : [Leaf, Node Color (Tree a b) a b (Tree a b)]
 
 Map : Tree I64 Bool
 
-ConsList a : [ Nil, Cons a (ConsList a) ]
+ConsList a : [Nil, Cons a (ConsList a)]
 
 main : Task.Task {} []
 main =
@@ -156,7 +156,7 @@ isBlack = \c ->
         Red ->
             False
 
-Del a b : [ Del (Tree a b) Bool ]
+Del a b : [Del (Tree a b) Bool]
 
 setRed : Map -> Map
 setRed = \t ->

@@ -258,34 +258,34 @@ fn literal_empty_list() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn literal_empty_list_empty_record() {
-    expect_success("[ {} ]", "[ {} ] : List {}");
+    expect_success("[ {} ]", "[{}] : List {}");
 }
 
 #[test]
 fn literal_num_list() {
-    expect_success("[ 1, 2, 3 ]", "[ 1, 2, 3 ] : List (Num *)");
+    expect_success("[ 1, 2, 3 ]", "[1, 2, 3] : List (Num *)");
 }
 
 #[test]
 fn literal_int_list() {
-    expect_success("[ 0x1, 0x2, 0x3 ]", "[ 1, 2, 3 ] : List (Int *)");
+    expect_success("[ 0x1, 0x2, 0x3 ]", "[1, 2, 3] : List (Int *)");
 }
 
 #[test]
 fn literal_float_list() {
-    expect_success("[ 1.1, 2.2, 3.3 ]", "[ 1.1, 2.2, 3.3 ] : List (Float *)");
+    expect_success("[ 1.1, 2.2, 3.3 ]", "[1.1, 2.2, 3.3] : List (Float *)");
 }
 
 #[test]
 fn literal_string_list() {
-    expect_success(r#"[ "a", "b", "cd" ]"#, r#"[ "a", "b", "cd" ] : List Str"#);
+    expect_success(r#"[ "a", "b", "cd" ]"#, r#"["a", "b", "cd"] : List Str"#);
 }
 
 #[test]
 fn nested_string_list() {
     expect_success(
         r#"[ [ [ "a", "b", "cd" ], [ "y", "z" ] ], [ [] ], [] ]"#,
-        r#"[ [ [ "a", "b", "cd" ], [ "y", "z" ] ], [ [] ], [] ] : List (List (List Str))"#,
+        r#"[[["a", "b", "cd"], ["y", "z"]], [[]], []] : List (List (List Str))"#,
     );
 }
 
@@ -293,7 +293,7 @@ fn nested_string_list() {
 fn nested_num_list() {
     expect_success(
         r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ]"#,
-        r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List (Num *)))"#,
+        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Num *)))"#,
     );
 }
 
@@ -301,7 +301,7 @@ fn nested_num_list() {
 fn nested_int_list() {
     expect_success(
         r#"[ [ [ 4, 3, 2 ], [ 1, 0x0 ] ], [ [] ], [] ]"#,
-        r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List Int *))"#,
+        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List Int *))"#,
     );
 }
 
@@ -309,7 +309,7 @@ fn nested_int_list() {
 fn nested_float_list() {
     expect_success(
         r#"[ [ [ 4, 3, 2 ], [ 1, 0.0 ] ], [ [] ], [] ]"#,
-        r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List (Float *)))"#,
+        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Float *)))"#,
     );
 }
 
@@ -386,7 +386,7 @@ fn num_mul_checked() {
 fn list_concat() {
     expect_success(
         "List.concat [ 1.1, 2.2 ] [ 3.3, 4.4, 5.5 ]",
-        "[ 1.1, 2.2, 3.3, 4.4, 5.5 ] : List (Float *)",
+        "[1.1, 2.2, 3.3, 4.4, 5.5] : List (Float *)",
     );
 }
 
@@ -508,14 +508,14 @@ fn basic_3_field_record() {
 fn list_of_1_field_records() {
     // Even though these get unwrapped at runtime, the repl should still
     // report them as records
-    expect_success("[ { foo: 42 } ]", "[ { foo: 42 } ] : List { foo : Num * }");
+    expect_success("[ { foo: 42 } ]", "[{ foo: 42 }] : List { foo : Num * }");
 }
 
 #[test]
 fn list_of_2_field_records() {
     expect_success(
         "[ { foo: 4.1, bar: 2 } ]",
-        "[ { bar: 2, foo: 4.1 } ] : List { bar : Num *, foo : Float * }",
+        "[{ bar: 2, foo: 4.1 }] : List { bar : Num *, foo : Float * }",
     );
 }
 
@@ -547,7 +547,7 @@ fn multiline_string() {
 fn list_of_3_field_records() {
     expect_success(
         "[ { foo: 4.1, bar: 2, baz: 0x3 } ]",
-        "[ { bar: 2, baz: 3, foo: 4.1 } ] : List { bar : Num *, baz : Int *, foo : Float * }",
+        "[{ bar: 2, baz: 3, foo: 4.1 }] : List { bar : Num *, baz : Int *, foo : Float * }",
     );
 }
 
@@ -738,7 +738,7 @@ fn non_nullable_unwrapped_tag_union() {
                 combo
                 "#
         ),
-        r#"Tree "combo" [ Tree "e1" [], Tree "e2" [] ] : RoseTree Str"#,
+        r#"Tree "combo" [Tree "e1" [], Tree "e2" []] : RoseTree Str"#,
     )
 }
 
@@ -822,7 +822,7 @@ fn issue_2300() {
 fn function_in_list() {
     expect_success(
         r#"[\x -> x + 1, \s -> s * 2]"#,
-        r#"[ <function>, <function> ] : List (Num a -> Num a)"#,
+        r#"[<function>, <function>] : List (Num a -> Num a)"#,
     )
 }
 

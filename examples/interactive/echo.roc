@@ -1,7 +1,7 @@
 app "echo"
     packages { pf: "cli-platform" }
-    imports [ pf.Stdin, pf.Stdout, pf.Task ]
-    provides [ main ] to pf
+    imports [pf.Stdin, pf.Stdout, pf.Task]
+    provides [main] to pf
 
 main : Task.Task {} []
 main =

@@ -1,5 +1,5 @@
 interface Issue2279Help
-    exposes [ text, asText ]
+    exposes [text, asText]
     imports []
 
 text = "Hello, world!"

@@ -201,7 +201,7 @@ isEmpty : List a -> Bool
 isEmpty = \list ->
     List.len list == 0
 
-get : List a, Nat -> Result a [ OutOfBounds ]*
+get : List a, Nat -> Result a [OutOfBounds]*
 replace : List a, Nat, a -> { list : List a, value : a }
 
 ## Replaces the element at the given index with a replacement.
@@ -248,7 +248,7 @@ len : List a -> Nat
 concat : List a, List a -> List a
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
-last : List a -> Result a [ ListWasEmpty ]*
+last : List a -> Result a [ListWasEmpty]*
 
 ## A list with a single element in it.
 ##
@@ -332,7 +332,7 @@ walkBackwards : List elem, state, (state, elem -> state) -> state
 ##
 ## As such, it is typically better for performance to use this over [List.walk]
 ## if returning `Done` earlier than the last element is expected to be common.
-walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
+walkUntil : List elem, state, (state, elem -> [Continue state, Stop state]) -> state
 
 sum : List (Num a) -> Num a
 sum = \list ->
@@ -443,7 +443,7 @@ mapWithIndex : List a, (a, Nat -> b) -> List b
 ##
 ## >>> List.range 2 8
 range : Int a, Int a -> List (Int a)
-sortWith : List a, (a, a -> [ LT, EQ, GT ]) -> List a
+sortWith : List a, (a, a -> [LT, EQ, GT]) -> List a
 
 ## Sorts a list in ascending order (lowest to highest), using a function which
 ## specifies a way to represent each element as a number.
@@ -462,7 +462,7 @@ sortDesc = \list -> List.sortWith list (\a, b -> Num.compare b a)
 swap : List a, Nat, Nat -> List a
 
 ## Returns the first element in the list, or `ListWasEmpty` if it was empty.
-first : List a -> Result a [ ListWasEmpty ]*
+first : List a -> Result a [ListWasEmpty]*
 
 ## Remove the first element from the list.
 ##
@@ -539,7 +539,7 @@ drop : List elem, Nat -> List elem
 ## To replace the element at a given index, instead of dropping it, see [List.set].
 dropAt : List elem, Nat -> List elem
 
-min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+min : List (Num a) -> Result (Num a) [ListWasEmpty]*
 min = \list ->
     when List.first list is
         Ok initial ->
@@ -555,7 +555,7 @@ minHelp = \list, initial ->
         else
             bestSoFar
 
-max : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+max : List (Num a) -> Result (Num a) [ListWasEmpty]*
 max = \list ->
     when List.first list is
         Ok initial ->
@@ -581,7 +581,7 @@ joinMap = \list, mapper ->
 
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
+find : List elem, (elem -> Bool) -> Result elem [NotFound]*
 
 ## Returns a subsection of the given list, beginning at the `start` index and
 ## including a total of `len` elements.

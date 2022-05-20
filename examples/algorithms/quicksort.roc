@@ -1,7 +1,7 @@
 app "quicksort"
     packages { pf: "quicksort-platform" }
     imports []
-    provides [ quicksort ] to pf
+    provides [quicksort] to pf
 
 quicksort = \originalList ->
     n = List.len originalList
@@ -19,7 +19,7 @@ quicksortHelp = \list, low, high ->
     else
         list
 
-partition : Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]
+partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
 partition = \low, high, initialList ->
     when List.get initialList high is
         Ok pivot ->
@@ -29,7 +29,7 @@ partition = \low, high, initialList ->
         Err _ ->
             Pair low initialList
 
-partitionHelp : Nat, Nat, List (Num c), Nat, Num c -> [ Pair Nat (List (Num c)) ]
+partitionHelp : Nat, Nat, List (Num c), Nat, Num c -> [Pair Nat (List (Num c))]
 partitionHelp = \i, j, list, high, pivot ->
     if j < high then
         when List.get list j is

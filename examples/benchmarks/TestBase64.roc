@@ -1,7 +1,7 @@
 app "test-base64"
     packages { pf: "platform" }
-    imports [ pf.Task, Base64 ]
-    provides [ main ] to pf
+    imports [pf.Task, Base64]
+    provides [main] to pf
 
 IO a : Task.Task a []
 

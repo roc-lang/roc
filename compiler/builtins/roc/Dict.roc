@@ -71,7 +71,7 @@ interface Dict
 ## An empty dictionary.
 empty : Dict k v
 single : k, v -> Dict k v
-get : Dict k v, k -> Result v [ KeyNotFound ]*
+get : Dict k v, k -> Result v [KeyNotFound]*
 walk : Dict k v, state, (state, k, v -> state) -> state
 insert : Dict k v, k, v -> Dict k v
 len : Dict k v -> Nat
