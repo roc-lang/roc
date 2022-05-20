@@ -345,17 +345,15 @@ impl {name} {{
 
     // The Drop impl for the tag union
     {
-        write!(
+        writeln!(
             buf,
             r#"
 impl Drop for {name} {{
-    fn drop(&mut self) {{
-        match self.tag {{
-"#
+    fn drop(&mut self) {{"#
         )?;
 
         write_impl_tags(
-            3,
+            2,
             tags.iter(),
             &discriminant_name,
             buf,
@@ -377,15 +375,14 @@ impl Drop for {name} {{
 
         writeln!(
             buf,
-            r#"        }}
-    }}
+            r#"    }}
 }}"#
         )?;
     }
 
     // The PartialEq impl for the tag union
     {
-        write!(
+        writeln!(
             buf,
             r#"
 impl PartialEq for {name} {{
@@ -394,13 +391,11 @@ impl PartialEq for {name} {{
             return false;
         }}
 
-        unsafe {{
-            match self.tag {{
-"#
+        unsafe {{"#
         )?;
 
         write_impl_tags(
-            4,
+            3,
             tags.iter(),
             &discriminant_name,
             buf,
@@ -418,8 +413,7 @@ impl PartialEq for {name} {{
 
         writeln!(
             buf,
-            r#"            }}
-        }}
+            r#"        }}
     }}
 }}"#
         )?;
@@ -431,7 +425,7 @@ impl PartialEq for {name} {{
 
     // The PartialOrd impl for the tag union
     {
-        write!(
+        writeln!(
             buf,
             r#"
 impl PartialOrd for {name} {{
@@ -441,13 +435,11 @@ impl PartialOrd for {name} {{
             not_eq => return not_eq,
         }}
 
-        unsafe {{
-            match self.tag {{
-"#
+        unsafe {{"#
         )?;
 
         write_impl_tags(
-            4,
+            3,
             tags.iter(),
             &discriminant_name,
             buf,
@@ -465,8 +457,7 @@ impl PartialOrd for {name} {{
 
         writeln!(
             buf,
-            r#"            }}
-        }}
+            r#"        }}
     }}
 }}"#
         )?;
@@ -474,7 +465,7 @@ impl PartialOrd for {name} {{
 
     // The Ord impl for the tag union
     {
-        write!(
+        writeln!(
             buf,
             r#"
 impl Ord for {name} {{
@@ -484,13 +475,11 @@ impl Ord for {name} {{
             not_eq => return not_eq,
         }}
 
-        unsafe {{
-            match self.tag {{
-"#
+        unsafe {{"#
         )?;
 
         write_impl_tags(
-            4,
+            3,
             tags.iter(),
             &discriminant_name,
             buf,
@@ -508,8 +497,7 @@ impl Ord for {name} {{
 
         writeln!(
             buf,
-            r#"            }}
-        }}
+            r#"        }}
     }}
 }}"#
         )?;
@@ -517,17 +505,15 @@ impl Ord for {name} {{
 
     // The Clone impl for the tag union
     {
-        write!(
+        writeln!(
             buf,
             r#"
 impl Clone for {name} {{
-    fn clone(&self) -> Self {{
-        match self.tag {{
-"#
+    fn clone(&self) -> Self {{"#
         )?;
 
         write_impl_tags(
-            3,
+            2,
             tags.iter(),
             &discriminant_name,
             buf,
@@ -561,8 +547,7 @@ impl Clone for {name} {{
 
         writeln!(
             buf,
-            r#"        }}
-    }}
+            r#"    }}
 }}"#
         )?;
     }
@@ -577,12 +562,11 @@ impl Clone for {name} {{
             buf,
             r#"
 impl core::hash::Hash for {name} {{
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {{
-        match self.tag() {{"#
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {{"#
         )?;
 
         write_impl_tags(
-            3,
+            2,
             tags.iter(),
             &discriminant_name,
             buf,
@@ -604,28 +588,25 @@ impl core::hash::Hash for {name} {{
 
         writeln!(
             buf,
-            r#"        }}
-    }}
+            r#"    }}
 }}"#
         )?;
     }
 
     // The Debug impl for the tag union
     {
-        write!(
+        writeln!(
             buf,
             r#"
 impl core::fmt::Debug for {name} {{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
         f.write_str("{name}::")?;
 
-        unsafe {{
-            match self.tag {{
-"#
+        unsafe {{"#
         )?;
 
         write_impl_tags(
-            4,
+            3,
             tags.iter(),
             &discriminant_name,
             buf,
@@ -642,8 +623,7 @@ impl core::fmt::Debug for {name} {{
 
         writeln!(
             buf,
-            r#"            }}
-        }}
+            r#"        }}
     }}
 }}
 "#
@@ -664,15 +644,27 @@ fn write_impl_tags<
     buf: &mut String,
     to_branch_str: F,
 ) -> fmt::Result {
+    for _ in 0..indentations {
+        buf.write_str(INDENT)?;
+    }
+
+    buf.write_str("match self.tag() {\n")?;
+
     for (tag_name, opt_payload_id) in tags {
         let branch_str = to_branch_str(tag_name, *opt_payload_id);
 
-        for _ in 0..indentations {
+        for _ in 0..(indentations + 1) {
             buf.write_str(INDENT)?;
         }
 
         writeln!(buf, "{discriminant_name}::{tag_name} => {branch_str}")?;
     }
+
+    for _ in 0..indentations {
+        buf.write_str(INDENT)?;
+    }
+
+    buf.write_str("}\n")?;
 
     Ok(())
 }
