@@ -1,5 +1,6 @@
 use crate::ast::{
-    AssignedField, CommentOrNewline, HasClause, Pattern, Spaced, Tag, TypeAnnotation, TypeHeader,
+    AssignedField, CommentOrNewline, Derived, HasClause, Pattern, Spaced, Tag, TypeAnnotation,
+    TypeHeader,
 };
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::ident::lowercase_ident;
@@ -15,19 +16,29 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::{Loc, Position, Region};
 
-pub fn located_help<'a>(
+pub fn located<'a>(
     min_indent: u32,
     is_trailing_comma_valid: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    expression(min_indent, is_trailing_comma_valid)
+    expression(min_indent, is_trailing_comma_valid, false)
+}
+
+pub fn located_opaque_signature<'a>(
+    min_indent: u32,
+    is_trailing_comma_valid: bool,
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+    expression(min_indent, is_trailing_comma_valid, true)
 }
 
 #[inline(always)]
-fn tag_union_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, ETypeTagUnion<'a>> {
+fn tag_union_type<'a>(
+    min_indent: u32,
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, TypeAnnotation<'a>, ETypeTagUnion<'a>> {
     move |arena, state| {
         let (_, tags, state) = collection_trailing_sep_e!(
             word1(b'[', ETypeTagUnion::Open),
-            loc!(tag_type(min_indent)),
+            loc!(tag_type(min_indent, false)),
             word1(b',', ETypeTagUnion::End),
             word1(b']', ETypeTagUnion::End),
             min_indent,
@@ -40,7 +51,7 @@ fn tag_union_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, ET
         // This could be an open tag union, e.g. `[ Foo, Bar ]a`
         let (_, ext, state) = optional(allocated(specialize_ref(
             ETypeTagUnion::Type,
-            term(min_indent),
+            term(min_indent, stop_at_surface_has),
         )))
         .parse(arena, state)?;
 
@@ -90,7 +101,7 @@ fn check_type_alias(
 
 fn parse_type_alias_after_as<'a>(min_indent: u32) -> impl Parser<'a, TypeHeader<'a>, EType<'a>> {
     move |arena, state| {
-        space0_before_e(term(min_indent), min_indent, EType::TAsIndentStart)
+        space0_before_e(term(min_indent, false), min_indent, EType::TAsIndentStart)
             .parse(arena, state)
             .and_then(|(p, annot, state)| {
                 specialize(EType::TInlineAlias, check_type_alias(p, annot)).parse(arena, state)
@@ -102,17 +113,26 @@ fn fail_type_start<'a, T: 'a>() -> impl Parser<'a, T, EType<'a>> {
     |_arena, state: State<'a>| Err((NoProgress, EType::TStart(state.pos()), state))
 }
 
-fn term<'a>(min_indent: u32) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+fn term<'a>(
+    min_indent: u32,
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     map_with_arena!(
         and!(
             one_of!(
                 loc_wildcard(),
                 loc_inferred(),
                 specialize(EType::TInParens, loc_type_in_parens(min_indent)),
-                loc!(specialize(EType::TRecord, record_type(min_indent))),
-                loc!(specialize(EType::TTagUnion, tag_union_type(min_indent))),
-                loc!(applied_type(min_indent)),
-                loc!(parse_type_variable),
+                loc!(specialize(
+                    EType::TRecord,
+                    record_type(min_indent, stop_at_surface_has)
+                )),
+                loc!(specialize(
+                    EType::TTagUnion,
+                    tag_union_type(min_indent, stop_at_surface_has)
+                )),
+                loc!(applied_type(min_indent, stop_at_surface_has)),
+                loc!(parse_type_variable(stop_at_surface_has)),
                 fail_type_start(),
             ),
             // Inline alias notation, e.g. [ Nil, Cons a (List a) ] as List a
@@ -163,7 +183,10 @@ fn loc_inferred<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     })
 }
 
-fn loc_applied_arg<'a>(min_indent: u32) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
+fn loc_applied_arg<'a>(
+    min_indent: u32,
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     use crate::ast::Spaceable;
 
     map_with_arena!(
@@ -173,10 +196,16 @@ fn loc_applied_arg<'a>(min_indent: u32) -> impl Parser<'a, Loc<TypeAnnotation<'a
                 loc_wildcard(),
                 loc_inferred(),
                 specialize(EType::TInParens, loc_type_in_parens(min_indent)),
-                loc!(specialize(EType::TRecord, record_type(min_indent))),
-                loc!(specialize(EType::TTagUnion, tag_union_type(min_indent))),
+                loc!(specialize(
+                    EType::TRecord,
+                    record_type(min_indent, stop_at_surface_has)
+                )),
+                loc!(specialize(
+                    EType::TTagUnion,
+                    tag_union_type(min_indent, stop_at_surface_has)
+                )),
                 loc!(specialize(EType::TApply, parse_concrete_type)),
-                loc!(parse_type_variable)
+                loc!(parse_type_variable(stop_at_surface_has))
             )
         ),
         |arena: &'a Bump, (spaces, argument): (&'a [_], Loc<TypeAnnotation<'a>>)| {
@@ -196,8 +225,11 @@ fn loc_type_in_parens<'a>(
     between!(
         word1(b'(', ETypeInParens::Open),
         space0_around_ee(
-            move |arena, state| specialize_ref(ETypeInParens::Type, expression(min_indent, true))
-                .parse(arena, state),
+            move |arena, state| specialize_ref(
+                ETypeInParens::Type,
+                expression(min_indent, true, false)
+            )
+            .parse(arena, state),
             min_indent,
             ETypeInParens::IndentOpen,
             ETypeInParens::IndentEnd,
@@ -207,12 +239,18 @@ fn loc_type_in_parens<'a>(
 }
 
 #[inline(always)]
-fn tag_type<'a>(min_indent: u32) -> impl Parser<'a, Tag<'a>, ETypeTagUnion<'a>> {
+fn tag_type<'a>(
+    min_indent: u32,
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, Tag<'a>, ETypeTagUnion<'a>> {
     move |arena, state: State<'a>| {
         let (_, name, state) = loc!(parse_tag_name(ETypeTagUnion::End)).parse(arena, state)?;
 
-        let (_, args, state) = specialize_ref(ETypeTagUnion::Type, loc_applied_args_e(min_indent))
-            .parse(arena, state)?;
+        let (_, args, state) = specialize_ref(
+            ETypeTagUnion::Type,
+            loc_applied_args_e(min_indent, stop_at_surface_has),
+        )
+        .parse(arena, state)?;
 
         let result = Tag::Apply {
             name,
@@ -262,7 +300,7 @@ fn record_type_field<'a>(
         ))
         .parse(arena, state)?;
 
-        let val_parser = specialize_ref(ETypeRecord::Type, expression(min_indent, true));
+        let val_parser = specialize_ref(ETypeRecord::Type, expression(min_indent, true, false));
 
         match opt_loc_val {
             Some(First(_)) => {
@@ -304,7 +342,10 @@ fn record_type_field<'a>(
 }
 
 #[inline(always)]
-fn record_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
+fn record_type<'a>(
+    min_indent: u32,
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
     use crate::type_annotation::TypeAnnotation::*;
 
     (move |arena, state| {
@@ -322,7 +363,7 @@ fn record_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, EType
         )
         .parse(arena, state)?;
 
-        let field_term = specialize_ref(ETypeRecord::Type, term(min_indent));
+        let field_term = specialize_ref(ETypeRecord::Type, term(min_indent, stop_at_surface_has));
         let (_, ext, state) = optional(allocated(field_term)).parse(arena, state)?;
 
         let result = Record { fields, ext };
@@ -332,13 +373,16 @@ fn record_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, EType
     .trace("type_annotation:record_type")
 }
 
-fn applied_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
+fn applied_type<'a>(
+    min_indent: u32,
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
     map!(
         and!(
             specialize(EType::TApply, parse_concrete_type),
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`
-            loc_applied_args_e(min_indent)
+            loc_applied_args_e(min_indent, stop_at_surface_has)
         ),
         |(ctor, args): (TypeAnnotation<'a>, Vec<'a, Loc<TypeAnnotation<'a>>>)| {
             match &ctor {
@@ -360,8 +404,9 @@ fn applied_type<'a>(min_indent: u32) -> impl Parser<'a, TypeAnnotation<'a>, ETyp
 
 fn loc_applied_args_e<'a>(
     min_indent: u32,
+    stop_at_surface_has: bool,
 ) -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, EType<'a>> {
-    zero_or_more!(loc_applied_arg(min_indent))
+    zero_or_more!(loc_applied_arg(min_indent, stop_at_surface_has))
 }
 
 fn has_clause<'a>(min_indent: u32) -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
@@ -433,20 +478,51 @@ fn has_clause_chain<'a>(
     }
 }
 
+/// Parse a has-derived clause, e.g. `has [ Eq, Hash ]`.
+pub fn has_derived<'a>(min_indent: u32) -> impl Parser<'a, Loc<Derived<'a>>, EType<'a>> {
+    skip_first!(
+        // Parse "has"; we don't care about this keyword
+        word3(b'h', b'a', b's', EType::THasClause),
+        // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
+        space0_before_e(
+            loc!(map!(
+                collection_trailing_sep_e!(
+                    word1(b'[', EType::TStart),
+                    specialize(EType::TApply, loc!(parse_concrete_type)),
+                    word1(b',', EType::TEnd),
+                    word1(b']', EType::TEnd),
+                    min_indent + 1,
+                    EType::TStart,
+                    EType::TIndentEnd,
+                    TypeAnnotation::SpaceBefore
+                ),
+                Derived::Has
+            )),
+            min_indent + 1,
+            EType::TIndentEnd
+        )
+    )
+}
+
 fn expression<'a>(
     min_indent: u32,
     is_trailing_comma_valid: bool,
+    stop_at_surface_has: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
     (move |arena, state: State<'a>| {
-        let (p1, first, state) = space0_before_e(term(min_indent), min_indent, EType::TIndentStart)
-            .parse(arena, state)?;
+        let (p1, first, state) = space0_before_e(
+            term(min_indent, stop_at_surface_has),
+            min_indent,
+            EType::TIndentStart,
+        )
+        .parse(arena, state)?;
 
         let result = and![
             zero_or_more!(skip_first!(
                 word1(b',', EType::TFunctionArgument),
                 one_of![
                     space0_around_ee(
-                        term(min_indent),
+                        term(min_indent, stop_at_surface_has),
                         min_indent,
                         EType::TIndentStart,
                         EType::TIndentEnd
@@ -471,9 +547,12 @@ fn expression<'a>(
 
         let (progress, annot, state) = match result {
             Ok((p2, (rest, _dropped_spaces), state)) => {
-                let (p3, return_type, state) =
-                    space0_before_e(term(min_indent), min_indent, EType::TIndentStart)
-                        .parse(arena, state)?;
+                let (p3, return_type, state) = space0_before_e(
+                    term(min_indent, stop_at_surface_has),
+                    min_indent,
+                    EType::TIndentStart,
+                )
+                .parse(arena, state)?;
 
                 let region = Region::span_across(&first.region, &return_type.region);
 
@@ -590,14 +669,17 @@ fn parse_concrete_type<'a>(
 }
 
 fn parse_type_variable<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-) -> ParseResult<'a, TypeAnnotation<'a>, EType<'a>> {
-    match crate::ident::lowercase_ident().parse(arena, state) {
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
+    move |arena, state: State<'a>| match crate::ident::lowercase_ident().parse(arena, state) {
         Ok((_, name, state)) => {
-            let answer = TypeAnnotation::BoundVariable(name);
+            if name == "has" && stop_at_surface_has {
+                Err((NoProgress, EType::TEnd(state.pos()), state))
+            } else {
+                let answer = TypeAnnotation::BoundVariable(name);
 
-            Ok((MadeProgress, answer, state))
+                Ok((MadeProgress, answer, state))
+            }
         }
         Err((progress, _, state)) => Err((progress, EType::TBadTypeVariable(state.pos()), state)),
     }

@@ -1340,6 +1340,7 @@ fn to_pending_type_def<'a>(
         | Opaque {
             header: TypeHeader { name, vars },
             typ: ann,
+            derived: _,
         } => {
             let (kind, shadow_kind) = if matches!(def, Alias { .. }) {
                 (AliasKind::Structural, ShadowKind::Alias)
