@@ -258,7 +258,6 @@ fn find_i16_slice(slice: &[i16], key: i16) -> Option<usize> {
     return find_i16_slice_fallback(slice, key);
 }
 
-
 #[cfg(target_arch = "x86_64")]
 fn find_i16_slice_x86_64(slice: &[i16], key: i16) -> Option<usize> {
     use std::arch::x86_64::*;
