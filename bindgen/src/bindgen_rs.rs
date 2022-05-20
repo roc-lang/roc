@@ -302,18 +302,16 @@ impl {name} {{
                     buf,
                     // Don't use indoc because this must be indented once!
                     r#"
-    /// Construct a tag named {tag_name}
-    pub fn {tag_name}() -> Self {{
-        Self {{
-            tag: {discriminant_name}::{tag_name},
-            variant: unsafe {{
-                core::mem::transmute::<
-                    core::mem::MaybeUninit<{variant_name}>,
-                    {variant_name},
-                >(core::mem::MaybeUninit::uninit())
-            }},
-        }}
-    }}"#,
+    /// A tag named {tag_name}, which has no payload.
+    pub const {tag_name}: Self = Self {{
+        tag: {discriminant_name}::{tag_name},
+        variant: unsafe {{
+            core::mem::transmute::<
+                core::mem::MaybeUninit<{variant_name}>,
+                {variant_name},
+            >(core::mem::MaybeUninit::uninit())
+        }},
+    }};"#,
                 )?;
 
                 writeln!(
