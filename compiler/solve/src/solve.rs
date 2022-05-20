@@ -2879,19 +2879,20 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     while let Some(var) = stack.pop() {
         visited.push(var);
 
-        let desc = subs.get_ref_mut(var);
-        if desc.copy.is_some() {
+        if subs.get_copy(var).is_some() {
             continue;
         }
 
-        desc.rank = Rank::NONE;
-        desc.mark = Mark::NONE;
-        desc.copy = OptVariable::from(var);
+        subs.modify(var, |desc| {
+            desc.rank = Rank::NONE;
+            desc.mark = Mark::NONE;
+            desc.copy = OptVariable::from(var);
+        });
 
         use Content::*;
         use FlatType::*;
 
-        match &desc.content {
+        match subs.get_content_without_compacting(var) {
             RigidVar(name) => {
                 // what it's all about: convert the rigid var into a flex var
                 let name = *name;
