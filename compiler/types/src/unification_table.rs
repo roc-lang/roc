@@ -118,6 +118,7 @@ impl UnificationTable {
         self.marks[key.index() as usize]
     }
 
+    #[allow(unused)]
     #[inline(always)]
     pub fn get_copy_unchecked(&self, key: Variable) -> OptVariable {
         self.copies[key.index() as usize]
@@ -163,11 +164,13 @@ impl UnificationTable {
         self.marks[key.index() as usize] = value;
     }
 
+    #[allow(unused)]
     #[inline(always)]
     pub fn set_copy_unchecked(&mut self, key: Variable, value: OptVariable) {
         self.copies[key.index() as usize] = value;
     }
 
+    #[allow(unused)]
     #[inline(always)]
     pub fn set_content_unchecked(&mut self, key: Variable, value: Content) {
         self.contents[key.index() as usize] = value;

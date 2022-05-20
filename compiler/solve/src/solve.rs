@@ -2583,8 +2583,10 @@ fn pool_to_rank_table(
     // the vast majority of young variables have young_rank
     let mut i = 0;
     while i < young_vars.len() {
-        let var = young_vars[i];
-        let rank = subs.get_rank_set_mark(var, young_mark);
+        let var = subs.get_root_key(young_vars[i]);
+
+        subs.set_mark_unchecked(var, young_mark);
+        let rank = subs.get_rank_unchecked(var);
 
         if rank != young_rank {
             debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
