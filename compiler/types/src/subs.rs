@@ -860,14 +860,17 @@ pub struct OptVariable(u32);
 impl OptVariable {
     pub const NONE: OptVariable = OptVariable(Variable::NULL.0);
 
+    #[inline(always)]
     pub const fn is_none(self) -> bool {
         self.0 == Self::NONE.0
     }
 
+    #[inline(always)]
     pub const fn is_some(self) -> bool {
         self.0 != Self::NONE.0
     }
 
+    #[inline(always)]
     pub const fn into_variable(self) -> Option<Variable> {
         if self.is_none() {
             None
