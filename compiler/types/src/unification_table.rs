@@ -106,29 +106,29 @@ impl UnificationTable {
         result
     }
 
+    // GET UNCHECKED
+
     #[inline(always)]
-    pub fn root_key(&mut self, mut key: Variable) -> Variable {
-        let index = key.index() as usize;
-
-        while let Some(redirect) = self.redirects[key.index() as usize].into_variable() {
-            key = redirect;
-        }
-
-        if index != key.index() as usize {
-            self.redirects[index] = OptVariable::from(key);
-        }
-
-        key
+    pub fn get_rank_unchecked(&self, key: Variable) -> Rank {
+        self.ranks[key.index() as usize]
     }
 
     #[inline(always)]
-    pub fn root_key_without_compacting(&self, mut key: Variable) -> Variable {
-        while let Some(redirect) = self.redirects[key.index() as usize].into_variable() {
-            key = redirect;
-        }
-
-        key
+    pub fn get_mark_unchecked(&self, key: Variable) -> Mark {
+        self.marks[key.index() as usize]
     }
+
+    #[inline(always)]
+    pub fn get_copy_unchecked(&self, key: Variable) -> OptVariable {
+        self.copies[key.index() as usize]
+    }
+
+    #[inline(always)]
+    pub fn get_content_unchecked(&self, key: Variable) -> &Content {
+        &self.contents[key.index() as usize]
+    }
+
+    // GET CHECKED
 
     #[inline(always)]
     pub fn get_rank(&self, key: Variable) -> Rank {
@@ -150,6 +150,30 @@ impl UnificationTable {
     pub fn get_content(&self, key: Variable) -> &Content {
         &self.contents[self.root_key_without_compacting(key).index() as usize]
     }
+
+    // SET UNCHECKED
+
+    #[inline(always)]
+    pub fn set_rank_unchecked(&mut self, key: Variable, value: Rank) {
+        self.ranks[key.index() as usize] = value;
+    }
+
+    #[inline(always)]
+    pub fn set_mark_unchecked(&mut self, key: Variable, value: Mark) {
+        self.marks[key.index() as usize] = value;
+    }
+
+    #[inline(always)]
+    pub fn set_copy_unchecked(&mut self, key: Variable, value: OptVariable) {
+        self.copies[key.index() as usize] = value;
+    }
+
+    #[inline(always)]
+    pub fn set_content_unchecked(&mut self, key: Variable, value: Content) {
+        self.contents[key.index() as usize] = value;
+    }
+
+    // SET CHECKED
 
     #[inline(always)]
     pub fn set_rank(&mut self, key: Variable, value: Rank) {
@@ -173,6 +197,32 @@ impl UnificationTable {
     pub fn set_content(&mut self, key: Variable, value: Content) {
         let index = self.root_key(key).index() as usize;
         self.contents[index] = value;
+    }
+
+    // ROOT KEY
+
+    #[inline(always)]
+    pub fn root_key(&mut self, mut key: Variable) -> Variable {
+        let index = key.index() as usize;
+
+        while let Some(redirect) = self.redirects[key.index() as usize].into_variable() {
+            key = redirect;
+        }
+
+        if index != key.index() as usize {
+            self.redirects[index] = OptVariable::from(key);
+        }
+
+        key
+    }
+
+    #[inline(always)]
+    pub fn root_key_without_compacting(&self, mut key: Variable) -> Variable {
+        while let Some(redirect) = self.redirects[key.index() as usize].into_variable() {
+            key = redirect;
+        }
+
+        key
     }
 
     pub fn snapshot(&self) -> Snapshot {
