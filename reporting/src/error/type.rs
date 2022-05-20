@@ -350,7 +350,7 @@ fn report_underivable_reason<'a>(
         UnderivableReason::NotABuiltin => {
             Some(alloc.reflow("Only builtin abilities can have generated implementations!"))
         }
-        UnderivableReason::SurfaceNotDerivable => underivable_hint(alloc, ability, &typ),
+        UnderivableReason::SurfaceNotDerivable => underivable_hint(alloc, ability, typ),
         UnderivableReason::NestedNotDerivable(nested_typ) => {
             let hint = underivable_hint(alloc, ability, &nested_typ);
             let reason = alloc.stack(

@@ -383,7 +383,7 @@ impl ObligationCache<'_> {
     }
 
     fn check_impl(&mut self, impl_key: ImplKey) {
-        if let Some(_) = self.impl_cache.get(&impl_key) {
+        if self.impl_cache.get(&impl_key).is_some() {
             return;
         }
 
@@ -422,7 +422,7 @@ impl ObligationCache<'_> {
         opaque_real_var: Variable,
         derive_region: Region,
     ) {
-        if let Some(_) = self.derive_cache.get(&derive_key) {
+        if self.derive_cache.get(&derive_key).is_some() {
             return;
         }
 
