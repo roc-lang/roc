@@ -231,7 +231,7 @@ fn canonicalize_alias<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &[Symbol],
 
     name: Loc<Symbol>,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
@@ -245,7 +245,7 @@ fn canonicalize_alias<'a>(
         &ann.value,
         ann.region,
         var_store,
-        abilities_in_scope,
+        pending_abilities_in_scope,
     );
 
     // Record all the annotation's references in output.references.lookups
@@ -343,7 +343,7 @@ fn canonicalize_opaque<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &[Symbol],
 
     name: Loc<Symbol>,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
@@ -355,7 +355,7 @@ fn canonicalize_opaque<'a>(
         output,
         var_store,
         scope,
-        abilities_in_scope,
+        pending_abilities_in_scope,
         name,
         ann,
         vars,
@@ -375,7 +375,7 @@ fn canonicalize_opaque<'a>(
                 &derived.value,
                 region,
                 var_store,
-                abilities_in_scope,
+                pending_abilities_in_scope,
             );
             match can_derived.typ {
                 Type::Apply(ability, args, _)
