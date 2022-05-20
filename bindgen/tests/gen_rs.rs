@@ -195,7 +195,7 @@ mod test_gen_rs {
                     /// (Always examine .tag() first to make sure this is the correct variant!)
                     /// Panics in debug builds if the .tag() doesn't return Bar.
                     pub unsafe fn into_Bar(self) -> roc_std::U128 {
-                        debug_assert_eq!(self.tag(), Self::Bar);
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Bar);
                         self.variant.Bar
                     }
 
@@ -203,7 +203,7 @@ mod test_gen_rs {
                     /// (Always examine .tag() first to make sure this is the correct variant!)
                     /// Panics in debug builds if the .tag() doesn't return Bar.
                     pub unsafe fn as_Bar(&self) -> roc_std::U128 {
-                        debug_assert_eq!(self.tag(), Self::Bar);
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Bar);
                         self.variant.Bar
                     }
 
@@ -246,7 +246,7 @@ mod test_gen_rs {
                     /// (Always examine .tag() first to make sure this is the correct variant!)
                     /// Panics in debug builds if the .tag() doesn't return Blah.
                     pub unsafe fn into_Blah(self) -> i32 {
-                        debug_assert_eq!(self.tag(), Self::Blah);
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Blah);
                         self.variant.Blah
                     }
 
@@ -254,7 +254,7 @@ mod test_gen_rs {
                     /// (Always examine .tag() first to make sure this is the correct variant!)
                     /// Panics in debug builds if the .tag() doesn't return Blah.
                     pub unsafe fn as_Blah(&self) -> i32 {
-                        debug_assert_eq!(self.tag(), Self::Blah);
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Blah);
                         self.variant.Blah
                     }
 
@@ -272,7 +272,7 @@ mod test_gen_rs {
                     /// (Always examine .tag() first to make sure this is the correct variant!)
                     /// Panics in debug builds if the .tag() doesn't return Foo.
                     pub unsafe fn into_Foo(mut self) -> roc_std::RocStr {
-                        debug_assert_eq!(self.tag(), Self::Foo);
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Foo);
                         core::mem::ManuallyDrop::take(&mut self.variant.Foo)
                     }
 
@@ -280,14 +280,14 @@ mod test_gen_rs {
                     /// (Always examine .tag() first to make sure this is the correct variant!)
                     /// Panics in debug builds if the .tag() doesn't return Foo.
                     pub unsafe fn as_Foo(&self) -> &roc_std::RocStr {
-                        debug_assert_eq!(self.tag(), Self::Foo);
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Foo);
                         &self.variant.Foo
                     }
                 }
 
                 impl Drop for NonRecursive {
                     fn drop(&mut self) {
-                        match self.tag {
+                        match self.tag() {
                             tag_NonRecursive::Bar => {}
                             tag_NonRecursive::Baz => {}
                             tag_NonRecursive::Blah => {}
@@ -303,7 +303,7 @@ mod test_gen_rs {
                         }
 
                         unsafe {
-                            match self.tag {
+                            match self.tag() {
                                 tag_NonRecursive::Bar => self.variant.Bar == other.variant.Bar,
                                 tag_NonRecursive::Baz => true,
                                 tag_NonRecursive::Blah => self.variant.Blah == other.variant.Blah,
@@ -323,7 +323,7 @@ mod test_gen_rs {
                         }
 
                         unsafe {
-                            match self.tag {
+                            match self.tag() {
                                 tag_NonRecursive::Bar => self.variant.Bar.partial_cmp(&other.variant.Bar),
                                 tag_NonRecursive::Baz => Some(core::cmp::Ordering::Equal),
                                 tag_NonRecursive::Blah => self.variant.Blah.partial_cmp(&other.variant.Blah),
@@ -341,7 +341,7 @@ mod test_gen_rs {
                         }
 
                         unsafe {
-                            match self.tag {
+                            match self.tag() {
                                 tag_NonRecursive::Bar => self.variant.Bar.cmp(&other.variant.Bar),
                                 tag_NonRecursive::Baz => core::cmp::Ordering::Equal,
                                 tag_NonRecursive::Blah => self.variant.Blah.cmp(&other.variant.Blah),
@@ -353,7 +353,7 @@ mod test_gen_rs {
 
                 impl Clone for NonRecursive {
                     fn clone(&self) -> Self {
-                        match self.tag {
+                        match self.tag() {
                             tag_NonRecursive::Bar => Self {
                                 variant: union_NonRecursive {
                                     Bar: unsafe { self.variant.Bar.clone() },
@@ -385,12 +385,32 @@ mod test_gen_rs {
                     }
                 }
 
+                impl core::hash::Hash for NonRecursive {
+                    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                        match self.tag() {
+                            tag_NonRecursive::Bar => unsafe {
+                                tag_NonRecursive::Bar.hash(state);
+                                &self.variant.Bar.hash(state);
+                            },
+                            tag_NonRecursive::Baz => tag_NonRecursive::Baz.hash(state),
+                            tag_NonRecursive::Blah => unsafe {
+                                tag_NonRecursive::Blah.hash(state);
+                                &self.variant.Blah.hash(state);
+                            },
+                            tag_NonRecursive::Foo => unsafe {
+                                tag_NonRecursive::Foo.hash(state);
+                                &self.variant.Foo.hash(state);
+                            },
+                        }
+                    }
+                }
+
                 impl core::fmt::Debug for NonRecursive {
                     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                         f.write_str("NonRecursive::")?;
 
                         unsafe {
-                            match self.tag {
+                            match self.tag() {
                                 tag_NonRecursive::Bar => f.debug_tuple("Bar").field(&self.variant.Bar).finish(),
                                 tag_NonRecursive::Baz => f.write_str("Baz"),
                                 tag_NonRecursive::Blah => f.debug_tuple("Blah").field(&self.variant.Blah).finish(),
@@ -409,9 +429,9 @@ mod test_gen_rs {
     fn tag_union_enumeration() {
         let module = indoc!(
             r#"
-            NonRecursive : [ Blah, Foo, Bar, ]
+            Enumeration : [ Blah, Foo, Bar, ]
 
-            main : NonRecursive
+            main : Enumeration
             main = Foo
         "#
         );
@@ -424,18 +444,18 @@ mod test_gen_rs {
                 r#"
                 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
-                pub enum NonRecursive {
+                pub enum Enumeration {
                     Bar = 0,
                     Blah = 1,
                     Foo = 2,
                 }
 
-                impl core::fmt::Debug for NonRecursive {
+                impl core::fmt::Debug for Enumeration {
                     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                         match self {
-                            Self::Bar => f.write_str("NonRecursive::Bar"),
-                            Self::Blah => f.write_str("NonRecursive::Blah"),
-                            Self::Foo => f.write_str("NonRecursive::Foo"),
+                            Self::Bar => f.write_str("Enumeration::Bar"),
+                            Self::Blah => f.write_str("Enumeration::Blah"),
+                            Self::Foo => f.write_str("Enumeration::Foo"),
                         }
                     }
                 }
@@ -563,7 +583,7 @@ mod test_gen_rs {
                     /// (Always examine .tag() first to make sure this is the correct variant!)
                     /// Panics in debug builds if the .tag() doesn't return Cons.
                     pub unsafe fn into_Cons(self) -> roc_std::RocStr {
-                        debug_assert_eq!(self.tag(), Self::Cons);
+                        debug_assert_eq!(self.tag(), tag_StrConsList::Cons);
 
                         let payload = core::mem::ManuallyDrop::take(&mut *self.pointer);
                         let align = core::mem::align_of::<roc_std::RocStr>() as u32;
@@ -577,7 +597,7 @@ mod test_gen_rs {
                     /// (Always examine .tag() first to make sure this is the correct variant!)
                     /// Panics in debug builds if the .tag() doesn't return Cons.
                     pub unsafe fn as_Cons(&self) -> &roc_std::RocStr {
-                        debug_assert_eq!(self.tag(), Self::Cons);
+                        debug_assert_eq!(self.tag(), tag_StrConsList::Cons);
                         &*self.pointer
                     }
 
@@ -699,7 +719,7 @@ mod test_gen_rs {
                     /// (Always examine .tag() first to make sure this is the correct variant!)
                     /// Panics in debug builds if the .tag() doesn't return Prepend.
                     pub unsafe fn into_Prepend(self) -> u16 {
-                        debug_assert_eq!(self.tag(), Self::Prepend);
+                        debug_assert_eq!(self.tag(), tag_IntConsList::Prepend);
 
                         let payload = *self.pointer;
                         let align = core::mem::align_of::<u16>() as u32;
@@ -713,7 +733,7 @@ mod test_gen_rs {
                     /// (Always examine .tag() first to make sure this is the correct variant!)
                     /// Panics in debug builds if the .tag() doesn't return Prepend.
                     pub unsafe fn as_Prepend(&self) -> u16 {
-                        debug_assert_eq!(self.tag(), Self::Prepend);
+                        debug_assert_eq!(self.tag(), tag_IntConsList::Prepend);
                         *self.pointer
                     }
 
