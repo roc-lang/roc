@@ -150,14 +150,50 @@ impl<'a> Formattable for Def<'a> {
             Value(def) => match def {
                 Annotation(loc_pattern, loc_annotation) => {
                     loc_pattern.format(buf, indent);
+
                     if loc_annotation.is_multiline() {
                         buf.push_str(" :");
-                        loc_annotation.format_with_options(
-                            buf,
-                            Parens::NotNeeded,
-                            Newlines::Yes,
-                            indent + INDENT,
-                        );
+
+                        let should_outdent = match loc_annotation.value {
+                            TypeAnnotation::SpaceBefore(sub_def, spaces) => match sub_def {
+                                TypeAnnotation::Record { .. } | TypeAnnotation::TagUnion { .. } => {
+                                    let is_only_newlines = spaces.iter().all(|s| s.is_newline());
+                                    is_only_newlines && sub_def.is_multiline()
+                                }
+                                _ => false,
+                            },
+                            TypeAnnotation::Record { .. } | TypeAnnotation::TagUnion { .. } => true,
+                            _ => false,
+                        };
+
+                        if should_outdent {
+                            buf.spaces(1);
+                            match loc_annotation.value {
+                                TypeAnnotation::SpaceBefore(sub_def, _) => {
+                                    sub_def.format_with_options(
+                                        buf,
+                                        Parens::NotNeeded,
+                                        Newlines::No,
+                                        indent,
+                                    );
+                                }
+                                _ => {
+                                    loc_annotation.format_with_options(
+                                        buf,
+                                        Parens::NotNeeded,
+                                        Newlines::No,
+                                        indent,
+                                    );
+                                }
+                            }
+                        } else {
+                            loc_annotation.format_with_options(
+                                buf,
+                                Parens::NotNeeded,
+                                Newlines::Yes,
+                                indent + INDENT,
+                            );
+                        }
                     } else {
                         buf.spaces(1);
                         buf.push_str(":");
