@@ -458,7 +458,6 @@ fn eat_line_comment<'a>(
                 index += progress;
                 state = state.advance(progress);
 
-                // if we found a special char, let the outer loop handle it
                 if first_special_char != 16 {
                     match bytes[index] {
                         b'\t' => unreachable!(),
