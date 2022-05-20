@@ -6,3 +6,4 @@ pub mod pretty_print;
 pub mod solved_types;
 pub mod subs;
 pub mod types;
+mod unification_table;
