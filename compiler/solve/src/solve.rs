@@ -1,6 +1,6 @@
 use crate::ability::{
-    resolve_ability_specialization, type_implementing_member, AbilityImplError,
-    DeferredMustImplementAbility,
+    resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
+    DeferredMustImplementAbility, Resolved, Unfulfilled,
 };
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
@@ -26,7 +26,7 @@ use roc_types::types::{
     gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, OptAbleType,
     OptAbleVar, PatternCategory, Reason, TypeExtension,
 };
-use roc_unify::unify::{unify, Mode, Unified::*};
+use roc_unify::unify::{unify, Mode, Obligated, Unified::*};
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
@@ -78,15 +78,6 @@ use roc_unify::unify::{unify, Mode, Unified::*};
 // Ranks are used to limit the number of type variables considered for generalization. Only those inside
 // of the let (so those used in inferring the type of `\x -> x`) are considered.
 
-#[derive(PartialEq, Debug, Clone)]
-pub struct IncompleteAbilityImplementation {
-    // TODO(abilities): have general types here, not just opaques
-    pub typ: Symbol,
-    pub ability: Symbol,
-    pub specialized_members: Vec<Loc<Symbol>>,
-    pub missing_members: Vec<Loc<Symbol>>,
-}
-
 #[derive(Debug, Clone)]
 pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
@@ -95,20 +86,16 @@ pub enum TypeError {
     CircularDef(Vec<CycleEntry>),
     BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
-    IncompleteAbilityImplementation(IncompleteAbilityImplementation),
-    BadExprMissingAbility(
-        Region,
-        Category,
-        ErrorType,
-        Vec<IncompleteAbilityImplementation>,
-    ),
-    BadPatternMissingAbility(
-        Region,
-        PatternCategory,
-        ErrorType,
-        Vec<IncompleteAbilityImplementation>,
-    ),
+    UnfulfilledAbility(Unfulfilled),
+    BadExprMissingAbility(Region, Category, ErrorType, Vec<Unfulfilled>),
+    BadPatternMissingAbility(Region, PatternCategory, ErrorType, Vec<Unfulfilled>),
     Exhaustive(roc_exhaustive::Error),
+    StructuralSpecialization {
+        region: Region,
+        typ: ErrorType,
+        ability: Symbol,
+        member: Symbol,
+    },
 }
 
 use roc_types::types::Alias;
@@ -544,7 +531,7 @@ fn run_in_place(
 
     // Now that the module has been solved, we can run through and check all
     // types claimed to implement abilities.
-    problems.extend(deferred_must_implement_abilities.check(subs, abilities_store));
+    problems.extend(deferred_must_implement_abilities.check_all(subs, abilities_store));
 
     state.env
 }
@@ -1379,12 +1366,14 @@ fn solve(
                 member,
                 specialization_id,
             }) => {
-                if let Some(specialization) = resolve_ability_specialization(
-                    subs,
-                    abilities_store,
-                    member,
-                    specialization_variable,
-                ) {
+                if let Some(Resolved::Specialization(specialization)) =
+                    resolve_ability_specialization(
+                        subs,
+                        abilities_store,
+                        member,
+                        specialization_variable,
+                    )
+                {
                     abilities_store.insert_resolved(specialization_id, specialization);
 
                     // We must now refine the current type state to account for this specialization.
@@ -1501,6 +1490,7 @@ fn check_ability_specialization(
         let root_signature_var = root_data
             .signature_var()
             .unwrap_or_else(|| internal_error!("Signature var not resolved for {:?}", root_symbol));
+        let parent_ability = root_data.parent_ability;
 
         // Check if they unify - if they don't, then the claimed specialization isn't really one,
         // and that's a type error!
@@ -1516,62 +1506,80 @@ fn check_ability_specialization(
 
         match unified {
             Success {
-                vars: _,
-                must_implement_ability,
-            } if must_implement_ability.is_empty() => {
-                // This can happen when every ability constriant on a type variable went
-                // through only another type variable. That means this def is not specialized
-                // for one type - for now, we won't admit this.
-
-                // Rollback the snapshot so we unlink the root signature with the specialization,
-                // so we can have two separate error types.
-                subs.rollback_to(snapshot);
-
-                let (expected_type, _problems) = subs.var_to_error_type(root_signature_var);
-                let (actual_type, _problems) = subs.var_to_error_type(symbol_loc_var.value);
-
-                let reason = Reason::GeneralizedAbilityMemberSpecialization {
-                    member_name: root_symbol,
-                    def_region: root_data.region,
-                };
-
-                let problem = TypeError::BadExpr(
-                    symbol_loc_var.region,
-                    Category::AbilityMemberSpecialization(root_symbol),
-                    actual_type,
-                    Expected::ForReason(reason, expected_type, symbol_loc_var.region),
-                );
-
-                problems.push(problem);
-            }
-
-            Success {
                 vars,
                 must_implement_ability,
             } => {
-                subs.commit_snapshot(snapshot);
-                introduce(subs, rank, pools, &vars);
-
-                // First, figure out and register for what type does this symbol specialize
-                // the ability member.
                 let specialization_type =
-                    type_implementing_member(&must_implement_ability, root_data.parent_ability)
-                        .expect("checked in previous branch");
-                let specialization = MemberSpecialization {
-                    symbol,
-                    region: symbol_loc_var.region,
-                };
-                abilities_store.register_specialization_for_type(
-                    root_symbol,
-                    specialization_type,
-                    specialization,
-                );
+                    type_implementing_specialization(&must_implement_ability, parent_ability);
 
-                // Store the checks for what abilities must be implemented to be checked after the
-                // whole module is complete.
-                deferred_must_implement_abilities
-                    .add(must_implement_ability, AbilityImplError::IncompleteAbility);
+                match specialization_type {
+                    Some(Obligated::Opaque(opaque)) => {
+                        // This is a specialization for an opaque - that's allowed.
+
+                        subs.commit_snapshot(snapshot);
+                        introduce(subs, rank, pools, &vars);
+
+                        let specialization = MemberSpecialization {
+                            symbol,
+                            region: symbol_loc_var.region,
+                        };
+                        abilities_store.register_specialization_for_type(
+                            root_symbol,
+                            opaque,
+                            specialization,
+                        );
+
+                        // Make sure we check that the opaque has specialized all members of the
+                        // ability, after we finish solving the module.
+                        deferred_must_implement_abilities
+                            .add(must_implement_ability, AbilityImplError::IncompleteAbility);
+                    }
+                    Some(Obligated::Adhoc(var)) => {
+                        // This is a specialization of a structural type - never allowed.
+
+                        // Commit so that `var` persists in subs.
+                        subs.commit_snapshot(snapshot);
+
+                        let (typ, _problems) = subs.var_to_error_type(var);
+
+                        let problem = TypeError::StructuralSpecialization {
+                            region: symbol_loc_var.region,
+                            typ,
+                            ability: parent_ability,
+                            member: root_symbol,
+                        };
+
+                        problems.push(problem);
+                    }
+                    None => {
+                        // This can happen when every ability constriant on a type variable went
+                        // through only another type variable. That means this def is not specialized
+                        // for one concrete type - we won't admit this.
+
+                        // Rollback the snapshot so we unlink the root signature with the specialization,
+                        // so we can have two separate error types.
+                        subs.rollback_to(snapshot);
+
+                        let (expected_type, _problems) = subs.var_to_error_type(root_signature_var);
+                        let (actual_type, _problems) = subs.var_to_error_type(symbol_loc_var.value);
+
+                        let reason = Reason::GeneralizedAbilityMemberSpecialization {
+                            member_name: root_symbol,
+                            def_region: root_data.region,
+                        };
+
+                        let problem = TypeError::BadExpr(
+                            symbol_loc_var.region,
+                            Category::AbilityMemberSpecialization(root_symbol),
+                            actual_type,
+                            Expected::ForReason(reason, expected_type, symbol_loc_var.region),
+                        );
+
+                        problems.push(problem);
+                    }
+                }
             }
+
             Failure(vars, actual_type, expected_type, unimplemented_abilities) => {
                 subs.commit_snapshot(snapshot);
                 introduce(subs, rank, pools, &vars);

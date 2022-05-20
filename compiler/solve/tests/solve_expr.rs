@@ -6455,4 +6455,41 @@ mod solve_expr {
             "Str",
         )
     }
+
+    #[test]
+    fn encode_record() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test"
+                    imports [ Encode.{ toEncoder } ]
+                    provides [ main ] to "./platform"
+
+                main = toEncoder { a: "" }
+                     # ^^^^^^^^^
+                "#
+            ),
+            &["Encoding#toEncoder : { a : Str } -> Encoder fmt | fmt has EncoderFormatting"],
+        )
+    }
+
+    #[test]
+    fn encode_record_with_nested_custom_impl() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test"
+                    imports [ Encode.{ toEncoder, Encoding, custom } ]
+                    provides [ main ] to "./platform"
+
+                A := {}
+                toEncoder = \@A _ -> custom \b, _ -> b
+
+                main = toEncoder { a: @A {} }
+                     # ^^^^^^^^^
+                "#
+            ),
+            &["Encoding#toEncoder : { a : A } -> Encoder fmt | fmt has EncoderFormatting"],
+        )
+    }
 }

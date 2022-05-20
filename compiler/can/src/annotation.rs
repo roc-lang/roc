@@ -908,7 +908,7 @@ fn canonicalize_has_clause(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     clause: &Loc<roc_parse::ast::HasClause<'_>>,
-    abilities_in_scope: &[Symbol],
+    abilities_in_local_scope: &[Symbol],
     references: &mut VecSet<Symbol>,
 ) -> Result<(), Type> {
     let Loc {
@@ -927,7 +927,12 @@ fn canonicalize_has_clause(
     let ability = match ability.value {
         TypeAnnotation::Apply(module_name, ident, _type_arguments) => {
             let symbol = make_apply_symbol(env, ability.region, scope, module_name, ident)?;
-            if !abilities_in_scope.contains(&symbol) {
+
+            // Ability defined locally, whose members we are constructing right now...
+            if !abilities_in_local_scope.contains(&symbol)
+                // or an ability that was imported from elsewhere
+                && !scope.abilities_store.is_ability(symbol)
+            {
                 let region = ability.region;
                 env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
                 return Err(Type::Erroneous(Problem::HasClauseIsNotAbility(region)));

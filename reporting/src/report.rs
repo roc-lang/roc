@@ -487,6 +487,14 @@ impl<'a> RocDocAllocator<'a> {
         content.annotate(Annotation::TypeBlock).indent(4)
     }
 
+    /// Turns of backticks/colors in a block
+    pub fn inline_type_block(
+        &'a self,
+        content: DocBuilder<'a, Self, Annotation>,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        content.annotate(Annotation::InlineTypeBlock)
+    }
+
     pub fn tip(&'a self) -> DocBuilder<'a, Self, Annotation> {
         self.text("Tip")
             .annotate(Annotation::Tip)
@@ -804,6 +812,7 @@ pub enum Annotation {
     PlainText,
     CodeBlock,
     TypeBlock,
+    InlineTypeBlock,
     Module,
     Typo,
     TypoSuggestion,
@@ -873,6 +882,11 @@ where
             TypeBlock => {
                 self.in_type_block = true;
             }
+            InlineTypeBlock => {
+                debug_assert!(!self.in_type_block);
+                self.write_str("`")?;
+                self.in_type_block = true;
+            }
             CodeBlock => {
                 self.in_code_block = true;
             }
@@ -901,6 +915,11 @@ where
             None => {}
             Some(annotation) => match annotation {
                 TypeBlock => {
+                    self.in_type_block = false;
+                }
+                InlineTypeBlock => {
+                    debug_assert!(self.in_type_block);
+                    self.write_str("`")?;
                     self.in_type_block = false;
                 }
                 CodeBlock => {
@@ -1004,7 +1023,7 @@ where
             ParserSuggestion => {
                 self.write_str(self.palette.parser_suggestion)?;
             }
-            TypeBlock | Tag | RecordField => { /* nothing yet */ }
+            TypeBlock | InlineTypeBlock | Tag | RecordField => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -1022,7 +1041,7 @@ where
                     self.write_str(self.palette.reset)?;
                 }
 
-                TypeBlock | Tag | Opaque | RecordField => { /* nothing yet */ }
+                TypeBlock | InlineTypeBlock | Tag | Opaque | RecordField => { /* nothing yet */ }
             },
         }
         Ok(())

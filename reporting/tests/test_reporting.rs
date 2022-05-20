@@ -9296,25 +9296,20 @@ All branches in an `if` must have the same type!
             ),
             indoc!(
                 r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+                ── ILLEGAL SPECIALIZATION ──────────────────────────────── /code/proj/Main.roc ─
 
-                Something is off with this specialization of `hash`:
+                This specialization of `hash` is for a non-opaque type:
 
                 5│  hash = \{} -> 0u64
                     ^^^^
 
-                This value is a declared specialization of type:
+                It is specialized for
 
-                    {}a -> U64
+                    {}a
 
-                But the type annotation on `hash` says it must match:
+                but structural types can never specialize abilities!
 
-                    a -> U64 | a has Hash
-
-                Note: Some types in this specialization don't implement the abilities
-                they are expected to. I found the following missing implementations:
-
-                    {}a does not implement Hash
+                Note: `hash` is a member of `#UserApp.Hash`
                 "#
             ),
         )
@@ -9384,13 +9379,6 @@ All branches in an `if` must have the same type!
 
                 5│      le : a, a -> Bool | a has Eq
                         ^^
-
-                Note: `Id` specializes the following members of `Eq`:
-
-                `eq`, specialized here:
-
-                9│  eq = \@Id m, @Id n -> m == n
-                    ^^
                 "#
             ),
         )
@@ -9563,18 +9551,16 @@ All branches in an `if` must have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st argument to `hash` is not what I expect:
+                This expression has a type that does not implement the abilities it's expected to:
 
                 15│          notYet: hash (A 1),
                                            ^^^
 
-                This `A` tag application has the type:
+                Roc can't generate an implementation of the `#UserApp.Hash` ability for
 
                     [ A (Num a) ]b
 
-                But `hash` needs the 1st argument to be:
-
-                    a | a has Hash
+                Only builtin abilities can have generated implementations!
 
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -9582,15 +9568,6 @@ All branches in an `if` must have the same type!
 
                 14│          nope: hash (@User {}),
                                          ^^^^^^^^
-
-                This User opaque wrapping has the type:
-
-                    User
-
-                The ways this expression is used requires that the following types
-                implement the following abilities, which they do not:
-
-                    User does not implement Hash
 
                 The type `User` does not fully implement the ability `Hash`. The following
                 specializations are missing:
@@ -10049,6 +10026,114 @@ All branches in an `if` must have the same type!
                     │     ↓
                     │     t2
                     └─────┘
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn function_does_not_implement_encoding() {
+        new_report_problem_as(
+            "function_does_not_implement_encoding",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ main ] to "./platform"
+
+                main = Encode.toEncoder \x -> x
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression has a type that does not implement the abilities it's expected to:
+
+                3│  main = Encode.toEncoder \x -> x
+                                            ^^^^^^^
+
+                Roc can't generate an implementation of the `Encode.Encoding` ability
+                for
+
+                    a -> a
+
+                Note: `Encoding` cannot be generated for functions.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unbound_type_in_record_does_not_implement_encoding() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ main ] to "./platform"
+
+                main = \x -> Encode.toEncoder { x: x }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression has a type that does not implement the abilities it's expected to:
+
+                3│  main = \x -> Encode.toEncoder { x: x }
+                                                  ^^^^^^^^
+
+                Roc can't generate an implementation of the `Encode.Encoding` ability
+                for
+
+                    { x : a }
+
+                In particular, an implementation for
+
+                    a
+
+                cannot be generated.
+
+                Tip: This type variable is not bound to `Encoding`. Consider adding a
+                `has` clause to bind the type variable, like `| a has Encode.Encoding`
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn nested_opaque_does_not_implement_encoding() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ main ] to "./platform"
+
+                A := {}
+                main = Encode.toEncoder { x: @A {} }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression has a type that does not implement the abilities it's expected to:
+
+                4│  main = Encode.toEncoder { x: @A {} }
+                                            ^^^^^^^^^^^^
+
+                Roc can't generate an implementation of the `Encode.Encoding` ability
+                for
+
+                    { x : A }
+
+                In particular, an implementation for
+
+                    A
+
+                cannot be generated.
+
+                Tip: `A` does not implement `Encoding`. Consider adding a custom
+                implementation or `has Encode.Encoding` to the definition of `A`.
                 "#
             ),
         )
