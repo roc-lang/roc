@@ -21,10 +21,8 @@ echo 'Generating docs...'
 cargo --version
 rustc --version
 
-# We set RUSTFLAGS to -Awarnings to ignore warnings during this build,
-# because when building without "the" llvm feature (which is only ever done
-# for this exact use case), the result is lots of "unused" warnings!
-RUSTFLAGS=-Awarnings
+# removing `-C link-arg=-fuse-ld=lld` from RUSTFLAGS because this causes an error when compiling `roc_repl_wasm`
+RUSTFLAGS="-C target-cpu=native"
 
 # We set ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
 # "/builtins/" rather than "/" - which is what we want based on how the server
