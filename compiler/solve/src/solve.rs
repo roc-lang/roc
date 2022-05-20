@@ -1443,14 +1443,13 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
     while let Some(var) = stack.pop() {
         use {Content::*, FlatType::*};
 
-        let mut desc = subs.get(var);
+        let desc = subs.get(var);
         if let Structure(TagUnion(tags, ext)) = desc.content {
             if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
                 let new_ext = subs.fresh_unnamed_flex_var();
                 subs.set_rank(new_ext, desc.rank);
                 let new_union = Structure(TagUnion(tags, new_ext));
-                desc.content = new_union;
-                subs.set(var, desc);
+                subs.set_content(var, new_union);
             }
 
             // Also open up all nested tag unions.
@@ -2495,11 +2494,9 @@ fn check_for_infinite_type(
     let var = loc_var.value;
 
     while let Err((recursive, _chain)) = subs.occurs(var) {
-        let description = subs.get(recursive);
-
         // try to make a tag union recursive, see if that helps
-        match description.content {
-            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+        match subs.get_content_without_compacting(recursive) {
+            &Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
                 subs.mark_tag_union_recursive(recursive, tags, ext_var);
             }
 
