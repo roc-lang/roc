@@ -3073,6 +3073,19 @@ fn deep_copy_var_help(
     let actual_copy = subs.fresh(make_descriptor(content));
     debug_assert_eq!(copy, actual_copy);
 
+    macro_rules! copy_sequence {
+        ($length:expr, $variables:expr) => {{
+            let new_variables = SubsSlice::reserve_into_subs(subs, $length as _);
+            for (target_index, var_index) in (new_variables.indices()).zip($variables) {
+                let var = subs[var_index];
+                let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
+                subs.variables[target_index] = copy_var;
+            }
+
+            new_variables
+        }};
+    }
+
     // Now we recursively copy the content of the variable.
     // We have already marked the variable as copied, so we
     // will not repeat this work or crawl this variable again.
@@ -3080,12 +3093,7 @@ fn deep_copy_var_help(
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, arguments) => {
-                    let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-                    for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                        let var = subs[var_index];
-                        let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                        subs.variables[target_index] = copy_var;
-                    }
+                    let new_arguments = copy_sequence!(arguments.len(), arguments);
 
                     Apply(symbol, new_arguments)
                 }
@@ -3095,12 +3103,7 @@ fn deep_copy_var_help(
                     let new_closure_var =
                         deep_copy_var_help(subs, max_rank, pools, visited, closure_var);
 
-                    let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-                    for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                        let var = subs[var_index];
-                        let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                        subs.variables[target_index] = copy_var;
-                    }
+                    let new_arguments = copy_sequence!(arguments.len(), arguments);
 
                     Func(new_arguments, new_closure_var, new_ret_var)
                 }
@@ -3109,15 +3112,7 @@ fn deep_copy_var_help(
 
                 Record(fields, ext_var) => {
                     let record_fields = {
-                        let new_variables =
-                            VariableSubsSlice::reserve_into_subs(subs, fields.len());
-
-                        let it = (new_variables.indices()).zip(fields.iter_variables());
-                        for (target_index, var_index) in it {
-                            let var = subs[var_index];
-                            let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                            subs.variables[target_index] = copy_var;
-                        }
+                        let new_variables = copy_sequence!(fields.len(), fields.iter_variables());
 
                         RecordFields {
                             length: fields.length,
@@ -3140,14 +3135,7 @@ fn deep_copy_var_help(
                     for (target_index, index) in it {
                         let slice = subs[index];
 
-                        let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
-                        let it = (new_variables.indices()).zip(slice);
-                        for (target_index, var_index) in it {
-                            let var = subs[var_index];
-                            let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                            subs.variables[target_index] = copy_var;
-                        }
-
+                        let new_variables = copy_sequence!(slice.len(), slice);
                         subs.variable_slices[target_index] = new_variables;
                     }
 
@@ -3170,14 +3158,7 @@ fn deep_copy_var_help(
                     for (target_index, index) in it {
                         let slice = subs[index];
 
-                        let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
-                        let it = (new_variables.indices()).zip(slice);
-                        for (target_index, var_index) in it {
-                            let var = subs[var_index];
-                            let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                            subs.variables[target_index] = copy_var;
-                        }
-
+                        let new_variables = copy_sequence!(slice.len(), slice);
                         subs.variable_slices[target_index] = new_variables;
                     }
 
@@ -3228,14 +3209,7 @@ fn deep_copy_var_help(
 
         Alias(symbol, arguments, real_type_var, kind) => {
             let new_variables =
-                SubsSlice::reserve_into_subs(subs, arguments.all_variables_len as _);
-            for (target_index, var_index) in
-                (new_variables.indices()).zip(arguments.all_variables())
-            {
-                let var = subs[var_index];
-                let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                subs.variables[target_index] = copy_var;
-            }
+                copy_sequence!(arguments.all_variables_len, arguments.all_variables());
 
             let new_arguments = AliasVariables {
                 variables_start: new_variables.start,
@@ -3254,14 +3228,9 @@ fn deep_copy_var_help(
         RangedNumber(typ, range_vars) => {
             let new_type_var = deep_copy_var_help(subs, max_rank, pools, visited, typ);
 
-            let new_vars = SubsSlice::reserve_into_subs(subs, range_vars.len());
-            for (target_index, var_index) in (new_vars.indices()).zip(range_vars) {
-                let var = subs[var_index];
-                let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                subs.variables[target_index] = copy_var;
-            }
+            let new_variables = copy_sequence!(range_vars.len(), range_vars);
 
-            let new_content = RangedNumber(new_type_var, new_vars);
+            let new_content = RangedNumber(new_type_var, new_variables);
 
             subs.set(copy, make_descriptor(new_content));
 
