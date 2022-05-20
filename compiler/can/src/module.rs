@@ -357,13 +357,16 @@ pub fn canonicalize_module_defs<'a>(
     let symbols_from_requires = symbols_from_requires
         .iter()
         .map(|(symbol, loc_ann)| {
+            // We've already canonicalized the module, so there are no pending abilities.
+            let pending_abilities_in_scope = &[];
+
             let ann = canonicalize_annotation(
                 &mut env,
                 &mut scope,
                 &loc_ann.value,
                 loc_ann.region,
                 var_store,
-                &output.abilities_in_scope,
+                pending_abilities_in_scope,
             );
 
             ann.add_to(
