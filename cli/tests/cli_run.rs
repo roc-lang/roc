@@ -907,7 +907,7 @@ mod cli_run {
                 r#"
                 ── UNRECOGNIZED NAME ─────────────────────────── tests/known_bad/TypeError.roc ─
 
-                I cannot find a `d` value
+                Nothing is named `d` in this scope.
 
                 10│      _ <- await (line d)
                                           ^
