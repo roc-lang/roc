@@ -3,6 +3,7 @@ use crate::abilities::MemberTypeInfo;
 use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::find_type_def_symbols;
+use crate::annotation::make_apply_symbol;
 use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::env::Env;
@@ -370,19 +371,22 @@ fn canonicalize_opaque<'a>(
 
         for derived in derives.items {
             let region = derived.region;
-            let can_derived = canonicalize_annotation(
-                env,
-                scope,
-                &derived.value,
-                region,
-                var_store,
-                pending_abilities_in_scope,
-            );
-            match can_derived.typ {
-                Type::Apply(ability, args, _)
-                    if ability.is_builtin_ability() && args.is_empty() =>
-                {
-                    can_derives.push(Loc::at(region, ability));
+            match derived.value.extract_spaces().item {
+                ast::TypeAnnotation::Apply(module_name, ident, []) => {
+                    match make_apply_symbol(env, region, scope, module_name, ident) {
+                        Ok(ability) if ability.is_builtin_ability() => {
+                            can_derives.push(Loc::at(region, ability));
+                        }
+                        Ok(_) => {
+                            // Register the problem but keep going, we may still be able to compile the
+                            // program even if a derive is missing.
+                            env.problem(Problem::IllegalDerive(region));
+                        }
+                        Err(_) => {
+                            // This is bad apply; an error will have been reported for it
+                            // already.
+                        }
+                    }
                 }
                 _ => {
                     // Register the problem but keep going, we may still be able to compile the

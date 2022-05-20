@@ -97,6 +97,12 @@ pub enum TypeError {
         ability: Symbol,
         member: Symbol,
     },
+    DominatedDerive {
+        opaque: Symbol,
+        ability: Symbol,
+        derive_region: Region,
+        impl_region: Region,
+    },
 }
 
 use roc_types::types::Alias;
@@ -1526,9 +1532,10 @@ fn check_ability_specialization(
                         subs.commit_snapshot(snapshot);
                         introduce(subs, rank, pools, &vars);
 
+                        let specialization_region = symbol_loc_var.region;
                         let specialization = MemberSpecialization {
                             symbol,
-                            region: symbol_loc_var.region,
+                            region: specialization_region,
                         };
                         abilities_store.register_specialization_for_type(
                             root_symbol,
@@ -1541,10 +1548,13 @@ fn check_ability_specialization(
                         deferred_obligations
                             .add(must_implement_ability, AbilityImplError::IncompleteAbility);
                         // This specialization dominates any derives that might be present.
-                        deferred_obligations.dominate(DeriveKey {
-                            opaque,
-                            ability: parent_ability,
-                        });
+                        deferred_obligations.dominate(
+                            DeriveKey {
+                                opaque,
+                                ability: parent_ability,
+                            },
+                            specialization_region,
+                        );
                     }
                     Some(Obligated::Adhoc(var)) => {
                         // This is a specialization of a structural type - never allowed.

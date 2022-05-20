@@ -320,7 +320,7 @@ pub fn canonicalize_annotation(
     }
 }
 
-fn make_apply_symbol(
+pub(crate) fn make_apply_symbol(
     env: &mut Env,
     region: Region,
     scope: &mut Scope,

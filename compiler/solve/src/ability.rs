@@ -1,6 +1,6 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
-use roc_collections::{VecMap, VecSet};
+use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -55,10 +55,18 @@ pub enum Unfulfilled {
     },
 }
 
+/// Indexes a deriving of an ability for an opaque type.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct DeriveKey {
     pub opaque: Symbol,
     pub ability: Symbol,
+}
+
+/// Indexes a custom implementation of an ability for an opaque type.
+#[derive(Debug, PartialEq, Clone, Copy)]
+struct ImplKey {
+    opaque: Symbol,
+    ability: Symbol,
 }
 
 #[derive(Debug)]
@@ -107,8 +115,9 @@ pub struct DeferredObligations {
     /// Derives that module-defined opaques claim to have.
     pending_derives: PendingDerivesTable,
     /// Derives that are claimed, but have also been determined to have
-    /// specializations.
-    dominated_derives: VecSet<DeriveKey>,
+    /// specializations. Maps to the first member specialization of the same
+    /// ability.
+    dominated_derives: VecMap<DeriveKey, Region>,
 }
 
 impl DeferredObligations {
@@ -124,9 +133,10 @@ impl DeferredObligations {
         self.obligations.push((must_implement, on_error));
     }
 
-    pub fn dominate(&mut self, key: DeriveKey) {
-        if self.pending_derives.0.contains_key(&key) {
-            self.dominated_derives.insert(key);
+    pub fn dominate(&mut self, key: DeriveKey, impl_region: Region) {
+        // Only builtin abilities can be derived, and hence dominated.
+        if self.pending_derives.0.contains_key(&key) && !self.dominated_derives.contains_key(&key) {
+            self.dominated_derives.insert(key, impl_region);
         }
     }
 
@@ -156,19 +166,32 @@ impl DeferredObligations {
             abilities_store,
             pending_derives: &pending_derives,
             dominated_derives: &dominated_derives,
-            cache: VecMap::with_capacity(obligations.len()),
+
+            impl_cache: VecMap::with_capacity(obligations.len()),
+            derive_cache: VecMap::with_capacity(pending_derives.0.len()),
         };
 
         let mut legal_derives = Vec::with_capacity(pending_derives.0.len());
 
         // First, check all derives.
         for (&derive_key, &(opaque_real_var, derive_region)) in pending_derives.0.iter() {
-            let result =
-                obligation_cache.check_derive(subs, derive_key, opaque_real_var, derive_region);
+            obligation_cache.check_derive(subs, derive_key, opaque_real_var, derive_region);
+            let result = obligation_cache.derive_cache.get(&derive_key).unwrap();
             match result {
                 Ok(()) => legal_derives.push(derive_key),
-                Err(problem) => problems.push(TypeError::UnfulfilledAbility(problem)),
+                Err(problem) => problems.push(TypeError::UnfulfilledAbility(problem.clone())),
             }
+        }
+
+        for (derive_key, impl_region) in dominated_derives.iter() {
+            let derive_region = pending_derives.0.get(derive_key).unwrap().1;
+
+            problems.push(TypeError::DominatedDerive {
+                opaque: derive_key.opaque,
+                ability: derive_key.ability,
+                derive_region,
+                impl_region: *impl_region,
+            });
         }
 
         // Keep track of which types that have an incomplete ability were reported as part of
@@ -259,106 +282,137 @@ type ObligationResult = Result<(), Unfulfilled>;
 
 struct ObligationCache<'a> {
     abilities_store: &'a AbilitiesStore,
-    dominated_derives: &'a VecSet<DeriveKey>,
+    dominated_derives: &'a VecMap<DeriveKey, Region>,
     pending_derives: &'a PendingDerivesTable,
 
-    cache: VecMap<MustImplementAbility, Result<(), Unfulfilled>>,
+    impl_cache: VecMap<ImplKey, ObligationResult>,
+    derive_cache: VecMap<DeriveKey, ObligationResult>,
+}
+
+enum ReadCache {
+    Impl,
+    Derive,
 }
 
 impl ObligationCache<'_> {
-    fn check_one(&mut self, subs: &mut Subs, mia: MustImplementAbility) -> &ObligationResult {
-        self.check_one_help(subs, mia);
-        self.cache.get(&mia).unwrap()
+    fn check_one(&mut self, subs: &mut Subs, mia: MustImplementAbility) -> ObligationResult {
+        let MustImplementAbility { typ, ability } = mia;
+
+        match typ {
+            Obligated::Adhoc(var) => self.check_adhoc(subs, var, ability),
+            Obligated::Opaque(opaque) => self.check_opaque_and_read(subs, opaque, ability).clone(),
+        }
     }
 
-    fn check_one_help(&mut self, subs: &mut Subs, mia: MustImplementAbility) {
-        if let Some(_) = self.cache.get(&mia) {
+    fn check_adhoc(&mut self, subs: &mut Subs, var: Variable, ability: Symbol) -> ObligationResult {
+        // Not worth caching ad-hoc checks because variables are unlikely to be the same between
+        // independent queries.
+
+        let opt_can_derive_builtin = match ability {
+            Symbol::ENCODE_ENCODING => Some(self.can_derive_encoding(subs, var)),
+            _ => None,
+        };
+
+        let opt_underivable = match opt_can_derive_builtin {
+            Some(Ok(())) => {
+                // can derive!
+                None
+            }
+            Some(Err(failure_var)) => Some(if failure_var == var {
+                UnderivableReason::SurfaceNotDerivable
+            } else {
+                let (error_type, _skeletons) = subs.var_to_error_type(failure_var);
+                UnderivableReason::NestedNotDerivable(error_type)
+            }),
+            None => Some(UnderivableReason::NotABuiltin),
+        };
+
+        if let Some(underivable_reason) = opt_underivable {
+            let (error_type, _skeletons) = subs.var_to_error_type(var);
+
+            Err(Unfulfilled::AdhocUnderivable {
+                typ: error_type,
+                ability,
+                reason: underivable_reason,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_opaque(&mut self, subs: &mut Subs, opaque: Symbol, ability: Symbol) -> ReadCache {
+        let impl_key = ImplKey { opaque, ability };
+        let derive_key = DeriveKey { opaque, ability };
+
+        match self.pending_derives.0.get(&derive_key) {
+            Some(&(opaque_real_var, derive_region)) => {
+                if self.dominated_derives.contains_key(&derive_key) {
+                    // We have a derive, but also a custom implementation. The custom
+                    // implementation takes priority because we'll use that for codegen.
+                    // We'll report an error for the conflict, and whether the derive is
+                    // legal will be checked out-of-band.
+                    self.check_impl(impl_key);
+                    ReadCache::Impl
+                } else {
+                    // Only a derive
+                    self.check_derive(subs, derive_key, opaque_real_var, derive_region);
+                    ReadCache::Derive
+                }
+            }
+            // Only an impl
+            None => {
+                self.check_impl(impl_key);
+                ReadCache::Impl
+            }
+        }
+    }
+
+    fn check_opaque_and_read(
+        &mut self,
+        subs: &mut Subs,
+        opaque: Symbol,
+        ability: Symbol,
+    ) -> &ObligationResult {
+        match self.check_opaque(subs, opaque, ability) {
+            ReadCache::Impl => self.impl_cache.get(&ImplKey { opaque, ability }).unwrap(),
+            ReadCache::Derive => self
+                .derive_cache
+                .get(&DeriveKey { opaque, ability })
+                .unwrap(),
+        }
+    }
+
+    fn check_impl(&mut self, impl_key: ImplKey) {
+        if let Some(_) = self.impl_cache.get(&impl_key) {
             return;
         }
 
-        let MustImplementAbility { typ, ability } = mia;
+        let ImplKey { opaque, ability } = impl_key;
 
-        let obligation_result = match typ {
-            Obligated::Opaque(opaque) => {
-                let derive_key = DeriveKey { opaque, ability };
-
-                let check_specialization = || {
-                    let members_of_ability =
-                        self.abilities_store.members_of_ability(ability).unwrap();
-                    let mut missing_members = Vec::new();
-                    for &member in members_of_ability {
-                        if self
-                            .abilities_store
-                            .get_specialization(member, opaque)
-                            .is_none()
-                        {
-                            let root_data = self.abilities_store.member_def(member).unwrap();
-                            missing_members.push(Loc::at(root_data.region, member));
-                        }
-                    }
-
-                    if !missing_members.is_empty() {
-                        Err(Unfulfilled::Incomplete {
-                            typ: opaque,
-                            ability,
-                            missing_members,
-                        })
-                    } else {
-                        Ok(())
-                    }
-                };
-
-                if self.dominated_derives.contains(&derive_key) {
-                    // Always check the specialization if it dominates. The derive will be
-                    // checked out-of-band.
-                    check_specialization()
-                } else {
-                    match self.pending_derives.0.get(&derive_key) {
-                        // Derive and no known specialization; check the derive
-                        Some((opaque_real_var, derive_region)) => {
-                            self.check_derive(subs, derive_key, *opaque_real_var, *derive_region)
-                        }
-                        // No derive, this must be a specialization at best
-                        None => check_specialization(),
-                    }
-                }
+        let members_of_ability = self.abilities_store.members_of_ability(ability).unwrap();
+        let mut missing_members = Vec::new();
+        for &member in members_of_ability {
+            if self
+                .abilities_store
+                .get_specialization(member, opaque)
+                .is_none()
+            {
+                let root_data = self.abilities_store.member_def(member).unwrap();
+                missing_members.push(Loc::at(root_data.region, member));
             }
+        }
 
-            Obligated::Adhoc(var) => {
-                let opt_can_derive_builtin = match ability {
-                    Symbol::ENCODE_ENCODING => Some(self.can_derive_encoding(subs, var)),
-                    _ => None,
-                };
-
-                let opt_underivable = match opt_can_derive_builtin {
-                    Some(Ok(())) => {
-                        // can derive!
-                        None
-                    }
-                    Some(Err(failure_var)) => Some(if failure_var == var {
-                        UnderivableReason::SurfaceNotDerivable
-                    } else {
-                        let (error_type, _skeletons) = subs.var_to_error_type(failure_var);
-                        UnderivableReason::NestedNotDerivable(error_type)
-                    }),
-                    None => Some(UnderivableReason::NotABuiltin),
-                };
-
-                if let Some(underivable_reason) = opt_underivable {
-                    let (error_type, _skeletons) = subs.var_to_error_type(var);
-
-                    Err(Unfulfilled::AdhocUnderivable {
-                        typ: error_type,
-                        ability,
-                        reason: underivable_reason,
-                    })
-                } else {
-                    Ok(())
-                }
-            }
+        let obligation_result = if !missing_members.is_empty() {
+            Err(Unfulfilled::Incomplete {
+                typ: opaque,
+                ability,
+                missing_members,
+            })
+        } else {
+            Ok(())
         };
 
-        self.cache.insert(mia, obligation_result);
+        self.impl_cache.insert(impl_key, obligation_result);
     }
 
     fn check_derive(
@@ -367,77 +421,66 @@ impl ObligationCache<'_> {
         derive_key: DeriveKey,
         opaque_real_var: Variable,
         derive_region: Region,
-    ) -> ObligationResult {
-        // Checking of derives needs to be treated a specially. We suppose that the derive holds,
-        // in case the opaque type is recursive; then, we check that the opaque's real type is
-        // indeed derivable.
+    ) {
+        if let Some(_) = self.derive_cache.get(&derive_key) {
+            return;
+        }
 
-        let root_obligation = MustImplementAbility {
-            typ: Obligated::Opaque(derive_key.opaque),
-            ability: derive_key.ability,
-        };
-        let fake_is_fulfilled = Ok(());
-
+        // The opaque may be recursive, so make sure we stop if we see it again.
+        // We need to enforce that on both the impl and derive cache.
+        let fake_fulfilled = Ok(());
         // If this opaque both derives and specializes, we may already know whether the
         // specialization fulfills or not. Since specializations take priority over derives, we
         // want to keep that result around.
-        let opt_specialization_result = self
-            .cache
-            .insert(root_obligation, fake_is_fulfilled.clone());
-        let is_dominated = self.dominated_derives.contains(&derive_key);
+        let impl_key = ImplKey {
+            opaque: derive_key.opaque,
+            ability: derive_key.ability,
+        };
+        let opt_specialization_result = self.impl_cache.insert(impl_key, fake_fulfilled.clone());
+        let is_dominated = self.dominated_derives.contains_key(&derive_key);
         debug_assert!(
             opt_specialization_result.is_none() || is_dominated,
             "This derive also has a specialization but it's not marked as dominated!"
         );
 
+        let old_deriving = self.derive_cache.insert(derive_key, fake_fulfilled.clone());
+        debug_assert!(
+            old_deriving.is_none(),
+            "Already knew deriving result, but here anyway"
+        );
+
         // Now we check whether the structural type behind the opaque is derivable, since that's
         // what we'll need to generate an implementation for during codegen.
-        let real_var_obligation = MustImplementAbility {
-            typ: Obligated::Adhoc(opaque_real_var),
-            ability: derive_key.ability,
-        };
-        let real_var_result = self.check_one(subs, real_var_obligation).as_ref();
+        let real_var_result = self.check_adhoc(subs, opaque_real_var, derive_key.ability);
 
-        let root_result = real_var_result
-            .map_err(|err| match err {
-                // Promote the failure, which should be related to a structural type not being
-                // derivable for the ability, to a failure regarding the opaque in particular.
-                Unfulfilled::AdhocUnderivable {
-                    typ,
-                    ability,
-                    reason,
-                } => Unfulfilled::OpaqueUnderivable {
-                    typ: typ.clone(),
-                    ability: *ability,
-                    reason: reason.clone(),
-                    opaque: derive_key.opaque,
-                    derive_region,
-                },
-                _ => internal_error!("unexpected underivable result"),
-            })
-            .map(|&()| ());
+        let root_result = real_var_result.map_err(|err| match err {
+            // Promote the failure, which should be related to a structural type not being
+            // derivable for the ability, to a failure regarding the opaque in particular.
+            Unfulfilled::AdhocUnderivable {
+                typ,
+                ability,
+                reason,
+            } => Unfulfilled::OpaqueUnderivable {
+                typ,
+                ability,
+                reason,
+                opaque: derive_key.opaque,
+                derive_region,
+            },
+            _ => internal_error!("unexpected underivable result"),
+        });
 
-        if is_dominated {
-            // Remove the derive result because the specialization check should take priority.
-            let check_has_fake = self.cache.remove(&root_obligation);
-            debug_assert_eq!(check_has_fake.map(|(_, b)| b), Some(fake_is_fulfilled));
+        // Remove the derive result because the specialization check should take priority.
+        let check_has_fake = self.impl_cache.remove(&impl_key);
+        debug_assert_eq!(check_has_fake.map(|(_, b)| b), Some(fake_fulfilled.clone()));
 
-            if let Some(specialization_result) = opt_specialization_result {
-                self.cache.insert(root_obligation, specialization_result);
-            } else {
-                // Even if we don't yet know whether the specialization fulfills or not, we
-                // remove the result of the derive. Because it's dominated, the next time we
-                // look at this opaque obligation, the specialization will be checked.
-            }
-
-            root_result
-        } else {
-            // Make sure we fix-up with the correct result of the check.
-            let check_has_fake = self.cache.insert(root_obligation, root_result);
-            debug_assert_eq!(check_has_fake, Some(fake_is_fulfilled));
-
-            self.cache.get(&root_obligation).unwrap().clone()
+        if let Some(specialization_result) = opt_specialization_result {
+            self.impl_cache.insert(impl_key, specialization_result);
         }
+
+        // Make sure we fix-up with the correct result of the check.
+        let check_has_fake = self.derive_cache.insert(derive_key, root_result);
+        debug_assert_eq!(check_has_fake, Some(fake_fulfilled));
     }
 
     // If we have a lot of these, consider using a visitor.
@@ -511,14 +554,11 @@ impl ObligationCache<'_> {
                     Erroneous(_) => return Err(var),
                 },
                 Alias(name, _, _, AliasKind::Opaque) => {
-                    let mia = MustImplementAbility {
-                        typ: Obligated::Opaque(*name),
-                        ability: Symbol::ENCODE_ENCODING,
-                    };
-
-                    self.check_one_help(subs, mia);
-
-                    if let Some(Err(_)) = self.cache.get(&mia) {
+                    let opaque = *name;
+                    if self
+                        .check_opaque_and_read(subs, opaque, Symbol::ENCODE_ENCODING)
+                        .is_err()
+                    {
                         return Err(var);
                     }
                 }
