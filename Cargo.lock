@@ -3457,6 +3457,7 @@ dependencies = [
  "bumpalo",
  "clap 3.1.17",
  "cli_utils",
+ "ctor",
  "dircpy",
  "indoc",
  "pretty_assertions",
