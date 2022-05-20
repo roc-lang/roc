@@ -10172,4 +10172,134 @@ All branches in an `if` must have the same type!
             ),
         )
     }
+
+    #[test]
+    fn has_encoding_for_function() {
+        new_report_problem_as(
+            "has_encoding_for_function",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ A ] to "./platform"
+
+                A a := a -> a has [ Encode.Encoding ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+                Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+
+                3│  A a := a -> a has [ Encode.Encoding ]
+                                        ^^^^^^^^^^^^^^^
+
+                Note: `Encoding` cannot be generated for functions.
+
+                Tip: You can define a custom implementation of `Encode.Encoding` for `A`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn has_encoding_for_non_encoding_alias() {
+        new_report_problem_as(
+            "has_encoding_for_non_encoding_alias",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ A ] to "./platform"
+
+                A := B has [ Encode.Encoding ]
+
+                B := {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+                Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+
+                3│  A := B has [ Encode.Encoding ]
+                                 ^^^^^^^^^^^^^^^
+
+                Tip: `B` does not implement `Encoding`. Consider adding a custom
+                implementation or `has Encode.Encoding` to the definition of `B`.
+
+                Tip: You can define a custom implementation of `Encode.Encoding` for `A`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn has_encoding_for_other_has_encoding() {
+        new_report_problem_as(
+            "has_encoding_for_other_has_encoding",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ A ] to "./platform"
+
+                A := B has [ Encode.Encoding ]
+
+                B := {} has [ Encode.Encoding ]
+                "#
+            ),
+            indoc!(""), // no error
+        )
+    }
+
+    #[test]
+    fn has_encoding_for_recursive_deriving() {
+        new_report_problem_as(
+            "has_encoding_for_recursive_deriving",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ MyNat ] to "./platform"
+
+                MyNat := [ S MyNat, Z ] has [ Encode.Encoding ]
+                "#
+            ),
+            indoc!(""), // no error
+        )
+    }
+
+    #[test]
+    fn has_encoding_dominated_by_custom() {
+        new_report_problem_as(
+            "has_encoding_dominated_by_custom",
+            indoc!(
+                r#"
+                app "test" imports [ Encode.{ Encoding, toEncoder, custom } ] provides [ A ] to "./platform"
+
+                A := {} has [ Encode.Encoding ]
+
+                toEncoder = \@A {} -> custom \l, _ -> l
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CONFLICTING DERIVE AND IMPLEMENTATION ───────────────── /code/proj/Main.roc ─
+
+                `A` both derives and custom-implements `Encode.Encoding`. We found the
+                derive here:
+
+                3│  A := {} has [ Encode.Encoding ]
+                                  ^^^^^^^^^^^^^^^
+
+                and one custom implementation of `Encode.Encoding` here:
+
+                5│  toEncoder = \@A {} -> custom \l, _ -> l
+                    ^^^^^^^^^
+
+                Derived and custom implementations can conflict, so one of them needs
+                to be removed!
+
+                Note: We'll try to compile your program using the custom
+                implementation first, and fall-back on the derived implementation if
+                needed. Make sure to disambiguate which one you want!
+                "#
+            ),
+        )
+    }
 }
