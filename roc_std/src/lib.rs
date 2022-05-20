@@ -362,8 +362,7 @@ impl fmt::Display for RocDec {
     }
 }
 
-#[repr(align(16))]
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Clone, Copy, Eq, Default)]
 pub struct I128([u8; 16]);
 
@@ -430,8 +429,7 @@ impl Hash for I128 {
     }
 }
 
-#[repr(align(16))]
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Clone, Copy, Eq, Default)]
 pub struct U128([u8; 16]);
 
