@@ -740,7 +740,7 @@ pub fn can_problem<'b>(
         }
         Problem::IllegalDerive(region) => {
             doc = alloc.stack([
-                alloc.reflow("This type cannot be derived:"),
+                alloc.reflow("This ability cannot be derived:"),
                 alloc.region(lines.convert_region(region)),
                 alloc.reflow("Only builtin abilities can be derived."),
                 alloc

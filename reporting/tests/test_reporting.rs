@@ -10156,7 +10156,7 @@ All branches in an `if` must have the same type!
                 r#"
                 ── ILLEGAL DERIVE ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                This type cannot be derived:
+                This ability cannot be derived:
 
                 5│  A := {} has [ Ab ]
                                   ^^
