@@ -83,6 +83,29 @@ impl UnificationTable {
         self.copies[index] = copy;
     }
 
+    pub fn modify<F, T>(&mut self, key: Variable, mapper: F) -> T
+    where
+        F: FnOnce(&mut Descriptor) -> T,
+    {
+        let index = self.root_key(key).index() as usize;
+
+        let mut desc = Descriptor {
+            content: self.contents[index],
+            rank: self.ranks[index],
+            mark: self.marks[index],
+            copy: self.copies[index],
+        };
+
+        let result = mapper(&mut desc);
+
+        self.contents[index] = desc.content;
+        self.ranks[index] = desc.rank;
+        self.marks[index] = desc.mark;
+        self.copies[index] = desc.copy;
+
+        result
+    }
+
     #[inline(always)]
     pub fn root_key(&mut self, mut key: Variable) -> Variable {
         let index = key.index() as usize;

@@ -1631,15 +1631,6 @@ impl Subs {
         self.utable.get_descriptor(key)
     }
 
-    //    pub fn get_ref(&self, key: Variable) -> &Descriptor {
-    //        &self.utable.probe_value_ref(key).value
-    //    }
-    //
-    //    #[inline(always)]
-    //    pub fn get_ref_mut(&mut self, key: Variable) -> &mut Descriptor {
-    //        &mut self.utable.probe_value_ref_mut(key).value
-    //    }
-
     pub fn get_rank(&self, key: Variable) -> Rank {
         self.utable.get_rank(key)
     }
@@ -1716,13 +1707,11 @@ impl Subs {
         self.utable.set_content(key, content);
     }
 
-    pub fn modify<F>(&mut self, key: Variable, mapper: F)
+    pub fn modify<F, T>(&mut self, key: Variable, mapper: F) -> T
     where
-        F: FnOnce(&mut Descriptor),
+        F: FnOnce(&mut Descriptor) -> T,
     {
-        let mut desc = self.utable.get_descriptor(key);
-        mapper(&mut desc);
-        self.utable.set_descriptor(key, desc);
+        self.utable.modify(key, mapper)
     }
 
     #[inline(always)]
