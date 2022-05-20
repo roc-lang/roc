@@ -414,7 +414,7 @@ mod test_gen_rs {
                                 tag_NonRecursive::Bar => f.debug_tuple("Bar").field(&self.variant.Bar).finish(),
                                 tag_NonRecursive::Baz => f.write_str("Baz"),
                                 tag_NonRecursive::Blah => f.debug_tuple("Blah").field(&self.variant.Blah).finish(),
-                                tag_NonRecursive::Foo => f.debug_tuple("Foo").field(&self.variant.Foo).finish(),
+                                tag_NonRecursive::Foo => f.debug_tuple("Foo").field(*self.variant.Foo).finish(),
                             }
                         }
                     }

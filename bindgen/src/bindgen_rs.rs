@@ -608,14 +608,22 @@ impl core::fmt::Debug for {name} {{
             tags.iter(),
             &discriminant_name,
             buf,
-            |tag_name, opt_payload_id| {
-                if opt_payload_id.is_some() {
+            |tag_name, opt_payload_id| match opt_payload_id {
+                Some(payload_id) => {
+                    // If it's a ManuallyDrop, we need a `*` prefix to dereference it
+                    // (because otherwise we're using ManuallyDrop's Debug instance
+                    // rather than the Debug instance of the value it wraps).
+                    let deref_str = if types.get(payload_id).has_pointer(types) {
+                        "&*"
+                    } else {
+                        "&"
+                    };
+
                     format!(
-                        r#"f.debug_tuple("{tag_name}").field(&self.variant.{tag_name}).finish(),"#,
+                        r#"f.debug_tuple("{tag_name}").field({deref_str}self.variant.{tag_name}).finish(),"#,
                     )
-                } else {
-                    format!(r#"f.write_str("{tag_name}"),"#)
                 }
+                None => format!(r#"f.write_str("{tag_name}"),"#),
             },
         )?;
 
