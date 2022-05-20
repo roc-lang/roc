@@ -1716,11 +1716,7 @@ impl Subs {
 
     #[inline(always)]
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
-        // let l_key = self.utable.inlined_get_root_key(key);
-
-        self.utable.set_mark(key, mark);
-
-        self.utable.get_rank(key)
+        self.utable.get_rank_set_mark(key, mark)
     }
 
     pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {

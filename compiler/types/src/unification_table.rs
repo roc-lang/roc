@@ -200,6 +200,16 @@ impl UnificationTable {
         self.root_key(a) == self.root_key(b)
     }
 
+    // custom very specific helpers
+    #[inline(always)]
+    pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
+        let index = self.root_key(key).index() as usize;
+
+        self.marks[index] = mark;
+
+        self.ranks[index]
+    }
+
     // TODO remove
     #[inline(always)]
     pub fn inlined_get_root_key(&mut self, key: Variable) -> Variable {
