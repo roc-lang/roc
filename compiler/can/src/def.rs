@@ -32,6 +32,7 @@ use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::IllegalCycleMark;
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::AliasCommon;
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
 use roc_types::types::LambdaSet;
@@ -349,7 +350,7 @@ fn canonicalize_opaque<'a>(
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
     derives: Option<&'a Loc<ast::Derived<'a>>>,
-) -> Result<(Alias, Vec<(Symbol, Region)>), ()> {
+) -> Result<Alias, ()> {
     let alias = canonicalize_alias(
         env,
         output,
@@ -381,7 +382,7 @@ fn canonicalize_opaque<'a>(
                 Type::Apply(ability, args, _)
                     if ability.is_builtin_ability() && args.is_empty() =>
                 {
-                    can_derives.push((ability, region));
+                    can_derives.push(Loc::at(region, ability));
                 }
                 _ => {
                     // Register the problem but keep going, we may still be able to compile the
@@ -391,10 +392,30 @@ fn canonicalize_opaque<'a>(
             }
         }
 
-        Ok((alias, can_derives))
-    } else {
-        Ok((alias, vec![]))
+        if !can_derives.is_empty() {
+            // Fresh instance of this opaque to be checked for derivability during solving.
+            let fresh_inst = Type::DelayedAlias(AliasCommon {
+                symbol: name.value,
+                type_arguments: alias
+                    .type_variables
+                    .iter()
+                    .map(|_| Type::Variable(var_store.fresh()))
+                    .collect(),
+                lambda_set_variables: alias
+                    .lambda_set_variables
+                    .iter()
+                    .map(|_| LambdaSet(Type::Variable(var_store.fresh())))
+                    .collect(),
+            });
+
+            let old = output
+                .pending_derives
+                .insert(name.value, (fresh_inst, can_derives));
+            debug_assert!(old.is_none());
+        }
     }
+
+    Ok(alias)
 }
 
 #[inline(always)]
@@ -550,7 +571,7 @@ pub(crate) fn canonicalize_defs<'a>(
                     derived,
                 );
 
-                if let Ok((alias, _derives_to_check)) = alias_and_derives {
+                if let Ok(alias) = alias_and_derives {
                     aliases.insert(name.value, alias);
                 }
             }

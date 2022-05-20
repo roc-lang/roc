@@ -255,31 +255,12 @@ fn report_unfulfilled_ability<'a>(
 
             alloc.stack(stack)
         }
-        Unfulfilled::Underivable {
+        Unfulfilled::AdhocUnderivable {
             typ,
             ability,
             reason,
         } => {
-            let reason = match reason {
-                UnderivableReason::NotABuiltin => {
-                    Some(alloc.reflow("Only builtin abilities can have generated implementations!"))
-                }
-                UnderivableReason::SurfaceNotDerivable => underivable_hint(alloc, ability, &typ),
-                UnderivableReason::NestedNotDerivable(nested_typ) => {
-                    let hint = underivable_hint(alloc, ability, &nested_typ);
-                    let reason = alloc.stack(
-                        [
-                            alloc.reflow("In particular, an implementation for"),
-                            alloc.type_block(error_type_to_doc(alloc, nested_typ)),
-                            alloc.reflow("cannot be generated."),
-                        ]
-                        .into_iter()
-                        .chain(hint),
-                    );
-                    Some(reason)
-                }
-            };
-
+            let reason = report_underivable_reason(alloc, reason, ability, &typ);
             let stack = [
                 alloc.concat([
                     alloc.reflow("Roc can't generate an implementation of the "),
@@ -292,6 +273,61 @@ fn report_unfulfilled_ability<'a>(
             .chain(reason);
 
             alloc.stack(stack)
+        }
+        Unfulfilled::OpaqueUnderivable {
+            typ,
+            ability,
+            opaque,
+            derive_region,
+            reason,
+        } => {
+            let reason = report_underivable_reason(alloc, reason, ability, &typ);
+            let stack = [
+                alloc.concat([
+                    alloc.reflow("Roc can't derive an implementation of the "),
+                    alloc.symbol_qualified(ability),
+                    alloc.reflow(" for "),
+                    alloc.symbol_unqualified(opaque),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(lines.convert_region(derive_region)),
+            ]
+            .into_iter()
+            .chain(reason)
+            .chain(std::iter::once(alloc.tip().append(alloc.concat([
+                alloc.reflow("You can create a custom implementation of "),
+                alloc.symbol_qualified(ability),
+                alloc.reflow(" for this type."),
+            ]))));
+
+            alloc.stack(stack)
+        }
+    }
+}
+
+fn report_underivable_reason<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    reason: UnderivableReason,
+    ability: Symbol,
+    typ: &ErrorType,
+) -> Option<RocDocBuilder<'a>> {
+    match reason {
+        UnderivableReason::NotABuiltin => {
+            Some(alloc.reflow("Only builtin abilities can have generated implementations!"))
+        }
+        UnderivableReason::SurfaceNotDerivable => underivable_hint(alloc, ability, &typ),
+        UnderivableReason::NestedNotDerivable(nested_typ) => {
+            let hint = underivable_hint(alloc, ability, &nested_typ);
+            let reason = alloc.stack(
+                [
+                    alloc.reflow("In particular, an implementation for"),
+                    alloc.type_block(error_type_to_doc(alloc, nested_typ)),
+                    alloc.reflow("cannot be generated."),
+                ]
+                .into_iter()
+                .chain(hint),
+            );
+            Some(reason)
         }
     }
 }

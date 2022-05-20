@@ -12,6 +12,7 @@ mod test_reporting {
     use bumpalo::Bump;
     use indoc::indoc;
     use roc_can::abilities::AbilitiesStore;
+    use roc_can::expr::PendingDerives;
     use roc_load::{self, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_region::all::LineInfo;
@@ -229,6 +230,9 @@ mod test_reporting {
             &mut unify_problems,
             &constraints,
             &constraint,
+            // Use `new_report_problem_as` in order to get proper derives.
+            // TODO: remove the non-new reporting test infra.
+            PendingDerives::default(),
             &mut solve_aliases,
             &mut abilities_store,
             var,

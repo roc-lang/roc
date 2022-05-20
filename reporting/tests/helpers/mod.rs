@@ -5,7 +5,7 @@ use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::env::Env;
 use roc_can::expected::Expected;
-use roc_can::expr::{canonicalize_expr, Expr, Output};
+use roc_can::expr::{canonicalize_expr, Expr, Output, PendingDerives};
 use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, SendSet};
@@ -31,6 +31,7 @@ pub fn infer_expr(
     problems: &mut Vec<solve::TypeError>,
     constraints: &Constraints,
     constraint: &Constraint,
+    pending_derives: PendingDerives,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
     expr_var: Variable,
@@ -41,6 +42,7 @@ pub fn infer_expr(
         subs,
         aliases,
         constraint,
+        pending_derives,
         abilities_store,
     );
 

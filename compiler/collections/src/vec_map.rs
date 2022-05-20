@@ -125,7 +125,7 @@ impl<K: PartialEq, V> VecMap<K, V> {
     }
 }
 
-impl<K: Ord, V> Extend<(K, V)> for VecMap<K, V> {
+impl<K: PartialEq, V> Extend<(K, V)> for VecMap<K, V> {
     #[inline(always)]
     fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
         let it = iter.into_iter();
