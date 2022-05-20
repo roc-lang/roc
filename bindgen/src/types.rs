@@ -5,7 +5,6 @@ use roc_mono::layout::UnionLayout;
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use std::convert::TryInto;
-use ven_graph::topological_sort;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
@@ -52,16 +51,28 @@ impl Types {
     }
 
     pub fn sorted_ids(&self) -> Vec<TypeId> {
-        // TODO: instead use the bitvec matrix type we use in the Roc compiler -
-        // it's more efficient and also would bring us one step closer to dropping
-        // the dependency on this topological_sort implementation!
-        topological_sort(self.ids(), |id| match self.deps.get(id) {
-            Some(dep_ids) => dep_ids.to_vec(),
-            None => Vec::new(),
-        })
-        .unwrap_or_else(|err| {
-            unreachable!("Cyclic type definitions: {:?}", err);
-        })
+        use roc_collections::{ReferenceMatrix, TopologicalSort};
+
+        let mut matrix = ReferenceMatrix::new(self.by_id.len());
+
+        for type_id in self.ids() {
+            for dep in self.deps.get(&type_id).iter().flat_map(|x| x.iter()) {
+                matrix.set_row_col(type_id.0, dep.0, true);
+            }
+        }
+
+        match matrix.topological_sort_into_groups() {
+            TopologicalSort::Groups { groups } => groups
+                .into_iter()
+                .flatten()
+                .rev()
+                .map(|n| TypeId(n as usize))
+                .collect(),
+            TopologicalSort::HasCycles {
+                groups: _,
+                nodes_in_cycle,
+            } => unreachable!("Cyclic type definitions: {:?}", nodes_in_cycle),
+        }
     }
 
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &RocType> {

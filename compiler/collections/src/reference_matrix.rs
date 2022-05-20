@@ -154,7 +154,7 @@ impl ReferenceMatrix {
     }
 }
 
-#[allow(dead_code)]
+#[derive(Debug)]
 pub enum TopologicalSort {
     /// There were no cycles, all nodes have been partitioned into groups
     Groups { groups: Vec<Vec<u32>> },

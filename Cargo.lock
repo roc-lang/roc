@@ -3474,7 +3474,6 @@ dependencies = [
  "roc_types",
  "target-lexicon",
  "tempfile",
- "ven_graph",
 ]
 
 [[package]]
