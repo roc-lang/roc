@@ -18,16 +18,6 @@ fi
 WWW_ROOT="${1:-repl_www/public}"
 mkdir -p $WWW_ROOT
 
-# Debugging build scripts on CI
-lsb_release -a
-cargo --version
-rustc --version
-rustup show
-wasm-pack --version
-which wasm-opt && wasm-opt --version
-
-echo $PATH | tr ':' '\n'
-
 # We want a release build, but with debug info (to get stack traces for Wasm backend `todo!()`)
 # This configuration is called `--profiling`
 wasm-pack build --profiling --target web repl_wasm -- --features console_error_panic_hook -v
