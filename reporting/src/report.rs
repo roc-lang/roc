@@ -479,7 +479,7 @@ impl<'a> RocDocAllocator<'a> {
         self.text(content.to_string()).annotate(Annotation::BinOp)
     }
 
-    /// Turns of backticks/colors in a block
+    /// Turns off backticks/colors in a block
     pub fn type_block(
         &'a self,
         content: DocBuilder<'a, Self, Annotation>,
@@ -487,7 +487,7 @@ impl<'a> RocDocAllocator<'a> {
         content.annotate(Annotation::TypeBlock).indent(4)
     }
 
-    /// Turns of backticks/colors in a block
+    /// Turns off backticks/colors in a block
     pub fn inline_type_block(
         &'a self,
         content: DocBuilder<'a, Self, Annotation>,
