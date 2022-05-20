@@ -1166,14 +1166,7 @@ fn pretty_runtime_error<'b>(
         }
 
         RuntimeError::LookupNotInScope(loc_name, options) => {
-            doc = not_found(
-                alloc,
-                lines,
-                loc_name.region,
-                &loc_name.value,
-                "value",
-                options,
-            );
+            doc = not_found(alloc, lines, loc_name.region, &loc_name.value, options);
             title = UNRECOGNIZED_NAME;
         }
         RuntimeError::CircularDef(entries) => {
@@ -1766,7 +1759,6 @@ fn not_found<'b>(
     lines: &LineInfo,
     region: roc_region::all::Region,
     name: &Ident,
-    thing: &'b str,
     options: MutSet<Box<str>>,
 ) -> RocDocBuilder<'b> {
     let mut suggestions = suggest::sort(
@@ -1800,10 +1792,9 @@ fn not_found<'b>(
 
     alloc.stack([
         alloc.concat([
-            alloc.reflow("I cannot find a `"),
+            alloc.reflow("Nothing is named `"),
             alloc.string(name.to_string()),
-            alloc.reflow("` "),
-            alloc.reflow(thing),
+            alloc.reflow("` in this scope."),
         ]),
         alloc.region(lines.convert_region(region)),
         to_details(default_no, default_yes),

@@ -670,7 +670,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `bar` value
+                Nothing is named `bar` in this scope.
 
                 8│          4 -> bar baz "yay"
                                  ^^^
@@ -698,7 +698,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `true` value
+                Nothing is named `true` in this scope.
 
                 1│  if true then 1 else 2
                        ^^^^
@@ -863,7 +863,7 @@ mod test_reporting {
                 r#"
                 <cyan>── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─<reset>
 
-                I cannot find a `theAdmin` value
+                Nothing is named `theAdmin` in this scope.
 
                 <cyan>3<reset><cyan>│<reset>  <white>theAdmin<reset>
                     <red>^^^^^^^^<reset>
@@ -1775,7 +1775,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `foo` value
+                Nothing is named `foo` in this scope.
 
                 2│      { foo: _ } -> foo
                                       ^^^
@@ -2232,7 +2232,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `ok` value
+                Nothing is named `ok` in this scope.
 
                 2│  f = \_ -> ok 4
                               ^^
@@ -6071,7 +6071,7 @@ All branches in an `if` must have the same type!
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `bar` value
+                Nothing is named `bar` in this scope.
 
                 1│  [ "foo", bar("") ]
                              ^^^
@@ -8762,7 +8762,7 @@ All branches in an `if` must have the same type!
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `UnknownType` value
+                Nothing is named `UnknownType` in this scope.
 
                 1│  Type : [ Constructor UnknownType ]
                                          ^^^^^^^^^^^
@@ -8776,7 +8776,7 @@ All branches in an `if` must have the same type!
 
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `UnknownType` value
+                Nothing is named `UnknownType` in this scope.
 
                 3│  insertHelper : UnknownType, Type -> Type
                                    ^^^^^^^^^^^
