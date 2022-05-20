@@ -502,7 +502,7 @@ fn unify_two_aliases(
             .into_iter()
             .zip(other_args.all_variables().into_iter());
 
-        let args_unification_snapshot = subs.snapshot();
+        let length_before = subs.len();
 
         for (l, r) in it {
             let l_var = subs[l];
@@ -514,10 +514,9 @@ fn unify_two_aliases(
             outcome.union(merge(subs, ctx, *other_content));
         }
 
-        let args_unification_had_changes = !subs
-            .vars_since_snapshot(&args_unification_snapshot)
-            .is_empty();
-        subs.commit_snapshot(args_unification_snapshot);
+        let length_after = subs.len();
+
+        let args_unification_had_changes = length_after != length_before;
 
         if !args.is_empty() && args_unification_had_changes && outcome.mismatches.is_empty() {
             // We need to unify the real vars because unification of type variables

@@ -8,7 +8,7 @@ use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
 use std::iter::{once, Iterator, Map};
-use ven_ena::unify::{InPlace, /* Snapshot,  UnificationTable, */ UnifyKey};
+use ven_ena::unify::UnifyKey;
 
 use crate::unification_table::{Snapshot, UnificationTable};
 
@@ -132,7 +132,7 @@ impl Subs {
         written += header.len();
         writer.write_all(&header)?;
 
-        written = Self::serialize_unification_table(&self.utable, writer, written)?;
+        written = self.utable.serialize(writer, written)?;
 
         written = Self::serialize_slice(&self.variables, writer, written)?;
         written = Self::serialize_tag_names(&self.tag_names, writer, written)?;
@@ -142,14 +142,6 @@ impl Subs {
         written = Self::serialize_slice(exposed_vars_by_symbol, writer, written)?;
 
         Ok(written)
-    }
-
-    fn serialize_unification_table(
-        utable: &UnificationTable,
-        writer: &mut impl std::io::Write,
-        mut written: usize,
-    ) -> std::io::Result<usize> {
-        todo!()
     }
 
     /// Lowercase can be heap-allocated
@@ -201,7 +193,7 @@ impl Subs {
         Self::serialize_slice(&buf, writer, written)
     }
 
-    fn serialize_slice<T>(
+    pub(crate) fn serialize_slice<T>(
         slice: &[T],
         writer: &mut impl std::io::Write,
         written: usize,
@@ -225,8 +217,7 @@ impl Subs {
         offset += header_slice.len();
         let header = SubsHeader::from_array(header_slice.try_into().unwrap());
 
-        let (utable, offset) =
-            Self::deserialize_unification_table(bytes, header.utable as usize, offset);
+        let (utable, offset) = UnificationTable::deserialize(bytes, header.utable as usize, offset);
 
         let (variables, offset) = Self::deserialize_slice(bytes, header.variables as usize, offset);
         let (tag_names, offset) =
@@ -253,14 +244,6 @@ impl Subs {
             },
             exposed_vars_by_symbol,
         )
-    }
-
-    fn deserialize_unification_table(
-        bytes: &[u8],
-        length: usize,
-        offset: usize,
-    ) -> (UnificationTable, usize) {
-        todo!()
     }
 
     fn deserialize_field_names(
@@ -309,7 +292,11 @@ impl Subs {
         (tag_names, offset)
     }
 
-    fn deserialize_slice<T>(bytes: &[u8], length: usize, mut offset: usize) -> (&[T], usize) {
+    pub(crate) fn deserialize_slice<T>(
+        bytes: &[u8],
+        length: usize,
+        mut offset: usize,
+    ) -> (&[T], usize) {
         let alignment = std::mem::align_of::<T>();
         let size = std::mem::size_of::<T>();
 
@@ -1876,11 +1863,6 @@ impl Subs {
     pub fn vars_since_snapshot(&mut self, snapshot: &Snapshot) -> core::ops::Range<Variable> {
         self.utable.vars_since_snapshot(snapshot)
     }
-}
-
-#[inline(always)]
-fn flex_var_descriptor() -> Descriptor {
-    Descriptor::from(unnamed_flex_var())
 }
 
 #[inline(always)]

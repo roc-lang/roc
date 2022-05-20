@@ -12,6 +12,7 @@ pub struct UnificationTable {
 pub struct Snapshot(UnificationTable);
 
 impl UnificationTable {
+    #[allow(unused)]
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             contents: Vec::with_capacity(cap),  // vec![Content::Error; cap],
@@ -65,6 +66,7 @@ impl UnificationTable {
         variable
     }
 
+    #[allow(unused)]
     pub fn set(
         &mut self,
         key: Variable,
@@ -216,5 +218,41 @@ impl UnificationTable {
         self.ranks[index] = desc.rank;
         self.marks[index] = desc.mark;
         self.copies[index] = desc.copy;
+    }
+
+    pub(crate) fn serialize(
+        &self,
+        writer: &mut impl std::io::Write,
+        mut written: usize,
+    ) -> std::io::Result<usize> {
+        use crate::subs::Subs;
+
+        written = Subs::serialize_slice(&self.contents, writer, written)?;
+        written = Subs::serialize_slice(&self.ranks, writer, written)?;
+        written = Subs::serialize_slice(&self.marks, writer, written)?;
+        written = Subs::serialize_slice(&self.copies, writer, written)?;
+        written = Subs::serialize_slice(&self.redirects, writer, written)?;
+
+        Ok(written)
+    }
+
+    pub(crate) fn deserialize(bytes: &[u8], length: usize, offset: usize) -> (Self, usize) {
+        use crate::subs::Subs;
+
+        let (contents, offset) = Subs::deserialize_slice::<Content>(bytes, length, offset);
+        let (ranks, offset) = Subs::deserialize_slice::<Rank>(bytes, length, offset);
+        let (marks, offset) = Subs::deserialize_slice::<Mark>(bytes, length, offset);
+        let (copies, offset) = Subs::deserialize_slice::<OptVariable>(bytes, length, offset);
+        let (redirects, offset) = Subs::deserialize_slice::<OptVariable>(bytes, length, offset);
+
+        let this = Self {
+            contents: contents.to_vec(),
+            ranks: ranks.to_vec(),
+            marks: marks.to_vec(),
+            copies: copies.to_vec(),
+            redirects: redirects.to_vec(),
+        };
+
+        (this, offset)
     }
 }
