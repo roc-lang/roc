@@ -180,14 +180,14 @@ pub fn load_and_typecheck_str<'a>(
     }
 }
 
-const BOOL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Bool.dat")) as &[_];
-const RESULT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Result.dat")) as &[_];
-const LIST: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/List.dat")) as &[_];
-const STR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Str.dat")) as &[_];
-const DICT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Dict.dat")) as &[_];
-const SET: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Set.dat")) as &[_];
-const BOX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Box.dat")) as &[_];
-const NUM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Num.dat")) as &[_];
+// const BOOL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Bool.dat")) as &[_];
+// const RESULT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Result.dat")) as &[_];
+// const LIST: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/List.dat")) as &[_];
+// const STR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Str.dat")) as &[_];
+// const DICT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Dict.dat")) as &[_];
+// const SET: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Set.dat")) as &[_];
+// const BOX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Box.dat")) as &[_];
+// const NUM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Num.dat")) as &[_];
 
 fn deserialize_help(bytes: &[u8]) -> (Subs, Vec<(Symbol, Variable)>) {
     let (subs, slice) = Subs::deserialize(bytes);
@@ -201,16 +201,16 @@ fn read_cached_subs() -> MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)> {
     // Wasm seems to re-order definitions between build time and runtime, but only in release mode.
     // That is very strange, but we can solve it separately
     if !cfg!(target_family = "wasm") {
-        output.insert(ModuleId::BOOL, deserialize_help(BOOL));
-        output.insert(ModuleId::RESULT, deserialize_help(RESULT));
-        output.insert(ModuleId::NUM, deserialize_help(NUM));
-
-        output.insert(ModuleId::LIST, deserialize_help(LIST));
-        output.insert(ModuleId::STR, deserialize_help(STR));
-        output.insert(ModuleId::DICT, deserialize_help(DICT));
-
-        output.insert(ModuleId::SET, deserialize_help(SET));
-        output.insert(ModuleId::BOX, deserialize_help(BOX));
+        //        output.insert(ModuleId::BOOL, deserialize_help(BOOL));
+        //        output.insert(ModuleId::RESULT, deserialize_help(RESULT));
+        //        output.insert(ModuleId::NUM, deserialize_help(NUM));
+        //
+        //        output.insert(ModuleId::LIST, deserialize_help(LIST));
+        //        output.insert(ModuleId::STR, deserialize_help(STR));
+        //        output.insert(ModuleId::DICT, deserialize_help(DICT));
+        //
+        //        output.insert(ModuleId::SET, deserialize_help(SET));
+        //        output.insert(ModuleId::BOX, deserialize_help(BOX));
     }
 
     output
