@@ -2899,17 +2899,25 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                 // NOTE: we must write to the mutually borrowed `desc` value here
                 // using `subs.set` does not work (unclear why, really)
                 // but get_ref_mut approach saves a lookup, so the weirdness is worth it
-                desc.content = FlexVar(Some(name));
-                desc.rank = max_rank;
-                desc.mark = Mark::NONE;
-                desc.copy = OptVariable::NONE;
+                subs.modify(var, |d| {
+                    *d = Descriptor {
+                        content: FlexVar(Some(name)),
+                        rank: max_rank,
+                        mark: Mark::NONE,
+                        copy: OptVariable::NONE,
+                    }
+                })
             }
             &RigidAbleVar(name, ability) => {
                 // Same as `RigidVar` above
-                desc.content = FlexAbleVar(Some(name), ability);
-                desc.rank = max_rank;
-                desc.mark = Mark::NONE;
-                desc.copy = OptVariable::NONE;
+                subs.modify(var, |d| {
+                    *d = Descriptor {
+                        content: FlexAbleVar(Some(name), ability),
+                        rank: max_rank,
+                        mark: Mark::NONE,
+                        copy: OptVariable::NONE,
+                    }
+                })
             }
             FlexVar(_) | FlexAbleVar(_, _) | Error => (),
 
