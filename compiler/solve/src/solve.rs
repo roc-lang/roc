@@ -2999,13 +2999,13 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     // we have tracked all visited variables, and can now traverse them
     // in one go (without looking at the UnificationTable) and clear the copy field
     for var in visited {
-        let descriptor = subs.get_ref_mut(var);
-
-        if descriptor.copy.is_some() {
-            descriptor.rank = Rank::NONE;
-            descriptor.mark = Mark::NONE;
-            descriptor.copy = OptVariable::NONE;
-        }
+        subs.modify(var, |descriptor| {
+            if descriptor.copy.is_some() {
+                descriptor.rank = Rank::NONE;
+                descriptor.mark = Mark::NONE;
+                descriptor.copy = OptVariable::NONE;
+            }
+        });
     }
 }
 
@@ -3023,13 +3023,13 @@ fn deep_copy_var_in(
     // we have tracked all visited variables, and can now traverse them
     // in one go (without looking at the UnificationTable) and clear the copy field
     for var in visited {
-        let descriptor = subs.get_ref_mut(var);
-
-        if descriptor.copy.is_some() {
-            descriptor.rank = Rank::NONE;
-            descriptor.mark = Mark::NONE;
-            descriptor.copy = OptVariable::NONE;
-        }
+        subs.modify(var, |descriptor| {
+            if descriptor.copy.is_some() {
+                descriptor.rank = Rank::NONE;
+                descriptor.mark = Mark::NONE;
+                descriptor.copy = OptVariable::NONE;
+            }
+        });
     }
 
     copy

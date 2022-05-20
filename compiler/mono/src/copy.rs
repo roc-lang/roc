@@ -391,14 +391,14 @@ fn deep_copy_type_vars<'a>(
     // in one go (without looking at the UnificationTable) and clear the copy field
     let mut result = Vec::with_capacity_in(copied.len(), arena);
     for var in copied {
-        let descriptor = subs.get_ref_mut(var);
-
-        if let Some(copy) = descriptor.copy.into_variable() {
-            result.push((var, copy));
-            descriptor.copy = OptVariable::NONE;
-        } else {
-            debug_assert!(false, "{:?} marked as copied but it wasn't", var);
-        }
+        subs.modify(var, |descriptor| {
+            if let Some(copy) = descriptor.copy.into_variable() {
+                result.push((var, copy));
+                descriptor.copy = OptVariable::NONE;
+            } else {
+                debug_assert!(false, "{:?} marked as copied but it wasn't", var);
+            }
+        })
     }
 
     debug_assert!(result.contains(&(var, cloned_var)));

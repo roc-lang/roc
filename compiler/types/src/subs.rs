@@ -1784,7 +1784,7 @@ impl Subs {
 
     pub fn modify<F>(&mut self, key: Variable, mapper: F)
     where
-        F: Fn(&mut Descriptor),
+        F: FnOnce(&mut Descriptor),
     {
         mapper(self.get_ref_mut(key));
     }
