@@ -154,7 +154,8 @@ mod solve_expr {
                 mut type_problems,
                 interns,
                 mut solved,
-                exposed_to_host,
+                mut exposed_to_host,
+                abilities_store,
                 ..
             },
             src,
@@ -171,6 +172,8 @@ mod solve_expr {
             format_problems(&src, home, &interns, can_problems, type_problems);
 
         let subs = solved.inner_mut();
+
+        exposed_to_host.retain(|s, _| !abilities_store.is_specialization_name(*s));
 
         debug_assert!(exposed_to_host.len() == 1);
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
@@ -6424,6 +6427,32 @@ mod solve_expr {
                 "#
             ),
             &["A#default : {} -> A"],
+        )
+    }
+
+    #[test]
+    fn stdlib_encode_json() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test"
+                    imports [ Encode.{ toEncoder }, Json ]
+                    provides [ main ] to "./platform"
+
+                HelloWorld := {}
+
+                toEncoder = \@HelloWorld {} ->
+                    Encode.custom \bytes, fmt ->
+                        bytes
+                        |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format) is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            "Str",
         )
     }
 }

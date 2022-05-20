@@ -149,7 +149,7 @@ pub fn can_expr_with<'a>(
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
-    let mut scope = Scope::new(home, IdentIds::default());
+    let mut scope = Scope::new(home, IdentIds::default(), Default::default());
 
     // to skip loading other modules, we populate the scope with the builtin aliases
     // that makes the reporting tests much faster

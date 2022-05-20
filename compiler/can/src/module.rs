@@ -166,13 +166,14 @@ pub fn canonicalize_module_defs<'a>(
     exposed_ident_ids: IdentIds,
     dep_idents: &'a IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
+    imported_abilities_state: AbilitiesStore,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home, exposed_ident_ids);
+    let mut scope = Scope::new(home, exposed_ident_ids, imported_abilities_state);
     let mut env = Env::new(home, dep_idents, module_ids);
     let num_deps = dep_idents.len();
 
@@ -517,8 +518,16 @@ pub fn canonicalize_module_defs<'a>(
         aliases.insert(symbol, alias);
     }
 
-    for member in scope.abilities_store.root_ability_members().keys() {
-        exposed_but_not_defined.remove(member);
+    for (ability, members) in scope
+        .abilities_store
+        .iter_abilities()
+        .filter(|(ab, _)| ab.module_id() == home)
+    {
+        exposed_but_not_defined.remove(&ability);
+        members.iter().for_each(|member| {
+            debug_assert!(member.module_id() == home);
+            exposed_but_not_defined.remove(member);
+        });
     }
 
     // By this point, all exposed symbols should have been removed from

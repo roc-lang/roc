@@ -1,3 +1,5 @@
+use crate::abilities::AbilityMemberData;
+use crate::abilities::MemberTypeInfo;
 use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::find_type_def_symbols;
@@ -646,10 +648,15 @@ fn resolve_abilities<'a>(
 
             can_members.push((
                 member_sym,
-                name_region,
-                var_store.fresh(),
-                member_annot.typ,
-                variables,
+                AbilityMemberData {
+                    parent_ability: loc_ability_name.value,
+                    region: name_region,
+                    typ: MemberTypeInfo::Local {
+                        variables,
+                        signature: member_annot.typ,
+                        signature_var: var_store.fresh(),
+                    },
+                },
             ));
         }
 

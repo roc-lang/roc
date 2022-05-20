@@ -2,10 +2,9 @@ use crate::docs::DocEntry::DetachedDoc;
 use crate::docs::TypeAnnotation::{Apply, BoundVariable, Function, NoTypeAnn, Record, TagUnion};
 use crate::file::LoadedModule;
 use roc_can::scope::Scope;
-use roc_error_macros::todo_abilities;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
-use roc_parse::ast::{self, TypeHeader};
+use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
 use roc_parse::ast::{AssignedField, Def};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
 use roc_region::all::Loc;
@@ -62,9 +61,13 @@ pub enum TypeAnnotation {
         fields: Vec<RecordField>,
         extension: Box<TypeAnnotation>,
     },
+    Ability {
+        members: Vec<AbilityMember>,
+    },
     Wildcard,
     NoTypeAnn,
 }
+
 #[derive(Debug, Clone)]
 pub enum RecordField {
     RecordField {
@@ -78,6 +81,14 @@ pub enum RecordField {
     LabelOnly {
         name: String,
     },
+}
+
+#[derive(Debug, Clone)]
+pub struct AbilityMember {
+    pub name: String,
+    pub type_annotation: TypeAnnotation,
+    pub able_variables: Vec<(String, TypeAnnotation)>,
+    pub docs: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -264,7 +275,45 @@ fn generate_entry_doc<'a>(
                 (acc, None)
             }
 
-            TypeDef::Ability { .. } => todo_abilities!(),
+            TypeDef::Ability {
+                header: TypeHeader { name, vars },
+                members,
+                ..
+            } => {
+                let mut type_vars = Vec::new();
+
+                for var in vars.iter() {
+                    if let Pattern::Identifier(ident_name) = var.value {
+                        type_vars.push(ident_name.to_string());
+                    }
+                }
+
+                let members = members
+                    .iter()
+                    .map(|mem| {
+                        let extracted = mem.name.value.extract_spaces();
+                        let (type_annotation, able_variables) =
+                            ability_member_type_to_docs(mem.typ.value);
+
+                        AbilityMember {
+                            name: extracted.item.to_string(),
+                            type_annotation,
+                            able_variables,
+                            docs: comments_or_new_lines_to_docs(extracted.before),
+                        }
+                    })
+                    .collect();
+
+                let doc_def = DocDef {
+                    name: name.value.to_string(),
+                    type_annotation: TypeAnnotation::Ability { members },
+                    type_vars,
+                    docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+                };
+                acc.push(DocEntry::DocDef(doc_def));
+
+                (acc, None)
+            }
         },
 
         Def::NotYetImplemented(s) => todo!("{}", s),
@@ -349,6 +398,29 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
         }
         ast::TypeAnnotation::Wildcard => TypeAnnotation::Wildcard,
         _ => NoTypeAnn,
+    }
+}
+
+fn ability_member_type_to_docs(
+    type_annotation: ast::TypeAnnotation,
+) -> (TypeAnnotation, Vec<(String, TypeAnnotation)>) {
+    match type_annotation {
+        ast::TypeAnnotation::Where(ta, has_clauses) => {
+            let ta = type_to_docs(false, ta.value);
+            let has_clauses = has_clauses
+                .iter()
+                .map(|hc| {
+                    let ast::HasClause { var, ability } = hc.value;
+                    (
+                        var.value.extract_spaces().item.to_string(),
+                        type_to_docs(false, ability.value),
+                    )
+                })
+                .collect();
+
+            (ta, has_clauses)
+        }
+        _ => (type_to_docs(false, type_annotation), vec![]),
     }
 }
 

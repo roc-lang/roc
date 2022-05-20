@@ -299,7 +299,7 @@ impl Aliases {
         arena: &bumpalo::Bump,
         symbol: Symbol,
         alias_variables: AliasVariables,
-    ) -> Result<(Variable, AliasKind), ()> {
+    ) -> (Variable, AliasKind) {
         // hardcoded instantiations for builtin aliases
         if let Some((var, kind)) = Self::instantiate_builtin_aliases_real_var(
             self,
@@ -309,12 +309,15 @@ impl Aliases {
             symbol,
             alias_variables,
         ) {
-            return Ok((var, kind));
+            return (var, kind);
         }
 
         let (typ, delayed_variables, &mut kind) =
             match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
-                None => return Err(()),
+                None => internal_error!(
+                    "Alias not registered in delayed aliases! {:?}",
+                    &self.aliases
+                ),
                 Some((_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),
             };
 
@@ -384,7 +387,7 @@ impl Aliases {
             }
         }
 
-        Ok((alias_variable, kind))
+        (alias_variable, kind)
     }
 }
 
@@ -1495,7 +1498,9 @@ fn check_ability_specialization(
     // inferred type for the specialization actually aligns with the expected
     // implementation.
     if let Some((root_symbol, root_data)) = abilities_store.root_name_and_def(symbol) {
-        let root_signature_var = root_data.signature_var;
+        let root_signature_var = root_data
+            .signature_var()
+            .unwrap_or_else(|| internal_error!("Signature var not resolved for {:?}", root_symbol));
 
         // Check if they unify - if they don't, then the claimed specialization isn't really one,
         // and that's a type error!
@@ -2000,7 +2005,7 @@ fn type_to_variable<'a>(
                     }
                 };
 
-                let instantiated = aliases.instantiate_real_var(
+                let (alias_variable, kind) = aliases.instantiate_real_var(
                     subs,
                     rank,
                     pools,
@@ -2008,9 +2013,6 @@ fn type_to_variable<'a>(
                     *symbol,
                     alias_variables,
                 );
-
-                let (alias_variable, kind) = instantiated
-                    .unwrap_or_else(|_| unreachable!("Alias {:?} is not available", symbol));
 
                 let content = Content::Alias(*symbol, alias_variables, alias_variable, kind);
 
