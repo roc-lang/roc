@@ -6,16 +6,31 @@ use crate::{
     Buf,
 };
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum Braces {
+    Square,
+    Curly,
+}
+
 pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
     buf: &mut Buf<'buf>,
     indent: u16,
-    start: char,
-    end: char,
+    braces: Braces,
     items: Collection<'a, T>,
     newline: Newlines,
 ) where
     <T as ExtractSpaces<'a>>::Item: Formattable,
 {
+    let start = match braces {
+        Braces::Curly => '{',
+        Braces::Square => '[',
+    };
+
+    let end = match braces {
+        Braces::Curly => '}',
+        Braces::Square => ']',
+    };
+
     if items.is_multiline() {
         let braces_indent = indent;
         let item_indent = braces_indent + INDENT;
