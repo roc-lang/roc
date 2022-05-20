@@ -1782,6 +1782,18 @@ impl Subs {
         });
     }
 
+    pub fn get_copy(&self, key: Variable) -> OptVariable {
+        self.utable.probe_value_ref(key).value.copy
+    }
+
+    pub fn set_copy(&mut self, key: Variable, v: OptVariable) {
+        let l_key = self.utable.inlined_get_root_key(key);
+
+        self.utable.update_value(l_key, |node| {
+            node.value.copy = v;
+        });
+    }
+
     pub fn modify<F>(&mut self, key: Variable, mapper: F)
     where
         F: FnOnce(&mut Descriptor),
