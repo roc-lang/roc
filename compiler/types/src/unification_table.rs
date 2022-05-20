@@ -1,6 +1,6 @@
 use crate::subs::{Content, Descriptor, Mark, OptVariable, Rank, Variable, VariableSubsSlice};
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct UnificationTable {
     contents: Vec<Content>,
     ranks: Vec<Rank>,
@@ -9,7 +9,7 @@ pub struct UnificationTable {
     redirects: Vec<OptVariable>,
 }
 
-struct Snapshot(UnificationTable);
+pub struct Snapshot(UnificationTable);
 
 impl UnificationTable {
     pub fn with_capacity(cap: usize) -> Self {
@@ -36,7 +36,7 @@ impl UnificationTable {
         let start = self.contents.len();
 
         self.contents
-            .extend(repeat(Content::Error).take(extra_length));
+            .extend(repeat(Content::FlexVar(None)).take(extra_length));
         self.ranks.extend(repeat(Rank::NONE).take(extra_length));
         self.marks.extend(repeat(Mark::NONE).take(extra_length));
         self.copies
@@ -47,12 +47,22 @@ impl UnificationTable {
         VariableSubsSlice::new(start as _, extra_length as _)
     }
 
-    pub fn push(&mut self, content: Content, rank: Rank, mark: Mark, copy: OptVariable) {
+    pub fn push(
+        &mut self,
+        content: Content,
+        rank: Rank,
+        mark: Mark,
+        copy: OptVariable,
+    ) -> Variable {
+        let variable = unsafe { Variable::from_index(self.len() as _) };
+
         self.contents.push(content);
         self.ranks.push(rank);
         self.marks.push(mark);
         self.copies.push(copy);
         self.redirects.push(OptVariable::NONE);
+
+        variable
     }
 
     pub fn set(
@@ -72,11 +82,6 @@ impl UnificationTable {
     }
 
     #[inline(always)]
-    pub fn unify_right_to_left(&mut self, to: Variable, from: Variable) {
-        self.redirects[to.index() as usize] = OptVariable::from(from);
-    }
-
-    #[inline(always)]
     pub fn root_key(&mut self, mut key: Variable) -> Variable {
         let index = key.index() as usize;
 
@@ -84,7 +89,9 @@ impl UnificationTable {
             key = redirect;
         }
 
-        self.redirects[index] = OptVariable::from(key);
+        if index != key.index() as usize {
+            self.redirects[index] = OptVariable::from(key);
+        }
 
         key
     }
@@ -109,6 +116,12 @@ impl UnificationTable {
     }
 
     #[inline(always)]
+    pub fn get_copy(&self, key: Variable) -> OptVariable {
+        let index = self.root_key_without_compacting(key).index() as usize;
+        self.copies[index]
+    }
+
+    #[inline(always)]
     pub fn get_content(&self, key: Variable) -> &Content {
         &self.contents[self.root_key_without_compacting(key).index() as usize]
     }
@@ -126,6 +139,12 @@ impl UnificationTable {
     }
 
     #[inline(always)]
+    pub fn set_copy(&mut self, key: Variable, value: OptVariable) {
+        let index = self.root_key(key).index() as usize;
+        self.copies[index] = value;
+    }
+
+    #[inline(always)]
     pub fn set_content(&mut self, key: Variable, value: Content) {
         let index = self.root_key(key).index() as usize;
         self.contents[index] = value;
@@ -137,5 +156,65 @@ impl UnificationTable {
 
     pub fn rollback_to(&mut self, snapshot: Snapshot) {
         *self = snapshot.0;
+    }
+
+    pub fn vars_since_snapshot(&self, snapshot: &Snapshot) -> std::ops::Range<Variable> {
+        unsafe {
+            let start = Variable::from_index(snapshot.0.len() as u32);
+            let end = Variable::from_index(self.len() as u32);
+
+            start..end
+        }
+    }
+
+    pub fn is_redirect(&self, key: Variable) -> bool {
+        self.redirects[key.index() as usize].is_some()
+    }
+
+    pub fn unioned(&mut self, a: Variable, b: Variable) -> bool {
+        self.root_key(a) == self.root_key(b)
+    }
+
+    // TODO remove
+    #[inline(always)]
+    pub fn inlined_get_root_key(&mut self, key: Variable) -> Variable {
+        self.root_key(key)
+    }
+
+    /// NOTE: assumes variables are root
+    pub fn unify_roots(&mut self, to: Variable, from: Variable, desc: Descriptor) {
+        let from_index = from.index() as usize;
+        let to_index = to.index() as usize;
+
+        // redirect from -> to
+        if from_index != to_index {
+            self.redirects[from_index] = OptVariable::from(to);
+        }
+
+        // update to's Descriptor
+        self.contents[to_index] = desc.content;
+        self.ranks[to_index] = desc.rank;
+        self.marks[to_index] = desc.mark;
+        self.copies[to_index] = desc.copy;
+    }
+
+    pub fn get_descriptor(&self, key: Variable) -> Descriptor {
+        let index = self.root_key_without_compacting(key).index() as usize;
+
+        Descriptor {
+            content: self.contents[index],
+            rank: self.ranks[index],
+            mark: self.marks[index],
+            copy: self.copies[index],
+        }
+    }
+
+    pub fn set_descriptor(&mut self, key: Variable, desc: Descriptor) {
+        let index = self.root_key(key).index() as usize;
+
+        self.contents[index] = desc.content;
+        self.ranks[index] = desc.rank;
+        self.marks[index] = desc.mark;
+        self.copies[index] = desc.copy;
     }
 }

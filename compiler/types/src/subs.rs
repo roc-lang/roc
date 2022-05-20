@@ -8,7 +8,9 @@ use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
 use std::iter::{once, Iterator, Map};
-use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
+use ven_ena::unify::{InPlace, /* Snapshot,  UnificationTable, */ UnifyKey};
+
+use crate::unification_table::{Snapshot, UnificationTable};
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
@@ -143,34 +145,11 @@ impl Subs {
     }
 
     fn serialize_unification_table(
-        utable: &UnificationTable<InPlace<Variable>>,
+        utable: &UnificationTable,
         writer: &mut impl std::io::Write,
         mut written: usize,
     ) -> std::io::Result<usize> {
-        for i in 0..utable.len() {
-            let var = unsafe { Variable::from_index(i as u32) };
-
-            let desc = if utable.is_redirect(var) {
-                let root = utable.get_root_key_without_compacting(var);
-
-                // our strategy for a redirect; rank is max, mark is max, copy stores the var
-                Descriptor {
-                    content: Content::Error,
-                    rank: Rank(u32::MAX),
-                    mark: Mark(i32::MAX),
-                    copy: root.into(),
-                }
-            } else {
-                utable.probe_value_without_compacting(var)
-            };
-
-            let bytes: [u8; std::mem::size_of::<Descriptor>()] =
-                unsafe { std::mem::transmute(desc) };
-            written += bytes.len();
-            writer.write_all(&bytes)?;
-        }
-
-        Ok(written)
+        todo!()
     }
 
     /// Lowercase can be heap-allocated
@@ -280,38 +259,8 @@ impl Subs {
         bytes: &[u8],
         length: usize,
         offset: usize,
-    ) -> (UnificationTable<InPlace<Variable>>, usize) {
-        let alignment = std::mem::align_of::<Descriptor>();
-        let size = std::mem::size_of::<Descriptor>();
-        debug_assert_eq!(offset, round_to_multiple_of(offset, alignment));
-
-        let mut utable = UnificationTable::default();
-        utable.reserve(length);
-
-        let byte_length = length * size;
-        let byte_slice = &bytes[offset..][..byte_length];
-
-        let slice =
-            unsafe { std::slice::from_raw_parts(byte_slice.as_ptr() as *const Descriptor, length) };
-
-        let mut roots = Vec::new();
-
-        for desc in slice {
-            let var = utable.new_key(*desc);
-
-            if desc.rank == Rank(u32::MAX) && desc.mark == Mark(i32::MAX) {
-                let root = desc.copy.into_variable().unwrap();
-
-                roots.push((var, root));
-            }
-        }
-
-        for (var, root) in roots {
-            let desc = utable.probe_value_without_compacting(root);
-            utable.unify_roots(var, root, desc)
-        }
-
-        (utable, offset + byte_length)
+    ) -> (UnificationTable, usize) {
+        todo!()
     }
 
     fn deserialize_field_names(
@@ -377,7 +326,7 @@ impl Subs {
 
 #[derive(Clone)]
 pub struct Subs {
-    utable: UnificationTable<InPlace<Variable>>,
+    utable: UnificationTable,
     pub variables: Vec<Variable>,
     pub tag_names: Vec<TagName>,
     pub field_names: Vec<Lowercase>,
@@ -1597,15 +1546,7 @@ impl Subs {
             problems: Vec::new(),
         };
 
-        // NOTE the utable does not (currently) have a with_capacity; using this as the next-best thing
         subs.utable.reserve(capacity);
-
-        // TODO There are at least these opportunities for performance optimization here:
-        // * Making the default flex_var_descriptor be all 0s, so no init step is needed.
-
-        for _ in 0..capacity {
-            subs.utable.new_key(flex_var_descriptor());
-        }
 
         define_integer_types(&mut subs);
         define_float_types(&mut subs);
@@ -1654,14 +1595,14 @@ impl Subs {
 
     pub fn extend_by(&mut self, entries: usize) {
         self.utable.reserve(entries);
-        for _ in 0..entries {
-            self.utable.new_key(flex_var_descriptor());
-        }
     }
 
     #[inline(always)]
     pub fn fresh(&mut self, value: Descriptor) -> Variable {
-        self.utable.new_key(value)
+        // self.utable.new_key(value)
+
+        self.utable
+            .push(value.content, value.rank, value.mark, value.copy)
     }
 
     #[inline(always)]
@@ -1697,39 +1638,43 @@ impl Subs {
     }
 
     pub fn get(&mut self, key: Variable) -> Descriptor {
-        self.utable.probe_value(key)
+        self.utable.get_descriptor(key)
     }
 
-    pub fn get_ref(&self, key: Variable) -> &Descriptor {
-        &self.utable.probe_value_ref(key).value
-    }
-
-    #[inline(always)]
-    pub fn get_ref_mut(&mut self, key: Variable) -> &mut Descriptor {
-        &mut self.utable.probe_value_ref_mut(key).value
-    }
+    //    pub fn get_ref(&self, key: Variable) -> &Descriptor {
+    //        &self.utable.probe_value_ref(key).value
+    //    }
+    //
+    //    #[inline(always)]
+    //    pub fn get_ref_mut(&mut self, key: Variable) -> &mut Descriptor {
+    //        &mut self.utable.probe_value_ref_mut(key).value
+    //    }
 
     pub fn get_rank(&self, key: Variable) -> Rank {
-        self.utable.probe_value_ref(key).value.rank
+        self.utable.get_rank(key)
+    }
+
+    pub fn get_copy(&self, key: Variable) -> OptVariable {
+        self.utable.get_copy(key)
     }
 
     pub fn get_mark(&self, key: Variable) -> Mark {
-        self.utable.probe_value_ref(key).value.mark
+        self.utable.get_mark(key)
     }
 
     pub fn get_rank_mark(&self, key: Variable) -> (Rank, Mark) {
-        let desc = &self.utable.probe_value_ref(key).value;
-
-        (desc.rank, desc.mark)
+        (self.utable.get_rank(key), self.utable.get_mark(key))
     }
 
     #[inline(always)]
     pub fn get_without_compacting(&self, key: Variable) -> Descriptor {
-        self.utable.probe_value_without_compacting(key)
+        // self.utable.probe_value_without_compacting(key)
+        self.utable.get_descriptor(key)
     }
 
     pub fn get_content_without_compacting(&self, key: Variable) -> &Content {
-        &self.utable.probe_value_ref(key).value.content
+        // &self.utable.probe_value_ref(key).value.content
+        self.utable.get_content(key)
     }
 
     #[inline(always)]
@@ -1739,80 +1684,64 @@ impl Subs {
 
     #[inline(always)]
     pub fn get_root_key_without_compacting(&self, key: Variable) -> Variable {
-        self.utable.get_root_key_without_compacting(key)
+        self.utable.root_key_without_compacting(key)
     }
 
     #[inline(always)]
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
         let l_key = self.utable.inlined_get_root_key(key);
 
-        self.utable.update_value(l_key, |node| node.value = r_value);
+        // self.utable.update_value(l_key, |node| node.value = r_value);
+        self.utable.set_descriptor(l_key, r_value)
     }
 
     pub fn set_rank(&mut self, key: Variable, rank: Rank) {
-        let l_key = self.utable.inlined_get_root_key(key);
+        // let l_key = self.utable.inlined_get_root_key(key);
 
-        self.utable.update_value(l_key, |node| {
-            node.value.rank = rank;
-        });
+        self.utable.set_rank(key, rank)
     }
 
     pub fn set_mark(&mut self, key: Variable, mark: Mark) {
-        let l_key = self.utable.inlined_get_root_key(key);
+        // let l_key = self.utable.inlined_get_root_key(key);
 
-        self.utable.update_value(l_key, |node| {
-            node.value.mark = mark;
-        });
+        self.utable.set_mark(key, mark)
+    }
+
+    pub fn set_copy(&mut self, key: Variable, copy: OptVariable) {
+        // let l_key = self.utable.inlined_get_root_key(key);
+
+        self.utable.set_copy(key, copy)
     }
 
     pub fn set_rank_mark(&mut self, key: Variable, rank: Rank, mark: Mark) {
-        let l_key = self.utable.inlined_get_root_key(key);
+        // let l_key = self.utable.inlined_get_root_key(key);
 
-        self.utable.update_value(l_key, |node| {
-            node.value.rank = rank;
-            node.value.mark = mark;
-        });
+        self.utable.set_rank(key, rank);
+        self.utable.set_mark(key, mark);
     }
 
     pub fn set_content(&mut self, key: Variable, content: Content) {
-        let l_key = self.utable.inlined_get_root_key(key);
+        // let l_key = self.utable.inlined_get_root_key(key);
 
-        self.utable.update_value(l_key, |node| {
-            node.value.content = content;
-        });
-    }
-
-    pub fn get_copy(&self, key: Variable) -> OptVariable {
-        self.utable.probe_value_ref(key).value.copy
-    }
-
-    pub fn set_copy(&mut self, key: Variable, v: OptVariable) {
-        let l_key = self.utable.inlined_get_root_key(key);
-
-        self.utable.update_value(l_key, |node| {
-            node.value.copy = v;
-        });
+        self.utable.set_content(key, content);
     }
 
     pub fn modify<F>(&mut self, key: Variable, mapper: F)
     where
         F: FnOnce(&mut Descriptor),
     {
-        mapper(self.get_ref_mut(key));
+        let mut desc = self.utable.get_descriptor(key);
+        mapper(&mut desc);
+        self.utable.set_descriptor(key, desc);
     }
 
     #[inline(always)]
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
-        let l_key = self.utable.inlined_get_root_key(key);
+        // let l_key = self.utable.inlined_get_root_key(key);
 
-        let mut rank = Rank::NONE;
+        self.utable.set_mark(key, mark);
 
-        self.utable.update_value(l_key, |node| {
-            node.value.mark = mark;
-            rank = node.value.rank;
-        });
-
-        rank
+        self.utable.get_rank(key)
     }
 
     pub fn equivalent(&mut self, left: Variable, right: Variable) -> bool {
@@ -1932,22 +1861,19 @@ impl Subs {
         (var.index() as usize) < self.len()
     }
 
-    pub fn snapshot(&mut self) -> Snapshot<InPlace<Variable>> {
+    pub fn snapshot(&mut self) -> Snapshot {
         self.utable.snapshot()
     }
 
-    pub fn rollback_to(&mut self, snapshot: Snapshot<InPlace<Variable>>) {
+    pub fn rollback_to(&mut self, snapshot: Snapshot) {
         self.utable.rollback_to(snapshot)
     }
 
-    pub fn commit_snapshot(&mut self, snapshot: Snapshot<InPlace<Variable>>) {
-        self.utable.commit(snapshot)
+    pub fn commit_snapshot(&mut self, _snapshot: Snapshot) {
+        // self.utable.commit(snapshot)
     }
 
-    pub fn vars_since_snapshot(
-        &mut self,
-        snapshot: &Snapshot<InPlace<Variable>>,
-    ) -> core::ops::Range<Variable> {
+    pub fn vars_since_snapshot(&mut self, snapshot: &Snapshot) -> core::ops::Range<Variable> {
         self.utable.vars_since_snapshot(snapshot)
     }
 }
@@ -3657,77 +3583,81 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
         |variable_subs_slice: VariableSubsSlice| &variables[variable_subs_slice.indices()];
 
     while let Some(var) = stack.pop() {
-        let desc = &mut subs.utable.probe_value_ref_mut(var).value;
+        // let desc = &mut subs.utable.probe_value_ref_mut(var).value;
 
-        if desc.copy.is_some() {
-            desc.rank = Rank::NONE;
-            desc.mark = Mark::NONE;
-            desc.copy = OptVariable::NONE;
+        let copy = subs.utable.get_copy(var);
 
-            use Content::*;
-            use FlatType::*;
+        if copy.is_none() {
+            continue;
+        }
 
-            match &desc.content {
-                FlexVar(_) | RigidVar(_) | FlexAbleVar(_, _) | RigidAbleVar(_, _) | Error => (),
+        subs.utable.set_rank(var, Rank::NONE);
+        subs.utable.set_mark(var, Mark::NONE);
+        subs.utable.set_copy(var, OptVariable::NONE);
 
-                RecursionVar { structure, .. } => {
-                    stack.push(*structure);
+        use Content::*;
+        use FlatType::*;
+
+        match subs.utable.get_content(var) {
+            FlexVar(_) | RigidVar(_) | FlexAbleVar(_, _) | RigidAbleVar(_, _) | Error => (),
+
+            RecursionVar { structure, .. } => {
+                stack.push(*structure);
+            }
+
+            Structure(flat_type) => match flat_type {
+                Apply(_, args) => {
+                    stack.extend(var_slice(*args));
                 }
 
-                Structure(flat_type) => match flat_type {
-                    Apply(_, args) => {
-                        stack.extend(var_slice(*args));
-                    }
+                Func(arg_vars, closure_var, ret_var) => {
+                    stack.extend(var_slice(*arg_vars));
 
-                    Func(arg_vars, closure_var, ret_var) => {
-                        stack.extend(var_slice(*arg_vars));
-
-                        stack.push(*ret_var);
-                        stack.push(*closure_var);
-                    }
-
-                    EmptyRecord => (),
-                    EmptyTagUnion => (),
-
-                    Record(fields, ext_var) => {
-                        stack.extend(var_slice(fields.variables()));
-
-                        stack.push(*ext_var);
-                    }
-                    TagUnion(tags, ext_var) => {
-                        for slice_index in tags.variables() {
-                            let slice = variable_slices[slice_index.index as usize];
-                            stack.extend(var_slice(slice));
-                        }
-
-                        stack.push(*ext_var);
-                    }
-                    FunctionOrTagUnion(_, _, ext_var) => {
-                        stack.push(*ext_var);
-                    }
-
-                    RecursiveTagUnion(rec_var, tags, ext_var) => {
-                        for slice_index in tags.variables() {
-                            let slice = variable_slices[slice_index.index as usize];
-                            stack.extend(var_slice(slice));
-                        }
-
-                        stack.push(*ext_var);
-                        stack.push(*rec_var);
-                    }
-
-                    Erroneous(_) => (),
-                },
-                Alias(_, args, var, _) => {
-                    stack.extend(var_slice(args.all_variables()));
-
-                    stack.push(*var);
+                    stack.push(*ret_var);
+                    stack.push(*closure_var);
                 }
 
-                RangedNumber(typ, vars) => {
-                    stack.push(*typ);
-                    stack.extend(var_slice(*vars));
+                EmptyRecord => (),
+                EmptyTagUnion => (),
+
+                Record(fields, ext_var) => {
+                    stack.extend(var_slice(fields.variables()));
+
+                    stack.push(*ext_var);
                 }
+                TagUnion(tags, ext_var) => {
+                    for slice_index in tags.variables() {
+                        let slice = variable_slices[slice_index.index as usize];
+                        stack.extend(var_slice(slice));
+                    }
+
+                    stack.push(*ext_var);
+                }
+                FunctionOrTagUnion(_, _, ext_var) => {
+                    stack.push(*ext_var);
+                }
+
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    for slice_index in tags.variables() {
+                        let slice = variable_slices[slice_index.index as usize];
+                        stack.extend(var_slice(slice));
+                    }
+
+                    stack.push(*ext_var);
+                    stack.push(*rec_var);
+                }
+
+                Erroneous(_) => (),
+            },
+            Alias(_, args, var, _) => {
+                stack.extend(var_slice(args.all_variables()));
+
+                stack.push(*var);
+            }
+
+            RangedNumber(typ, vars) => {
+                stack.push(*typ);
+                stack.extend(var_slice(*vars));
             }
         }
     }
@@ -3804,7 +3734,7 @@ impl StorageSubs {
 
         for i in range {
             let variable = Variable(i as u32);
-            let descriptor = self.subs.get_ref(variable);
+            let descriptor = self.subs.utable.get_descriptor(variable);
             debug_assert!(descriptor.copy.is_none());
 
             let new_content = Self::offset_content(&offsets, &descriptor.content);
@@ -4025,13 +3955,13 @@ pub fn deep_copy_var_to(
         // we have tracked all visited variables, and can now traverse them
         // in one go (without looking at the UnificationTable) and clear the copy field
         for var in env.visited {
-            let descriptor = env.source.get_ref_mut(var);
-
-            if descriptor.copy.is_some() {
-                descriptor.rank = Rank::NONE;
-                descriptor.mark = Mark::NONE;
-                descriptor.copy = OptVariable::NONE;
-            }
+            env.source.modify(var, |descriptor| {
+                if descriptor.copy.is_some() {
+                    descriptor.rank = Rank::NONE;
+                    descriptor.mark = Mark::NONE;
+                    descriptor.copy = OptVariable::NONE;
+                }
+            });
         }
 
         copy
@@ -4436,13 +4366,13 @@ pub fn copy_import_to(
         // in one go (without looking at the UnificationTable) and clear the copy field
 
         for var in visited {
-            let descriptor = source.get_ref_mut(var);
-
-            if descriptor.copy.is_some() {
-                descriptor.rank = Rank::NONE;
-                descriptor.mark = Mark::NONE;
-                descriptor.copy = OptVariable::NONE;
-            }
+            source.modify(var, |descriptor| {
+                if descriptor.copy.is_some() {
+                    descriptor.rank = Rank::NONE;
+                    descriptor.mark = Mark::NONE;
+                    descriptor.copy = OptVariable::NONE;
+                }
+            });
         }
 
         CopiedImport {
