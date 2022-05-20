@@ -571,6 +571,45 @@ impl Clone for {name} {{
         writeln!(buf, "impl Copy for {name} {{}}\n")?;
     }
 
+    // The Hash impl for the tag union
+    {
+        writeln!(
+            buf,
+            r#"
+impl core::hash::Hash for {name} {{
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {{
+        match self.tag() {{"#
+        )?;
+
+        write_impl_tags(
+            3,
+            tags.iter(),
+            &discriminant_name,
+            buf,
+            |tag_name, opt_payload_id| {
+                let hash_tag = format!("{discriminant_name}::{tag_name}.hash(state)");
+
+                if opt_payload_id.is_some() {
+                    format!(
+                        r#"unsafe {{
+                {hash_tag};
+                &self.variant.{tag_name}.hash(state);
+            }},"#
+                    )
+                } else {
+                    format!("{},", hash_tag)
+                }
+            },
+        )?;
+
+        writeln!(
+            buf,
+            r#"        }}
+    }}
+}}"#
+        )?;
+    }
+
     // The Debug impl for the tag union
     {
         write!(
