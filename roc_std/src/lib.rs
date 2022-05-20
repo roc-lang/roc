@@ -211,6 +211,7 @@ impl<T, E> Drop for RocResult<T, E> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[repr(C, align(16))]
 pub struct RocDec(i128);
 
 impl RocDec {
