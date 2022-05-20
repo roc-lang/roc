@@ -3049,11 +3049,12 @@ fn deep_copy_var_help(
     use roc_types::subs::FlatType::*;
 
     let subs_len = subs.len();
-    let desc = subs.get_ref_mut(var);
 
-    if let Some(copy) = desc.copy.into_variable() {
+    let existing_copy = subs.get_copy(var);
+
+    if let Some(copy) = existing_copy.into_variable() {
         return copy;
-    } else if desc.rank != Rank::NONE {
+    } else if subs.get_rank(var) != Rank::NONE {
         return var;
     }
 
@@ -3065,8 +3066,6 @@ fn deep_copy_var_help(
         mark: Mark::NONE,
         copy: OptVariable::NONE,
     };
-
-    let content = desc.content;
 
     // Safety: Here we make a variable that is 1 position out of bounds.
     // The reason is that we can now keep the mutable reference to `desc`
@@ -3080,8 +3079,12 @@ fn deep_copy_var_help(
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    desc.mark = Mark::NONE;
-    desc.copy = copy.into();
+    subs.modify(var, |desc| {
+        desc.mark = Mark::NONE;
+        desc.copy = copy.into();
+    });
+
+    let content = *subs.get_content_without_compacting(var);
 
     let actual_copy = subs.fresh(make_descriptor(content));
     debug_assert_eq!(copy, actual_copy);
