@@ -59,7 +59,6 @@ pub struct Annotation {
 pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
     def_ordering: DefOrdering,
-    pub(crate) abilities_in_scope: Vec<Symbol>,
     aliases: VecMap<Symbol, Alias>,
 }
 
@@ -261,7 +260,7 @@ pub(crate) fn canonicalize_defs<'a>(
     }
 
     let mut type_defs = MutMap::default();
-    let mut abilities_in_scope = Vec::new();
+    let mut pending_abilities_in_scope = Vec::new();
 
     let mut referenced_type_symbols = VecMap::default();
 
@@ -298,7 +297,7 @@ pub(crate) fn canonicalize_defs<'a>(
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
                 type_defs.insert(name.value, TypeDef::Ability(name, members));
-                abilities_in_scope.push(name.value);
+                pending_abilities_in_scope.push(name.value);
             }
             PendingTypeDef::InvalidAlias { .. }
             | PendingTypeDef::InvalidAbility { .. }
@@ -322,7 +321,7 @@ pub(crate) fn canonicalize_defs<'a>(
                     &ann.value,
                     ann.region,
                     var_store,
-                    &abilities_in_scope,
+                    &pending_abilities_in_scope,
                 );
 
                 // Record all the annotation's references in output.references.lookups
@@ -444,7 +443,7 @@ pub(crate) fn canonicalize_defs<'a>(
         var_store,
         scope,
         abilities,
-        &abilities_in_scope,
+        &pending_abilities_in_scope,
         pattern_type,
     );
 
@@ -512,7 +511,6 @@ pub(crate) fn canonicalize_defs<'a>(
             var_store,
             pattern_type,
             &mut aliases,
-            &abilities_in_scope,
         );
 
         output = temp_output.output;
@@ -526,7 +524,6 @@ pub(crate) fn canonicalize_defs<'a>(
         CanDefs {
             defs,
             def_ordering,
-            abilities_in_scope,
             // The result needs a thread-safe `SendMap`
             aliases,
         },
@@ -543,7 +540,7 @@ fn resolve_abilities<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     abilities: MutMap<Symbol, (Loc<Symbol>, &[AbilityMember])>,
-    abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &[Symbol],
     pattern_type: PatternType,
 ) {
     for (loc_ability_name, members) in abilities.into_values() {
@@ -556,7 +553,7 @@ fn resolve_abilities<'a>(
                 &member.typ.value,
                 member.typ.region,
                 var_store,
-                abilities_in_scope,
+                pending_abilities_in_scope,
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -766,10 +763,7 @@ pub(crate) fn sort_can_defs(
         mut defs,
         def_ordering,
         aliases,
-        abilities_in_scope,
     } = defs;
-
-    output.abilities_in_scope = abilities_in_scope;
 
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
@@ -1007,9 +1001,11 @@ fn canonicalize_pending_value_def<'a>(
     var_store: &mut VarStore,
     pattern_type: PatternType,
     aliases: &mut VecMap<Symbol, Alias>,
-    abilities_in_scope: &[Symbol],
 ) -> DefOutput {
     use PendingValueDef::*;
+
+    // All abilities should be resolved by the time we're canonicalizing value defs.
+    let pending_abilities_in_scope = &[];
 
     let output = match pending_def {
         AnnotationOnly(_, loc_can_pattern, loc_ann) => {
@@ -1025,7 +1021,7 @@ fn canonicalize_pending_value_def<'a>(
                 &loc_ann.value,
                 loc_ann.region,
                 var_store,
-                abilities_in_scope,
+                pending_abilities_in_scope,
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -1122,7 +1118,7 @@ fn canonicalize_pending_value_def<'a>(
                 &loc_ann.value,
                 loc_ann.region,
                 var_store,
-                abilities_in_scope,
+                pending_abilities_in_scope,
             );
 
             // Record all the annotation's references in output.references.lookups

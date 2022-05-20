@@ -31,7 +31,6 @@ pub struct Output {
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
-    pub abilities_in_scope: Vec<Symbol>,
 }
 
 impl Output {
