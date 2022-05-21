@@ -51,7 +51,7 @@ impl From<&target_lexicon::Triple> for TargetInfo {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PtrWidth {
     Bytes4 = 4,
     Bytes8 = 8,
