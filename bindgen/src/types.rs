@@ -574,24 +574,22 @@ impl RocTagUnion {
 fn sizes_agree_with_roc_std() {
     use std::mem::size_of;
 
-    let target_info = target_lexicon::Triple::host().into();
-    let types = Types::default();
+    let target_info = TargetInfo::from(&target_lexicon::Triple::host());
+    let mut types = Types::default();
 
     assert_eq!(
         RocType::RocStr.size(&types, target_info),
         size_of::<roc_std::RocStr>(),
-        answer
     );
 
     assert_eq!(
-        RocType::RocList(RocType::RocStr).size(&types, target_info),
+        RocType::RocList(types.add(RocType::RocStr)).size(&types, target_info),
         size_of::<roc_std::RocList<()>>(),
-        answer
     );
 
-    assert_eq!(
-        RocType::RocDict.size(&types, target_info),
-        size_of::<roc_std::Dict>(),
-        answer
-    );
+    // TODO enable this once we have RocDict in roc_std
+    // assert_eq!(
+    //     RocType::RocDict.size(&types, target_info),
+    //     size_of::<roc_std::RocDict>(),
+    // );
 }
