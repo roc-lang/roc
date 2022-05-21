@@ -2,10 +2,19 @@ use core::ffi::c_void;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
+#[link(name = "wasi_libc_sys")]
+extern "C" {
+    pub fn malloc(size: usize) -> *mut c_void;
+    pub fn free(p: *mut c_void);
+    pub fn realloc(p: *mut c_void, size: usize) -> *mut c_void;
+    pub fn memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void;
+    pub fn memset(dst: *mut c_void, ch: i32, n: usize) -> *mut c_void;
+}
+
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
-    return wasi_libc_sys::malloc(size);
+    return malloc(size);
 }
 
 #[no_mangle]
@@ -15,12 +24,12 @@ pub unsafe extern "C" fn roc_realloc(
     _old_size: usize,
     _alignment: u32,
 ) -> *mut c_void {
-    return wasi_libc_sys::realloc(c_ptr, new_size);
+    return realloc(c_ptr, new_size);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
-    wasi_libc_sys::free(c_ptr);
+    free(c_ptr);
 }
 
 #[no_mangle]

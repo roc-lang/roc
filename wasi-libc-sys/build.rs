@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
+    println!("cargo:rustc-link-lib=static=wasi_libc_sys");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/dummy.c");
 
@@ -34,13 +35,15 @@ fn main() {
     // Find the libc.a file that Zig wrote (as a side-effect of compiling the dummy program)
     let find_cmd_output = run_command(Path::new("."), "find", [&zig_cache_dir, "-name", "libc.a"]);
     let zig_libc_path = find_cmd_output.trim(); // get rid of a newline
-
+    //dbg!(zig_libc_path);
     // Copy libc to where Cargo expects it
     fs::copy(&zig_libc_path, &out_file).unwrap();
 
     // Generate some Rust code to indicate where the file is
     let generated_rust = format!("pub const WASI_LIBC_PATH: &str =\n    \"{}\";\n", out_file);
     fs::write("src/generated.rs", generated_rust).unwrap();
+
+    
 }
 
 fn zig_executable() -> String {
