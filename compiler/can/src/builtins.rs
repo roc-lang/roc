@@ -1,7 +1,7 @@
 use crate::def::Def;
 use crate::expr::{self, AnnotatedMark, ClosureData, Expr::*, IntValue};
 use crate::expr::{Expr, Field, Recursive};
-use crate::num::{FloatBound, IntBound, IntWidth, NumericBound};
+use crate::num::{FloatBound, IntBound, IntWidth, NumBound};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
 use roc_module::called_via::CalledVia;
@@ -5414,8 +5414,8 @@ fn defn_help(
     })
 }
 
-fn num_no_bound() -> NumericBound {
-    NumericBound::None
+fn num_no_bound() -> NumBound {
+    NumBound::None
 }
 
 fn int_no_bound() -> IntBound {
@@ -5453,7 +5453,7 @@ fn frac(num_var: Variable, precision_var: Variable, f: f64, bound: FloatBound) -
 }
 
 #[inline(always)]
-fn num<I: Into<i128>>(num_var: Variable, i: I, bound: NumericBound) -> Expr {
+fn num<I: Into<i128>>(num_var: Variable, i: I, bound: NumBound) -> Expr {
     let i = i.into();
     Num(
         num_var,

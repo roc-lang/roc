@@ -2,8 +2,8 @@ use crate::annotation::freshen_opaque_def;
 use crate::env::Env;
 use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
 use crate::num::{
-    finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatBound, IntBound,
-    NumericBound, ParsedNumResult,
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatBound, IntBound, NumBound,
+    ParsedNumResult,
 };
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
@@ -55,7 +55,7 @@ pub enum Pattern {
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
     },
-    NumLiteral(Variable, Box<str>, IntValue, NumericBound),
+    NumLiteral(Variable, Box<str>, IntValue, NumBound),
     IntLiteral(Variable, Variable, Box<str>, IntValue, IntBound),
     FloatLiteral(Variable, Variable, Box<str>, f64, FloatBound),
     StrLiteral(Box<str>),

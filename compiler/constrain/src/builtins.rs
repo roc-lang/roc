@@ -1,7 +1,7 @@
 use arrayvec::ArrayVec;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::Expected::{self, *};
-use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumericBound, SignDemand};
+use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumBound, SignDemand};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::subs::Variable;
@@ -117,7 +117,7 @@ pub fn num_literal(
     num_var: Variable,
     expected: Expected<Type>,
     region: Region,
-    bound: NumericBound,
+    bound: NumBound,
 ) -> Constraint {
     let open_number_type = crate::builtins::num_num(Type::Variable(num_var));
 
@@ -338,11 +338,11 @@ impl TypedNumericBound for FloatBound {
     }
 }
 
-impl TypedNumericBound for NumericBound {
+impl TypedNumericBound for NumBound {
     fn bounded_range(&self) -> Vec<Variable> {
         match self {
-            NumericBound::None => vec![],
-            &NumericBound::AtLeastIntOrFloat { sign, width } => {
+            NumBound::None => vec![],
+            &NumBound::AtLeastIntOrFloat { sign, width } => {
                 let mut range = IntBound::AtLeast { sign, width }.bounded_range();
                 range.extend_from_slice(&[Variable::F32, Variable::F64, Variable::DEC]);
                 range
