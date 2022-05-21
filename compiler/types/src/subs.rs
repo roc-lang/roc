@@ -1720,9 +1720,11 @@ impl Subs {
     }
 
     pub fn set_content(&mut self, key: Variable, content: Content) {
-        // let l_key = self.utable.inlined_get_root_key(key);
-
         self.utable.set_content(key, content);
+    }
+
+    pub fn set_content_unchecked(&mut self, key: Variable, content: Content) {
+        self.utable.set_content_unchecked(key, content);
     }
 
     pub fn modify<F, T>(&mut self, key: Variable, mapper: F) -> T
