@@ -282,9 +282,47 @@ impl RocType {
                 3 * target_info.ptr_size()
             }
             RocType::RocBox(_) => target_info.ptr_size(),
-            RocType::TagUnion(_) => {
-                todo!()
-            }
+            RocType::TagUnion(tag_union) => match tag_union {
+                RocTagUnion::Enumeration { tags, .. } => size_for_tag_count(tags.len()),
+                RocTagUnion::NonRecursive { tags, .. } => {
+                    // The "unpadded" size (without taking alignment into account)
+                    // is the sum of all the sizes of the fields.
+                    let size_unpadded = tags.iter().fold(0, |total, (_, opt_payload_id)| {
+                        if let Some(payload_id) = opt_payload_id {
+                            let payload = types.get(*payload_id);
+
+                            total + payload.size(types, target_info)
+                        } else {
+                            total
+                        }
+                    });
+
+                    // Round up to the next multiple of alignment, to incorporate
+                    // any necessary alignment padding.
+                    //
+                    // e.g. if we have a record with a Str and a U8, that would be a
+                    // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
+                    // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
+                    let discriminant_align = align_for_tag_count(tags.len(), target_info);
+                    let align = self.alignment(types, target_info).max(discriminant_align);
+                    let size_padded = (size_unpadded / align) * align;
+
+                    if size_unpadded == size_padded {
+                        // We don't have any alignment padding, which means we can't
+                        // put the discriminant in the padding and the compiler will
+                        // add extra space for it.
+                        let discriminant_size = size_for_tag_count(tags.len());
+
+                        size_padded + discriminant_size.max(align)
+                    } else {
+                        size_padded
+                    }
+                }
+                RocTagUnion::Recursive { .. } => todo!(),
+                RocTagUnion::NonNullableUnwrapped { .. } => todo!(),
+                RocTagUnion::NullableWrapped { .. } => todo!(),
+                RocTagUnion::NullableUnwrapped { .. } => todo!(),
+            },
             RocType::Struct { fields, .. } => {
                 // The "unpadded" size (without taking alignment into account)
                 // is the sum of all the sizes of the fields.
@@ -396,6 +434,26 @@ impl RocType {
                     .unwrap()
             }
         }
+    }
+}
+
+fn size_for_tag_count(num_tags: usize) -> usize {
+    if num_tags == 0 {
+        // empty tag union
+        0
+    } else if num_tags < u8::MAX as usize {
+        IntWidth::U8.stack_size() as usize
+    } else if num_tags < u16::MAX as usize {
+        IntWidth::U16.stack_size() as usize
+    } else if num_tags < u32::MAX as usize {
+        IntWidth::U32.stack_size() as usize
+    } else if num_tags < u64::MAX as usize {
+        IntWidth::U64.stack_size() as usize
+    } else {
+        panic!(
+            "Too many tags. You can't have more than {} tags in a tag union!",
+            u64::MAX
+        );
     }
 }
 
