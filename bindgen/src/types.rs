@@ -259,6 +259,57 @@ impl RocType {
         }
     }
 
+    pub fn size(&self, types: &Types, target_info: TargetInfo) -> usize {
+        use std::mem::size_of;
+
+        match self {
+            RocType::Bool => size_of::<bool>(),
+            RocType::I8 => size_of::<i8>(),
+            RocType::U8 => size_of::<u8>(),
+            RocType::I16 => size_of::<i16>(),
+            RocType::U16 => size_of::<u16>(),
+            RocType::I32 => size_of::<i32>(),
+            RocType::U32 => size_of::<u32>(),
+            RocType::I64 => size_of::<i64>(),
+            RocType::U64 => size_of::<u64>(),
+            RocType::I128 => size_of::<roc_std::I128>(),
+            RocType::U128 => size_of::<roc_std::U128>(),
+            RocType::F32 => size_of::<f32>(),
+            RocType::F64 => size_of::<f64>(),
+            RocType::F128 => todo!(),
+            RocType::RocDec => size_of::<roc_std::RocDec>(),
+            RocType::RocStr | RocType::RocList(_) | RocType::RocDict(_, _) | RocType::RocSet(_) => {
+                3 * target_info.ptr_size()
+            }
+            RocType::RocBox(_) => target_info.ptr_size(),
+            RocType::TagUnion(_) => {
+                todo!()
+            }
+            RocType::Struct { fields, .. } => {
+                // The "unpadded" size (without taking alignment into account)
+                // is the sum of all the sizes of the fields.
+                let size_unpadded = fields.iter().fold(0, |total, (_, field_id)| {
+                    let field = types.get(*field_id);
+
+                    total + field.size(types, target_info)
+                });
+
+                // Round up to the next multiple of alignment, to incorporate
+                // any necessary alignment padding.
+                //
+                // e.g. if we have a record with a Str and a U8, that would be a
+                // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
+                // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
+                let align = self.alignment(types, target_info);
+
+                (size_unpadded / align) * align
+            }
+            RocType::TransparentWrapper { content, .. } => {
+                types.get(*content).size(types, target_info)
+            }
+        }
+    }
+
     pub fn alignment(&self, types: &Types, target_info: TargetInfo) -> usize {
         match self {
             RocType::RocStr
@@ -417,4 +468,30 @@ pub enum RocTagUnion {
         /// Otherwise, this would have been an Enumeration!
         non_null_payload: TypeId,
     },
+}
+
+#[test]
+fn sizes_agree_with_roc_std() {
+    use std::mem::size_of;
+
+    let target_info = target_lexicon::Triple::host().into();
+    let types = Types::default();
+
+    assert_eq!(
+        RocType::RocStr.size(&types, target_info),
+        size_of::<roc_std::RocStr>(),
+        answer
+    );
+
+    assert_eq!(
+        RocType::RocList(RocType::RocStr).size(&types, target_info),
+        size_of::<roc_std::RocList<()>>(),
+        answer
+    );
+
+    assert_eq!(
+        RocType::RocDict.size(&types, target_info),
+        size_of::<roc_std::Dict>(),
+        answer
+    );
 }
