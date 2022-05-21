@@ -12,6 +12,13 @@ impl TargetInfo {
         self.architecture.ptr_width()
     }
 
+    pub const fn ptr_size(&self) -> usize {
+        match self.ptr_width() {
+            PtrWidth::Bytes4 => 4,
+            PtrWidth::Bytes8 => 8,
+        }
+    }
+
     pub const fn ptr_alignment_bytes(&self) -> usize {
         self.architecture.ptr_alignment_bytes()
     }
@@ -44,7 +51,7 @@ impl From<&target_lexicon::Triple> for TargetInfo {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PtrWidth {
     Bytes4 = 4,
     Bytes8 = 8,
