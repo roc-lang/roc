@@ -2,7 +2,8 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
 use super::opcodes::OpCode;
-use super::serialize::{parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes};
+use super::parse::{parse_u32_or_panic, SkipBytes};
+use super::serialize::{SerialBuffer, Serialize};
 use super::CodeBuilder;
 
 /*

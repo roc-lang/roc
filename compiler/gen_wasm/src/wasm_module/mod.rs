@@ -4,6 +4,7 @@ pub mod linking;
 pub mod opcodes;
 pub mod sections;
 pub mod serialize;
+pub mod parse;
 
 use bumpalo::{collections::Vec, Bump};
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};

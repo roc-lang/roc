@@ -1,6 +1,6 @@
 use roc_error_macros::internal_error;
 
-use super::serialize::{parse_u32_or_panic, SkipBytes};
+use super::parse::{parse_u32_or_panic, SkipBytes};
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

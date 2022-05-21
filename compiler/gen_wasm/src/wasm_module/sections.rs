@@ -11,10 +11,8 @@ use super::dead_code::{
 };
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
-use super::serialize::{
-    parse_string_bytes, parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes,
-    MAX_SIZE_ENCODED_U32,
-};
+use super::parse::{parse_string_bytes, parse_u32_or_panic, SkipBytes};
+use super::serialize::{SerialBuffer, Serialize, MAX_SIZE_ENCODED_U32};
 use super::{CodeBuilder, ValueType};
 
 /*******************************************************************
