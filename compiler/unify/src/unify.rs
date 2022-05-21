@@ -454,9 +454,46 @@ fn check_valid_range(
     range: VariableSubsSlice,
     mode: Mode,
 ) -> Outcome {
-    let slice = subs.get_subs_slice(range).to_vec();
+    let slice = subs.get_subs_slice(range);
+    let content = subs.get_content_without_compacting(var);
 
-    let mut it = slice.iter().peekable();
+    macro_rules! is_in_range {
+        ($var:expr) => {
+            if slice.contains(&$var) {
+                return Outcome::default();
+            }
+        };
+    }
+
+    if let Content::Alias(symbol, _, _, _) = content {
+        match *symbol {
+            Symbol::NUM_I8 => is_in_range!(Variable::I8),
+            Symbol::NUM_U8 => is_in_range!(Variable::U8),
+            Symbol::NUM_I16 => is_in_range!(Variable::I16),
+            Symbol::NUM_U16 => is_in_range!(Variable::U16),
+            Symbol::NUM_I32 => is_in_range!(Variable::I32),
+            Symbol::NUM_U32 => is_in_range!(Variable::U32),
+            Symbol::NUM_I64 => is_in_range!(Variable::I64),
+            Symbol::NUM_NAT => is_in_range!(Variable::NAT),
+            Symbol::NUM_U64 => is_in_range!(Variable::U64),
+            Symbol::NUM_I128 => is_in_range!(Variable::I128),
+            Symbol::NUM_U128 => is_in_range!(Variable::U128),
+
+            Symbol::NUM_DEC => is_in_range!(Variable::DEC),
+            Symbol::NUM_F32 => is_in_range!(Variable::F32),
+            Symbol::NUM_F64 => is_in_range!(Variable::F64),
+
+            Symbol::NUM_NUM | Symbol::NUM_INT | Symbol::NUM_FRAC => {
+                // these satisfy any range that they are given
+                return Outcome::default();
+            }
+
+            _ => {}
+        }
+    }
+
+    let vec = slice.to_vec();
+    let mut it = vec.iter().peekable();
     while let Some(&possible_var) = it.next() {
         let snapshot = subs.snapshot();
         let old_pool = pool.clone();

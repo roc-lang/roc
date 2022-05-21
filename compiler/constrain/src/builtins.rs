@@ -267,47 +267,53 @@ pub trait TypedNumericBound {
     fn bounded_range(&self) -> Vec<Variable>;
 }
 
+const fn int_width_to_variable(w: IntWidth) -> Variable {
+    match w {
+        IntWidth::U8 => Variable::U8,
+        IntWidth::U16 => Variable::U16,
+        IntWidth::U32 => Variable::U32,
+        IntWidth::U64 => Variable::U64,
+        IntWidth::U128 => Variable::U128,
+        IntWidth::I8 => Variable::I8,
+        IntWidth::I16 => Variable::I16,
+        IntWidth::I32 => Variable::I32,
+        IntWidth::I64 => Variable::I64,
+        IntWidth::I128 => Variable::I128,
+        IntWidth::Nat => Variable::NAT,
+    }
+}
+
+const NO_DEMAND_INT_VARIABLES: &[(IntWidth, Variable)] = &[
+    (IntWidth::I8, Variable::I8),
+    (IntWidth::U8, Variable::U8),
+    (IntWidth::I16, Variable::I16),
+    (IntWidth::U16, Variable::U16),
+    (IntWidth::I32, Variable::I32),
+    (IntWidth::U32, Variable::U32),
+    (IntWidth::I64, Variable::I64),
+    (IntWidth::Nat, Variable::NAT), // FIXME: Nat's order here depends on the platform!
+    (IntWidth::U64, Variable::U64),
+    (IntWidth::I128, Variable::I128),
+    (IntWidth::U128, Variable::U128),
+];
+
+const SIGNED_INT_VARIABLES: &[(IntWidth, Variable)] = &[
+    (IntWidth::I8, Variable::I8),
+    (IntWidth::I16, Variable::I16),
+    (IntWidth::I32, Variable::I32),
+    (IntWidth::I64, Variable::I64),
+    (IntWidth::I128, Variable::I128),
+];
+
 impl TypedNumericBound for IntBound {
     fn bounded_range(&self) -> Vec<Variable> {
         match self {
             IntBound::None => vec![],
-            IntBound::Exact(w) => vec![match w {
-                IntWidth::U8 => Variable::U8,
-                IntWidth::U16 => Variable::U16,
-                IntWidth::U32 => Variable::U32,
-                IntWidth::U64 => Variable::U64,
-                IntWidth::U128 => Variable::U128,
-                IntWidth::I8 => Variable::I8,
-                IntWidth::I16 => Variable::I16,
-                IntWidth::I32 => Variable::I32,
-                IntWidth::I64 => Variable::I64,
-                IntWidth::I128 => Variable::I128,
-                IntWidth::Nat => Variable::NAT,
-            }],
+            IntBound::Exact(w) => vec![int_width_to_variable(*w)],
             IntBound::AtLeast { sign, width } => {
                 let whole_range: &[(IntWidth, Variable)] = match sign {
-                    SignDemand::NoDemand => {
-                        &[
-                            (IntWidth::I8, Variable::I8),
-                            (IntWidth::U8, Variable::U8),
-                            (IntWidth::I16, Variable::I16),
-                            (IntWidth::U16, Variable::U16),
-                            (IntWidth::I32, Variable::I32),
-                            (IntWidth::U32, Variable::U32),
-                            (IntWidth::I64, Variable::I64),
-                            (IntWidth::Nat, Variable::NAT), // FIXME: Nat's order here depends on the platform!
-                            (IntWidth::U64, Variable::U64),
-                            (IntWidth::I128, Variable::I128),
-                            (IntWidth::U128, Variable::U128),
-                        ]
-                    }
-                    SignDemand::Signed => &[
-                        (IntWidth::I8, Variable::I8),
-                        (IntWidth::I16, Variable::I16),
-                        (IntWidth::I32, Variable::I32),
-                        (IntWidth::I64, Variable::I64),
-                        (IntWidth::I128, Variable::I128),
-                    ],
+                    SignDemand::NoDemand => NO_DEMAND_INT_VARIABLES,
+                    SignDemand::Signed => SIGNED_INT_VARIABLES,
                 };
                 whole_range
                     .iter()
