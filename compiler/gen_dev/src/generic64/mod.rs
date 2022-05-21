@@ -963,7 +963,7 @@ impl<
         self.load_literal(
             &Symbol::DEV_TMP,
             u32_layout,
-            &Literal::Int(list_alignment as i128),
+            &Literal::Int((list_alignment as i128).to_ne_bytes()),
         );
 
         // Have to pass the input element by pointer, so put it on the stack and load it's address.
@@ -982,7 +982,7 @@ impl<
         self.load_literal(
             &Symbol::DEV_TMP3,
             u64_layout,
-            &Literal::Int(elem_stack_size as i128),
+            &Literal::Int((elem_stack_size as i128).to_ne_bytes()),
         );
 
         // Setup the return location.
@@ -1141,7 +1141,7 @@ impl<
             ) => {
                 let reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
                 let val = *x;
-                ASM::mov_reg64_imm64(&mut self.buf, reg, val as i64);
+                ASM::mov_reg64_imm64(&mut self.buf, reg, i128::from_ne_bytes(val) as i64);
             }
             (Literal::Float(x), Layout::Builtin(Builtin::Float(FloatWidth::F64))) => {
                 let reg = self.storage_manager.claim_float_reg(&mut self.buf, sym);

@@ -52,10 +52,9 @@ pub fn pretty_print_ir_symbols() -> bool {
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
 
-// i128 alignment is different on arm
-roc_error_macros::assert_sizeof_aarch64!(Literal, 4 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Literal, 3 * 8);
 roc_error_macros::assert_sizeof_aarch64!(Expr, 10 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Stmt, 20 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Stmt, 19 * 8);
 roc_error_macros::assert_sizeof_aarch64!(ProcLayout, 6 * 8);
 roc_error_macros::assert_sizeof_aarch64!(Call, 7 * 8);
 roc_error_macros::assert_sizeof_aarch64!(CallType, 5 * 8);
@@ -1452,10 +1451,13 @@ impl ModifyRc {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Literal<'a> {
     // Literals
-    Int(i128),
-    U128(u128),
+    /// stored as raw bytes rather than a number to avoid an alignment bump
+    Int([u8; 16]),
+    /// stored as raw bytes rather than a number to avoid an alignment bump
+    U128([u8; 16]),
     Float(f64),
-    Decimal(RocDec),
+    /// stored as raw bytes rather than a number to avoid an alignment bump
+    Decimal([u8; 16]),
     Str(&'a str),
     /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
     /// so they can (at least potentially) be emitted as 1-bit machine bools.
@@ -1707,10 +1709,10 @@ impl<'a> Literal<'a> {
         use Literal::*;
 
         match self {
-            Int(lit) => alloc.text(format!("{}i64", lit)),
-            U128(lit) => alloc.text(format!("{}u128", lit)),
+            Int(bytes) => alloc.text(format!("{}i64", i128::from_ne_bytes(*bytes))),
+            U128(bytes) => alloc.text(format!("{}u128", u128::from_ne_bytes(*bytes))),
             Float(lit) => alloc.text(format!("{}f64", lit)),
-            Decimal(lit) => alloc.text(format!("{}dec", lit)),
+            Decimal(bytes) => alloc.text(format!("{}dec", RocDec::from_ne_bytes(*bytes))),
             Bool(lit) => alloc.text(format!("{}", lit)),
             Byte(lit) => alloc.text(format!("{}u8", lit)),
             Str(lit) => alloc.text(format!("{:?}", lit)),
@@ -3689,7 +3691,7 @@ fn try_make_literal<'a>(
                         ),
                     };
 
-                    Some(Literal::Decimal(dec))
+                    Some(Literal::Decimal(dec.to_ne_bytes()))
                 }
                 _ => unreachable!("unexpected float precision for integer"),
             }
@@ -3705,8 +3707,8 @@ fn try_make_literal<'a>(
                     IntValue::U128(n) => Literal::U128(n),
                 }),
                 IntOrFloat::Float(_) => Some(match *num {
-                    IntValue::I128(n) => Literal::Float(n as f64),
-                    IntValue::U128(n) => Literal::Float(n as f64),
+                    IntValue::I128(n) => Literal::Float(i128::from_ne_bytes(n) as f64),
+                    IntValue::U128(n) => Literal::Float(u128::from_ne_bytes(n) as f64),
                 }),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
@@ -3717,7 +3719,7 @@ fn try_make_literal<'a>(
                         ),
                     };
 
-                    Some(Literal::Decimal(dec))
+                    Some(Literal::Decimal(dec.to_ne_bytes()))
                 }
             }
         }
@@ -3769,7 +3771,7 @@ pub fn with_hole<'a>(
                         };
                     Stmt::Let(
                         assigned,
-                        Expr::Literal(Literal::Decimal(dec)),
+                        Expr::Literal(Literal::Decimal(dec.to_ne_bytes())),
                         Layout::Builtin(Builtin::Decimal),
                         hole,
                     )
@@ -3787,7 +3789,7 @@ pub fn with_hole<'a>(
 
         SingleQuote(character) => Stmt::Let(
             assigned,
-            Expr::Literal(Literal::Int(character as _)),
+            Expr::Literal(Literal::Int((character as i128).to_ne_bytes())),
             Layout::int_width(IntWidth::I32),
             hole,
         ),
@@ -3807,8 +3809,8 @@ pub fn with_hole<'a>(
                 IntOrFloat::Float(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(match num {
-                        IntValue::I128(n) => Literal::Float(n as f64),
-                        IntValue::U128(n) => Literal::Float(n as f64),
+                        IntValue::I128(n) => Literal::Float(i128::from_ne_bytes(n) as f64),
+                        IntValue::U128(n) => Literal::Float(u128::from_ne_bytes(n) as f64),
                     }),
                     Layout::float_width(precision),
                     hole,
@@ -3820,7 +3822,7 @@ pub fn with_hole<'a>(
                         };
                     Stmt::Let(
                         assigned,
-                        Expr::Literal(Literal::Decimal(dec)),
+                        Expr::Literal(Literal::Decimal(dec.to_ne_bytes())),
                         Layout::Builtin(Builtin::Decimal),
                         hole,
                     )
@@ -8089,10 +8091,10 @@ fn call_specialized_proc<'a>(
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
-    U128Literal(u128),
-    IntLiteral(i128, IntWidth),
+    U128Literal([u8; 16]),
+    IntLiteral([u8; 16], IntWidth),
     FloatLiteral(u64, FloatWidth),
-    DecimalLiteral(RocDec),
+    DecimalLiteral([u8; 16]),
     BitLiteral {
         value: bool,
         tag_name: TagName,
@@ -8210,12 +8212,15 @@ fn from_can_pattern_help<'a>(
                             float_str
                         ),
                     };
-                    Ok(Pattern::DecimalLiteral(dec))
+                    Ok(Pattern::DecimalLiteral(dec.to_ne_bytes()))
                 }
             }
         }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
-        SingleQuote(c) => Ok(Pattern::IntLiteral(*c as _, IntWidth::I32)),
+        SingleQuote(c) => Ok(Pattern::IntLiteral(
+            (*c as i128).to_ne_bytes(),
+            IntWidth::I32,
+        )),
         Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
@@ -8239,8 +8244,8 @@ fn from_can_pattern_help<'a>(
                 IntOrFloat::Float(precision) => {
                     // TODO: this may be lossy
                     let num = match *num {
-                        IntValue::I128(n) => f64::to_bits(n as f64),
-                        IntValue::U128(n) => f64::to_bits(n as f64),
+                        IntValue::I128(n) => f64::to_bits(i128::from_ne_bytes(n) as f64),
+                        IntValue::U128(n) => f64::to_bits(u128::from_ne_bytes(n) as f64),
                     };
                     Ok(Pattern::FloatLiteral(num, precision))
                 }
@@ -8249,7 +8254,7 @@ fn from_can_pattern_help<'a>(
                             Some(d) => d,
                             None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", num_str),
                         };
-                    Ok(Pattern::DecimalLiteral(dec))
+                    Ok(Pattern::DecimalLiteral(dec.to_ne_bytes()))
                 }
             }
         }

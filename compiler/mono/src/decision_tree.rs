@@ -8,7 +8,6 @@ use roc_exhaustive::{Ctor, CtorName, RenderAs, TagId, Union};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_std::RocDec;
 
 /// COMPILE CASES
 
@@ -86,10 +85,10 @@ enum Test<'a> {
         union: roc_exhaustive::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
-    IsInt(i128, IntWidth),
-    IsU128(u128),
+    IsInt([u8; 16], IntWidth),
+    IsU128([u8; 16]),
     IsFloat(u64, FloatWidth),
-    IsDecimal(RocDec),
+    IsDecimal([u8; 16]),
     IsStr(Box<str>),
     IsBit(bool),
     IsByte {
@@ -1338,7 +1337,7 @@ fn test_to_equality<'a>(
 
             match test_layout {
                 Layout::Union(union_layout) => {
-                    let lhs = Expr::Literal(Literal::Int(tag_id as i128));
+                    let lhs = Expr::Literal(Literal::Int((tag_id as i128).to_ne_bytes()));
 
                     let rhs = Expr::GetTagId {
                         structure: path_symbol,
@@ -1370,8 +1369,8 @@ fn test_to_equality<'a>(
 
         Test::IsInt(test_int, precision) => {
             // TODO don't downcast i128 here
-            debug_assert!(test_int <= i64::MAX as i128);
-            let lhs = Expr::Literal(Literal::Int(test_int as i128));
+            debug_assert!(i128::from_ne_bytes(test_int) <= i64::MAX as i128);
+            let lhs = Expr::Literal(Literal::Int(test_int));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::int_width(precision), lhs));
 
@@ -1835,7 +1834,7 @@ fn decide_to_branching<'a>(
                 );
 
                 let tag = match test {
-                    Test::IsInt(v, _) => v as u64,
+                    Test::IsInt(v, _) => i128::from_ne_bytes(v) as u64,
                     Test::IsFloat(v, _) => v as u64,
                     Test::IsBit(v) => v as u64,
                     Test::IsByte { tag_id, .. } => tag_id as u64,

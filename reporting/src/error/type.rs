@@ -9,6 +9,7 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve::ability::{UnderivableReason, Unfulfilled};
 use roc_solve::solve;
+use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
     AliasKind, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
@@ -3779,13 +3780,13 @@ fn pattern_to_doc_help<'b>(
     match pattern {
         Anything => alloc.text("_"),
         Literal(l) => match l {
-            Int(i) => alloc.text(i.to_string()),
-            U128(i) => alloc.text(i.to_string()),
+            Int(i) => alloc.text(i128::from_ne_bytes(i).to_string()),
+            U128(i) => alloc.text(u128::from_ne_bytes(i).to_string()),
             Bit(true) => alloc.text("True"),
             Bit(false) => alloc.text("False"),
             Byte(b) => alloc.text(b.to_string()),
             Float(f) => alloc.text(f.to_string()),
-            Decimal(d) => alloc.text(d.to_string()),
+            Decimal(d) => alloc.text(RocDec::from_ne_bytes(d).to_string()),
             Str(s) => alloc.string(s.into()),
         },
         Ctor(union, tag_id, args) => {

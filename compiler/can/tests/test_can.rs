@@ -68,7 +68,7 @@ mod test_can {
 
         match actual_out.loc_expr.value {
             Expr::Int(_, _, _, actual, _) => {
-                assert_eq!(IntValue::I128(expected), actual);
+                assert_eq!(IntValue::I128(expected.to_ne_bytes()), actual);
             }
             actual => {
                 panic!("Expected an Num.Int *, but got: {:?}", actual);
@@ -82,7 +82,7 @@ mod test_can {
 
         match actual_out.loc_expr.value {
             Expr::Num(_, _, actual, _) => {
-                assert_eq!(IntValue::I128(expected), actual);
+                assert_eq!(IntValue::I128(expected.to_ne_bytes()), actual);
             }
             actual => {
                 panic!("Expected a Num, but got: {:?}", actual);
