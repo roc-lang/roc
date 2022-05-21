@@ -24,6 +24,9 @@ use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
 
+/// Derives that an opaque type has claimed, to checked and recorded after solving.
+pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
+
 #[derive(Clone, Default, Debug)]
 pub struct Output {
     pub references: References,
@@ -31,6 +34,7 @@ pub struct Output {
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
+    pub pending_derives: PendingDerives,
 }
 
 impl Output {
@@ -45,6 +49,15 @@ impl Output {
             .union_owned(other.introduced_variables);
         self.aliases.extend(other.aliases);
         self.non_closures.extend(other.non_closures);
+
+        {
+            let expected_derives_size = self.pending_derives.len() + other.pending_derives.len();
+            self.pending_derives.extend(other.pending_derives);
+            debug_assert!(
+                expected_derives_size == self.pending_derives.len(),
+                "Derives overwritten from nested scope - something is very wrong"
+            );
+        }
     }
 }
 

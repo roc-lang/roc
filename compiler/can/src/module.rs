@@ -3,7 +3,7 @@ use crate::annotation::canonicalize_annotation;
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
-use crate::expr::{ClosureData, Expr, Output};
+use crate::expr::{ClosureData, Expr, Output, PendingDerives};
 use crate::operator::desugar_def;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
@@ -51,6 +51,7 @@ pub struct ModuleOutput {
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
     pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
+    pub pending_derives: PendingDerives,
     pub scope: Scope,
 }
 
@@ -290,6 +291,8 @@ pub fn canonicalize_module_defs<'a>(
         PatternType::TopLevelDef,
     );
 
+    let pending_derives = output.pending_derives;
+
     // See if any of the new idents we defined went unused.
     // If any were unused and also not exposed, report it.
     for (symbol, region) in symbols_introduced {
@@ -353,6 +356,11 @@ pub fn canonicalize_module_defs<'a>(
     };
 
     let (mut declarations, mut output) = sort_can_defs(&mut env, var_store, defs, new_output);
+
+    debug_assert!(
+        output.pending_derives.is_empty(),
+        "I thought pending derives are only found during def introduction"
+    );
 
     let symbols_from_requires = symbols_from_requires
         .iter()
@@ -588,6 +596,7 @@ pub fn canonicalize_module_defs<'a>(
         exposed_imports: can_exposed_imports,
         problems: env.problems,
         symbols_from_requires,
+        pending_derives,
         lookups,
     }
 }

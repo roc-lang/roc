@@ -3,6 +3,7 @@ use crate::abilities::MemberTypeInfo;
 use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::find_type_def_symbols;
+use crate::annotation::make_apply_symbol;
 use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::env::Env;
@@ -32,6 +33,7 @@ use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::IllegalCycleMark;
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::AliasCommon;
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
 use roc_types::types::LambdaSet;
@@ -231,7 +233,7 @@ fn canonicalize_alias<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &[Symbol],
 
     name: Loc<Symbol>,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
@@ -245,7 +247,7 @@ fn canonicalize_alias<'a>(
         &ann.value,
         ann.region,
         var_store,
-        abilities_in_scope,
+        pending_abilities_in_scope,
     );
 
     // Record all the annotation's references in output.references.lookups
@@ -343,19 +345,19 @@ fn canonicalize_opaque<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &[Symbol],
 
     name: Loc<Symbol>,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
     derives: Option<&'a Loc<ast::Derived<'a>>>,
-) -> Result<(Alias, Vec<(Symbol, Region)>), ()> {
+) -> Result<Alias, ()> {
     let alias = canonicalize_alias(
         env,
         output,
         var_store,
         scope,
-        abilities_in_scope,
+        pending_abilities_in_scope,
         name,
         ann,
         vars,
@@ -369,19 +371,22 @@ fn canonicalize_opaque<'a>(
 
         for derived in derives.items {
             let region = derived.region;
-            let can_derived = canonicalize_annotation(
-                env,
-                scope,
-                &derived.value,
-                region,
-                var_store,
-                abilities_in_scope,
-            );
-            match can_derived.typ {
-                Type::Apply(ability, args, _)
-                    if ability.is_builtin_ability() && args.is_empty() =>
-                {
-                    can_derives.push((ability, region));
+            match derived.value.extract_spaces().item {
+                ast::TypeAnnotation::Apply(module_name, ident, []) => {
+                    match make_apply_symbol(env, region, scope, module_name, ident) {
+                        Ok(ability) if ability.is_builtin_ability() => {
+                            can_derives.push(Loc::at(region, ability));
+                        }
+                        Ok(_) => {
+                            // Register the problem but keep going, we may still be able to compile the
+                            // program even if a derive is missing.
+                            env.problem(Problem::IllegalDerive(region));
+                        }
+                        Err(_) => {
+                            // This is bad apply; an error will have been reported for it
+                            // already.
+                        }
+                    }
                 }
                 _ => {
                     // Register the problem but keep going, we may still be able to compile the
@@ -391,10 +396,30 @@ fn canonicalize_opaque<'a>(
             }
         }
 
-        Ok((alias, can_derives))
-    } else {
-        Ok((alias, vec![]))
+        if !can_derives.is_empty() {
+            // Fresh instance of this opaque to be checked for derivability during solving.
+            let fresh_inst = Type::DelayedAlias(AliasCommon {
+                symbol: name.value,
+                type_arguments: alias
+                    .type_variables
+                    .iter()
+                    .map(|_| Type::Variable(var_store.fresh()))
+                    .collect(),
+                lambda_set_variables: alias
+                    .lambda_set_variables
+                    .iter()
+                    .map(|_| LambdaSet(Type::Variable(var_store.fresh())))
+                    .collect(),
+            });
+
+            let old = output
+                .pending_derives
+                .insert(name.value, (fresh_inst, can_derives));
+            debug_assert!(old.is_none());
+        }
     }
+
+    Ok(alias)
 }
 
 #[inline(always)]
@@ -550,7 +575,7 @@ pub(crate) fn canonicalize_defs<'a>(
                     derived,
                 );
 
-                if let Ok((alias, _derives_to_check)) = alias_and_derives {
+                if let Ok(alias) = alias_and_derives {
                     aliases.insert(name.value, alias);
                 }
             }

@@ -1,12 +1,13 @@
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
-    DeferredMustImplementAbility, Resolved, Unfulfilled,
+    DeferredObligations, DeriveKey, PendingDerivesTable, Resolved, Unfulfilled,
 };
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
+use roc_can::expr::PendingDerives;
 use roc_collections::all::MutMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
@@ -95,6 +96,12 @@ pub enum TypeError {
         typ: ErrorType,
         ability: Symbol,
         member: Symbol,
+    },
+    DominatedDerive {
+        opaque: Symbol,
+        ability: Symbol,
+        derive_region: Region,
+        impl_region: Region,
     },
 }
 
@@ -418,7 +425,7 @@ impl Env {
 const DEFAULT_POOLS: usize = 8;
 
 #[derive(Clone, Debug)]
-struct Pools(Vec<Vec<Variable>>);
+pub(crate) struct Pools(Vec<Vec<Variable>>);
 
 impl Default for Pools {
     fn default() -> Self {
@@ -481,6 +488,7 @@ pub fn run(
     mut subs: Subs,
     aliases: &mut Aliases,
     constraint: &Constraint,
+    pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
 ) -> (Solved<Subs>, Env) {
     let env = run_in_place(
@@ -489,6 +497,7 @@ pub fn run(
         &mut subs,
         aliases,
         constraint,
+        pending_derives,
         abilities_store,
     );
 
@@ -502,6 +511,7 @@ fn run_in_place(
     subs: &mut Subs,
     aliases: &mut Aliases,
     constraint: &Constraint,
+    pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
 ) -> Env {
     let mut pools = Pools::default();
@@ -513,7 +523,8 @@ fn run_in_place(
     let rank = Rank::toplevel();
     let arena = Bump::new();
 
-    let mut deferred_must_implement_abilities = DeferredMustImplementAbility::default();
+    let pending_derives = PendingDerivesTable::new(subs, aliases, pending_derives);
+    let mut deferred_obligations = DeferredObligations::new(pending_derives);
 
     let state = solve(
         &arena,
@@ -526,12 +537,14 @@ fn run_in_place(
         subs,
         constraint,
         abilities_store,
-        &mut deferred_must_implement_abilities,
+        &mut deferred_obligations,
     );
 
     // Now that the module has been solved, we can run through and check all
-    // types claimed to implement abilities.
-    problems.extend(deferred_must_implement_abilities.check_all(subs, abilities_store));
+    // types claimed to implement abilities. This will also tell us what derives
+    // are legal, which we need to register.
+    let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
+    problems.extend(obligation_problems);
 
     state.env
 }
@@ -584,7 +597,7 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
     abilities_store: &mut AbilitiesStore,
-    deferred_must_implement_abilities: &mut DeferredMustImplementAbility,
+    deferred_obligations: &mut DeferredObligations,
 ) -> State {
     let initial = Work::Constraint {
         env: &Env::default(),
@@ -644,7 +657,7 @@ fn solve(
                         rank,
                         abilities_store,
                         problems,
-                        deferred_must_implement_abilities,
+                        deferred_obligations,
                         *symbol,
                         *loc_var,
                     );
@@ -749,7 +762,7 @@ fn solve(
                         rank,
                         abilities_store,
                         problems,
-                        deferred_must_implement_abilities,
+                        deferred_obligations,
                         *symbol,
                         *loc_var,
                     );
@@ -804,7 +817,7 @@ fn solve(
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
-                            deferred_must_implement_abilities.add(
+                            deferred_obligations.add(
                                 must_implement_ability,
                                 AbilityImplError::BadExpr(*region, category.clone(), actual),
                             );
@@ -911,7 +924,7 @@ fn solve(
                             } => {
                                 introduce(subs, rank, pools, &vars);
                                 if !must_implement_ability.is_empty() {
-                                    deferred_must_implement_abilities.add(
+                                    deferred_obligations.add(
                                         must_implement_ability,
                                         AbilityImplError::BadExpr(
                                             *region,
@@ -988,7 +1001,7 @@ fn solve(
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
-                            deferred_must_implement_abilities.add(
+                            deferred_obligations.add(
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(*region, category.clone(), actual),
                             );
@@ -1150,7 +1163,7 @@ fn solve(
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
-                            deferred_must_implement_abilities.add(
+                            deferred_obligations.add(
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(
                                     *region,
@@ -1479,7 +1492,7 @@ fn check_ability_specialization(
     rank: Rank,
     abilities_store: &mut AbilitiesStore,
     problems: &mut Vec<TypeError>,
-    deferred_must_implement_abilities: &mut DeferredMustImplementAbility,
+    deferred_obligations: &mut DeferredObligations,
     symbol: Symbol,
     symbol_loc_var: Loc<Variable>,
 ) {
@@ -1519,9 +1532,10 @@ fn check_ability_specialization(
                         subs.commit_snapshot(snapshot);
                         introduce(subs, rank, pools, &vars);
 
+                        let specialization_region = symbol_loc_var.region;
                         let specialization = MemberSpecialization {
                             symbol,
-                            region: symbol_loc_var.region,
+                            region: specialization_region,
                         };
                         abilities_store.register_specialization_for_type(
                             root_symbol,
@@ -1531,8 +1545,16 @@ fn check_ability_specialization(
 
                         // Make sure we check that the opaque has specialized all members of the
                         // ability, after we finish solving the module.
-                        deferred_must_implement_abilities
+                        deferred_obligations
                             .add(must_implement_ability, AbilityImplError::IncompleteAbility);
+                        // This specialization dominates any derives that might be present.
+                        deferred_obligations.dominate(
+                            DeriveKey {
+                                opaque,
+                                ability: parent_ability,
+                            },
+                            specialization_region,
+                        );
                     }
                     Some(Obligated::Adhoc(var)) => {
                         // This is a specialization of a structural type - never allowed.
@@ -1701,7 +1723,7 @@ fn either_type_index_to_var(
     }
 }
 
-fn type_to_var(
+pub(crate) fn type_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
