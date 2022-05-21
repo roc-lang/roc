@@ -84,7 +84,7 @@ pub fn expr_to_expr2<'a>(
                     let expr = Expr2::SmallInt {
                         number: IntVal::I64(match int {
                             IntValue::U128(_) => todo!(),
-                            IntValue::I128(n) => n as i64, // FIXME
+                            IntValue::I128(n) => i128::from_ne_bytes(n) as i64, // FIXME
                         }),
                         var: env.var_store.fresh(),
                         // TODO non-hardcode
@@ -129,7 +129,7 @@ pub fn expr_to_expr2<'a>(
                     let expr = Expr2::SmallInt {
                         number: IntVal::I64(match int {
                             IntValue::U128(_) => todo!(),
-                            IntValue::I128(n) => n as i64, // FIXME
+                            IntValue::I128(n) => i128::from_ne_bytes(n) as i64, // FIXME
                         }),
                         var: env.var_store.fresh(),
                         // TODO non-hardcode

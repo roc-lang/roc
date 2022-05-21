@@ -402,11 +402,15 @@ pub fn canonicalize_pattern<'a>(
                     malformed_pattern(env, problem, region)
                 }
                 Ok((int, bound)) => {
+                    use std::ops::Neg;
+
                     let sign_str = if is_negative { "-" } else { "" };
                     let int_str = format!("{}{}", sign_str, int).into_boxed_str();
                     let i = match int {
                         // Safety: this is fine because I128::MAX = |I128::MIN| - 1
-                        IntValue::I128(n) if is_negative => IntValue::I128(-n),
+                        IntValue::I128(n) if is_negative => {
+                            IntValue::I128(i128::from_ne_bytes(n).neg().to_ne_bytes())
+                        }
                         IntValue::I128(n) => IntValue::I128(n),
                         IntValue::U128(_) => unreachable!(),
                     };

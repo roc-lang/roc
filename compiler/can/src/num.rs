@@ -227,7 +227,7 @@ fn from_str_radix(src: &str, radix: u32) -> Result<ParsedNumResult, IntErrorKind
 
     use std::num::IntErrorKind as StdIEK;
     let result = match i128::from_str_radix(src, radix) {
-        Ok(result) => IntValue::I128(result),
+        Ok(result) => IntValue::I128(result.to_ne_bytes()),
         Err(pie) => match pie.kind() {
             StdIEK::Empty => return Err(IntErrorKind::Empty),
             StdIEK::InvalidDigit => return Err(IntErrorKind::InvalidDigit),
@@ -235,7 +235,7 @@ fn from_str_radix(src: &str, radix: u32) -> Result<ParsedNumResult, IntErrorKind
             StdIEK::PosOverflow => {
                 // try a u128
                 match u128::from_str_radix(src, radix) {
-                    Ok(result) => IntValue::U128(result),
+                    Ok(result) => IntValue::U128(result.to_ne_bytes()),
                     Err(pie) => match pie.kind() {
                         StdIEK::InvalidDigit => return Err(IntErrorKind::InvalidDigit),
                         StdIEK::PosOverflow => return Err(IntErrorKind::Overflow),
@@ -252,7 +252,11 @@ fn from_str_radix(src: &str, radix: u32) -> Result<ParsedNumResult, IntErrorKind
     };
 
     let (lower_bound, is_negative) = match result {
-        IntValue::I128(num) => (lower_bound_of_int(num), num < 0),
+        IntValue::I128(bytes) => {
+            let num = i128::from_ne_bytes(bytes);
+
+            (lower_bound_of_int(num), num < 0)
+        }
         IntValue::U128(_) => (IntWidth::U128, false),
     };
 
@@ -277,8 +281,8 @@ fn from_str_radix(src: &str, radix: u32) -> Result<ParsedNumResult, IntErrorKind
             // TODO: this is somewhat incorrect, revisit
             Ok(ParsedNumResult::Float(
                 match result {
-                    IntValue::I128(n) => n as f64,
-                    IntValue::U128(n) => n as f64,
+                    IntValue::I128(n) => i128::from_ne_bytes(n) as f64,
+                    IntValue::U128(n) => i128::from_ne_bytes(n) as f64,
                 },
                 FloatBound::Exact(fw),
             ))

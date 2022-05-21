@@ -211,24 +211,25 @@ impl<T, E> Drop for RocResult<T, E> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct RocDec(i128);
+#[repr(C)]
+pub struct RocDec([u8; 16]);
 
 impl RocDec {
-    pub const MIN: Self = Self(i128::MIN);
-    pub const MAX: Self = Self(i128::MAX);
+    pub const MIN: Self = Self(i128::MIN.to_ne_bytes());
+    pub const MAX: Self = Self(i128::MAX.to_ne_bytes());
 
     const DECIMAL_PLACES: usize = 18;
     const ONE_POINT_ZERO: i128 = 10i128.pow(Self::DECIMAL_PLACES as u32);
     const MAX_DIGITS: usize = 39;
     const MAX_STR_LENGTH: usize = Self::MAX_DIGITS + 2; // + 2 here to account for the sign & decimal dot
 
-    pub fn new(bits: i128) -> Self {
-        Self(bits)
+    pub fn new(num: i128) -> Self {
+        Self(num.to_ne_bytes())
     }
 
     pub fn as_bits(&self) -> (i64, u64) {
-        let lower_bits = self.0 as u64;
-        let upper_bits = (self.0 >> 64) as i64;
+        let lower_bits = self.as_i128() as u64;
+        let upper_bits = (self.as_i128() >> 64) as i64;
         (upper_bits, lower_bits)
     }
 
@@ -281,7 +282,7 @@ impl RocDec {
         // Calculate the high digits - the ones before the decimal point.
         match before_point.parse::<i128>() {
             Ok(answer) => match answer.checked_mul(Self::ONE_POINT_ZERO) {
-                Some(hi) => hi.checked_add(lo).map(Self),
+                Some(hi) => hi.checked_add(lo).map(|num| Self(num.to_ne_bytes())),
                 None => None,
             },
             Err(_) => None,
@@ -289,16 +290,30 @@ impl RocDec {
     }
 
     pub fn from_str_to_i128_unsafe(val: &str) -> i128 {
-        Self::from_str(val).unwrap().0
+        Self::from_str(val).unwrap().as_i128()
+    }
+
+    /// This is private because RocDec being an i128 is an implementation detail
+    #[inline(always)]
+    fn as_i128(&self) -> i128 {
+        i128::from_ne_bytes(self.0)
+    }
+
+    pub fn from_ne_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    pub fn to_ne_bytes(&self) -> [u8; 16] {
+        self.0
     }
 
     fn to_str_helper(&self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> usize {
-        if self.0 == 0 {
+        if self.as_i128() == 0 {
             write!(&mut bytes[..], "{}", "0").unwrap();
             return 1;
         }
 
-        let is_negative = (self.0 < 0) as usize;
+        let is_negative = (self.as_i128() < 0) as usize;
 
         static_assertions::const_assert!(Self::DECIMAL_PLACES + 1 == 19);
         // The :019 in the following write! is computed as Self::DECIMAL_PLACES + 1. If you change
@@ -307,7 +322,7 @@ impl RocDec {
         //
         // By using the :019 format, we're guaranteeing that numbers less than 1, say 0.01234
         // get their leading zeros placed in bytes for us. i.e. bytes = b"0012340000000000000"
-        write!(&mut bytes[..], "{:019}", self.0).unwrap();
+        write!(&mut bytes[..], "{:019}", self.as_i128()).unwrap();
 
         // If self represents 1234.5678, then bytes is b"1234567800000000000000".
         let mut i = Self::MAX_STR_LENGTH - 1;

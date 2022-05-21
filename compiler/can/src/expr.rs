@@ -50,15 +50,15 @@ impl Output {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum IntValue {
-    I128(i128),
-    U128(u128),
+    I128([u8; 16]),
+    U128([u8; 16]),
 }
 
 impl Display for IntValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IntValue::I128(n) => Display::fmt(&n, f),
-            IntValue::U128(n) => Display::fmt(&n, f),
+            IntValue::I128(n) => Display::fmt(&i128::from_ne_bytes(*n), f),
+            IntValue::U128(n) => Display::fmt(&u128::from_ne_bytes(*n), f),
         }
     }
 }

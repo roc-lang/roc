@@ -4064,6 +4064,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_std",
  "roc_target",
  "roc_test_utils",
  "roc_types",
