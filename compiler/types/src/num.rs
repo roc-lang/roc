@@ -12,8 +12,8 @@ pub enum NumericRange {
 }
 
 impl NumericRange {
-    pub fn contains_symbol(&self, symbol: Symbol) -> bool {
-        match symbol {
+    pub fn contains_symbol(&self, symbol: Symbol) -> Option<bool> {
+        let contains = match symbol {
             Symbol::NUM_I8 => self.contains_int_width(IntWidth::I8),
             Symbol::NUM_U8 => self.contains_int_width(IntWidth::U8),
             Symbol::NUM_I16 => self.contains_int_width(IntWidth::I16),
@@ -35,8 +35,12 @@ impl NumericRange {
                 true
             }
 
-            _ => unreachable!("weird number symbol {:?}", symbol),
-        }
+            _ => {
+                return None;
+            }
+        };
+
+        Some(contains)
     }
 
     fn contains_float_width(&self, _width: FloatWidth) -> bool {

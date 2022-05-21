@@ -452,14 +452,21 @@ fn check_valid_range(subs: &mut Subs, var: Variable, range: NumericRange) -> Out
     let content = subs.get_content_without_compacting(var);
 
     match content {
-        Content::Alias(symbol, _, _, _) => {
-            if !range.contains_symbol(*symbol) {
-                let outcome = Outcome {
-                    mismatches: vec![Mismatch::TypeNotInRange],
-                    must_implement_ability: Default::default(),
-                };
+        &Content::Alias(symbol, _, actual, _) => {
+            match range.contains_symbol(symbol) {
+                None => {
+                    // symbol not recognized; go into the alias
+                    return check_valid_range(subs, actual, range);
+                }
+                Some(false) => {
+                    let outcome = Outcome {
+                        mismatches: vec![Mismatch::TypeNotInRange],
+                        must_implement_ability: Default::default(),
+                    };
 
-                return outcome;
+                    return outcome;
+                }
+                Some(true) => { /* fall through */ }
             }
         }
 
