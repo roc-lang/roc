@@ -4,17 +4,14 @@ use roc_module::symbol::Symbol;
 /// A bound placed on a number because of its literal value.
 /// e.g. `-5` cannot be unsigned, and 300 does not fit in a U8
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NumericBound {
-    None,
-    FloatExact(FloatWidth),
-    IntExact(IntWidth),
+pub enum NumericRange {
     IntAtLeastSigned(IntWidth),
     IntAtLeastEitherSign(IntWidth),
     NumAtLeastSigned(IntWidth),
     NumAtLeastEitherSign(IntWidth),
 }
 
-impl NumericBound {
+impl NumericRange {
     pub fn contains_symbol(&self, symbol: Symbol) -> bool {
         match symbol {
             Symbol::NUM_I8 => self.contains_int_width(IntWidth::I8),
@@ -47,14 +44,13 @@ impl NumericBound {
     }
 
     fn contains_int_width(&self, width: IntWidth) -> bool {
-        use NumericBound::*;
+        use NumericRange::*;
 
         let (range_sign, at_least_width) = match self {
             IntAtLeastSigned(width) => (SignDemand::Signed, width),
             IntAtLeastEitherSign(width) => (SignDemand::NoDemand, width),
             NumAtLeastSigned(width) => (SignDemand::Signed, width),
             NumAtLeastEitherSign(width) => (SignDemand::NoDemand, width),
-            _ => panic!(),
         };
 
         let (actual_sign, _) = width.sign_and_width();
@@ -67,7 +63,7 @@ impl NumericBound {
     }
 
     pub fn variable_slice(&self) -> &'static [Variable] {
-        use NumericBound::*;
+        use NumericRange::*;
 
         match self {
             IntAtLeastSigned(width) => {
@@ -96,7 +92,6 @@ impl NumericBound {
 
                 &ALL_VARIABLES[start..]
             }
-            _ => panic!(),
         }
     }
 }
@@ -267,7 +262,7 @@ pub enum NumBound {
     },
 }
 
-const fn int_width_to_variable(w: IntWidth) -> Variable {
+pub const fn int_width_to_variable(w: IntWidth) -> Variable {
     match w {
         IntWidth::U8 => Variable::U8,
         IntWidth::U16 => Variable::U16,
@@ -280,6 +275,14 @@ const fn int_width_to_variable(w: IntWidth) -> Variable {
         IntWidth::I64 => Variable::I64,
         IntWidth::I128 => Variable::I128,
         IntWidth::Nat => Variable::NAT,
+    }
+}
+
+pub const fn float_width_to_variable(w: FloatWidth) -> Variable {
+    match w {
+        FloatWidth::Dec => Variable::DEC,
+        FloatWidth::F32 => Variable::F32,
+        FloatWidth::F64 => Variable::F64,
     }
 }
 

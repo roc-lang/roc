@@ -5,7 +5,7 @@ use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_types::num::NumericBound;
+use roc_types::num::NumericRange;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
@@ -414,7 +414,7 @@ fn unify_ranged_number(
     pool: &mut Pool,
     ctx: &Context,
     real_var: Variable,
-    range_vars: NumericBound,
+    range_vars: NumericRange,
 ) -> Outcome {
     let other_content = &ctx.second_desc.content;
 
@@ -448,7 +448,7 @@ fn unify_ranged_number(
     check_valid_range(subs, ctx.second, range_vars)
 }
 
-fn check_valid_range(subs: &mut Subs, var: Variable, range: NumericBound) -> Outcome {
+fn check_valid_range(subs: &mut Subs, var: Variable, range: NumericRange) -> Outcome {
     let content = subs.get_content_without_compacting(var);
 
     match content {

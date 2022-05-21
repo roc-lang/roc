@@ -1,4 +1,4 @@
-use crate::num::NumericBound;
+use crate::num::NumericRange;
 use crate::pretty_print::Parens;
 use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
@@ -255,7 +255,7 @@ pub enum Type {
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
     Apply(Symbol, Vec<Type>, Region),
     Variable(Variable),
-    RangedNumber(Box<Type>, NumericBound),
+    RangedNumber(Box<Type>, NumericRange),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }

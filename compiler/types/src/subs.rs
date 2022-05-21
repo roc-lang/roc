@@ -2008,7 +2008,7 @@ pub enum Content {
     },
     Structure(FlatType),
     Alias(Symbol, AliasVariables, Variable, AliasKind),
-    RangedNumber(Variable, crate::num::NumericBound),
+    RangedNumber(Variable, crate::num::NumericRange),
     Error,
 }
 
