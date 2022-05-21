@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use roc_debug_flags::dbg_do;
+use roc_debug_flags::{dbg_do, ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -9,9 +9,6 @@ use roc_types::subs::{
     RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField};
-
-#[cfg(debug_assertions)]
-use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 
 macro_rules! mismatch {
     () => {{
@@ -476,8 +473,7 @@ fn unify_two_aliases(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    // NOTE: symbol is unused in release builds; the underscore prefix prevents a warning.
-    _symbol: Symbol,
+    symbol: Symbol,
     args: AliasVariables,
     real_var: Variable,
     other_args: AliasVariables,
@@ -517,7 +513,7 @@ fn unify_two_aliases(
         outcome
     } else {
         dbg!(args.len(), other_args.len());
-        mismatch!("{:?}", _symbol)
+        mismatch!("{:?}", symbol)
     }
 }
 
@@ -633,10 +629,9 @@ fn unify_opaque(
                 outcome
             }
         }
-        // NOTE: This is prefixed with underscore because it's unused in release builds.
-        _other => {
+        other => {
             // The type on the left is an opaque, but the one on the right is not!
-            mismatch!("Cannot unify opaque {:?} with {:?}", symbol, _other)
+            mismatch!("Cannot unify opaque {:?} with {:?}", symbol, other)
         }
     }
 }
@@ -673,14 +668,9 @@ fn unify_structure(
             }
             outcome
         }
-        // NOTE: This is prefixed with underscore because it's unused in release builds.
-        RigidVar(_name) => {
+        RigidVar(name) => {
             // Type mismatch! Rigid can only unify with flex.
-            mismatch!(
-                "trying to unify {:?} with rigid var {:?}",
-                &flat_type,
-                _name
-            )
+            mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name)
         }
         RecursionVar { structure, .. } => match flat_type {
             FlatType::TagUnion(_, _) => {
@@ -724,8 +714,7 @@ fn unify_structure(
             // Unify the two flat types
             unify_flat_type(subs, pool, ctx, flat_type, other_flat_type)
         }
-        // NOTE: _sym is prefixed with underscore because it's unused in release builds.
-        Alias(_sym, _, real_var, kind) => match kind {
+        Alias(sym, _, real_var, kind) => match kind {
             AliasKind::Structural => {
                 // NB: not treating this as a presence constraint seems pivotal! I
                 // can't quite figure out why, but it doesn't seem to impact other types.
@@ -735,7 +724,7 @@ fn unify_structure(
                 mismatch!(
                     "Cannot unify structure {:?} with opaque {:?}",
                     &flat_type,
-                    _sym
+                    sym
                 )
             }
         },
@@ -1703,13 +1692,13 @@ fn unify_flat_type(
 
             unify_tag_union_new(subs, pool, ctx, tags1, *ext1, *tags2, *ext2, rec)
         }
-        // NOTE: These are prefixed with underscores because they're unused in release builds.
-        (_other1, _other2) => {
+
+        (other1, other2) => {
             // any other combination is a mismatch
             mismatch!(
                 "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
-                roc_types::subs::SubsFmtFlatType(_other1, subs),
-                roc_types::subs::SubsFmtFlatType(_other2, subs)
+                roc_types::subs::SubsFmtFlatType(other1, subs),
+                roc_types::subs::SubsFmtFlatType(other2, subs)
             )
         }
     }
@@ -1795,14 +1784,13 @@ fn unify_rigid(
                     output.must_implement_ability.push(must_implement_ability);
                     output
                 }
-                // NOTE: These are prefixed with underscores because they're unused in release builds.
-                (Some(_ability), _other) => {
+                (Some(ability), other) => {
                     // For now, only allow opaque types with no type variables to implement abilities.
                     mismatch!(
-                        %not_able, ctx.second, _ability,
+                        %not_able, ctx.second, ability,
                         "RigidAble {:?} with non-opaque or opaque with type variables {:?}",
                         ctx.first,
-                        &_other
+                        &other
                     )
                 }
             }
@@ -1935,12 +1923,11 @@ fn unify_recursion(
             },
         ),
 
-        // NOTE: _opaque is prefixed with underscore because it's unused in release builds.
-        Alias(_opaque, _, _, AliasKind::Opaque) => {
+        Alias(opaque, _, _, AliasKind::Opaque) => {
             mismatch!(
                 "RecursionVar {:?} cannot be equal to opaque {:?}",
                 ctx.first,
-                _opaque
+                opaque
             )
         }
 

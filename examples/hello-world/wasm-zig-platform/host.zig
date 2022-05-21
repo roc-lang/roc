@@ -1,6 +1,5 @@
 const std = @import("std");
 const str = @import("str");
-const builtin = @import("builtin");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -15,38 +14,33 @@ comptime {
     // -fcompiler-rt in link.rs instead of doing this. Note that this
     // workaround is present in many host.zig files, so make sure to undo
     // it everywhere!
-    if (builtin.os.tag == .macos) {
+    if (std.builtin.os.tag == .macos) {
         _ = @import("compiler_rt");
     }
 }
 
 const Align = extern struct { a: usize, b: usize };
-extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) anyopaque;
-extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*anyopaque;
+extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
+extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
-extern fn memcpy(dest: *anyopaque, src: *anyopaque, count: usize) *anyopaque;
 
-export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
+export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     _ = alignment;
 
     return malloc(size);
 }
 
-export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque {
+export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
     _ = old_size;
     _ = alignment;
 
     return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
 }
 
-export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
+export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     _ = alignment;
 
     free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
-}
-
-export fn roc_memcpy(dest: *anyopaque, src: *anyopaque, count: usize) callconv(.C) void {
-    _ = memcpy(dest, src, count);
 }
 
 // NOTE roc_panic is provided in the JS file, so it can throw an exception

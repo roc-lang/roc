@@ -1009,7 +1009,7 @@ mod test_reporting {
 
                     Num a
 
-                All branches in an `if` must have the same type!
+                I need all branches in an `if` to have the same type!
                 "#
             ),
         )
@@ -1040,7 +1040,7 @@ mod test_reporting {
 
                     Num a
 
-                All branches in an `if` must have the same type!
+                I need all branches in an `if` to have the same type!
                 "#
             ),
         )
@@ -1076,7 +1076,7 @@ mod test_reporting {
 
                     Str
 
-                All branches of a `when` must have the same type!
+                I need all branches of a `when` to have the same type!
                 "#
             ),
         )
@@ -1107,7 +1107,7 @@ mod test_reporting {
 
                     Num a
 
-                Every element in a list must have the same type!
+                I need every element in a list to have the same type!
                 "#
             ),
         )
@@ -5807,7 +5807,7 @@ mod test_reporting {
 
                     Num a
 
-                All branches in an `if` must have the same type!
+                I need all branches in an `if` to have the same type!
                 "#
             ),
         )
@@ -5836,7 +5836,7 @@ but the `then` branch has the type:
 
     Str
 
-All branches in an `if` must have the same type!
+I need all branches in an `if` to have the same type!
 "#,
                         $op, "^".repeat($op.len())
                     ),

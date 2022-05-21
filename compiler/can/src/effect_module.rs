@@ -74,7 +74,7 @@ pub(crate) fn build_effect_builtins(
         let def = helper!(build_effect_forever);
         declarations.push(Declaration::DeclareRec(
             vec![def],
-            IllegalCycleMark::empty(),
+            IllegalCycleMark::new(var_store),
         ));
     }
 
@@ -83,7 +83,7 @@ pub(crate) fn build_effect_builtins(
         let def = helper!(build_effect_loop);
         declarations.push(Declaration::DeclareRec(
             vec![def],
-            IllegalCycleMark::empty(),
+            IllegalCycleMark::new(var_store),
         ));
     }
 
