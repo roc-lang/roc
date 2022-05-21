@@ -1,11 +1,17 @@
-use roc_can::def::{CanDefs, Def};
-use roc_load::LoadedModule;
+use std::{path::{PathBuf, Path}, fs};
+
+use bumpalo::Bump;
+use roc_can::def::{CanDefs, Def, Declaration};
+use roc_load::{LoadedModule, LoadStart, Phase, Threading};
 use roc_load_internal::file::ModuleHeader;
+use roc_constrain::module::ExposedByModule;
+use roc_reporting::report::RenderTarget;
+use roc_target::TargetInfo;
 
 #[derive(Debug)]
 pub struct AST<'a> {
     pub module_header: ModuleHeader<'a>,
-    pub can_defs: CanDefs
+    pub defs: Vec<Def>
 }
 
 impl<'a> AST<'a> {
@@ -17,7 +23,7 @@ impl<'a> AST<'a> {
     pub fn ast_to_string(&self) -> String {
         let mut full_ast_string = String::new();
 
-        for def in self.can_defs.defs.iter() {
+        for def in self.defs.iter() {
             full_ast_string.push_str(&format!("{:?}", def));
             full_ast_string.push_str("\n\n");
         }
@@ -26,6 +32,25 @@ impl<'a> AST<'a> {
     }
 }
 
-pub fn build_ast<'a>(loaded_module: LoadedModule) -> AST<'a> {
-    //TODO file.rs load with goal phase CanAndConstrain, defs are in declarations
+pub fn build_ast<'a>(
+    loaded_module: LoadedModule
+) -> AST<'a> {
+    // TODO remove unwrap
+    let declarations =
+        loaded_module.declarations_by_id.get(
+            &loaded_module.module_id
+        ).unwrap();
+
+    let defs =
+        declarations.iter().filter_map(|dec| {
+            match dec {
+                Declaration::Declare(def) => Some(*def),
+                _ => unimplemented!("TODO handle other varianst of Declaration"),
+            }
+        }).collect();
+
+    AST {
+        module_header: (), // TODO find this somewhere
+        defs
+    }
 }

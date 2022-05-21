@@ -3475,6 +3475,7 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_constrain",
  "roc_error_macros",
  "roc_load",
  "roc_load_internal",

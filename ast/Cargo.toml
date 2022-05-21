@@ -14,6 +14,7 @@ roc_region = { path = "../compiler/region" }
 roc_module = { path = "../compiler/module" }
 roc_parse = { path = "../compiler/parse" }
 roc_problem = { path = "../compiler/problem" }
+roc_constrain = { path = "../compiler/constrain" }
 roc_types = { path = "../compiler/types" }
 roc_unify = { path = "../compiler/unify"}
 roc_load = { path = "../compiler/load" }
