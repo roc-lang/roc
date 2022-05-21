@@ -1659,6 +1659,10 @@ impl Subs {
         self.utable.get_rank_unchecked(key)
     }
 
+    pub fn get_copy_unchecked(&self, key: Variable) -> OptVariable {
+        self.utable.get_copy_unchecked(key)
+    }
+
     #[inline(always)]
     pub fn get_without_compacting(&self, key: Variable) -> Descriptor {
         self.utable.get_descriptor(key)
@@ -1702,6 +1706,10 @@ impl Subs {
         self.utable.set_mark_unchecked(key, mark)
     }
 
+    pub fn set_copy_unchecked(&mut self, key: Variable, copy: OptVariable) {
+        self.utable.set_copy_unchecked(key, copy)
+    }
+
     pub fn set_copy(&mut self, key: Variable, copy: OptVariable) {
         self.utable.set_copy(key, copy)
     }
@@ -1712,9 +1720,11 @@ impl Subs {
     }
 
     pub fn set_content(&mut self, key: Variable, content: Content) {
-        // let l_key = self.utable.inlined_get_root_key(key);
-
         self.utable.set_content(key, content);
+    }
+
+    pub fn set_content_unchecked(&mut self, key: Variable, content: Content) {
+        self.utable.set_content_unchecked(key, content);
     }
 
     pub fn modify<F, T>(&mut self, key: Variable, mapper: F) -> T
