@@ -1706,6 +1706,10 @@ impl Subs {
         self.utable.set_mark_unchecked(key, mark)
     }
 
+    pub fn set_copy_unchecked(&mut self, key: Variable, copy: OptVariable) {
+        self.utable.set_copy_unchecked(key, copy)
+    }
+
     pub fn set_copy(&mut self, key: Variable, copy: OptVariable) {
         self.utable.set_copy(key, copy)
     }

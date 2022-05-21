@@ -3092,12 +3092,10 @@ fn deep_copy_var_help(
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    subs.modify(var, |desc| {
-        desc.mark = Mark::NONE;
-        desc.copy = copy.into();
-    });
+    subs.set_mark_unchecked(var, Mark::NONE);
+    subs.set_copy_unchecked(var, copy.into());
 
-    let content = *subs.get_content_without_compacting(var);
+    let content = *subs.get_content_unchecked(var);
 
     let actual_copy = subs.fresh(make_descriptor(content));
     debug_assert_eq!(copy, actual_copy);
