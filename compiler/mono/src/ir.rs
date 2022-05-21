@@ -6583,7 +6583,6 @@ fn store_pattern_help<'a>(
             return StorePattern::NotProductive(stmt);
         }
         IntLiteral(_, _)
-        | U128Literal(_)
         | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | EnumLiteral { .. }
@@ -8084,7 +8083,6 @@ fn call_specialized_proc<'a>(
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
-    U128Literal([u8; 16]),
     IntLiteral([u8; 16], IntWidth),
     FloatLiteral(u64, FloatWidth),
     DecimalLiteral([u8; 16]),
@@ -8173,13 +8171,9 @@ fn from_can_pattern_help<'a>(
         AbilityMemberSpecialization { ident, .. } => Ok(Pattern::Identifier(*ident)),
         IntLiteral(_, precision_var, _, int, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, false) {
-                IntOrFloat::Int(precision) => {
-                    let int = match *int {
-                        IntValue::I128(n) => Pattern::IntLiteral(n, precision),
-                        IntValue::U128(n) => Pattern::U128Literal(n),
-                    };
-                    Ok(int)
-                }
+                IntOrFloat::Int(precision) => match *int {
+                    IntValue::I128(n) | IntValue::U128(n) => Ok(Pattern::IntLiteral(n, precision)),
+                },
                 other => {
                     panic!(
                         "Invalid precision for int pattern: {:?} has {:?}",
@@ -8231,8 +8225,9 @@ fn from_can_pattern_help<'a>(
         NumLiteral(var, num_str, num, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
                 IntOrFloat::Int(precision) => Ok(match num {
-                    IntValue::I128(num) => Pattern::IntLiteral(*num, precision),
-                    IntValue::U128(num) => Pattern::U128Literal(*num),
+                    IntValue::I128(num) | IntValue::U128(num) => {
+                        Pattern::IntLiteral(*num, precision)
+                    }
                 }),
                 IntOrFloat::Float(precision) => {
                     // TODO: this may be lossy
