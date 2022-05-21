@@ -3040,6 +3040,19 @@ fn deep_copy_var_in(
     copy
 }
 
+#[inline]
+fn has_trivial_copy(subs: &Subs, root_var: Variable) -> Option<Variable> {
+    let existing_copy = subs.get_copy_unchecked(root_var);
+
+    if let Some(copy) = existing_copy.into_variable() {
+        Some(copy)
+    } else if subs.get_rank_unchecked(root_var) != Rank::NONE {
+        Some(root_var)
+    } else {
+        None
+    }
+}
+
 fn deep_copy_var_help(
     subs: &mut Subs,
     max_rank: Rank,
@@ -3051,13 +3064,11 @@ fn deep_copy_var_help(
     use roc_types::subs::FlatType::*;
 
     let subs_len = subs.len();
+    let var = subs.get_root_key(var);
 
-    let existing_copy = subs.get_copy(var);
-
-    if let Some(copy) = existing_copy.into_variable() {
+    // either this variable has been copied before, or does not have NONE rank
+    if let Some(copy) = has_trivial_copy(subs, var) {
         return copy;
-    } else if subs.get_rank(var) != Rank::NONE {
-        return var;
     }
 
     visited.push(var);

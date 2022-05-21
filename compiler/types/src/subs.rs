@@ -1659,6 +1659,10 @@ impl Subs {
         self.utable.get_rank_unchecked(key)
     }
 
+    pub fn get_copy_unchecked(&self, key: Variable) -> OptVariable {
+        self.utable.get_copy_unchecked(key)
+    }
+
     #[inline(always)]
     pub fn get_without_compacting(&self, key: Variable) -> Descriptor {
         self.utable.get_descriptor(key)
