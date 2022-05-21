@@ -101,7 +101,15 @@ mod bindgen_cli_run {
         basic_record:"basic-record" => "Record was: MyRcd { b: 42, a: 1995 }\n",
         nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
         enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
-        tag_union_nonrecursive:"tag-union-nonrecursive" => indoc!(r#"
+        union_with_padding:"union-with-padding" => indoc!(r#"
+            tag_union was: NonRecursive::Foo("This is a test")
+            `Foo "small str"` is: NonRecursive::Foo("small str")
+            `Foo "A long enough string to not be small"` is: NonRecursive::Foo("A long enough string to not be small")
+            `Bar 123` is: NonRecursive::Bar(123)
+            `Baz` is: NonRecursive::Baz
+            `Blah 456` is: NonRecursive::Blah(456)
+        "#),
+        union_without_padding:"union-without-padding" => indoc!(r#"
             tag_union was: NonRecursive::Foo("This is a test")
             `Foo "small str"` is: NonRecursive::Foo("small str")
             `Foo "A long enough string to not be small"` is: NonRecursive::Foo("A long enough string to not be small")
