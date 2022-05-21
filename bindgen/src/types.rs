@@ -470,6 +470,45 @@ pub enum RocTagUnion {
     },
 }
 
+impl RocTagUnion {
+    /// The byte offset where the discriminant is located within the tag union's
+    /// in-memory representation. So if you take a pointer to the tag union itself,
+    /// and add discriminant_offset to it, you'll have a pointer to the discriminant.
+    ///
+    /// This is only useful when given tags from RocTagUnion::Recursive or
+    /// RocTagUnion::NonRecursive - other tag types do not store their discriminants
+    /// as plain numbers at a fixed offset!
+    pub fn discriminant_offset(
+        tags: &[(String, Option<TypeId>)],
+        types: &Types,
+        target_info: TargetInfo,
+    ) -> usize {
+        tags.iter()
+            .fold(0, |max_size, (_, opt_tag_id)| match opt_tag_id {
+                Some(tag_id) => {
+                    let size_unpadded = match types.get(*tag_id) {
+                        // For structs (that is, payloads), we actually want
+                        // to get the size *before* alignment padding is taken
+                        // into account, since the discriminant is
+                        // stored after those bytes.
+                        RocType::Struct { fields, .. } => {
+                            fields.iter().fold(0, |total, (_, field_id)| {
+                                let field = types.get(*field_id);
+
+                                total + field.size(types, target_info)
+                            })
+                        }
+                        typ => max_size.max(typ.size(types, target_info)),
+                    };
+
+                    max_size.max(size_unpadded)
+                }
+
+                None => max_size,
+            })
+    }
+}
+
 #[test]
 fn sizes_agree_with_roc_std() {
     use std::mem::size_of;
