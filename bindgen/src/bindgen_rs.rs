@@ -574,7 +574,7 @@ impl core::hash::Hash for {name} {{
                     format!(
                         r#"unsafe {{
                 {hash_tag};
-                &self.{tag_name}.hash(state);
+                self.{tag_name}.hash(state);
             }},"#
                     )
                 } else {
