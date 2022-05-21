@@ -40,26 +40,28 @@ impl NumericRange {
     }
 
     fn contains_float_width(&self, _width: FloatWidth) -> bool {
-        false
+        // we don't currently check the float width
+        true
     }
 
     fn contains_int_width(&self, width: IntWidth) -> bool {
         use NumericRange::*;
 
-        let (range_sign, at_least_width) = match self {
+        let (range_signedness, at_least_width) = match self {
             IntAtLeastSigned(width) => (SignDemand::Signed, width),
             IntAtLeastEitherSign(width) => (SignDemand::NoDemand, width),
             NumAtLeastSigned(width) => (SignDemand::Signed, width),
             NumAtLeastEitherSign(width) => (SignDemand::NoDemand, width),
         };
 
-        let (actual_sign, _) = width.sign_and_width();
+        let (actual_signedness, _) = width.signedness_and_width();
 
-        if let (IntSign::Unsigned, SignDemand::Signed) = (actual_sign, range_sign) {
+        if let (IntSignedness::Unsigned, SignDemand::Signed) = (actual_signedness, range_signedness)
+        {
             return false;
         }
 
-        width.sign_and_width().1 >= at_least_width.sign_and_width().1
+        width.signedness_and_width().1 >= at_least_width.signedness_and_width().1
     }
 
     pub fn variable_slice(&self) -> &'static [Variable] {
@@ -97,7 +99,7 @@ impl NumericRange {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum IntSign {
+enum IntSignedness {
     Unsigned,
     Signed,
 }
@@ -118,9 +120,9 @@ pub enum IntWidth {
 }
 
 impl IntWidth {
-    /// Returns the `IntSign` and bit width of a variant.
-    pub fn sign_and_width(&self) -> (IntSign, u32) {
-        use IntSign::*;
+    /// Returns the `IntSignedness` and bit width of a variant.
+    fn signedness_and_width(&self) -> (IntSignedness, u32) {
+        use IntSignedness::*;
         use IntWidth::*;
         match self {
             U8 => (Unsigned, 8),
@@ -190,10 +192,13 @@ impl IntWidth {
     ///
     /// If `is_negative` is true, the negative side is checked; otherwise the positive side is checked.
     pub fn is_superset(&self, lower_bound: &Self, is_negative: bool) -> bool {
-        use IntSign::*;
+        use IntSignedness::*;
 
         if is_negative {
-            match (self.sign_and_width(), lower_bound.sign_and_width()) {
+            match (
+                self.signedness_and_width(),
+                lower_bound.signedness_and_width(),
+            ) {
                 ((Signed, us), (Signed, lower_bound)) => us >= lower_bound,
                 // Unsigned ints can never represent negative numbers; signed (non-zero width)
                 // ints always can.
@@ -203,7 +208,10 @@ impl IntWidth {
                 ((Unsigned, _), (Unsigned, _)) => true,
             }
         } else {
-            match (self.sign_and_width(), lower_bound.sign_and_width()) {
+            match (
+                self.signedness_and_width(),
+                lower_bound.signedness_and_width(),
+            ) {
                 ((Signed, us), (Signed, lower_bound))
                 | ((Unsigned, us), (Unsigned, lower_bound)) => us >= lower_bound,
 
