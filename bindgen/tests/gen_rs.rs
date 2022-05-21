@@ -389,16 +389,16 @@ mod test_gen_rs {
                         match self.tag() {
                             tag_NonRecursive::Bar => unsafe {
                                 tag_NonRecursive::Bar.hash(state);
-                                &self.Bar.hash(state);
+                                self.Bar.hash(state);
                             },
                             tag_NonRecursive::Baz => tag_NonRecursive::Baz.hash(state),
                             tag_NonRecursive::Blah => unsafe {
                                 tag_NonRecursive::Blah.hash(state);
-                                &self.Blah.hash(state);
+                                self.Blah.hash(state);
                             },
                             tag_NonRecursive::Foo => unsafe {
                                 tag_NonRecursive::Foo.hash(state);
-                                &self.Foo.hash(state);
+                                self.Foo.hash(state);
                             },
                         }
                     }
