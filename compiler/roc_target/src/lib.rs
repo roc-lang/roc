@@ -12,6 +12,13 @@ impl TargetInfo {
         self.architecture.ptr_width()
     }
 
+    pub const fn ptr_size(&self) -> usize {
+        match self.ptr_width() {
+            PtrWidth::Bytes4 => 4,
+            PtrWidth::Bytes8 => 8,
+        }
+    }
+
     pub const fn ptr_alignment_bytes(&self) -> usize {
         self.architecture.ptr_alignment_bytes()
     }
