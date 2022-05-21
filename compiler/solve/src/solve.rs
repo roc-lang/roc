@@ -3067,13 +3067,6 @@ fn deep_copy_var_help(
 
     visited.push(var);
 
-    let make_descriptor = |content| Descriptor {
-        content,
-        rank: max_rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
-    };
-
     // Safety: Here we make a variable that is 1 position out of bounds.
     // The reason is that we can now keep the mutable reference to `desc`
     // Below, we actually push a new variable onto subs meaning the `copy`
@@ -3091,7 +3084,14 @@ fn deep_copy_var_help(
 
     let content = *subs.get_content_unchecked(var);
 
-    let actual_copy = subs.fresh(make_descriptor(content));
+    let copy_descriptor = Descriptor {
+        content,
+        rank: max_rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
+
+    let actual_copy = subs.fresh(copy_descriptor);
     debug_assert_eq!(copy, actual_copy);
 
     macro_rules! copy_sequence {
