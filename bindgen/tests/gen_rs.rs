@@ -168,6 +168,7 @@ mod test_gen_rs {
                     Bar: roc_std::U128,
                     Blah: i32,
                     Foo: core::mem::ManuallyDrop<roc_std::RocStr>,
+                    _size_with_discriminant: [u8; 32],
                 }
 
                 impl NonRecursive {

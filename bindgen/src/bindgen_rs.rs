@@ -140,6 +140,11 @@ fn write_tag_union(
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
     let discriminant_name = write_discriminant(name, tag_names, types, buf)?;
     let typ = types.get(type_id);
+    // TODO also do this for other targets. Remember, these can change based on more
+    // than just pointer width; e.g. on wasm, the alignments of U16 and U8 are both 4!
+    let target_info = TargetInfo::from(&target_lexicon::Triple::host());
+    let discriminant_offset = RocTagUnion::discriminant_offset(tags, types, target_info);
+    let size = typ.size(types, target_info);
 
     {
         // No deriving for unions; we have to add the impls ourselves!
@@ -173,19 +178,21 @@ pub union {name} {{"#
             }
         }
 
+        // When there's no alignment padding after the largest variant,
+        // the compiler will make extra room for the discriminant.
+        // We need that to be reflected in the overall size of the enum,
+        // so add an extra variant with the appropriate size.
+        //
+        // (Do this even if theoretically shouldn't be necessary, since
+        // there's no runtime cost and it more explicitly syncs the
+        // union's size with what we think it should be.)
+        writeln!(buf, "    _size_with_discriminant: [u8; {size}],")?;
+
         buf.write_str("}\n")?;
     }
 
     // The impl for the tag union
     {
-        // TODO also do this for other targets. Remember, these can change based on more
-        // than just pointer width; e.g. on wasm, the alignments of U16 and U8 are both 4!
-        let discriminant_offset = RocTagUnion::discriminant_offset(
-            tags,
-            types,
-            TargetInfo::from(&target_lexicon::Triple::host()),
-        );
-
         // An old design, which ended up not working out, was that the tag union
         // was a struct containing two fields: one for the `union`, and another
         // for the discriminant.
