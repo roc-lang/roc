@@ -26,6 +26,7 @@ pub fn test_home() -> ModuleId {
 }
 
 #[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub fn infer_expr(
     subs: Subs,
     problems: &mut Vec<solve::TypeError>,
