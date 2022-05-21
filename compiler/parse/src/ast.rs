@@ -401,16 +401,20 @@ pub enum Derived<'a> {
 }
 
 impl Derived<'_> {
-    pub fn is_empty(&self) -> bool {
+    pub fn collection(&self) -> &Collection<AbilityName> {
         let mut it = self;
         loop {
             match it {
                 Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => {
                     it = inner;
                 }
-                Self::Has(collection) => return collection.is_empty(),
+                Self::Has(collection) => return collection,
             }
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.collection().is_empty()
     }
 }
 
