@@ -322,7 +322,7 @@ impl RocType {
             RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
                 // The smallest alignment this could possibly have is based on the number of tags - e.g.
                 // 0 tags is an empty union (so, alignment 0), 1-255 tags has a u8 tag (so, alignment 1), etc.
-                let mut align = align_for_tag_count(tags.len());
+                let mut align = align_for_tag_count(tags.len(), target_info);
 
                 for (_, payloads) in tags {
                     for id in payloads {
@@ -338,7 +338,7 @@ impl RocType {
                 //
                 // Unlike a regular tag union, a recursive one also includes a pointer.
                 let ptr_align = target_info.ptr_alignment_bytes();
-                let mut align = ptr_align.max(align_for_tag_count(tags.len()));
+                let mut align = ptr_align.max(align_for_tag_count(tags.len(), target_info));
 
                 for (_, payloads) in tags {
                     for id in payloads {
@@ -354,7 +354,8 @@ impl RocType {
                 //
                 // Unlike a regular tag union, a recursive one also includes a pointer.
                 let ptr_align = target_info.ptr_alignment_bytes();
-                let mut align = ptr_align.max(align_for_tag_count(non_null_tags.len()));
+                let mut align =
+                    ptr_align.max(align_for_tag_count(non_null_tags.len(), target_info));
 
                 for (_, _, payloads) in non_null_tags {
                     for id in payloads {
@@ -398,18 +399,20 @@ impl RocType {
     }
 }
 
-fn align_for_tag_count(num_tags: usize) -> usize {
+/// Returns the alignment of the discriminant based on the target
+/// (e.g. on wasm, these are always 4)
+fn align_for_tag_count(num_tags: usize, target_info: TargetInfo) -> usize {
     if num_tags == 0 {
         // empty tag union
         0
     } else if num_tags < u8::MAX as usize {
-        align_of::<u8>()
+        IntWidth::U8.alignment_bytes(target_info) as usize
     } else if num_tags < u16::MAX as usize {
-        align_of::<u16>()
+        IntWidth::U16.alignment_bytes(target_info) as usize
     } else if num_tags < u32::MAX as usize {
-        align_of::<u32>()
+        IntWidth::U32.alignment_bytes(target_info) as usize
     } else if num_tags < u64::MAX as usize {
-        align_of::<u64>()
+        IntWidth::U64.alignment_bytes(target_info) as usize
     } else {
         panic!(
             "Too many tags. You can't have more than {} tags in a tag union!",
