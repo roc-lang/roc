@@ -124,7 +124,7 @@ impl FunctionLayout {
         subs: &Subs,
         var: Variable,
     ) -> Result<Self, LayoutError> {
-        let content = &subs.get_ref(var).content;
+        let content = &subs.get_content_without_compacting(var);
         Self::from_content(layouts, subs, var, content)
     }
 
@@ -232,7 +232,7 @@ impl LambdaSet {
         subs: &Subs,
         var: Variable,
     ) -> Result<Self, LayoutError> {
-        let content = &subs.get_ref(var).content;
+        let content = &subs.get_content_without_compacting(var);
         Self::from_content(layouts, subs, var, content)
     }
 
@@ -598,7 +598,7 @@ impl Layout {
         subs: &Subs,
         var: Variable,
     ) -> Result<Layout, LayoutError> {
-        let content = &subs.get_ref(var).content;
+        let content = &subs.get_content_without_compacting(var);
         Self::from_content(layouts, subs, var, content)
     }
 
@@ -612,7 +612,7 @@ impl Layout {
         subs: &Subs,
         var: Variable,
     ) -> Result<Layout, LayoutError> {
-        let content = &subs.get_ref(var).content;
+        let content = &subs.get_content_without_compacting(var);
 
         match content {
             Content::FlexVar(_) | Content::RigidVar(_) => Ok(Layout::VOID),

@@ -1456,14 +1456,13 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
     while let Some(var) = stack.pop() {
         use {Content::*, FlatType::*};
 
-        let mut desc = subs.get(var);
+        let desc = subs.get(var);
         if let Structure(TagUnion(tags, ext)) = desc.content {
             if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
                 let new_ext = subs.fresh_unnamed_flex_var();
                 subs.set_rank(new_ext, desc.rank);
                 let new_union = Structure(TagUnion(tags, new_ext));
-                desc.content = new_union;
-                subs.set(var, desc);
+                subs.set_content(var, new_union);
             }
 
             // Also open up all nested tag unions.
@@ -2517,11 +2516,9 @@ fn check_for_infinite_type(
     let var = loc_var.value;
 
     while let Err((recursive, _chain)) = subs.occurs(var) {
-        let description = subs.get(recursive);
-
         // try to make a tag union recursive, see if that helps
-        match description.content {
-            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+        match subs.get_content_without_compacting(recursive) {
+            &Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
                 subs.mark_tag_union_recursive(recursive, tags, ext_var);
             }
 
@@ -2608,8 +2605,10 @@ fn pool_to_rank_table(
     // the vast majority of young variables have young_rank
     let mut i = 0;
     while i < young_vars.len() {
-        let var = young_vars[i];
-        let rank = subs.get_rank_set_mark(var, young_mark);
+        let var = subs.get_root_key(young_vars[i]);
+
+        subs.set_mark_unchecked(var, young_mark);
+        let rank = subs.get_rank_unchecked(var);
 
         if rank != young_rank {
             debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
@@ -2637,27 +2636,24 @@ fn adjust_rank(
     group_rank: Rank,
     var: Variable,
 ) -> Rank {
-    let desc = subs.get_ref_mut(var);
+    let var = subs.get_root_key(var);
 
-    let desc_rank = desc.rank;
-    let desc_mark = desc.mark;
+    let desc_rank = subs.get_rank_unchecked(var);
+    let desc_mark = subs.get_mark_unchecked(var);
 
     if desc_mark == young_mark {
-        // SAFETY: in this function (and functions it calls, we ONLY modify rank and mark, never content!
-        // hence, we can have an immutable reference to it even though we also have a mutable
-        // reference to the Subs as a whole. This prevents a clone of the content, which turns out
-        // to be quite expensive.
         let content = {
-            let ptr = &desc.content as *const _;
+            let ptr = subs.get_content_unchecked(var) as *const _;
             unsafe { &*ptr }
         };
 
         // Mark the variable as visited before adjusting content, as it may be cyclic.
-        desc.mark = visit_mark;
+        subs.set_mark_unchecked(var, visit_mark);
 
         let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
 
-        subs.set_rank_mark(var, max_rank, visit_mark);
+        subs.set_rank_unchecked(var, max_rank);
+        subs.set_mark_unchecked(var, visit_mark);
 
         max_rank
     } else if desc_mark == visit_mark {
@@ -2668,8 +2664,8 @@ fn adjust_rank(
         let min_rank = group_rank.min(desc_rank);
 
         // TODO from elm-compiler: how can min_rank ever be group_rank?
-        desc.rank = min_rank;
-        desc.mark = visit_mark;
+        subs.set_rank_unchecked(var, min_rank);
+        subs.set_mark_unchecked(var, visit_mark);
 
         min_rank
     }
@@ -2907,19 +2903,20 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     while let Some(var) = stack.pop() {
         visited.push(var);
 
-        let desc = subs.get_ref_mut(var);
-        if desc.copy.is_some() {
+        if subs.get_copy(var).is_some() {
             continue;
         }
 
-        desc.rank = Rank::NONE;
-        desc.mark = Mark::NONE;
-        desc.copy = OptVariable::from(var);
+        subs.modify(var, |desc| {
+            desc.rank = Rank::NONE;
+            desc.mark = Mark::NONE;
+            desc.copy = OptVariable::from(var);
+        });
 
         use Content::*;
         use FlatType::*;
 
-        match &desc.content {
+        match subs.get_content_without_compacting(var) {
             RigidVar(name) => {
                 // what it's all about: convert the rigid var into a flex var
                 let name = *name;
@@ -2927,17 +2924,25 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                 // NOTE: we must write to the mutually borrowed `desc` value here
                 // using `subs.set` does not work (unclear why, really)
                 // but get_ref_mut approach saves a lookup, so the weirdness is worth it
-                desc.content = FlexVar(Some(name));
-                desc.rank = max_rank;
-                desc.mark = Mark::NONE;
-                desc.copy = OptVariable::NONE;
+                subs.modify(var, |d| {
+                    *d = Descriptor {
+                        content: FlexVar(Some(name)),
+                        rank: max_rank,
+                        mark: Mark::NONE,
+                        copy: OptVariable::NONE,
+                    }
+                })
             }
             &RigidAbleVar(name, ability) => {
                 // Same as `RigidVar` above
-                desc.content = FlexAbleVar(Some(name), ability);
-                desc.rank = max_rank;
-                desc.mark = Mark::NONE;
-                desc.copy = OptVariable::NONE;
+                subs.modify(var, |d| {
+                    *d = Descriptor {
+                        content: FlexAbleVar(Some(name), ability),
+                        rank: max_rank,
+                        mark: Mark::NONE,
+                        copy: OptVariable::NONE,
+                    }
+                })
             }
             FlexVar(_) | FlexAbleVar(_, _) | Error => (),
 
@@ -3021,13 +3026,13 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     // we have tracked all visited variables, and can now traverse them
     // in one go (without looking at the UnificationTable) and clear the copy field
     for var in visited {
-        let descriptor = subs.get_ref_mut(var);
-
-        if descriptor.copy.is_some() {
-            descriptor.rank = Rank::NONE;
-            descriptor.mark = Mark::NONE;
-            descriptor.copy = OptVariable::NONE;
-        }
+        subs.modify(var, |descriptor| {
+            if descriptor.copy.is_some() {
+                descriptor.rank = Rank::NONE;
+                descriptor.mark = Mark::NONE;
+                descriptor.copy = OptVariable::NONE;
+            }
+        });
     }
 }
 
@@ -3045,13 +3050,13 @@ fn deep_copy_var_in(
     // we have tracked all visited variables, and can now traverse them
     // in one go (without looking at the UnificationTable) and clear the copy field
     for var in visited {
-        let descriptor = subs.get_ref_mut(var);
-
-        if descriptor.copy.is_some() {
-            descriptor.rank = Rank::NONE;
-            descriptor.mark = Mark::NONE;
-            descriptor.copy = OptVariable::NONE;
-        }
+        subs.modify(var, |descriptor| {
+            if descriptor.copy.is_some() {
+                descriptor.rank = Rank::NONE;
+                descriptor.mark = Mark::NONE;
+                descriptor.copy = OptVariable::NONE;
+            }
+        });
     }
 
     copy
@@ -3068,11 +3073,12 @@ fn deep_copy_var_help(
     use roc_types::subs::FlatType::*;
 
     let subs_len = subs.len();
-    let desc = subs.get_ref_mut(var);
 
-    if let Some(copy) = desc.copy.into_variable() {
+    let existing_copy = subs.get_copy(var);
+
+    if let Some(copy) = existing_copy.into_variable() {
         return copy;
-    } else if desc.rank != Rank::NONE {
+    } else if subs.get_rank(var) != Rank::NONE {
         return var;
     }
 
@@ -3084,8 +3090,6 @@ fn deep_copy_var_help(
         mark: Mark::NONE,
         copy: OptVariable::NONE,
     };
-
-    let content = desc.content;
 
     // Safety: Here we make a variable that is 1 position out of bounds.
     // The reason is that we can now keep the mutable reference to `desc`
@@ -3099,8 +3103,12 @@ fn deep_copy_var_help(
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    desc.mark = Mark::NONE;
-    desc.copy = copy.into();
+    subs.modify(var, |desc| {
+        desc.mark = Mark::NONE;
+        desc.copy = copy.into();
+    });
+
+    let content = *subs.get_content_without_compacting(var);
 
     let actual_copy = subs.fresh(make_descriptor(content));
     debug_assert_eq!(copy, actual_copy);
