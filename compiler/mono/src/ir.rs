@@ -52,13 +52,6 @@ pub fn pretty_print_ir_symbols() -> bool {
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
 
-roc_error_macros::assert_sizeof_aarch64!(Literal, 3 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Expr, 10 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Stmt, 19 * 8);
-roc_error_macros::assert_sizeof_aarch64!(ProcLayout, 6 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Call, 7 * 8);
-roc_error_macros::assert_sizeof_aarch64!(CallType, 5 * 8);
-
 roc_error_macros::assert_sizeof_wasm!(Literal, 24);
 roc_error_macros::assert_sizeof_wasm!(Expr, 48);
 roc_error_macros::assert_sizeof_wasm!(Stmt, 120);
@@ -66,12 +59,12 @@ roc_error_macros::assert_sizeof_wasm!(ProcLayout, 32);
 roc_error_macros::assert_sizeof_wasm!(Call, 36);
 roc_error_macros::assert_sizeof_wasm!(CallType, 28);
 
-roc_error_macros::assert_sizeof_default!(Literal, 3 * 8);
-roc_error_macros::assert_sizeof_default!(Expr, 10 * 8);
-roc_error_macros::assert_sizeof_default!(Stmt, 19 * 8);
-roc_error_macros::assert_sizeof_default!(ProcLayout, 6 * 8);
-roc_error_macros::assert_sizeof_default!(Call, 7 * 8);
-roc_error_macros::assert_sizeof_default!(CallType, 5 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Literal, 3 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Expr, 10 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Stmt, 19 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(ProcLayout, 6 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Call, 7 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(CallType, 5 * 8);
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
