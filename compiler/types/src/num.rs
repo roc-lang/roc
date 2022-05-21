@@ -1,3 +1,106 @@
+use crate::subs::Variable;
+use roc_module::symbol::Symbol;
+
+/// A bound placed on a number because of its literal value.
+/// e.g. `-5` cannot be unsigned, and 300 does not fit in a U8
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericBound {
+    None,
+    FloatExact(FloatWidth),
+    IntExact(IntWidth),
+    IntAtLeastSigned(IntWidth),
+    IntAtLeastEitherSign(IntWidth),
+    NumAtLeastSigned(IntWidth),
+    NumAtLeastEitherSign(IntWidth),
+}
+
+impl NumericBound {
+    pub fn contains_symbol(&self, symbol: Symbol) -> bool {
+        match symbol {
+            Symbol::NUM_I8 => self.contains_int_width(IntWidth::I8),
+            Symbol::NUM_U8 => self.contains_int_width(IntWidth::U8),
+            Symbol::NUM_I16 => self.contains_int_width(IntWidth::I16),
+            Symbol::NUM_U16 => self.contains_int_width(IntWidth::U16),
+            Symbol::NUM_I32 => self.contains_int_width(IntWidth::I32),
+            Symbol::NUM_U32 => self.contains_int_width(IntWidth::U32),
+            Symbol::NUM_I64 => self.contains_int_width(IntWidth::I64),
+            Symbol::NUM_NAT => self.contains_int_width(IntWidth::Nat),
+            Symbol::NUM_U64 => self.contains_int_width(IntWidth::U64),
+            Symbol::NUM_I128 => self.contains_int_width(IntWidth::I128),
+            Symbol::NUM_U128 => self.contains_int_width(IntWidth::U128),
+
+            Symbol::NUM_DEC => self.contains_float_width(FloatWidth::Dec),
+            Symbol::NUM_F32 => self.contains_float_width(FloatWidth::F32),
+            Symbol::NUM_F64 => self.contains_float_width(FloatWidth::F64),
+
+            Symbol::NUM_NUM | Symbol::NUM_INT | Symbol::NUM_FRAC => {
+                // these satisfy any range that they are given
+                true
+            }
+
+            _ => unreachable!("weird number symbol {:?}", symbol),
+        }
+    }
+
+    fn contains_float_width(&self, _width: FloatWidth) -> bool {
+        false
+    }
+
+    fn contains_int_width(&self, width: IntWidth) -> bool {
+        use NumericBound::*;
+
+        let (range_sign, at_least_width) = match self {
+            IntAtLeastSigned(width) => (SignDemand::Signed, width),
+            IntAtLeastEitherSign(width) => (SignDemand::NoDemand, width),
+            NumAtLeastSigned(width) => (SignDemand::Signed, width),
+            NumAtLeastEitherSign(width) => (SignDemand::NoDemand, width),
+            _ => panic!(),
+        };
+
+        let (actual_sign, _) = width.sign_and_width();
+
+        if let (IntSign::Unsigned, SignDemand::Signed) = (actual_sign, range_sign) {
+            return false;
+        }
+
+        width.sign_and_width().1 >= at_least_width.sign_and_width().1
+    }
+
+    pub fn variable_slice(&self) -> &'static [Variable] {
+        use NumericBound::*;
+
+        match self {
+            IntAtLeastSigned(width) => {
+                let target = int_width_to_variable(*width);
+                let start = SIGNED_VARIABLES.iter().position(|v| *v == target).unwrap();
+                let end = SIGNED_VARIABLES.len() - 3;
+
+                &SIGNED_VARIABLES[start..end]
+            }
+            IntAtLeastEitherSign(width) => {
+                let target = int_width_to_variable(*width);
+                let start = ALL_VARIABLES.iter().position(|v| *v == target).unwrap();
+                let end = ALL_VARIABLES.len() - 3;
+
+                &ALL_VARIABLES[start..end]
+            }
+            NumAtLeastSigned(width) => {
+                let target = int_width_to_variable(*width);
+                let start = SIGNED_VARIABLES.iter().position(|v| *v == target).unwrap();
+
+                &SIGNED_VARIABLES[start..]
+            }
+            NumAtLeastEitherSign(width) => {
+                let target = int_width_to_variable(*width);
+                let start = ALL_VARIABLES.iter().position(|v| *v == target).unwrap();
+
+                &ALL_VARIABLES[start..]
+            }
+            _ => panic!(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IntSign {
     Unsigned,
@@ -163,3 +266,47 @@ pub enum NumBound {
         width: IntWidth,
     },
 }
+
+const fn int_width_to_variable(w: IntWidth) -> Variable {
+    match w {
+        IntWidth::U8 => Variable::U8,
+        IntWidth::U16 => Variable::U16,
+        IntWidth::U32 => Variable::U32,
+        IntWidth::U64 => Variable::U64,
+        IntWidth::U128 => Variable::U128,
+        IntWidth::I8 => Variable::I8,
+        IntWidth::I16 => Variable::I16,
+        IntWidth::I32 => Variable::I32,
+        IntWidth::I64 => Variable::I64,
+        IntWidth::I128 => Variable::I128,
+        IntWidth::Nat => Variable::NAT,
+    }
+}
+
+const ALL_VARIABLES: &[Variable] = &[
+    Variable::I8,
+    Variable::U8,
+    Variable::I16,
+    Variable::U16,
+    Variable::I32,
+    Variable::U32,
+    Variable::I64,
+    Variable::NAT, // FIXME: Nat's order here depends on the platfor,
+    Variable::U64,
+    Variable::I128,
+    Variable::U128,
+    Variable::F32,
+    Variable::F64,
+    Variable::DEC,
+];
+
+const SIGNED_VARIABLES: &[Variable] = &[
+    Variable::I8,
+    Variable::I16,
+    Variable::I32,
+    Variable::I64,
+    Variable::I128,
+    Variable::F32,
+    Variable::F64,
+    Variable::DEC,
+];

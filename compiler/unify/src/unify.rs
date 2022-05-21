@@ -5,6 +5,7 @@ use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
+use roc_types::num::NumericBound;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
@@ -413,7 +414,7 @@ fn unify_ranged_number(
     pool: &mut Pool,
     ctx: &Context,
     real_var: Variable,
-    range_vars: VariableSubsSlice,
+    range_vars: NumericBound,
 ) -> Outcome {
     let other_content = &ctx.second_desc.content;
 
@@ -431,7 +432,7 @@ fn unify_ranged_number(
         &RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, real_var, other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, ctx.first, other_range_vars, ctx.mode)
+                check_valid_range(subs, ctx.first, other_range_vars)
             } else {
                 outcome
             }
@@ -444,78 +445,34 @@ fn unify_ranged_number(
         return outcome;
     }
 
-    check_valid_range(subs, pool, ctx.second, range_vars, ctx.mode)
+    check_valid_range(subs, ctx.second, range_vars)
 }
 
-fn check_valid_range(
-    subs: &mut Subs,
-    pool: &mut Pool,
-    var: Variable,
-    range: VariableSubsSlice,
-    mode: Mode,
-) -> Outcome {
-    let slice = subs.get_subs_slice(range);
+fn check_valid_range(subs: &mut Subs, var: Variable, range: NumericBound) -> Outcome {
     let content = subs.get_content_without_compacting(var);
 
-    macro_rules! is_in_range {
-        ($var:expr) => {
-            if slice.contains(&$var) {
-                return Outcome::default();
+    match content {
+        Content::Alias(symbol, _, _, _) => {
+            if !range.contains_symbol(*symbol) {
+                let outcome = Outcome {
+                    mismatches: vec![Mismatch::TypeNotInRange],
+                    must_implement_ability: Default::default(),
+                };
+
+                return outcome;
             }
-        };
-    }
+        }
 
-    if let Content::Alias(symbol, _, _, _) = content {
-        match *symbol {
-            Symbol::NUM_I8 => is_in_range!(Variable::I8),
-            Symbol::NUM_U8 => is_in_range!(Variable::U8),
-            Symbol::NUM_I16 => is_in_range!(Variable::I16),
-            Symbol::NUM_U16 => is_in_range!(Variable::U16),
-            Symbol::NUM_I32 => is_in_range!(Variable::I32),
-            Symbol::NUM_U32 => is_in_range!(Variable::U32),
-            Symbol::NUM_I64 => is_in_range!(Variable::I64),
-            Symbol::NUM_NAT => is_in_range!(Variable::NAT),
-            Symbol::NUM_U64 => is_in_range!(Variable::U64),
-            Symbol::NUM_I128 => is_in_range!(Variable::I128),
-            Symbol::NUM_U128 => is_in_range!(Variable::U128),
+        Content::RangedNumber(_, _) => {
+            // these ranges always intersect, we need more information before we can say more
+        }
 
-            Symbol::NUM_DEC => is_in_range!(Variable::DEC),
-            Symbol::NUM_F32 => is_in_range!(Variable::F32),
-            Symbol::NUM_F64 => is_in_range!(Variable::F64),
-
-            Symbol::NUM_NUM | Symbol::NUM_INT | Symbol::NUM_FRAC => {
-                // these satisfy any range that they are given
-                return Outcome::default();
-            }
-
-            _ => {}
+        _ => {
+            // anything else is definitely a type error, and will be reported elsewhere
         }
     }
 
-    let vec = slice.to_vec();
-    let mut it = vec.iter().peekable();
-    while let Some(&possible_var) = it.next() {
-        let snapshot = subs.snapshot();
-        let old_pool = pool.clone();
-        let outcome = unify_pool(subs, pool, var, possible_var, mode | Mode::RIGID_AS_FLEX);
-        if outcome.mismatches.is_empty() {
-            // Okay, we matched some type in the range.
-            subs.rollback_to(snapshot);
-            *pool = old_pool;
-            return Outcome::default();
-        } else if it.peek().is_some() {
-            // We failed to match something in the range, but there are still things we can try.
-            subs.rollback_to(snapshot);
-            *pool = old_pool;
-        } else {
-            subs.commit_snapshot(snapshot);
-        }
-    }
-
-    Outcome {
-        mismatches: vec![Mismatch::TypeNotInRange],
-        ..Outcome::default()
-    }
+    Outcome::default()
 }
 
 #[inline(always)]
@@ -613,7 +570,7 @@ fn unify_alias(
         RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, real_var, *other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, real_var, *other_range_vars, ctx.mode)
+                check_valid_range(subs, real_var, *other_range_vars)
             } else {
                 outcome
             }
@@ -674,7 +631,7 @@ fn unify_opaque(
             // This opaque might be a number, check if it unifies with the target ranged number var.
             let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, ctx.first, *other_range_vars, ctx.mode)
+                check_valid_range(subs, ctx.first, *other_range_vars)
             } else {
                 outcome
             }
@@ -805,7 +762,7 @@ fn unify_structure(
         RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, ctx.first, *other_range_vars, ctx.mode)
+                check_valid_range(subs, ctx.first, *other_range_vars)
             } else {
                 outcome
             }

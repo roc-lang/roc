@@ -611,15 +611,10 @@ fn deep_copy_type_vars<'a>(
                 })
             }
 
-            RangedNumber(typ, range_vars) => {
+            RangedNumber(typ, range) => {
                 let new_typ = descend_var!(typ);
-                descend_slice!(range_vars);
 
-                perform_clone!({
-                    let new_range_vars = clone_var_slice!(range_vars);
-
-                    RangedNumber(new_typ, new_range_vars)
-                })
+                perform_clone!(RangedNumber(new_typ, range))
             }
             Error => Error,
         };

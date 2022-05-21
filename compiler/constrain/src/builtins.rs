@@ -4,6 +4,7 @@ use roc_can::expected::Expected::{self, *};
 use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumBound, SignDemand};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
+use roc_types::num::NumericBound;
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{AliasKind, Category};
@@ -19,14 +20,16 @@ pub fn add_numeric_bound_constr(
     region: Region,
     category: Category,
 ) -> Type {
-    let range = bound.bounded_range();
-
+    let range = bound.numeric_bound();
     let total_num_type = num_type;
 
-    match range.len() {
-        0 => total_num_type,
-        1 => {
-            let actual_type = Variable(range[0]);
+    match range {
+        NumericBound::None => {
+            // no additional constraints
+            total_num_type
+        }
+        NumericBound::FloatExact(width) => {
+            let actual_type = Variable(float_width_to_variable(width));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
             let because_suffix =
                 constraints.equal_types(total_num_type.clone(), expected, category, region);
@@ -35,7 +38,20 @@ pub fn add_numeric_bound_constr(
 
             total_num_type
         }
-        _ => RangedNumber(Box::new(total_num_type), range),
+        NumericBound::IntExact(width) => {
+            let actual_type = Variable(int_width_to_variable(width));
+            let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
+            let because_suffix =
+                constraints.equal_types(total_num_type.clone(), expected, category, region);
+
+            num_constraints.extend([because_suffix]);
+
+            total_num_type
+        }
+        NumericBound::IntAtLeastSigned(_)
+        | NumericBound::IntAtLeastEitherSign(_)
+        | NumericBound::NumAtLeastSigned(_)
+        | NumericBound::NumAtLeastEitherSign(_) => RangedNumber(Box::new(total_num_type), range),
     }
 }
 
@@ -265,6 +281,8 @@ pub fn num_num(typ: Type) -> Type {
 
 pub trait TypedNumericBound {
     fn bounded_range(&self) -> Vec<Variable>;
+
+    fn numeric_bound(&self) -> NumericBound;
 }
 
 const fn int_width_to_variable(w: IntWidth) -> Variable {
@@ -323,6 +341,29 @@ impl TypedNumericBound for IntBound {
             }
         }
     }
+
+    fn numeric_bound(&self) -> NumericBound {
+        match self {
+            IntBound::None => NumericBound::None,
+            IntBound::Exact(w) => NumericBound::IntExact(*w),
+            IntBound::AtLeast {
+                sign: SignDemand::NoDemand,
+                width,
+            } => NumericBound::IntAtLeastEitherSign(*width),
+            IntBound::AtLeast {
+                sign: SignDemand::Signed,
+                width,
+            } => NumericBound::IntAtLeastSigned(*width),
+        }
+    }
+}
+
+const fn float_width_to_variable(w: FloatWidth) -> Variable {
+    match w {
+        FloatWidth::Dec => Variable::DEC,
+        FloatWidth::F32 => Variable::F32,
+        FloatWidth::F64 => Variable::F64,
+    }
 }
 
 impl TypedNumericBound for FloatBound {
@@ -336,6 +377,13 @@ impl TypedNumericBound for FloatBound {
             }],
         }
     }
+
+    fn numeric_bound(&self) -> NumericBound {
+        match self {
+            FloatBound::None => NumericBound::None,
+            FloatBound::Exact(w) => NumericBound::FloatExact(*w),
+        }
+    }
 }
 
 impl TypedNumericBound for NumBound {
@@ -347,6 +395,20 @@ impl TypedNumericBound for NumBound {
                 range.extend_from_slice(&[Variable::F32, Variable::F64, Variable::DEC]);
                 range
             }
+        }
+    }
+
+    fn numeric_bound(&self) -> NumericBound {
+        match self {
+            NumBound::None => NumericBound::None,
+            &NumBound::AtLeastIntOrFloat {
+                sign: SignDemand::NoDemand,
+                width,
+            } => NumericBound::NumAtLeastEitherSign(width),
+            &NumBound::AtLeastIntOrFloat {
+                sign: SignDemand::Signed,
+                width,
+            } => NumericBound::NumAtLeastSigned(width),
         }
     }
 }
