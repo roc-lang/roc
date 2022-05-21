@@ -186,6 +186,19 @@ pub union {name} {{"#
             TargetInfo::from(&target_lexicon::Triple::host()),
         );
 
+        // An old design, which ended up not working out, was that the tag union
+        // was a struct containing two fields: one for the `union`, and another
+        // for the discriminant.
+        //
+        // The problem with this was alignment; e.g. if you have one variant with a
+        // RocStr in it and another with an I128, then the `union` has a size of 32B
+        // and the discriminant is right after it - making the size of the whole struct
+        // round up to 48B total, since it has an alignment of 16 from the I128.
+        //
+        // However, Roc will generate the more efficient thing here: the whole thing will
+        // be 32B, and the discriminant will appear at offset 24 - right after the end of
+        // the RocStr. The current design recognizes this and works with it, by representing
+        // the entire structure as a union and manually setting the tag at the appropriate offset.
         write!(
             buf,
             r#"
