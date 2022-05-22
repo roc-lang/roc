@@ -1,5 +1,5 @@
 use crate::{
-    collection::fmt_collection,
+    collection::{fmt_collection, Braces},
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
@@ -295,7 +295,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             Inferred => buf.push('_'),
 
             TagUnion { tags, ext } => {
-                fmt_collection(buf, indent, '[', ']', *tags, newlines);
+                fmt_collection(buf, indent, Braces::Square, *tags, newlines);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
@@ -303,7 +303,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             }
 
             Record { fields, ext } => {
-                fmt_collection(buf, indent, '{', '}', *fields, newlines);
+                fmt_collection(buf, indent, Braces::Curly, *fields, newlines);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
@@ -584,7 +584,7 @@ impl<'a> Formattable for Derived<'a> {
                 }
                 buf.push_str("has");
                 buf.spaces(1);
-                fmt_collection(buf, indent, '[', ']', *derived, newlines);
+                fmt_collection(buf, indent, Braces::Square, *derived, newlines);
             }
             Derived::SpaceBefore(derived, spaces) => {
                 buf.newline();

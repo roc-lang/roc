@@ -1,4 +1,4 @@
-interface Base64.Decode exposes [ fromBytes ] imports [ Bytes.Decode.{ Decoder, DecodeProblem } ]
+interface Base64.Decode exposes [fromBytes] imports [Bytes.Decode.{ Decoder, DecodeProblem }]
 
 fromBytes : List U8 -> Result Str DecodeProblem
 fromBytes = \bytes ->
@@ -88,11 +88,11 @@ bitsToCharsHelp = \bits, missing ->
 
     when missing is
         0 ->
-            [ p, q, r, s ]
+            [p, q, r, s]
         1 ->
-            [ p, q, r, equals ]
+            [p, q, r, equals]
         2 ->
-            [ p, q, equals, equals ]
+            [p, q, equals, equals]
         _ ->
             # unreachable
             []

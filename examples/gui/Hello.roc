@@ -1,7 +1,7 @@
 app "hello-gui"
     packages { pf: "platform" }
     imports []# [ pf.Action.{ Action }, pf.Elem.{ button, text, row, col } ]
-    provides [ render ] to pf
+    provides [render] to pf
 
 render =
     rgba = \r, g, b, a -> { r: r / 255, g: g / 255, b: b / 255, a }

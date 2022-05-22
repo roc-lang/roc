@@ -1,6 +1,6 @@
 interface Elem
-    exposes [ Elem, PressEvent, row, col, text, button, none, translate, list ]
-    imports [ Action.{ Action } ]
+    exposes [Elem, PressEvent, row, col, text, button, none, translate, list]
+    imports [Action.{ Action }]
 
 Elem state :
     # PERFORMANCE NOTE:
@@ -12,7 +12,7 @@ Elem state :
         Text Str,
         Col (List (Elem state)),
         Row (List (Elem state)),
-        Lazy (Result { state, elem : Elem state } [ NotCached ] -> { state, elem : Elem state }),
+        Lazy (Result { state, elem : Elem state } [NotCached] -> { state, elem : Elem state }),
         # TODO FIXME: using this definition of Lazy causes a stack overflow in the compiler!
         # Lazy (Result (Cached state) [ NotCached ] -> Cached state),
         None,
@@ -23,7 +23,7 @@ Cached state : { state, elem : Elem state }
 
 ButtonConfig state : { onPress : state, PressEvent -> Action state }
 
-PressEvent : { button : [ Touch, Mouse [ Left, Right, Middle ] ] }
+PressEvent : { button : [Touch, Mouse [Left, Right, Middle]] }
 
 text : Str -> Elem *
 text = \str ->

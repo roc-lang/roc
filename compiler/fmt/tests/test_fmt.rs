@@ -1528,7 +1528,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
                     func = \_ ->
-                        [ 1, 2, 3 ]
+                        [1, 2, 3]
 
                     func
                 "#
@@ -1603,7 +1603,7 @@ mod test_fmt {
                 r#"
                     result = func
                         arg
-                        [ 1, 2, 3 ]
+                        [1, 2, 3]
 
                     result
                 "#
@@ -2192,7 +2192,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
                 x :
-                    [ Int ]
+                    [Int]
 
                 x
             "#
@@ -2455,13 +2455,14 @@ mod test_fmt {
 
     #[test]
     fn one_item_list() {
-        expr_formats_same(indoc!("[ 4 ] "));
+        expr_formats_same(indoc!("[4]"));
+        expr_formats_to(indoc!("[ 4 ]"), indoc!("[4]"));
     }
 
     #[test]
     fn two_item_list() {
-        expr_formats_same(indoc!("[ 7, 8 ] "));
-        expr_formats_to(indoc!("[   7  ,   8  ] "), indoc!("[ 7, 8 ] "));
+        expr_formats_same(indoc!("[7, 8]"));
+        expr_formats_to(indoc!("[   7  ,   8  ]"), indoc!("[7, 8]"));
     }
 
     #[test]
@@ -2688,7 +2689,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
                 l =
-                    [ 1, 2 ]
+                    [1, 2]
 
                 l
             "#
@@ -4167,7 +4168,7 @@ mod test_fmt {
     fn func_call_trailing_multiline_lambda() {
         expr_formats_same(indoc!(
             r#"
-                list = List.map [ 1, 2, 3 ] \x ->
+                list = List.map [1, 2, 3] \x ->
                     x + 1
 
                 list
@@ -4218,7 +4219,7 @@ mod test_fmt {
         module_formats_same(indoc!(
             r#"
                 interface Foo
-                    exposes [ Bar, Baz, a, b ]
+                    exposes [Bar, Baz, a, b]
                     imports []"#
         ));
     }
@@ -4228,8 +4229,8 @@ mod test_fmt {
         module_formats_same(indoc!(
             r#"
                 interface Foo
-                    exposes [ Bar, Baz, a, b ]
-                    imports [ Blah, Thing.{ foo, bar }, Stuff ]"#
+                    exposes [Bar, Baz, a, b]
+                    imports [Blah, Thing.{ foo, bar }, Stuff]"#
         ));
     }
 
@@ -4256,7 +4257,7 @@ mod test_fmt {
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
-                app "Foo" packages { pf: "platform" } imports [] provides [ main ] to pf"#
+                app "Foo" packages { pf: "platform" } imports [] provides [main] to pf"#
         ));
     }
 
@@ -4267,8 +4268,8 @@ mod test_fmt {
             requires { Model, Msg } { main : Effect {} } \
             exposes [] \
             packages {} \
-            imports [ Task.{ Task } ] \
-            provides [ mainForHost ]",
+            imports [Task.{ Task }] \
+            provides [mainForHost]",
         );
     }
 
@@ -4296,7 +4297,7 @@ mod test_fmt {
                         exposes []
                         packages {}
                         imports []
-                        provides [ mainForHost ]
+                        provides [mainForHost]
 
                     mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
                     mainForHost = main
@@ -4344,7 +4345,7 @@ mod test_fmt {
     fn list_alias() {
         expr_formats_same(indoc!(
             r#"
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             f : ConsList a -> ConsList a
             f = \_ -> Nil
@@ -4394,7 +4395,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             b :
-                [ True, False ]
+                [True, False]
 
             b
             "#
@@ -4500,7 +4501,7 @@ mod test_fmt {
     fn tag_union() {
         expr_formats_same(indoc!(
             r#"
-            f : [ True, False ] -> [ True, False ]
+            f : [True, False] -> [True, False]
             f = \x -> x
 
             a
@@ -4534,7 +4535,7 @@ mod test_fmt {
     fn recursive_tag_union() {
         expr_formats_same(indoc!(
             r#"
-            f : [ Cons a (ConsList a), Nil ] as ConsList a -> [ Just a, Nothing ]
+            f : [Cons a (ConsList a), Nil] as ConsList a -> [Just a, Nothing]
             f = \list ->
                 when list is
                     Nil ->
@@ -4763,7 +4764,7 @@ mod test_fmt {
     fn opaque_has_clause() {
         expr_formats_same(indoc!(
             r#"
-            A := U8 has [ Eq, Hash ]
+            A := U8 has [Eq, Hash]
 
             0
             "#
@@ -4773,7 +4774,7 @@ mod test_fmt {
             r#"
             A :=
                 U8
-                has [ Eq, Hash ]
+                has [Eq, Hash]
 
             0
             "#
@@ -4791,7 +4792,7 @@ mod test_fmt {
                 r#"
                 A :=
                     a | a has Hash
-                    has [ Eq, Hash ]
+                    has [Eq, Hash]
 
                 0
                 "#

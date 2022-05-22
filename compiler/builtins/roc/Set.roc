@@ -14,7 +14,7 @@ interface Set
             intersection,
             difference,
         ]
-    imports [ List, Bool.{ Bool }, Dict.{ values } ]
+    imports [List, Bool.{ Bool }, Dict.{ values }]
 
 ## An empty set.
 empty : Set k

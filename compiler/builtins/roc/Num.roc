@@ -510,10 +510,10 @@ Dec : Num (FloatingPoint Decimal)
 toStr : Num * -> Str
 intCast : Int a -> Int b
 
-bytesToU16 : List U8, Nat -> Result U16 [ OutOfBounds ]
-bytesToU32 : List U8, Nat -> Result U32 [ OutOfBounds ]
+bytesToU16 : List U8, Nat -> Result U16 [OutOfBounds]
+bytesToU32 : List U8, Nat -> Result U32 [OutOfBounds]
 
-compare : Num a, Num a -> [ LT, EQ, GT ]
+compare : Num a, Num a -> [LT, EQ, GT]
 
 ## Returns `True` if the first number is less than the second.
 ##
@@ -714,9 +714,9 @@ atan : Frac a -> Frac a
 ##
 ## >>> Num.sqrt -4.0f64
 sqrt : Frac a -> Frac a
-sqrtChecked : Frac a -> Result (Frac a) [ SqrtOfNegative ]*
+sqrtChecked : Frac a -> Result (Frac a) [SqrtOfNegative]*
 log : Frac a -> Frac a
-logChecked : Frac a -> Result (Frac a) [ LogNeedsPositive ]*
+logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]*
 
 ## Divide one [Frac] by another.
 ##
@@ -749,9 +749,9 @@ logChecked : Frac a -> Result (Frac a) [ LogNeedsPositive ]*
 ## >>> Num.pi
 ## >>>     |> Num.div 2.0
 div : Frac a, Frac a -> Frac a
-divChecked : Frac a, Frac a -> Result (Frac a) [ DivByZero ]*
+divChecked : Frac a, Frac a -> Result (Frac a) [DivByZero]*
 divCeil : Int a, Int a -> Int a
-divCeilChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+divCeilChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 
 ## Divide two integers, truncating the result towards zero.
 ##
@@ -770,7 +770,7 @@ divCeilChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
 ## >>> Num.divTrunc 8 -3
 ##
 divTrunc : Int a, Int a -> Int a
-divTruncChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 
 ## Obtain the remainder (truncating modulo) from the division of two integers.
 ##
@@ -784,7 +784,7 @@ divTruncChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
 ##
 ## >>> Num.rem -8 -3
 rem : Int a, Int a -> Int a
-remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+remChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 
 isMultipleOf : Int a, Int a -> Bool
 
@@ -842,7 +842,7 @@ addSaturated : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.add] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+addChecked : Num a, Num a -> Result (Num a) [Overflow]*
 
 subWrap : Int range, Int range -> Int range
 
@@ -859,7 +859,7 @@ subSaturated : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.sub] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+subChecked : Num a, Num a -> Result (Num a) [Overflow]*
 
 mulWrap : Int range, Int range -> Int range
 # mulSaturated : Num a, Num a -> Num a
@@ -867,7 +867,7 @@ mulWrap : Int range, Int range -> Int range
 ##
 ## This is the same as [Num.mul] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+mulChecked : Num a, Num a -> Result (Num a) [Overflow]*
 
 ## The lowest number that can be stored in an [I8] without underflowing its
 ## available memory and crashing.
@@ -1114,19 +1114,19 @@ toF64 : Num * -> F64
 ## Converts a [Int] to an [I8].
 ## If the given integer can't be precisely represented in an [I8], returns
 ## `Err OutOfBounds`.
-toI8Checked : Int * -> Result I8 [ OutOfBounds ]*
-toI16Checked : Int * -> Result I16 [ OutOfBounds ]*
-toI32Checked : Int * -> Result I32 [ OutOfBounds ]*
-toI64Checked : Int * -> Result I64 [ OutOfBounds ]*
-toI128Checked : Int * -> Result I128 [ OutOfBounds ]*
-toU8Checked : Int * -> Result U8 [ OutOfBounds ]*
-toU16Checked : Int * -> Result U16 [ OutOfBounds ]*
-toU32Checked : Int * -> Result U32 [ OutOfBounds ]*
-toU64Checked : Int * -> Result U64 [ OutOfBounds ]*
-toU128Checked : Int * -> Result U128 [ OutOfBounds ]*
-toNatChecked : Int * -> Result Nat [ OutOfBounds ]*
-toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
-toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
+toI8Checked : Int * -> Result I8 [OutOfBounds]*
+toI16Checked : Int * -> Result I16 [OutOfBounds]*
+toI32Checked : Int * -> Result I32 [OutOfBounds]*
+toI64Checked : Int * -> Result I64 [OutOfBounds]*
+toI128Checked : Int * -> Result I128 [OutOfBounds]*
+toU8Checked : Int * -> Result U8 [OutOfBounds]*
+toU16Checked : Int * -> Result U16 [OutOfBounds]*
+toU32Checked : Int * -> Result U32 [OutOfBounds]*
+toU64Checked : Int * -> Result U64 [OutOfBounds]*
+toU128Checked : Int * -> Result U128 [OutOfBounds]*
+toNatChecked : Int * -> Result Nat [OutOfBounds]*
+toF32Checked : Num * -> Result F32 [OutOfBounds]*
+toF64Checked : Num * -> Result F64 [OutOfBounds]*
 
 # Special Floating-Point operations
 ## When given a [F64] or [F32] value, returns `False` if that value is

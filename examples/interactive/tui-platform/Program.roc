@@ -1,5 +1,5 @@
 interface Program
-    exposes [ Program ]
+    exposes [Program]
     imports []
 
 Program model :

@@ -1,8 +1,8 @@
-interface Bytes.Encode exposes [ Encoder, sequence, u8, u16, bytes, empty, encode ] imports []
+interface Bytes.Encode exposes [Encoder, sequence, u8, u16, bytes, empty, encode] imports []
 
-Endianness : [ BE, LE ]
+Endianness : [BE, LE]
 
-Encoder : [ Signed8 I8, Unsigned8 U8, Signed16 Endianness I16, Unsigned16 Endianness U16, Sequence Nat (List Encoder), Bytes (List U8) ]
+Encoder : [Signed8 I8, Unsigned8 U8, Signed16 Endianness I16, Unsigned16 Endianness U16, Sequence Nat (List Encoder), Bytes (List U8)]
 
 u8 : U8 -> Encoder
 u8 = \value -> Unsigned8 value
