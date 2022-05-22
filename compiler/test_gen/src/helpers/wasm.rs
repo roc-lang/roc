@@ -65,7 +65,7 @@ fn src_hash(src: &str) -> u64 {
 
 fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
-    preload_bytes: &[u8],
+    host_bytes: &[u8],
     src: &str,
     _test_wrapper_type_info: PhantomData<T>,
 ) -> Vec<u8> {
@@ -119,9 +119,10 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         exposed_to_host,
     };
 
+    let host_module = roc_gen_wasm::parse_host(env.arena, host_bytes).unwrap();
+
     let (mut module, called_preload_fns, main_fn_index) =
-        roc_gen_wasm::build_module_unserialized(&env, &mut interns, preload_bytes, procedures)
-            .unwrap();
+        roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
     T::insert_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
 

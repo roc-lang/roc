@@ -24,6 +24,7 @@ use self::serialize::{SerialBuffer, Serialize};
 /// https://webassembly.github.io/spec/core/binary/modules.html
 #[derive(Debug)]
 pub struct WasmModule<'a> {
+    pub data_end: u32,
     pub types: TypeSection<'a>,
     pub import: ImportSection<'a>,
     pub function: FunctionSection<'a>,
@@ -173,7 +174,8 @@ impl<'a> WasmModule<'a> {
         let linking = LinkingSection::new(arena);
         let relocations = RelocationSection::new(arena, "reloc.CODE");
 
-        Ok(WasmModule {
+        let mut module = WasmModule {
+            data_end: 0,
             types,
             import,
             function,
@@ -188,7 +190,15 @@ impl<'a> WasmModule<'a> {
             names,
             linking,
             relocations,
-        })
+        };
+
+        if let Some(data_end) = module.get_exported_global_u32("__data_end") {
+            module.data_end = data_end;
+            Ok(module)
+        } else {
+            let message = "The Wasm module must export the __data_end global so that I know where its constant data ends (including zero data)".into();
+            Err(ParseError { offset: 0, message })
+        }
     }
 
     pub fn remove_dead_preloads<T: IntoIterator<Item = u32>>(
@@ -210,6 +220,14 @@ impl<'a> WasmModule<'a> {
             &function_indices,
             called_preload_fns,
         )
+    }
+
+    pub fn get_exported_global_u32(&self, name: &str) -> Option<u32> {
+        self.export
+            .exports
+            .iter()
+            .find(|ex| ex.name == name)
+            .and_then(|ex| self.global.parse_u32_at_index(ex.index).ok())
     }
 }
 

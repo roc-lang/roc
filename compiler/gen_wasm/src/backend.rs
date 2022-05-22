@@ -50,7 +50,6 @@ pub struct WasmBackend<'a> {
     // Module-level data
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
-    next_constant_addr: u32,
     pub fn_index_offset: u32,
     called_preload_fns: Vec<'a, u32>,
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
@@ -87,23 +86,6 @@ impl<'a> WasmBackend<'a> {
             }
         }
 
-        // The preloaded binary has a global to tell us where its data section ends
-        // Note: We need this to account for zero data (.bss), which doesn't have an explicit DataSegment!
-        let data_end_idx = app_exports
-            .iter()
-            .find(|ex| ex.name == "__data_end")
-            .map(|ex| ex.index)
-            .unwrap_or_else(|| {
-                internal_error!("Preloaded Wasm binary must export global constant `__data_end`")
-            });
-        // TODO: move this to module parsing
-        let next_constant_addr = module
-            .global
-            .parse_u32_at_index(data_end_idx)
-            .unwrap_or_else(|e| {
-                internal_error!("Failed to parse __data_end from object file: {:?}", e);
-            });
-
         module.export.exports = app_exports;
 
         WasmBackend {
@@ -114,7 +96,6 @@ impl<'a> WasmBackend<'a> {
             module,
 
             layout_ids,
-            next_constant_addr,
             fn_index_offset,
             called_preload_fns: Vec::with_capacity_in(2, env.arena),
             proc_lookup,
@@ -930,10 +911,10 @@ impl<'a> WasmBackend<'a> {
     /// Return the data we need for code gen: linker symbol index and memory address
     fn store_bytes_in_data_section(&mut self, bytes: &[u8], sym: Symbol) -> (u32, u32) {
         // Place the segment at a 4-byte aligned offset
-        let segment_addr = round_up_to_alignment!(self.next_constant_addr, PTR_SIZE);
+        let segment_addr = round_up_to_alignment!(self.module.data_end, PTR_SIZE);
         let elements_addr = segment_addr + PTR_SIZE;
         let length_with_refcount = 4 + bytes.len();
-        self.next_constant_addr = segment_addr + length_with_refcount as u32;
+        self.module.data_end = segment_addr + length_with_refcount as u32;
 
         let mut segment = DataSegment {
             mode: DataMode::active_at(segment_addr),

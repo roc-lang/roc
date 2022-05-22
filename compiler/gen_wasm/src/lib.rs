@@ -49,38 +49,43 @@ pub struct Env<'a> {
     pub exposed_to_host: MutSet<Symbol>,
 }
 
+/// Parse the preprocessed host binary
+/// If successful, the module can be passed to build_app_binary
+pub fn parse_host<'a>(arena: &'a Bump, host_bytes: &[u8]) -> Result<WasmModule<'a>, ParseError> {
+    WasmModule::preload(arena, &host_bytes)
+}
+
 /// Generate a Wasm module in binary form, ready to write to a file. Entry point from roc_build.
 ///   env            environment data from previous compiler stages
 ///   interns        names of functions and variables (as memory-efficient interned strings)
-///   preload_bytes  preloaded bytes from a Wasm object file containing all non-Roc code
+///   host_module    parsed module from a Wasm object file containing all of the non-Roc code
 ///   procedures     Roc code in monomorphized intermediate representation
-pub fn build_module<'a>(
+pub fn build_app_binary<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    preload_bytes: &[u8],
+    host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<std::vec::Vec<u8>, std::string::String> {
+) -> std::vec::Vec<u8> {
     let (mut wasm_module, called_preload_fns, _) =
-        build_module_unserialized(env, interns, preload_bytes, procedures)
-            .map_err(|e| format!("{:?}", e))?;
+        build_app_module(env, interns, host_module, procedures);
 
     wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
 
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
-    Ok(buffer)
+    buffer
 }
 
 /// Generate an unserialized Wasm module
 /// Shared by all consumers of gen_wasm: roc_build, roc_repl_wasm, and test_gen
 /// (roc_repl_wasm and test_gen will add more generated code for a wrapper function
 /// that defines a common interface to `main`, independent of return type.)
-pub fn build_module_unserialized<'a>(
+pub fn build_app_module<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    preload_bytes: &[u8],
+    host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<(WasmModule<'a>, Vec<'a, u32>, u32), ParseError> {
+) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
@@ -129,19 +134,15 @@ pub fn build_module_unserialized<'a>(
         fn_index += 1;
     }
 
-    // Pre-load the WasmModule with data from the platform & builtins object file
-    let initial_module = WasmModule::preload(env.arena, preload_bytes)?;
-
     // Adjust Wasm function indices to account for functions from the object file
-    let fn_index_offset: u32 =
-        initial_module.import.function_count + initial_module.code.preloaded_count;
+    let fn_index_offset: u32 = host_module.import.function_count + host_module.code.preloaded_count;
 
     let mut backend = WasmBackend::new(
         env,
         interns,
         layout_ids,
         proc_lookup,
-        initial_module,
+        host_module,
         fn_index_offset,
         CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
     );
@@ -193,7 +194,7 @@ pub fn build_module_unserialized<'a>(
     let (module, called_preload_fns) = backend.finalize();
     let main_function_index = maybe_main_fn_index.unwrap() + fn_index_offset;
 
-    Ok((module, called_preload_fns, main_function_index))
+    (module, called_preload_fns, main_function_index)
 }
 
 pub struct CopyMemoryConfig {
