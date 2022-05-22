@@ -5,6 +5,7 @@ use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, RecordDestruct};
 use roc_collections::all::{HumanIndex, SendMap};
+use roc_collections::VecMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -16,7 +17,7 @@ use roc_types::types::{
 
 #[derive(Default)]
 pub struct PatternState {
-    pub headers: SendMap<Symbol, Loc<Type>>,
+    pub headers: VecMap<Symbol, Loc<Type>>,
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
     pub delayed_is_open_constraints: Vec<Constraint>,
@@ -32,8 +33,8 @@ pub struct PatternState {
 pub fn headers_from_annotation(
     pattern: &Pattern,
     annotation: &Loc<&Type>,
-) -> Option<SendMap<Symbol, Loc<Type>>> {
-    let mut headers = SendMap::default();
+) -> Option<VecMap<Symbol, Loc<Type>>> {
+    let mut headers = VecMap::default();
     // Check that the annotation structurally agrees with the pattern, preventing e.g. `{ x, y } : Int`
     // in such incorrect cases we don't put the full annotation in headers, just a variable, and let
     // inference generate a proper error.
@@ -49,7 +50,7 @@ pub fn headers_from_annotation(
 fn headers_from_annotation_help(
     pattern: &Pattern,
     annotation: &Loc<&Type>,
-    headers: &mut SendMap<Symbol, Loc<Type>>,
+    headers: &mut VecMap<Symbol, Loc<Type>>,
 ) -> bool {
     match pattern {
         Identifier(symbol)

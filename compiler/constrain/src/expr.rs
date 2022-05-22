@@ -19,6 +19,7 @@ use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
 use roc_collections::soa::Index;
+use roc_collections::VecMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -743,14 +744,20 @@ pub fn constrain_expr(
                     );
 
                 pattern_vars.extend(new_pattern_vars);
-                debug_assert!(
-                    pattern_headers
-                        .clone()
-                        .intersection(new_pattern_headers.clone())
-                        .is_empty(),
-                    "Two patterns introduce the same symbols - that's a bug!\n{:?}",
-                    pattern_headers.clone().intersection(new_pattern_headers)
-                );
+
+                if cfg!(debug_assertions) {
+                    let intersection: Vec<_> = pattern_headers
+                        .keys()
+                        .filter(|k| new_pattern_headers.contains_key(k))
+                        .collect();
+
+                    debug_assert!(
+                        intersection.is_empty(),
+                        "Two patterns introduce the same symbols - that's a bug!\n{:?}",
+                        intersection
+                    );
+                }
+
                 pattern_headers.extend(new_pattern_headers);
                 pattern_cons.push(pattern_con);
 
@@ -1239,7 +1246,7 @@ fn constrain_function_def(
 
             let loc_body_expr = loc_expr;
             let mut argument_pattern_state = PatternState {
-                headers: SendMap::default(),
+                headers: VecMap::default(),
                 vars: Vec::with_capacity(function_def.arguments.len()),
                 constraints: Vec::with_capacity(1),
                 delayed_is_open_constraints: vec![],
@@ -1626,7 +1633,7 @@ fn constrain_when_branch_help(
     expr_expected: Expected<Type>,
 ) -> (
     Vec<Variable>,
-    SendMap<Symbol, Loc<Type>>,
+    VecMap<Symbol, Loc<Type>>,
     Constraint,
     Constraint,
 ) {
@@ -1639,7 +1646,7 @@ fn constrain_when_branch_help(
     );
 
     let mut state = PatternState {
-        headers: SendMap::default(),
+        headers: VecMap::default(),
         vars: Vec::with_capacity(2),
         constraints: Vec::with_capacity(2),
         delayed_is_open_constraints: Vec::new(),
@@ -1821,7 +1828,7 @@ pub(crate) fn constrain_def_pattern(
     let pattern_expected = PExpected::NoExpectation(expr_type);
 
     let mut state = PatternState {
-        headers: SendMap::default(),
+        headers: VecMap::default(),
         vars: Vec::with_capacity(1),
         constraints: Vec::with_capacity(1),
         delayed_is_open_constraints: vec![],
@@ -1920,7 +1927,7 @@ fn constrain_typed_def(
 
             let loc_body_expr = &**loc_body;
             let mut argument_pattern_state = PatternState {
-                headers: SendMap::default(),
+                headers: VecMap::default(),
                 vars: Vec::with_capacity(arguments.len()),
                 constraints: Vec::with_capacity(1),
                 delayed_is_open_constraints: vec![],
@@ -2487,7 +2494,7 @@ fn instantiate_rigids(
     introduced_vars: &IntroducedVariables,
     loc_pattern: &Loc<Pattern>,
     ftv: &mut MutMap<Lowercase, Variable>, // rigids defined before the current annotation
-    headers: &mut SendMap<Symbol, Loc<Type>>,
+    headers: &mut VecMap<Symbol, Loc<Type>>,
 ) -> InstantiateRigids {
     let mut annotation = annotation.clone();
     let mut new_rigid_variables: Vec<Variable> = Vec::new();
@@ -2700,7 +2707,7 @@ fn constraint_recursive_function(
 
             let loc_body_expr = loc_expr;
             let mut argument_pattern_state = PatternState {
-                headers: SendMap::default(),
+                headers: VecMap::default(),
                 vars: Vec::with_capacity(function_def.arguments.len()),
                 constraints: Vec::with_capacity(1),
                 delayed_is_open_constraints: vec![],
@@ -3103,7 +3110,7 @@ pub fn rec_defs_help(
 
                         let loc_body_expr = &**loc_body;
                         let mut state = PatternState {
-                            headers: SendMap::default(),
+                            headers: VecMap::default(),
                             vars: Vec::with_capacity(arguments.len()),
                             constraints: Vec::with_capacity(1),
                             delayed_is_open_constraints: vec![],
