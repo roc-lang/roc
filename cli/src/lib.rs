@@ -511,11 +511,12 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
-            let path = roc_run_executable_file_path(cwd, binary_bytes)?;
+            let executable = roc_run_executable_file_path(cwd, binary_bytes)?;
+            let path = executable.as_path();
             // If possible, report the generated executable name relative to the current dir.
             let generated_filename = path
                 .strip_prefix(env::current_dir().unwrap())
-                .unwrap_or(&path);
+                .unwrap_or(path);
 
             // No need to waste time freeing this memory,
             // since the process is about to exit anyway.
@@ -561,7 +562,8 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     use std::os::unix::ffi::OsStrExt;
 
     unsafe {
-        let path = roc_run_executable_file_path(cwd, binary_bytes)?;
+        let executable = roc_run_executable_file_path(cwd, binary_bytes)?;
+        let path = executable.as_path();
         let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
 
         // argv is an array of pointers to strings passed to the new program
@@ -589,22 +591,50 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         // program.  The envp array must be terminated by a NULL pointer.
         let envp = &[std::ptr::null()];
 
-        let execve_result =
-            libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr());
-
-        if execve_result != 0 {
-            internal_error!(
-                "libc::execve({:?}, ..., ...) failed: {:?}",
-                path,
-                errno::errno()
-            );
+        match executable {
+            ExecutableFile::MemFd(fd, _) => {
+                if libc::fexecve(fd, argv.as_ptr(), envp.as_ptr()) != 0 {
+                    internal_error!(
+                        "libc::fexecve({:?}, ..., ...) failed: {:?}",
+                        path,
+                        errno::errno()
+                    );
+                }
+            }
+            ExecutableFile::OnDisk(_) => {
+                if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
+                    internal_error!(
+                        "libc::execve({:?}, ..., ...) failed: {:?}",
+                        path,
+                        errno::errno()
+                    );
+                }
+            }
         }
     }
 
     Ok(1)
 }
 
-fn roc_run_executable_file_path(cwd: &Path, binary_bytes: &mut [u8]) -> std::io::Result<PathBuf> {
+#[derive(Debug, Clone)]
+enum ExecutableFile {
+    MemFd(libc::c_int, PathBuf),
+    OnDisk(PathBuf),
+}
+
+impl ExecutableFile {
+    fn as_path(&self) -> &Path {
+        match self {
+            ExecutableFile::MemFd(_, path_buf) => path_buf.as_ref(),
+            ExecutableFile::OnDisk(path_buf) => path_buf.as_ref(),
+        }
+    }
+}
+
+fn roc_run_executable_file_path(
+    cwd: &Path,
+    binary_bytes: &mut [u8],
+) -> std::io::Result<ExecutableFile> {
     if cfg!(target_os = "linux") {
         // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
         let flags = 0;
@@ -623,7 +653,7 @@ fn roc_run_executable_file_path(cwd: &Path, binary_bytes: &mut [u8]) -> std::io:
 
         std::fs::write(&path, binary_bytes)?;
 
-        Ok(path)
+        Ok(ExecutableFile::MemFd(fd, path))
     } else {
         // we have not found a way yet to use a virtual file on MacOs. Hence we fall back to just
         // writing the file to the file system, and using that file.
@@ -631,7 +661,7 @@ fn roc_run_executable_file_path(cwd: &Path, binary_bytes: &mut [u8]) -> std::io:
 
         std::fs::write(&app_path_buf, binary_bytes)?;
 
-        Ok(app_path_buf)
+        Ok(ExecutableFile::OnDisk(app_path_buf))
     }
 }
 
