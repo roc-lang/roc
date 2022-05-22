@@ -17,6 +17,7 @@ use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 use roc_target::TargetInfo;
+use wasm_module::parse::ParseError;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::wasm_module::{
@@ -59,7 +60,8 @@ pub fn build_module<'a>(
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<std::vec::Vec<u8>, String> {
     let (mut wasm_module, called_preload_fns, _) =
-        build_module_unserialized(env, interns, preload_bytes, procedures)?;
+        build_module_unserialized(env, interns, preload_bytes, procedures)
+            .map_err(|e| format!("{:?}", e))?;
 
     wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
 
@@ -77,7 +79,7 @@ pub fn build_module_unserialized<'a>(
     interns: &'a mut Interns,
     preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<(WasmModule<'a>, Vec<'a, u32>, u32), String> {
+) -> Result<(WasmModule<'a>, Vec<'a, u32>, u32), ParseError> {
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);

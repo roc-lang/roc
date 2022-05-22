@@ -11,7 +11,7 @@ use super::dead_code::{
 };
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
-use super::parse::{Parse, SkipBytes};
+use super::parse::{Parse, ParseError, SkipBytes};
 use super::serialize::{SerialBuffer, Serialize, MAX_SIZE_ENCODED_U32};
 use super::{CodeBuilder, ValueType};
 
@@ -351,7 +351,7 @@ impl<'a> ImportSection<'a> {
         self.count += 1;
     }
 
-    pub fn parse(&mut self, arena: &'a Bump) -> Result<Vec<'a, u32>, String> {
+    pub fn parse(&mut self, arena: &'a Bump) -> Result<Vec<'a, u32>, ParseError> {
         let mut fn_signatures = bumpalo::vec![in arena];
         let mut cursor = 0;
         while cursor < self.bytes.len() {
@@ -459,7 +459,7 @@ impl Serialize for TableType {
 }
 
 impl SkipBytes for TableType {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), String> {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), ParseError> {
         u8::skip_bytes(bytes, cursor)?;
         Limits::skip_bytes(bytes, cursor)?;
         Ok(())
@@ -563,7 +563,7 @@ impl Serialize for Limits {
 }
 
 impl SkipBytes for Limits {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), String> {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), ParseError> {
         let variant_id = bytes[*cursor];
         u8::skip_bytes(bytes, cursor)?; // advance past the variant byte
         u32::skip_bytes(bytes, cursor)?; // skip "min"
@@ -638,7 +638,7 @@ impl Serialize for GlobalType {
 }
 
 impl SkipBytes for GlobalType {
-    fn skip_bytes(_bytes: &[u8], cursor: &mut usize) -> Result<(), String> {
+    fn skip_bytes(_bytes: &[u8], cursor: &mut usize) -> Result<(), ParseError> {
         *cursor += 2;
         Ok(())
     }
@@ -655,15 +655,18 @@ pub enum ConstExpr {
 }
 
 impl ConstExpr {
-    fn parse_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, String> {
-        let err = Err("Invalid ConstExpr. Expected i32.".into());
+    fn parse_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, ParseError> {
+        let err = Err(ParseError {
+            offset: *cursor,
+            message: "Invalid ConstExpr. Expected i32.".into(),
+        });
 
         if bytes[*cursor] != OpCode::I32CONST as u8 {
             return err;
         }
         *cursor += 1;
 
-        let value = u32::parse((), bytes, cursor).unwrap();
+        let value = u32::parse((), bytes, cursor)?;
 
         if bytes[*cursor] != OpCode::END as u8 {
             return err;
@@ -706,7 +709,7 @@ impl Serialize for ConstExpr {
 }
 
 impl SkipBytes for ConstExpr {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), String> {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), ParseError> {
         while bytes[*cursor] != OpCode::END as u8 {
             OpCode::skip_bytes(bytes, cursor)?;
         }
@@ -737,7 +740,7 @@ pub struct GlobalSection<'a> {
 }
 
 impl<'a> GlobalSection<'a> {
-    pub fn parse_u32_at_index(&self, index: u32) -> Result<u32, String> {
+    pub fn parse_u32_at_index(&self, index: u32) -> Result<u32, ParseError> {
         let mut cursor = 0;
         for _ in 0..index {
             GlobalType::skip_bytes(&self.bytes, &mut cursor)?;

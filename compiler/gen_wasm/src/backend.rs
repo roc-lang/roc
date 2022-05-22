@@ -100,7 +100,7 @@ impl<'a> WasmBackend<'a> {
             });
         // TODO: move this to module parsing
         let next_constant_addr = module.global.parse_u32_at_index(data_end_idx).unwrap_or_else(|e| {
-            internal_error!("Failed to parse __data_end from object file: {}", e);
+            internal_error!("Failed to parse __data_end from object file: {:?}", e);
         });
 
         module.export.exports = app_exports;

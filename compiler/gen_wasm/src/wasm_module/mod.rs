@@ -2,9 +2,9 @@ pub mod code_builder;
 mod dead_code;
 pub mod linking;
 pub mod opcodes;
+pub mod parse;
 pub mod sections;
 pub mod serialize;
-pub mod parse;
 
 use bumpalo::{collections::Vec, Bump};
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
@@ -12,6 +12,7 @@ pub use linking::SymInfo;
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
 use self::linking::{LinkingSection, RelocationSection};
+use self::parse::ParseError;
 use self::sections::{
     CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
     ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId, TableSection,
@@ -121,11 +122,15 @@ impl<'a> WasmModule<'a> {
             + self.names.size()
     }
 
-    pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Result<Self, String> {
+    pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Result<Self, ParseError> {
         let is_valid_magic_number = &bytes[0..4] == "\0asm".as_bytes();
         let is_valid_version = bytes[4..8] == Self::WASM_VERSION.to_le_bytes();
         if !is_valid_magic_number || !is_valid_version {
-            return Err("This file is not a WebAssembly binary. The file header is not valid.".into());
+            return Err(ParseError {
+                offset: 0,
+                message: "This file is not a WebAssembly binary. The file header is not valid."
+                    .into(),
+            });
         }
 
         let mut cursor: usize = 8;

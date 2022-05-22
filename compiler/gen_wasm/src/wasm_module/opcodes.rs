@@ -1,4 +1,4 @@
-use super::parse::{Parse, SkipBytes};
+use super::parse::{Parse, ParseError, SkipBytes};
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,13 +259,17 @@ fn immediates_for(op: OpCode) -> Result<OpImmediates, String> {
 }
 
 impl SkipBytes for OpCode {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), String> {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), ParseError> {
         use OpImmediates::*;
 
         let opcode_byte: u8 = bytes[*cursor];
 
         let opcode: OpCode = unsafe { std::mem::transmute(opcode_byte) };
-        let immediates = immediates_for(opcode)?; // will return Err if transmute was invalid
+        // will return Err if transmute was invalid
+        let immediates = immediates_for(opcode).map_err(|message| ParseError {
+            message,
+            offset: *cursor,
+        })?;
 
         match immediates {
             NoImmediate => {
