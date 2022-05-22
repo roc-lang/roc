@@ -70,32 +70,45 @@ the `let` and `in` keywords. That's how it works in Roc.
 For example, this Elm code computes `someNumber` to be `1234`:
 
 ```elm
-someNumber =
+numbers =
     let
-        foo =
-            1000
+        num1 =
+            123
 
-        blah =
-            234
+        num2 =
+            456
     in
-    foo + blah
+    [num1, num2]
 ```
 
 Here's the equivalent Roc code:
 
 ```elm
-someNumber =
-    foo =
-        1000
+numbers =
+    num1 =
+        123
 
-    blah =
-        234
+    num2 =
+        456
 
-    foo + blah
+    [num1, num2]
 ```
 
 Like `let`...`in` in Elm, this is indentation-sensitive. Each of the definitions
 ("defs" for short) must have the same indentation as the ending expression.
+
+Roc has a built-in formatter that has a lot in common with `elm-format` (e.g. no configuration,
+no enforced line length) but also some stylistic differences. One notable difference is that
+it doesn't use as much spacing. For example, if you ran `roc format` on the following Roc
+code, the formatter would not change it:
+
+```elm
+numbers =
+    num1 = 123
+    num2 = 456
+
+    [num1, num2]
+```
 
 ## Function definitions
 
@@ -513,25 +526,25 @@ Here are some examples of using tags in a REPL:
 
 ```
 > True
-True : [ True ]*
+True : [True]*
 
 > False
-False : [ False ]*
+False : [False]*
 
 > Ok "hi"
-Ok "hi" : [ Ok Str ]*
+Ok "hi" : [Ok Str]*
 
 > SomethingIJustMadeUp "hi" "there"
-SomethingIJustMadeUp "hi" "there" : [ SomethingIJustMadeUp Str Str ]*
+SomethingIJustMadeUp "hi" "there" : [SomethingIJustMadeUp Str Str]*
 
 > x = Foo
-Foo : [ Foo ]*
+Foo : [Foo]*
 
 > y = Foo "hi" Bar
-Foo "hi" 5 : [ Foo Str [ Bar ]* ]*
+Foo "hi" 5 : [Foo Str [Bar]*]*
 
-> z = Foo [ "str1", "str2" ]
-Foo [ "str1", "str2" ] : [ Foo (List Str) ]*
+> z = Foo ["str1", "str2"]
+Foo ["str1", "str2"] : [Foo (List Str)]*
 ```
 
 The `[` `]`s in the types are tag *unions*, and they list all the possible
@@ -542,7 +555,7 @@ we saw earlier.
 Similarly to how if you put `{ name = "" }` into `elm repl`, it will
 infer a type of `{ a | name : String }` - that is, an *open record* with an
 unbound type variable and `name : Str` field - if you put a tag `Foo ""` into
-`roc repl`, it will infer a type of `[ Foo Str ]*` - that is, an *open tag union*
+`roc repl`, it will infer a type of `[Foo Str]*` - that is, an *open tag union*
 with one alternative: a `Foo` tag with a `Str` payload.
 
 The same tag can be used with different arities and types. In the REPL above,
@@ -561,7 +574,7 @@ when blah is
     MyBool bool -> Bool.not bool
 ```
 
-The inferred type of this expression would be `[ MyStr Str, MyBool Bool ]`.
+The inferred type of this expression would be `[MyStr Str, MyBool Bool]`.
 
 > Exhaustiveness checking is still in full effect here.  It's based on usage;
 > if any code pathways led to `blah` being set to the tag `Foo`, I'd get
@@ -571,13 +584,13 @@ There's an important interaction here between the inferred type of a *when-expre
 the inferred type of a tag value. Note which types have a `*` and which do not.
 
 ```elm
-x : [ Foo ]*
+x : [Foo]*
 x = Foo
 
-y : [ Bar Str ]*
+y : [Bar Str]*
 y = Bar "stuff"
 
-tagToStr : [ Foo, Bar Str ] -> Str
+tagToStr : [Foo, Bar Str] -> Str
 tagToStr = \tag ->
     when tag is
         Foo -> "hi"
@@ -586,8 +599,8 @@ tagToStr = \tag ->
 
 Each of these type annotations involves a *tag union* - a collection of tags bracketed by `[` and `]`.
 
-* The type `[ Foo, Bar Str ]` is a **closed** tag union.
-* The type `[ Foo ]*` is an **open** tag union.
+* The type `[Foo, Bar Str]` is a **closed** tag union.
+* The type `[Foo]*` is an **open** tag union.
 
 You can pass `x` to `tagToStr` because an open tag union is type-compatible with
 any closed tag union which contains its tags (in this case, the `Foo` tag). You can also
@@ -598,7 +611,7 @@ Using `when` *can* get you a closed union (a union without a `*`) but that's not
 always what happens. Here's a `when` in which the inferred type is an open tag union:
 
 ```elm
-alwaysFoo : [ Foo Str ]* -> [ Foo Str ]*
+alwaysFoo : [Foo Str]* -> [Foo Str]*
 alwaysFoo = \tag ->
     when tag is
         Foo str -> Foo (Str.concat str "!")
@@ -618,14 +631,14 @@ can pass the function some totally nonsensical tag, and it will still compile.
 > You could, if you wanted, change the argument's annotation to be `[]*` and
 > it would compile. After all, its default branch means it will accept any tag!
 >
-> Still, the compiler will infer `[ Foo Str ]*` based on usage.
+> Still, the compiler will infer `[Foo Str]*` based on usage.
 
-Just because `[ Foo Str ]*` is the inferred type of this argument,
+Just because `[Foo Str]*` is the inferred type of this argument,
 doesn't mean you have to accept that much flexibility. You can restrict it
 by removing the `*`. For example, if you changed the annotation to this...
 
 ```elm
-alwaysFoo : [ Foo Str, Bar Bool ] -> [ Foo Str ]*
+alwaysFoo : [Foo Str, Bar Bool] -> [Foo Str]*
 ```
 
 ...then the function would only accept tags like `Foo "hi"` and `Bar False`. By writing
@@ -639,27 +652,27 @@ functionality by making (and then using) a type alias for a closed tag union.
 Here's exactly how `Result` is defined using tags in Roc's standard library:
 
 ```elm
-Result ok err : [ Ok ok, Err err ]
+Result ok err : [Ok ok, Err err]
 ```
 
 You can also use tags to define recursive data structures, because recursive
 type aliases are allowed as long as the recursion happens within a tag. For example:
 
 ```elm
-LinkedList a : [ Nil, Cons a (LinkedList a) ]
+LinkedList a : [Nil, Cons a (LinkedList a)]
 ```
 
 > Inferred recursive tags use the `as` keyword. For example, the
 > inferred version of the above type alias would be:
 >
-> `[ Nil, Cons a b ] as b`
+> `[Nil, Cons a b] as b`
 
 The `*` in open tag unions is actually an unbound ("wildcard") type variable.
 It can be bound too, with a lowercase letter like any other bound type variable.
 Here's an example:
 
 ```elm
-exclaimFoo : [ Foo Str ]a -> [ Foo Str ]a
+exclaimFoo : [Foo Str]a -> [Foo Str]a
 exclaimFoo = \tag ->
     when tag is
         Foo str -> Foo (Str.concat str "!")
@@ -730,7 +743,7 @@ Roc application modules (where the equivalent of `main` lives) begin with the
 Here's how the above module header imports section would look in Roc:
 
 ```elm
-app imports [ Parser, Http.{ Request }, Task.{ Task, await } ]
+app imports [Parser, Http.{ Request }, Task.{ Task, await }]
 ```
 
 `app` modules are application entry points, and they don't formally expose anything.
@@ -740,8 +753,8 @@ Modules that *can* be imported are `interface` modules. Their headers look like 
 
 ```elm
 interface Parser
-    exposes [ Parser, map, oneOf, parse ]
-    imports [ Utf8 ]
+    exposes [Parser, map, oneOf, parse]
+    imports [Utf8]
 ```
 
 The name `interface` is intended to draw attention to the fact that the interface
@@ -791,14 +804,14 @@ Roc functions aren't curried. Calling `(List.append foo)` is a type mismatch
 because `List.append` takes 2 arguments, not 1.
 
 For this reason, function type annotations separate arguments with `,` instead of `->`.
-In Roc, the type of `Set.add` is:
+In Roc, the type of `List.map` is:
 
 ```elm
-Set.add : Set 'elem, 'elem -> Set 'elem
+List.map : List a, (a -> b) -> List b
 ```
 
-You might notice that Roc's `Set.add` takes its arguments in the reverse order
-from how they are in Elm; the `Set` is the first argument in Roc, whereas it would
+You might notice that Roc's `List.map` takes its arguments in the reverse order
+from how they are in Elm; the `List` is the first argument in Roc, whereas it would
 be the last argument in Elm. This is because Roc's `|>` operator works like Elixir's
 rather than like Elm's; here is an example of what it does in Roc:
 
@@ -834,32 +847,32 @@ rather than the denominator:
 Another example is `List.append`, which is called `List.concat` in Roc:
 
 ```elixir
-[ 1, 2 ]
-  |> List.concat [ 3, 4 ]
+[1, 2]
+  |> List.concat [3, 4]
 
-# [ 1, 2, 3, 4 ]
+# [1, 2, 3, 4]
 ```
 
 In Elm:
 
 ```elm
-[ 1, 2 ]
-  |> List.append [ 3, 4 ]
+[1, 2]
+  |> List.append [3, 4]
 
-# [ 3, 4, 1, 2 ]
+# [3, 4, 1, 2]
 ```
 
 > There are various trade-offs here, of course. Elm's `|>` has a [very elegant implementation](https://github.com/elm/core/blob/665624859a7a432107059411737e16d1d5cb6373/src/Basics.elm#L873-L874), and `(|>)` in Elm can be usefully passed to other
 > functions (e.g. `fold`) whereas in Roc it's not even possible to express the type of `|>`.
 
 As a consequence of `|>` working differently, "pipe-friendly" argument ordering is also
-different. That's why `Set.add` has a "flipped" signature in Roc; otherwise, `|> Set.add 5` wouldn't work. Here's the type of Roc's `Set.add` again, and also a pipeline using it:
+different. That's why `List.map` has a "flipped" signature in Roc; otherwise, `|> List.map Num.abs` wouldn't work on a list of numbers. Here's the type of Roc's `List.map` again, and also a pipeline using it:
 
 ```coffeescript
-Set.add : Set 'elem, 'elem -> Set 'elem
+List.map : List a, (a -> b) -> List b
 
-[: "a", "b", "c" :]
-    |> Set.add "d"
+[-1, 2, 3, -4]
+    |> List.map Num.abs
 ```
 
 Roc has no `<<` or `>>` operators, and there are no functions in the standard library
@@ -896,7 +909,6 @@ of expressions with anonymous functions - e.g.
 modifiedNums =
     List.map nums \num ->
         doubled = num * 2
-
         modified = modify doubled
 
         modified / 2
@@ -1072,7 +1084,7 @@ the `|>` and the other provided by the `<-`, like so:
 ```elm
 incrementedNumbers =
     num <-
-        [ 1, 2, 3 ]
+        [1, 2, 3]
             |> List.reverse
             |> List.map
 
@@ -1080,7 +1092,7 @@ incrementedNumbers =
 ```
 
 Here, the first argument to `List.map` is provided by the `|>`
-(namely the reversed `[ 1, 2, 3 ]` list), and the second argument is provided by +the `<-` (namely the `\num -> …` function).
+(namely the reversed `[1, 2, 3]` list), and the second argument is provided by +the `<-` (namely the `\num -> …` function).
 
 Backpassing can also be used with functions that take multiple arguments; for
 example, you could write `key, value <- Dict.map dictionary` similarly to how
@@ -1156,7 +1168,7 @@ target (for example, WebAssembly) at runtime it will be the same as `U32` instea
 For example:
 
 * `List.len : List * -> Nat`
-* `List.get : List elem, Nat -> Result elem [ OutOfBounds ]*`
+* `List.get : List elem, Nat -> Result elem [OutOfBounds]*`
 * `List.set : List elem, Nat, elem -> List elem`
 
 As with floats, which integer type to use depends on the values you want to support
@@ -1205,7 +1217,7 @@ If you encounter overflow with either integers or floats in Roc, you get a runti
 exception rather than wrapping overflow behavior (or a float becoming `Infinity`
 or `-Infinity`). You can opt into wrapping overflow instead with functions like
 `Num.addWrap : Int a, Int a -> Int a`, or use a function that gives `Err` if it
-overflows, like `Num.addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*`.
+overflows, like `Num.addChecked : Num a, Num a -> Result (Num a) [Overflow]*`.
 
 ## `comparable`, `appendable`, and `number`
 
@@ -1284,10 +1296,10 @@ Some differences to note:
 * `List` refers to something more like Elm's `Array`, as noted earlier.
 * No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).
 * No `Basics`. You use everything from the standard library fully-qualified; e.g. `Bool.not` or `Num.negate` or `Num.ceiling`. There is no `Never` because `[]` already serves that purpose. (Roc's standard library doesn't include an equivalent of `Basics.never`, but it's one line of code and anyone can implement it: `never = \a -> never a`.)
-* No `Tuple`. Roc doesn't have tuple syntax. As a convention, `Pair` can be used to represent tuples (e.g. `List.zip : List a, List b -> List [ Pair a b ]*`), but this comes up infrequently compared to languages that have dedicated syntax for it.
+* No `Tuple`. Roc doesn't have tuple syntax. As a convention, `Pair` can be used to represent tuples (e.g. `List.zip : List a, List b -> List [Pair a b]*`), but this comes up infrequently compared to languages that have dedicated syntax for it.
 * No `Task`. By design, platform authors implement `Task` (or don't; it's up to them) - it's not something that really *could* be usefully present in Roc's standard library.
 * No `Process`, `Platform`, `Cmd`, or `Sub` - similarly to `Task`, these are things platform authors would include, or not.
-* No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arg tag to describe what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*` instead of `List.first : List a -> Maybe a`.) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [ Null, NonNull a ]*`.
+* No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arg tag to describe what went wrong. (For example, `List.first : List a -> Result a [ListWasEmpty]*` instead of `List.first : List a -> Maybe a`.) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [Null, NonNull a]*`.
 
 ## Operator Desugaring Table
 
