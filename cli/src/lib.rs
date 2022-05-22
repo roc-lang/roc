@@ -619,24 +619,11 @@ fn roc_run_executable_file_path(cwd: &Path, binary_bytes: &mut [u8]) -> std::io:
             );
         }
 
-        // NOTE: this `fd` is special, using the rust `std::fs::File` functions does not work
-        let written = unsafe { libc::write(fd, binary_bytes.as_ptr().cast(), binary_bytes.len()) };
+        let path = PathBuf::from(format!("/proc/self/fd/{}", fd));
 
-        if written == -1 {
-            internal_error!("libc::write() failed: {:?}", errno::errno());
-        }
+        std::fs::write(&path, binary_bytes)?;
 
-        if written != binary_bytes.len() as isize {
-            internal_error!(
-                "libc::write() did not write the correct number of bytes: reported {}, should be {}",
-                written,
-                binary_bytes.len(),
-            );
-        }
-
-        let path = format!("/proc/self/fd/{}", fd);
-
-        Ok(PathBuf::from(path))
+        Ok(path)
     } else {
         // we have not found a way yet to use a virtual file on MacOs. Hence we fall back to just
         // writing the file to the file system, and using that file.
