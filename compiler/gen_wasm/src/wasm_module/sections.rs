@@ -11,7 +11,7 @@ use super::dead_code::{
 };
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
-use super::parse::{parse_string_bytes, parse_u32_or_panic, SkipBytes};
+use super::parse::{parse_string_bytes, parse_u32_or_panic, Parse, SkipBytes};
 use super::serialize::{SerialBuffer, Serialize, MAX_SIZE_ENCODED_U32};
 use super::{CodeBuilder, ValueType};
 
@@ -351,34 +351,35 @@ impl<'a> ImportSection<'a> {
         self.count += 1;
     }
 
-    pub fn parse(&mut self, arena: &'a Bump) -> Vec<'a, u32> {
+    pub fn parse(&mut self, arena: &'a Bump) -> Result<Vec<'a, u32>, String> {
         let mut fn_signatures = bumpalo::vec![in arena];
         let mut cursor = 0;
         while cursor < self.bytes.len() {
-            String::skip_bytes(&self.bytes, &mut cursor); // import namespace
-            String::skip_bytes(&self.bytes, &mut cursor); // import name
+            String::skip_bytes(&self.bytes, &mut cursor)?; // import namespace
+            String::skip_bytes(&self.bytes, &mut cursor)?; // import name
 
             let type_id = ImportTypeId::from(self.bytes[cursor]);
             cursor += 1;
 
             match type_id {
                 ImportTypeId::Func => {
-                    fn_signatures.push(parse_u32_or_panic(&self.bytes, &mut cursor));
+                    let sig = u32::parse((), &self.bytes, &mut cursor)?;
+                    fn_signatures.push(sig);
                 }
                 ImportTypeId::Table => {
-                    TableType::skip_bytes(&self.bytes, &mut cursor);
+                    TableType::skip_bytes(&self.bytes, &mut cursor)?;
                 }
                 ImportTypeId::Mem => {
-                    Limits::skip_bytes(&self.bytes, &mut cursor);
+                    Limits::skip_bytes(&self.bytes, &mut cursor)?;
                 }
                 ImportTypeId::Global => {
-                    GlobalType::skip_bytes(&self.bytes, &mut cursor);
+                    GlobalType::skip_bytes(&self.bytes, &mut cursor)?;
                 }
             }
         }
 
         self.function_count = fn_signatures.len() as u32;
-        fn_signatures
+        Ok(fn_signatures)
     }
 
     pub fn from_count_and_bytes(count: u32, bytes: Vec<'a, u8>) -> Self {
@@ -458,9 +459,10 @@ impl Serialize for TableType {
 }
 
 impl SkipBytes for TableType {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        u8::skip_bytes(bytes, cursor);
-        Limits::skip_bytes(bytes, cursor);
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), String> {
+        u8::skip_bytes(bytes, cursor)?;
+        Limits::skip_bytes(bytes, cursor)?;
+        Ok(())
     }
 }
 
@@ -561,13 +563,14 @@ impl Serialize for Limits {
 }
 
 impl SkipBytes for Limits {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), String> {
         let variant_id = bytes[*cursor];
-        u8::skip_bytes(bytes, cursor); // advance past the variant byte
-        u32::skip_bytes(bytes, cursor); // skip "min"
+        u8::skip_bytes(bytes, cursor)?; // advance past the variant byte
+        u32::skip_bytes(bytes, cursor)?; // skip "min"
         if variant_id == LimitsId::MinMax as u8 {
-            u32::skip_bytes(bytes, cursor); // skip "max"
+            u32::skip_bytes(bytes, cursor)?; // skip "max"
         }
+        Ok(())
     }
 }
 
@@ -635,8 +638,9 @@ impl Serialize for GlobalType {
 }
 
 impl SkipBytes for GlobalType {
-    fn skip_bytes(_bytes: &[u8], cursor: &mut usize) {
+    fn skip_bytes(_bytes: &[u8], cursor: &mut usize) -> Result<(), String> {
         *cursor += 2;
+        Ok(())
     }
 }
 
@@ -651,22 +655,22 @@ pub enum ConstExpr {
 }
 
 impl ConstExpr {
-    fn parse_u32(bytes: &[u8], cursor: &mut usize) -> u32 {
-        let err = || internal_error!("Invalid ConstExpr. Expected i32.");
+    fn parse_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, String> {
+        let err = Err("Invalid ConstExpr. Expected i32.".into());
 
         if bytes[*cursor] != OpCode::I32CONST as u8 {
-            err();
+            return err;
         }
         *cursor += 1;
 
         let value = parse_u32_or_panic(bytes, cursor);
 
         if bytes[*cursor] != OpCode::END as u8 {
-            err();
+            return err;
         }
         *cursor += 1;
 
-        value
+        Ok(value)
     }
 
     fn unwrap_i32(&self) -> i32 {
@@ -702,11 +706,12 @@ impl Serialize for ConstExpr {
 }
 
 impl SkipBytes for ConstExpr {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), String> {
         while bytes[*cursor] != OpCode::END as u8 {
-            OpCode::skip_bytes(bytes, cursor);
+            OpCode::skip_bytes(bytes, cursor)?;
         }
         *cursor += 1;
+        Ok(())
     }
 }
 
@@ -732,13 +737,13 @@ pub struct GlobalSection<'a> {
 }
 
 impl<'a> GlobalSection<'a> {
-    pub fn parse_u32_at_index(&self, index: u32) -> u32 {
+    pub fn parse_u32_at_index(&self, index: u32) -> Result<u32, String> {
         let mut cursor = 0;
         for _ in 0..index {
-            GlobalType::skip_bytes(&self.bytes, &mut cursor);
-            ConstExpr::skip_bytes(&self.bytes, &mut cursor);
+            GlobalType::skip_bytes(&self.bytes, &mut cursor)?;
+            ConstExpr::skip_bytes(&self.bytes, &mut cursor)?;
         }
-        GlobalType::skip_bytes(&self.bytes, &mut cursor);
+        GlobalType::skip_bytes(&self.bytes, &mut cursor)?;
         ConstExpr::parse_u32(&self.bytes, &mut cursor)
     }
 

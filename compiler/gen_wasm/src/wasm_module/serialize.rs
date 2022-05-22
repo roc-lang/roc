@@ -239,7 +239,6 @@ impl<'a> SerialBuffer for Vec<'a, u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wasm_module::parse::{decode_u32, parse_u32_or_panic};
     use bumpalo::{self, collections::Vec, Bump};
 
     fn help_u32(arena: &Bump, value: u32) -> Vec<'_, u8> {
@@ -411,38 +410,5 @@ mod tests {
             help_pad_i64(i64::MIN),
             &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f],
         );
-    }
-
-    #[test]
-    fn test_decode_u32() {
-        assert_eq!(decode_u32(&[0]), Ok((0, 1)));
-        assert_eq!(decode_u32(&[64]), Ok((64, 1)));
-        assert_eq!(decode_u32(&[0x7f]), Ok((0x7f, 1)));
-        assert_eq!(decode_u32(&[0x80, 0x01]), Ok((0x80, 2)));
-        assert_eq!(decode_u32(&[0xff, 0x7f]), Ok((0x3fff, 2)));
-        assert_eq!(decode_u32(&[0x80, 0x80, 0x01]), Ok((0x4000, 3)));
-        assert_eq!(
-            decode_u32(&[0xff, 0xff, 0xff, 0xff, 0x0f]),
-            Ok((u32::MAX, MAX_SIZE_ENCODED_U32))
-        );
-        assert!(matches!(decode_u32(&[0x80; 6]), Err(_)));
-        assert!(matches!(decode_u32(&[0x80; 2]), Err(_)));
-        assert!(matches!(decode_u32(&[]), Err(_)));
-    }
-
-    #[test]
-    fn test_parse_u32_sequence() {
-        let bytes = &[0, 0x80, 0x01, 0xff, 0xff, 0xff, 0xff, 0x0f];
-        let expected = [0, 128, u32::MAX];
-        let mut cursor = 0;
-
-        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[0]);
-        assert_eq!(cursor, 1);
-
-        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[1]);
-        assert_eq!(cursor, 3);
-
-        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[2]);
-        assert_eq!(cursor, 8);
     }
 }

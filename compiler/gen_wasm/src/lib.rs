@@ -57,15 +57,15 @@ pub fn build_module<'a>(
     interns: &'a mut Interns,
     preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> std::vec::Vec<u8> {
+) -> Result<std::vec::Vec<u8>, String> {
     let (mut wasm_module, called_preload_fns, _) =
-        build_module_unserialized(env, interns, preload_bytes, procedures);
+        build_module_unserialized(env, interns, preload_bytes, procedures)?;
 
     wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
 
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
-    buffer
+    Ok(buffer)
 }
 
 /// Generate an unserialized Wasm module
@@ -77,7 +77,7 @@ pub fn build_module_unserialized<'a>(
     interns: &'a mut Interns,
     preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
+) -> Result<(WasmModule<'a>, Vec<'a, u32>, u32), String> {
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
@@ -126,7 +126,7 @@ pub fn build_module_unserialized<'a>(
     }
 
     // Pre-load the WasmModule with data from the platform & builtins object file
-    let initial_module = WasmModule::preload(env.arena, preload_bytes);
+    let initial_module = WasmModule::preload(env.arena, preload_bytes)?;
 
     // Adjust Wasm function indices to account for functions from the object file
     let fn_index_offset: u32 =
@@ -189,7 +189,7 @@ pub fn build_module_unserialized<'a>(
     let (module, called_preload_fns) = backend.finalize();
     let main_function_index = maybe_main_fn_index.unwrap() + fn_index_offset;
 
-    (module, called_preload_fns, main_function_index)
+    Ok((module, called_preload_fns, main_function_index))
 }
 
 pub struct CopyMemoryConfig {

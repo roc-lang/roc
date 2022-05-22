@@ -210,6 +210,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
                 pre_linked_binary,
                 procedures,
             )
+            .unwrap()
         };
 
         wasm32_result::insert_wrapper_for_layout(

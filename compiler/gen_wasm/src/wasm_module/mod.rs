@@ -9,7 +9,6 @@ pub mod parse;
 use bumpalo::{collections::Vec, Bump};
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 pub use linking::SymInfo;
-use roc_error_macros::internal_error;
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
 use self::linking::{LinkingSection, RelocationSection};
@@ -122,11 +121,11 @@ impl<'a> WasmModule<'a> {
             + self.names.size()
     }
 
-    pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Self {
+    pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Result<Self, String> {
         let is_valid_magic_number = &bytes[0..4] == "\0asm".as_bytes();
         let is_valid_version = bytes[4..8] == Self::WASM_VERSION.to_le_bytes();
         if !is_valid_magic_number || !is_valid_version {
-            internal_error!("Invalid Wasm object file header for platform & builtins");
+            return Err("This file is not a WebAssembly binary. The file header is not valid.".into());
         }
 
         let mut cursor: usize = 8;
@@ -135,7 +134,7 @@ impl<'a> WasmModule<'a> {
         types.parse_offsets();
 
         let mut import = ImportSection::preload(arena, bytes, &mut cursor);
-        let imported_fn_signatures = import.parse(arena);
+        let imported_fn_signatures = import.parse(arena)?;
 
         let function = FunctionSection::preload(arena, bytes, &mut cursor);
         let defined_fn_signatures = function.parse(arena);
@@ -169,7 +168,7 @@ impl<'a> WasmModule<'a> {
         let linking = LinkingSection::new(arena);
         let relocations = RelocationSection::new(arena, "reloc.CODE");
 
-        WasmModule {
+        Ok(WasmModule {
             types,
             import,
             function,
@@ -184,7 +183,7 @@ impl<'a> WasmModule<'a> {
             names,
             linking,
             relocations,
-        }
+        })
     }
 
     pub fn remove_dead_preloads<T: IntoIterator<Item = u32>>(

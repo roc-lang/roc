@@ -118,9 +118,15 @@ pub fn parse_preloads_call_graph<'a>(
                         .iter()
                         .filter(|f| signatures[**f as usize] == sig),
                 );
-                u32::skip_bytes(code_section_body, &mut cursor); // table_idx
+                u32::skip_bytes(code_section_body, &mut cursor).unwrap(); // table_idx
             } else {
-                OpCode::skip_bytes(code_section_body, &mut cursor);
+                OpCode::skip_bytes(code_section_body, &mut cursor).unwrap_or_else(|e| {
+                    let display_slice = &code_section_body[cursor - 4..cursor + 4];
+                    panic!(
+                        "Error parsing host object file, at offset {} (0x{:x}) within Code section: {}\nbytes around the error: {:x?}\nstart of code section: {:x?}",
+                        cursor, cursor, e, display_slice, &code_section_body[0..16]
+                    )
+                });
             }
         }
     }

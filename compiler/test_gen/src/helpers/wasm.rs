@@ -120,7 +120,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     };
 
     let (mut module, called_preload_fns, main_fn_index) =
-        roc_gen_wasm::build_module_unserialized(&env, &mut interns, preload_bytes, procedures);
+        roc_gen_wasm::build_module_unserialized(&env, &mut interns, preload_bytes, procedures).unwrap();
 
     T::insert_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
 
