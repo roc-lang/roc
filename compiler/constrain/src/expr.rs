@@ -34,7 +34,7 @@ use roc_types::types::{
 pub struct Info {
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
-    pub def_types: SendMap<Symbol, Loc<Type>>,
+    pub def_types: VecMap<Symbol, Loc<Type>>,
 }
 
 impl Info {
@@ -42,7 +42,7 @@ impl Info {
         Info {
             vars: Vec::with_capacity(capacity),
             constraints: Vec::with_capacity(capacity),
-            def_types: SendMap::default(),
+            def_types: VecMap::default(),
         }
     }
 }
