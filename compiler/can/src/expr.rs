@@ -5,7 +5,7 @@ use crate::def::{can_defs_with_return, Annotation, Def};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
-    int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumericBound,
+    int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
@@ -25,6 +25,9 @@ use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
 
+/// Derives that an opaque type has claimed, to checked and recorded after solving.
+pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
+
 #[derive(Clone, Default, Debug)]
 pub struct Output {
     pub references: References,
@@ -32,7 +35,7 @@ pub struct Output {
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
-    pub abilities_in_scope: Vec<Symbol>,
+    pub pending_derives: PendingDerives,
 }
 
 impl Output {
@@ -47,20 +50,29 @@ impl Output {
             .union_owned(other.introduced_variables);
         self.aliases.extend(other.aliases);
         self.non_closures.extend(other.non_closures);
+
+        {
+            let expected_derives_size = self.pending_derives.len() + other.pending_derives.len();
+            self.pending_derives.extend(other.pending_derives);
+            debug_assert!(
+                expected_derives_size == self.pending_derives.len(),
+                "Derives overwritten from nested scope - something is very wrong"
+            );
+        }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum IntValue {
-    I128(i128),
-    U128(u128),
+    I128([u8; 16]),
+    U128([u8; 16]),
 }
 
 impl Display for IntValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IntValue::I128(n) => Display::fmt(&n, f),
-            IntValue::U128(n) => Display::fmt(&n, f),
+            IntValue::I128(n) => Display::fmt(&i128::from_ne_bytes(*n), f),
+            IntValue::U128(n) => Display::fmt(&u128::from_ne_bytes(*n), f),
         }
     }
 }
@@ -71,7 +83,7 @@ pub enum Expr {
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, Box<str>, IntValue, NumericBound),
+    Num(Variable, Box<str>, IntValue, NumBound),
 
     // Int and Float store a variable to generate better error messages
     Int(Variable, Variable, Box<str>, IntValue, IntBound),
@@ -205,10 +217,13 @@ pub enum Expr {
         lambda_set_variables: Vec<LambdaSet>,
     },
 
-    // Test
+    /// Test
     Expect(Box<Loc<Expr>>, Box<Loc<Expr>>),
 
-    // Compiles, but will crash if reached
+    /// Rendered as empty box in editor
+    TypedHole(Variable),
+
+    /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
 
@@ -248,7 +263,9 @@ impl Expr {
             },
             &Self::OpaqueRef { name, .. } => Category::OpaqueWrap(name),
             Self::Expect(..) => Category::Expect,
-            Self::RuntimeError(..) => Category::Unknown,
+
+            // these nodes place no constraints on the expression's type
+            Self::TypedHole(_) | Self::RuntimeError(..) => Category::Unknown,
         }
     }
 }
@@ -423,12 +440,7 @@ pub fn canonicalize_expr<'a>(
 
     let (expr, output) = match expr {
         &ast::Expr::Num(str) => {
-            let answer = num_expr_from_result(
-                var_store,
-                finish_parsing_num(str).map(|result| (str, result)),
-                region,
-                env,
-            );
+            let answer = num_expr_from_result(var_store, finish_parsing_num(str), region, env);
 
             (answer, Output::default())
         }
@@ -1326,7 +1338,7 @@ fn canonicalize_var_lookup(
     let can_expr = if module_name.is_empty() {
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
-        match scope.lookup(&(*ident).into(), region) {
+        match scope.lookup_str(ident, region) {
             Ok(symbol) => {
                 output.references.insert_value_lookup(symbol);
 
@@ -1397,6 +1409,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Var(_)
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
+        | other @ TypedHole { .. }
         | other @ ForeignCall { .. } => other,
 
         List {

@@ -3,9 +3,9 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Def, Expr, Has, HasClause,
-        Module, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader,
-        ValueDef, WhenBranch,
+        AbilityMember, AssignedField, Collection, CommentOrNewline, Def, Derived, Expr, Has,
+        HasClause, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
+        TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
@@ -159,10 +159,10 @@ where
 
 fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
     buf.push_str("##");
-    if !docs.starts_with(' ') {
+    if !docs.is_empty() {
         buf.spaces(1);
     }
-    buf.push_str(docs);
+    buf.push_str(docs.trim_end());
 }
 
 /// RemoveSpaces normalizes the ast to something that we _expect_ to be invariant under formatting.
@@ -438,12 +438,14 @@ impl<'a> RemoveSpaces<'a> for TypeDef<'a> {
             Opaque {
                 header: TypeHeader { name, vars },
                 typ,
+                derived,
             } => Opaque {
                 header: TypeHeader {
                     name: name.remove_spaces(arena),
                     vars: vars.remove_spaces(arena),
                 },
                 typ: typ.remove_spaces(arena),
+                derived: derived.remove_spaces(arena),
             },
             Ability {
                 header: TypeHeader { name, vars },
@@ -690,9 +692,14 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
             ),
             TypeAnnotation::Apply(a, b, c) => TypeAnnotation::Apply(a, b, c.remove_spaces(arena)),
             TypeAnnotation::BoundVariable(a) => TypeAnnotation::BoundVariable(a),
-            TypeAnnotation::As(a, _, c) => {
-                TypeAnnotation::As(arena.alloc(a.remove_spaces(arena)), &[], c)
-            }
+            TypeAnnotation::As(a, _, TypeHeader { name, vars }) => TypeAnnotation::As(
+                arena.alloc(a.remove_spaces(arena)),
+                &[],
+                TypeHeader {
+                    name: name.remove_spaces(arena),
+                    vars: vars.remove_spaces(arena),
+                },
+            ),
             TypeAnnotation::Record { fields, ext } => TypeAnnotation::Record {
                 fields: fields.remove_spaces(arena),
                 ext: ext.remove_spaces(arena),
@@ -733,6 +740,17 @@ impl<'a> RemoveSpaces<'a> for Tag<'a> {
             Tag::Malformed(a) => Tag::Malformed(a),
             Tag::SpaceBefore(a, _) => a.remove_spaces(arena),
             Tag::SpaceAfter(a, _) => a.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for Derived<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            Derived::Has(derived) => Derived::Has(derived.remove_spaces(arena)),
+            Derived::SpaceBefore(derived, _) | Derived::SpaceAfter(derived, _) => {
+                derived.remove_spaces(arena)
+            }
         }
     }
 }

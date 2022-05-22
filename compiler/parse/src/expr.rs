@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Def, Expr, ExtractSpaces, Has, Pattern, Spaceable,
-    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AssignedField, Collection, CommentOrNewline, Def, Derived, Expr, ExtractSpaces, Has, Pattern,
+    Spaceable, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
@@ -426,21 +426,21 @@ impl<'a> ExprState<'a> {
         mut self,
         arena: &'a Bump,
         loc_op: Loc<BinOp>,
-        kind: TypeKind,
+        kind: AliasOrOpaque,
     ) -> Result<(Loc<Expr<'a>>, Vec<'a, &'a Loc<Expr<'a>>>), EExpr<'a>> {
         debug_assert_eq!(
             loc_op.value,
             match kind {
-                TypeKind::Alias => BinOp::IsAliasType,
-                TypeKind::Opaque => BinOp::IsOpaqueType,
+                AliasOrOpaque::Alias => BinOp::IsAliasType,
+                AliasOrOpaque::Opaque => BinOp::IsOpaqueType,
             }
         );
 
         if !self.operators.is_empty() {
             // this `:`/`:=` likely occurred inline; treat it as an invalid operator
             let op = match kind {
-                TypeKind::Alias => ":",
-                TypeKind::Opaque => ":=",
+                AliasOrOpaque::Alias => ":",
+                AliasOrOpaque::Opaque => ":=",
             };
             let fail = EExpr::BadOperator(op, loc_op.region.start());
 
@@ -690,7 +690,10 @@ fn append_annotation_definition<'a>(
     spaces: &'a [CommentOrNewline<'a>],
     loc_pattern: Loc<Pattern<'a>>,
     loc_ann: Loc<TypeAnnotation<'a>>,
-    kind: TypeKind,
+
+    // If this turns out to be an alias
+    kind: AliasOrOpaque,
+    opt_derived: Option<Loc<Derived<'a>>>,
 ) {
     let region = Region::span_across(&loc_pattern.region, &loc_ann.region);
 
@@ -702,7 +705,7 @@ fn append_annotation_definition<'a>(
                 ..
             },
             alias_arguments,
-        ) => append_type_definition(
+        ) => append_alias_or_opaque_definition(
             arena,
             defs,
             region,
@@ -711,8 +714,9 @@ fn append_annotation_definition<'a>(
             alias_arguments,
             loc_ann,
             kind,
+            opt_derived,
         ),
-        Pattern::Tag(name) => append_type_definition(
+        Pattern::Tag(name) => append_alias_or_opaque_definition(
             arena,
             defs,
             region,
@@ -721,6 +725,7 @@ fn append_annotation_definition<'a>(
             &[],
             loc_ann,
             kind,
+            opt_derived,
         ),
         _ => {
             let mut loc_def = Loc::at(
@@ -762,7 +767,7 @@ fn append_expect_definition<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn append_type_definition<'a>(
+fn append_alias_or_opaque_definition<'a>(
     arena: &'a Bump,
     defs: &mut Vec<'a, &'a Loc<Def<'a>>>,
     region: Region,
@@ -770,23 +775,26 @@ fn append_type_definition<'a>(
     name: Loc<&'a str>,
     pattern_arguments: &'a [Loc<Pattern<'a>>],
     loc_ann: Loc<TypeAnnotation<'a>>,
-    kind: TypeKind,
+    kind: AliasOrOpaque,
+    opt_derived: Option<Loc<Derived<'a>>>,
 ) {
     let header = TypeHeader {
         name,
         vars: pattern_arguments,
     };
-    let def = match kind {
-        TypeKind::Alias => TypeDef::Alias {
+
+    let type_def = match kind {
+        AliasOrOpaque::Alias => TypeDef::Alias {
             header,
             ann: loc_ann,
         },
-        TypeKind::Opaque => TypeDef::Opaque {
+        AliasOrOpaque::Opaque => TypeDef::Opaque {
             header,
             typ: loc_ann,
+            derived: opt_derived,
         },
     };
-    let mut loc_def = Loc::at(region, Def::Type(def));
+    let mut loc_def = Loc::at(region, Def::Type(type_def));
 
     if !spaces.is_empty() {
         loc_def = arena
@@ -891,6 +899,7 @@ fn parse_defs_end<'a>(
                         Loc::at(name_region, name),
                         args,
                         loc_has,
+                        def_state.spaces_after,
                         arena,
                         state,
                     )?;
@@ -922,16 +931,9 @@ fn parse_defs_end<'a>(
 
                     parse_defs_end(options, column, def_state, arena, state)
                 }
-                Ok((_, op @ (BinOp::IsAliasType | BinOp::IsOpaqueType), state)) => {
-                    let (_, ann_type, state) = specialize(
-                        EExpr::Type,
-                        space0_before_e(
-                            type_annotation::located_help(min_indent + 1, false),
-                            min_indent + 1,
-                            EType::TIndentStart,
-                        ),
-                    )
-                    .parse(arena, state)?;
+                Ok((_, BinOp::IsAliasType, state)) => {
+                    let (_, ann_type, state) =
+                        alias_signature_with_space_before(min_indent + 1).parse(arena, state)?;
 
                     append_annotation_definition(
                         arena,
@@ -939,11 +941,24 @@ fn parse_defs_end<'a>(
                         def_state.spaces_after,
                         loc_pattern,
                         ann_type,
-                        match op {
-                            BinOp::IsAliasType => TypeKind::Alias,
-                            BinOp::IsOpaqueType => TypeKind::Opaque,
-                            _ => unreachable!(),
-                        },
+                        AliasOrOpaque::Alias,
+                        None,
+                    );
+
+                    parse_defs_end(options, column, def_state, arena, state)
+                }
+                Ok((_, BinOp::IsOpaqueType, state)) => {
+                    let (_, (signature, derived), state) =
+                        opaque_signature_with_space_before(min_indent + 1).parse(arena, state)?;
+
+                    append_annotation_definition(
+                        arena,
+                        &mut def_state.defs,
+                        def_state.spaces_after,
+                        loc_pattern,
+                        signature,
+                        AliasOrOpaque::Opaque,
+                        derived,
                     );
 
                     parse_defs_end(options, column, def_state, arena, state)
@@ -994,8 +1009,44 @@ fn parse_defs_expr<'a>(
     }
 }
 
+fn alias_signature_with_space_before<'a>(
+    min_indent: u32,
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EExpr<'a>> {
+    specialize(
+        EExpr::Type,
+        space0_before_e(
+            type_annotation::located(min_indent + 1, false),
+            min_indent + 1,
+            EType::TIndentStart,
+        ),
+    )
+}
+
+fn opaque_signature_with_space_before<'a>(
+    min_indent: u32,
+) -> impl Parser<'a, (Loc<TypeAnnotation<'a>>, Option<Loc<Derived<'a>>>), EExpr<'a>> {
+    and!(
+        specialize(
+            EExpr::Type,
+            space0_before_e(
+                type_annotation::located_opaque_signature(min_indent, true),
+                min_indent,
+                EType::TIndentStart,
+            ),
+        ),
+        optional(specialize(
+            EExpr::Type,
+            space0_before_e(
+                type_annotation::has_derived(min_indent),
+                min_indent,
+                EType::TIndentStart,
+            ),
+        ))
+    )
+}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
-enum TypeKind {
+enum AliasOrOpaque {
     Alias,
     Opaque,
 }
@@ -1010,7 +1061,7 @@ fn finish_parsing_alias_or_opaque<'a>(
     arena: &'a Bump,
     state: State<'a>,
     spaces_after_operator: &'a [CommentOrNewline<'a>],
-    kind: TypeKind,
+    kind: AliasOrOpaque,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let expr_region = expr_state.expr.region;
     let indented_more = start_column + 1;
@@ -1032,34 +1083,48 @@ fn finish_parsing_alias_or_opaque<'a>(
                 }
             }
 
-            let (_, ann_type, state) = specialize(
-                EExpr::Type,
-                space0_before_e(
-                    type_annotation::located_help(indented_more, true),
-                    min_indent,
-                    EType::TIndentStart,
-                ),
-            )
-            .parse(arena, state)?;
+            let (loc_def, state) = match kind {
+                AliasOrOpaque::Alias => {
+                    let (_, signature, state) =
+                        alias_signature_with_space_before(indented_more).parse(arena, state)?;
 
-            let def_region = Region::span_across(&expr.region, &ann_type.region);
+                    let def_region = Region::span_across(&expr.region, &signature.region);
 
-            let header = TypeHeader {
-                name: Loc::at(expr.region, name),
-                vars: type_arguments.into_bump_slice(),
+                    let header = TypeHeader {
+                        name: Loc::at(expr.region, name),
+                        vars: type_arguments.into_bump_slice(),
+                    };
+
+                    let def = TypeDef::Alias {
+                        header,
+                        ann: signature,
+                    };
+
+                    (Loc::at(def_region, Def::Type(def)), state)
+                }
+
+                AliasOrOpaque::Opaque => {
+                    let (_, (signature, derived), state) =
+                        opaque_signature_with_space_before(indented_more).parse(arena, state)?;
+
+                    let def_region = Region::span_across(&expr.region, &signature.region);
+
+                    let header = TypeHeader {
+                        name: Loc::at(expr.region, name),
+                        vars: type_arguments.into_bump_slice(),
+                    };
+
+                    let def = TypeDef::Opaque {
+                        header,
+                        typ: signature,
+                        derived,
+                    };
+
+                    (Loc::at(def_region, Def::Type(def)), state)
+                }
             };
-            let type_def = match kind {
-                TypeKind::Alias => TypeDef::Alias {
-                    header,
-                    ann: ann_type,
-                },
-                TypeKind::Opaque => TypeDef::Opaque {
-                    header,
-                    typ: ann_type,
-                },
-            };
 
-            (&*arena.alloc(Loc::at(def_region, type_def.into())), state)
+            (&*arena.alloc(loc_def), state)
         }
 
         _ => {
@@ -1070,7 +1135,7 @@ fn finish_parsing_alias_or_opaque<'a>(
                     let parser = specialize(
                         EExpr::Type,
                         space0_before_e(
-                            type_annotation::located_help(indented_more, false),
+                            type_annotation::located(indented_more, false),
                             min_indent,
                             EType::TIndentStart,
                         ),
@@ -1097,8 +1162,8 @@ fn finish_parsing_alias_or_opaque<'a>(
                 Err(_) => {
                     // this `:`/`:=` likely occurred inline; treat it as an invalid operator
                     let op = match kind {
-                        TypeKind::Alias => ":",
-                        TypeKind::Opaque => ":=",
+                        AliasOrOpaque::Alias => ":",
+                        AliasOrOpaque::Opaque => ":=",
                     };
                     let fail = EExpr::BadOperator(op, loc_op.region.start());
 
@@ -1139,7 +1204,7 @@ mod ability {
                     specialize(
                         EAbility::Type,
                         // Require the type to be more indented than the name
-                        type_annotation::located_help(start_column + 1, true)
+                        type_annotation::located(start_column + 1, true)
                     )
                 )
             ),
@@ -1240,6 +1305,7 @@ fn finish_parsing_ability_def<'a>(
     name: Loc<&'a str>,
     args: &'a [Loc<Pattern<'a>>],
     loc_has: Loc<Has<'a>>,
+    spaces_before: &'a [CommentOrNewline<'a>],
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, &'a Loc<Def<'a>>, EExpr<'a>> {
@@ -1281,13 +1347,21 @@ fn finish_parsing_ability_def<'a>(
     }
 
     let def_region = Region::span_across(&name.region, &demands.last().unwrap().typ.region);
-    let def = TypeDef::Ability {
+    let def = Def::Type(TypeDef::Ability {
         header: TypeHeader { name, vars: args },
         loc_has,
         members: demands.into_bump_slice(),
-    }
-    .into();
-    let loc_def = &*(arena.alloc(Loc::at(def_region, def)));
+    });
+
+    let loc_def = &*(if spaces_before.is_empty() {
+        arena.alloc(Loc::at(def_region, def))
+    } else {
+        arena.alloc(
+            arena
+                .alloc(def)
+                .with_spaces_before(spaces_before, def_region),
+        )
+    });
 
     Ok((MadeProgress, loc_def, state))
 }
@@ -1302,7 +1376,7 @@ fn finish_parsing_ability<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let (_, loc_def, state) =
-        finish_parsing_ability_def(start_column, name, args, loc_has, arena, state)?;
+        finish_parsing_ability_def(start_column, name, args, loc_has, &[], arena, state)?;
 
     let def_state = DefState {
         defs: bumpalo::vec![in arena; loc_def],
@@ -1463,8 +1537,8 @@ fn parse_expr_operator<'a>(
             state,
             spaces_after_operator,
             match op {
-                BinOp::IsAliasType => TypeKind::Alias,
-                BinOp::IsOpaqueType => TypeKind::Opaque,
+                BinOp::IsAliasType => AliasOrOpaque::Alias,
+                BinOp::IsOpaqueType => AliasOrOpaque::Opaque,
                 _ => unreachable!(),
             },
         ),
@@ -2705,6 +2779,21 @@ fn number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, ENumber> {
 
 const BINOP_CHAR_SET: &[u8] = b"+-/*=.<>:&|^?%!";
 
+const BINOP_CHAR_MASK: [bool; 125] = {
+    let mut result = [false; 125];
+
+    let mut i = 0;
+    while i < BINOP_CHAR_SET.len() {
+        let index = BINOP_CHAR_SET[i] as usize;
+
+        result[index] = true;
+
+        i += 1;
+    }
+
+    result
+};
+
 fn operator<'a>() -> impl Parser<'a, BinOp, EExpr<'a>> {
     |_, state| operator_help(EExpr::Start, EExpr::BadOperator, state)
 }
@@ -2774,10 +2863,11 @@ fn chomp_ops(bytes: &[u8]) -> &str {
     let mut chomped = 0;
 
     for c in bytes.iter() {
-        if !BINOP_CHAR_SET.contains(c) {
+        if let Some(true) = BINOP_CHAR_MASK.get(*c as usize) {
+            chomped += 1;
+        } else {
             break;
         }
-        chomped += 1;
     }
 
     unsafe {

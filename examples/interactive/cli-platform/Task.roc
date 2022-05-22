@@ -6,14 +6,13 @@ Task ok err : Effect.Effect (Result ok err)
 
 forever : Task val err -> Task * err
 forever = \task ->
-    looper = \{  } ->
+    looper = \{} ->
         task
             |> Effect.map
                 \res ->
                     when res is
                         Ok _ ->
                             Step {}
-
                         Err e ->
                             Done (Err e)
 
@@ -28,10 +27,8 @@ loop = \state, step ->
                     when res is
                         Ok (Step newState) ->
                             Step newState
-
                         Ok (Done result) ->
                             Done (Ok result)
-
                         Err e ->
                             Done (Err e)
 
@@ -53,7 +50,6 @@ attempt = \effect, transform ->
             when result is
                 Ok ok ->
                     transform (Ok ok)
-
                 Err err ->
                     transform (Err err)
 
@@ -65,7 +61,6 @@ await = \effect, transform ->
             when result is
                 Ok a ->
                     transform a
-
                 Err err ->
                     Task.fail err
 
@@ -77,7 +72,6 @@ onFail = \effect, transform ->
             when result is
                 Ok a ->
                     Task.succeed a
-
                 Err err ->
                     transform err
 
@@ -89,6 +83,5 @@ map = \effect, transform ->
             when result is
                 Ok a ->
                     Task.succeed (transform a)
-
                 Err err ->
                     Task.fail err

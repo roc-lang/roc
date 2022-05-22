@@ -5,7 +5,6 @@ use roc_mono::layout::UnionLayout;
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use std::convert::TryInto;
-use ven_graph::topological_sort;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
@@ -52,16 +51,28 @@ impl Types {
     }
 
     pub fn sorted_ids(&self) -> Vec<TypeId> {
-        // TODO: instead use the bitvec matrix type we use in the Roc compiler -
-        // it's more efficient and also would bring us one step closer to dropping
-        // the dependency on this topological_sort implementation!
-        topological_sort(self.ids(), |id| match self.deps.get(id) {
-            Some(dep_ids) => dep_ids.to_vec(),
-            None => Vec::new(),
-        })
-        .unwrap_or_else(|err| {
-            unreachable!("Cyclic type definitions: {:?}", err);
-        })
+        use roc_collections::{ReferenceMatrix, TopologicalSort};
+
+        let mut matrix = ReferenceMatrix::new(self.by_id.len());
+
+        for type_id in self.ids() {
+            for dep in self.deps.get(&type_id).iter().flat_map(|x| x.iter()) {
+                matrix.set_row_col(type_id.0, dep.0, true);
+            }
+        }
+
+        match matrix.topological_sort_into_groups() {
+            TopologicalSort::Groups { groups } => groups
+                .into_iter()
+                .flatten()
+                .rev()
+                .map(|n| TypeId(n as usize))
+                .collect(),
+            TopologicalSort::HasCycles {
+                groups: _,
+                nodes_in_cycle,
+            } => unreachable!("Cyclic type definitions: {:?}", nodes_in_cycle),
+        }
     }
 
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &RocType> {
@@ -248,6 +259,95 @@ impl RocType {
         }
     }
 
+    pub fn size(&self, types: &Types, target_info: TargetInfo) -> usize {
+        use std::mem::size_of;
+
+        match self {
+            RocType::Bool => size_of::<bool>(),
+            RocType::I8 => size_of::<i8>(),
+            RocType::U8 => size_of::<u8>(),
+            RocType::I16 => size_of::<i16>(),
+            RocType::U16 => size_of::<u16>(),
+            RocType::I32 => size_of::<i32>(),
+            RocType::U32 => size_of::<u32>(),
+            RocType::I64 => size_of::<i64>(),
+            RocType::U64 => size_of::<u64>(),
+            RocType::I128 => size_of::<roc_std::I128>(),
+            RocType::U128 => size_of::<roc_std::U128>(),
+            RocType::F32 => size_of::<f32>(),
+            RocType::F64 => size_of::<f64>(),
+            RocType::F128 => todo!(),
+            RocType::RocDec => size_of::<roc_std::RocDec>(),
+            RocType::RocStr | RocType::RocList(_) | RocType::RocDict(_, _) | RocType::RocSet(_) => {
+                3 * target_info.ptr_size()
+            }
+            RocType::RocBox(_) => target_info.ptr_size(),
+            RocType::TagUnion(tag_union) => match tag_union {
+                RocTagUnion::Enumeration { tags, .. } => size_for_tag_count(tags.len()),
+                RocTagUnion::NonRecursive { tags, .. } => {
+                    // The "unpadded" size (without taking alignment into account)
+                    // is the sum of all the sizes of the fields.
+                    let size_unpadded = tags.iter().fold(0, |total, (_, opt_payload_id)| {
+                        if let Some(payload_id) = opt_payload_id {
+                            let payload = types.get(*payload_id);
+
+                            total + payload.size(types, target_info)
+                        } else {
+                            total
+                        }
+                    });
+
+                    // Round up to the next multiple of alignment, to incorporate
+                    // any necessary alignment padding.
+                    //
+                    // e.g. if we have a record with a Str and a U8, that would be a
+                    // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
+                    // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
+                    let discriminant_align = align_for_tag_count(tags.len(), target_info);
+                    let align = self.alignment(types, target_info).max(discriminant_align);
+                    let size_padded = (size_unpadded / align) * align;
+
+                    if size_unpadded == size_padded {
+                        // We don't have any alignment padding, which means we can't
+                        // put the discriminant in the padding and the compiler will
+                        // add extra space for it.
+                        let discriminant_size = size_for_tag_count(tags.len());
+
+                        size_padded + discriminant_size.max(align)
+                    } else {
+                        size_padded
+                    }
+                }
+                RocTagUnion::Recursive { .. } => todo!(),
+                RocTagUnion::NonNullableUnwrapped { .. } => todo!(),
+                RocTagUnion::NullableWrapped { .. } => todo!(),
+                RocTagUnion::NullableUnwrapped { .. } => todo!(),
+            },
+            RocType::Struct { fields, .. } => {
+                // The "unpadded" size (without taking alignment into account)
+                // is the sum of all the sizes of the fields.
+                let size_unpadded = fields.iter().fold(0, |total, (_, field_id)| {
+                    let field = types.get(*field_id);
+
+                    total + field.size(types, target_info)
+                });
+
+                // Round up to the next multiple of alignment, to incorporate
+                // any necessary alignment padding.
+                //
+                // e.g. if we have a record with a Str and a U8, that would be a
+                // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
+                // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
+                let align = self.alignment(types, target_info);
+
+                (size_unpadded / align) * align
+            }
+            RocType::TransparentWrapper { content, .. } => {
+                types.get(*content).size(types, target_info)
+            }
+        }
+    }
+
     pub fn alignment(&self, types: &Types, target_info: TargetInfo) -> usize {
         match self {
             RocType::RocStr
@@ -260,7 +360,7 @@ impl RocType {
             RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
                 // The smallest alignment this could possibly have is based on the number of tags - e.g.
                 // 0 tags is an empty union (so, alignment 0), 1-255 tags has a u8 tag (so, alignment 1), etc.
-                let mut align = align_for_tag_count(tags.len());
+                let mut align = align_for_tag_count(tags.len(), target_info);
 
                 for (_, payloads) in tags {
                     for id in payloads {
@@ -276,7 +376,7 @@ impl RocType {
                 //
                 // Unlike a regular tag union, a recursive one also includes a pointer.
                 let ptr_align = target_info.ptr_alignment_bytes();
-                let mut align = ptr_align.max(align_for_tag_count(tags.len()));
+                let mut align = ptr_align.max(align_for_tag_count(tags.len(), target_info));
 
                 for (_, payloads) in tags {
                     for id in payloads {
@@ -292,7 +392,8 @@ impl RocType {
                 //
                 // Unlike a regular tag union, a recursive one also includes a pointer.
                 let ptr_align = target_info.ptr_alignment_bytes();
-                let mut align = ptr_align.max(align_for_tag_count(non_null_tags.len()));
+                let mut align =
+                    ptr_align.max(align_for_tag_count(non_null_tags.len(), target_info));
 
                 for (_, _, payloads) in non_null_tags {
                     for id in payloads {
@@ -336,18 +437,40 @@ impl RocType {
     }
 }
 
-fn align_for_tag_count(num_tags: usize) -> usize {
+fn size_for_tag_count(num_tags: usize) -> usize {
     if num_tags == 0 {
         // empty tag union
         0
     } else if num_tags < u8::MAX as usize {
-        align_of::<u8>()
+        IntWidth::U8.stack_size() as usize
     } else if num_tags < u16::MAX as usize {
-        align_of::<u16>()
+        IntWidth::U16.stack_size() as usize
     } else if num_tags < u32::MAX as usize {
-        align_of::<u32>()
+        IntWidth::U32.stack_size() as usize
     } else if num_tags < u64::MAX as usize {
-        align_of::<u64>()
+        IntWidth::U64.stack_size() as usize
+    } else {
+        panic!(
+            "Too many tags. You can't have more than {} tags in a tag union!",
+            u64::MAX
+        );
+    }
+}
+
+/// Returns the alignment of the discriminant based on the target
+/// (e.g. on wasm, these are always 4)
+fn align_for_tag_count(num_tags: usize, target_info: TargetInfo) -> usize {
+    if num_tags == 0 {
+        // empty tag union
+        0
+    } else if num_tags < u8::MAX as usize {
+        IntWidth::U8.alignment_bytes(target_info) as usize
+    } else if num_tags < u16::MAX as usize {
+        IntWidth::U16.alignment_bytes(target_info) as usize
+    } else if num_tags < u32::MAX as usize {
+        IntWidth::U32.alignment_bytes(target_info) as usize
+    } else if num_tags < u64::MAX as usize {
+        IntWidth::U64.alignment_bytes(target_info) as usize
     } else {
         panic!(
             "Too many tags. You can't have more than {} tags in a tag union!",
@@ -406,4 +529,67 @@ pub enum RocTagUnion {
         /// Otherwise, this would have been an Enumeration!
         non_null_payload: TypeId,
     },
+}
+
+impl RocTagUnion {
+    /// The byte offset where the discriminant is located within the tag union's
+    /// in-memory representation. So if you take a pointer to the tag union itself,
+    /// and add discriminant_offset to it, you'll have a pointer to the discriminant.
+    ///
+    /// This is only useful when given tags from RocTagUnion::Recursive or
+    /// RocTagUnion::NonRecursive - other tag types do not store their discriminants
+    /// as plain numbers at a fixed offset!
+    pub fn discriminant_offset(
+        tags: &[(String, Option<TypeId>)],
+        types: &Types,
+        target_info: TargetInfo,
+    ) -> usize {
+        tags.iter()
+            .fold(0, |max_size, (_, opt_tag_id)| match opt_tag_id {
+                Some(tag_id) => {
+                    let size_unpadded = match types.get(*tag_id) {
+                        // For structs (that is, payloads), we actually want
+                        // to get the size *before* alignment padding is taken
+                        // into account, since the discriminant is
+                        // stored after those bytes.
+                        RocType::Struct { fields, .. } => {
+                            fields.iter().fold(0, |total, (_, field_id)| {
+                                let field = types.get(*field_id);
+
+                                total + field.size(types, target_info)
+                            })
+                        }
+                        typ => max_size.max(typ.size(types, target_info)),
+                    };
+
+                    max_size.max(size_unpadded)
+                }
+
+                None => max_size,
+            })
+    }
+}
+
+#[test]
+fn sizes_agree_with_roc_std() {
+    use std::mem::size_of;
+
+    let target_info = TargetInfo::from(&target_lexicon::Triple::host());
+    let mut types = Types::default();
+
+    assert_eq!(
+        RocType::RocStr.size(&types, target_info),
+        size_of::<roc_std::RocStr>(),
+    );
+
+    assert_eq!(
+        RocType::RocList(types.add(RocType::RocStr)).size(&types, target_info),
+        size_of::<roc_std::RocList<()>>(),
+    );
+
+    // TODO enable this once we have RocDict in roc_std
+    // assert_eq!(
+    //     RocType::RocDict.size(&types, target_info),
+    //     size_of::<roc_std::RocDict>(),
+    // );
 }

@@ -10,6 +10,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::io::Read;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use tempfile::NamedTempFile;
@@ -21,7 +22,66 @@ pub struct Out {
     pub status: ExitStatus,
 }
 
+pub fn run_roc<I, S>(args: I, stdin_vals: &[&str]) -> Out
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let roc_binary_path = path_to_roc_binary();
+
+    // If we don't have a /target/release/roc, rebuild it!
+    if !roc_binary_path.exists() {
+        // Remove the /target/release/roc part
+        let root_project_dir = roc_binary_path
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+
+        // cargo build --bin roc
+        // (with --release iff the test is being built with --release)
+        let args = if cfg!(debug_assertions) {
+            vec!["build", "--bin", "roc"]
+        } else {
+            vec!["build", "--release", "--bin", "roc"]
+        };
+
+        let output = Command::new("cargo")
+            .current_dir(root_project_dir)
+            .args(args)
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            panic!("cargo build --release --bin roc failed. stdout was:\n\n{:?}\n\nstderr was:\n\n{:?}\n",
+                output.stdout,
+                output.stderr
+            );
+        }
+    }
+
+    run_with_stdin(&roc_binary_path, args, stdin_vals)
+}
+
+pub fn run_bindgen<I, S>(args: I) -> Out
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run_with_stdin(&path_to_bindgen_binary(), args, &[])
+}
+
 pub fn path_to_roc_binary() -> PathBuf {
+    path_to_binary("roc")
+}
+
+pub fn path_to_bindgen_binary() -> PathBuf {
+    path_to_binary("roc-bindgen")
+}
+
+pub fn path_to_binary(binary_name: &str) -> PathBuf {
     // Adapted from https://github.com/volta-cli/volta/blob/cefdf7436a15af3ce3a38b8fe53bb0cfdb37d3dd/tests/acceptance/support/sandbox.rs#L680
     // by the Volta Contributors - license information can be found in
     // the LEGAL_DETAILS file in the root directory of this distribution.
@@ -40,13 +100,33 @@ pub fn path_to_roc_binary() -> PathBuf {
             })
             .unwrap_or_else(|| panic!("CARGO_BIN_PATH wasn't set, and couldn't be inferred from context. Can't run CLI tests."));
 
-    path.push("roc");
+    path.push(binary_name);
 
     path
 }
 
-pub fn run_roc<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I, stdin_vals: &[&str]) -> Out {
-    let mut cmd = Command::new(path_to_roc_binary());
+pub fn strip_colors(str: &str) -> String {
+    use roc_reporting::report::ANSI_STYLE_CODES;
+
+    str.replace(ANSI_STYLE_CODES.red, "")
+        .replace(ANSI_STYLE_CODES.green, "")
+        .replace(ANSI_STYLE_CODES.yellow, "")
+        .replace(ANSI_STYLE_CODES.blue, "")
+        .replace(ANSI_STYLE_CODES.magenta, "")
+        .replace(ANSI_STYLE_CODES.cyan, "")
+        .replace(ANSI_STYLE_CODES.white, "")
+        .replace(ANSI_STYLE_CODES.bold, "")
+        .replace(ANSI_STYLE_CODES.underline, "")
+        .replace(ANSI_STYLE_CODES.reset, "")
+        .replace(ANSI_STYLE_CODES.color_reset, "")
+}
+
+pub fn run_with_stdin<I, S>(path: &Path, args: I, stdin_vals: &[&str]) -> Out
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut cmd = Command::new(path);
 
     for arg in args {
         cmd.arg(arg);
@@ -57,7 +137,12 @@ pub fn run_roc<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I, stdin_vals: 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to execute compiled `roc` binary in CLI test");
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to execute compiled binary {} in CLI test: {err}",
+                path.to_string_lossy()
+            )
+        });
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
@@ -71,7 +156,7 @@ pub fn run_roc<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I, stdin_vals: 
 
     let output = child
         .wait_with_output()
-        .expect("failed to get output for compiled `roc` binary in CLI test");
+        .expect("failed to get output for compiled binary in CLI test");
 
     Out {
         stdout: String::from_utf8(output.stdout).unwrap(),

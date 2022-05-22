@@ -42,7 +42,6 @@ partition = \low, high, initialList, order ->
             when partitionHelp low low initialList order high pivot is
                 Pair newI newList ->
                     Pair newI (swap newI high newList)
-
         Err _ ->
             Pair low initialList
 
@@ -54,10 +53,8 @@ partitionHelp = \i, j, list, order, high, pivot ->
                 when order value pivot is
                     LT | EQ ->
                         partitionHelp (i + 1) (j + 1) (swap i j list) order high pivot
-
                     GT ->
                         partitionHelp i (j + 1) list order high pivot
-
             Err _ ->
                 Pair i list
     else
@@ -70,6 +67,5 @@ swap = \i, j, list ->
             list
                 |> List.set i atJ
                 |> List.set j atI
-
         _ ->
             []

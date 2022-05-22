@@ -1,7 +1,7 @@
 use crate::def::Def;
 use crate::expr::{self, AnnotatedMark, ClosureData, Expr::*, IntValue};
 use crate::expr::{Expr, Field, Recursive};
-use crate::num::{FloatBound, IntBound, IntWidth, NumericBound};
+use crate::num::{FloatBound, IntBound, IntWidth, NumBound};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
 use roc_module::called_via::CalledVia;
@@ -5414,8 +5414,8 @@ fn defn_help(
     })
 }
 
-fn num_no_bound() -> NumericBound {
-    NumericBound::None
+fn num_no_bound() -> NumBound {
+    NumBound::None
 }
 
 fn int_no_bound() -> IntBound {
@@ -5436,7 +5436,7 @@ where
         num_var,
         precision_var,
         ii.to_string().into_boxed_str(),
-        IntValue::I128(ii),
+        IntValue::I128(ii.to_ne_bytes()),
         bound,
     )
 }
@@ -5453,12 +5453,12 @@ fn frac(num_var: Variable, precision_var: Variable, f: f64, bound: FloatBound) -
 }
 
 #[inline(always)]
-fn num<I: Into<i128>>(num_var: Variable, i: I, bound: NumericBound) -> Expr {
+fn num<I: Into<i128>>(num_var: Variable, i: I, bound: NumBound) -> Expr {
     let i = i.into();
     Num(
         num_var,
         i.to_string().into_boxed_str(),
-        IntValue::I128(i),
+        IntValue::I128(i.to_ne_bytes()),
         bound,
     )
 }

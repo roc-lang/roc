@@ -4,87 +4,44 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 
-use roc_bindgen::bindgen_rs;
-use roc_bindgen::load::load_types;
-use roc_load::Threading;
-use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
+mod helpers;
 
-fn generate_bindings(decl_src: &str) -> String {
-    use tempfile::tempdir;
+#[cfg(test)]
+mod test_gen_rs {
+    use crate::helpers::generate_bindings;
 
-    let mut src = indoc!(
-        r#"
-            platform "main"
-                requires {} { nothing : {} }
-                exposes []
-                packages {}
-                imports []
-                provides [ main ]
-
-        "#
-    )
-    .to_string();
-
-    src.push_str(decl_src);
-
-    let types = {
-        let dir = tempdir().expect("Unable to create tempdir");
-        let filename = PathBuf::from("Package-Config.roc");
-        let file_path = dir.path().join(filename);
-        let full_file_path = file_path.clone();
-        let mut file = File::create(file_path).unwrap();
-        writeln!(file, "{}", &src).unwrap();
-
-        let result = load_types(full_file_path, dir.path(), Threading::Single);
-
-        dir.close().expect("Unable to close tempdir");
-
-        result.expect("had problems loading")
-    };
-
-    // Reuse the `src` allocation since we're done with it.
-    let mut buf = src;
-    buf.clear();
-
-    bindgen_rs::write_types(&types, &mut buf).expect("I/O error when writing bindgen string");
-
-    buf
-}
-
-#[test]
-fn record_aliased() {
-    let module = indoc!(
-        r#"
-            MyRcd : { a : U64, b : U128 }
+    #[test]
+    fn record_aliased() {
+        let module = indoc!(
+            r#"
+            MyRcd : { a : U64, b : I128 }
 
             main : MyRcd
-            main = { a: 1u64, b: 2u128 }
+            main = { a: 1u64, b: 2i128 }
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct MyRcd {
-                    b: u128,
-                    a: u64,
+                    pub b: roc_std::I128,
+                    pub a: u64,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn nested_record_aliased() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn nested_record_aliased() {
+        let module = indoc!(
+            r#"
             Outer : { x : Inner, y : Str, z : List U8 }
 
             Inner : { a : U16, b : F32 }
@@ -92,101 +49,101 @@ fn nested_record_aliased() {
             main : Outer
             main = { x: { a: 5, b: 24 }, y: "foo", z: [ 1, 2 ] }
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Outer {
-                    y: roc_std::RocStr,
-                    z: roc_std::RocList<u8>,
-                    x: Inner,
+                    pub y: roc_std::RocStr,
+                    pub z: roc_std::RocList<u8>,
+                    pub x: Inner,
                 }
 
                 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Inner {
-                    b: f32,
-                    a: u16,
+                    pub b: f32,
+                    pub a: u16,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn record_anonymous() {
-    let module = "main = { a: 1u64, b: 2u128 }";
+    #[test]
+    fn record_anonymous() {
+        let module = "main = { a: 1u64, b: 2u128 }";
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
-                    b: u128,
-                    a: u64,
+                    pub b: roc_std::U128,
+                    pub a: u64,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn nested_record_anonymous() {
-    let module = r#"main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }"#;
+    #[test]
+    fn nested_record_anonymous() {
+        let module = r#"main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }"#;
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
-                    y: roc_std::RocStr,
-                    z: roc_std::RocList<u8>,
-                    x: R2,
+                    pub y: roc_std::RocStr,
+                    pub z: roc_std::RocList<u8>,
+                    pub x: R2,
                 }
 
                 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R2 {
-                    b: f32,
-                    a: u16,
+                    pub b: f32,
+                    pub a: u16,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn tag_union_aliased() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn tag_union_aliased() {
+        let module = indoc!(
+            r#"
             NonRecursive : [ Foo Str, Bar U128, Blah I32, Baz ]
 
             main : NonRecursive
             main = Foo "blah"
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
-                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
+                #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_NonRecursive {
                     Bar = 0,
@@ -195,139 +152,169 @@ fn tag_union_aliased() {
                     Foo = 3,
                 }
 
-                #[repr(C)]
-                pub union union_NonRecursive {
-                    Bar: u128,
-                    Blah: i32,
-                    Foo: core::mem::ManuallyDrop<roc_std::RocStr>,
+                impl core::fmt::Debug for tag_NonRecursive {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        match self {
+                            Self::Bar => f.write_str("tag_NonRecursive::Bar"),
+                            Self::Baz => f.write_str("tag_NonRecursive::Baz"),
+                            Self::Blah => f.write_str("tag_NonRecursive::Blah"),
+                            Self::Foo => f.write_str("tag_NonRecursive::Foo"),
+                        }
+                    }
                 }
 
                 #[repr(C)]
-                pub struct NonRecursive {
-                    variant: union_NonRecursive,
-                    tag: tag_NonRecursive,
+                pub union NonRecursive {
+                    Bar: roc_std::U128,
+                    Blah: i32,
+                    Foo: core::mem::ManuallyDrop<roc_std::RocStr>,
+                    _size_with_discriminant: [u8; 32],
                 }
 
                 impl NonRecursive {
                     pub fn tag(&self) -> tag_NonRecursive {
-                        self.tag
+                        unsafe {
+                            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
+
+                            core::mem::transmute::<u8, tag_NonRecursive>(*bytes.as_ptr().add(24))
+                        }
+                    }
+
+                    /// Internal helper
+                    fn set_discriminant(&mut self, tag: tag_NonRecursive) {
+                        let discriminant_ptr: *mut tag_NonRecursive = (self as *mut NonRecursive).cast();
+
+                        unsafe {
+                            *(discriminant_ptr.add(24)) = tag;
+                        }
                     }
 
                     /// Construct a tag named Bar, with the appropriate payload
-                    pub fn Bar(payload: u128) -> Self {
-                        Self {
-                            tag: tag_NonRecursive::Bar,
-                            variant: union_NonRecursive {
-                                Bar: payload
-                            },
-                        }
+                    pub fn Bar(payload: roc_std::U128) -> Self {
+                        let mut answer = Self {
+                            Bar: payload
+                        };
+
+                        answer.set_discriminant(tag_NonRecursive::Bar);
+
+                        answer
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Bar and convert it to Bar's payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
-                    pub unsafe fn into_Bar(self) -> u128 {
-                        self.variant.Bar
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Bar.
+                    pub unsafe fn into_Bar(self) -> roc_std::U128 {
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Bar);
+                        self.Bar
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Bar and return its payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
-                    pub unsafe fn as_Bar(&self) -> u128 {
-                        self.variant.Bar
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Bar.
+                    pub unsafe fn as_Bar(&self) -> roc_std::U128 {
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Bar);
+                        self.Bar
                     }
 
-                    /// Construct a tag named Baz
-                    pub fn Baz() -> Self {
-                        Self {
-                            tag: tag_NonRecursive::Baz,
-                            variant: unsafe {
-                                core::mem::transmute::<
-                                    core::mem::MaybeUninit<union_NonRecursive>,
-                                    union_NonRecursive,
-                                >(core::mem::MaybeUninit::uninit())
-                            },
-                        }
-                    }
+                    /// A tag named Baz, which has no payload.
+                    pub const Baz: Self = unsafe {
+                        let mut bytes = [0; core::mem::size_of::<NonRecursive>()];
+
+                        bytes[24] = tag_NonRecursive::Baz as u8;
+
+                        core::mem::transmute::<[u8; core::mem::size_of::<NonRecursive>()], NonRecursive>(bytes)
+                    };
 
                     /// Other `into_` methods return a payload, but since the Baz tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub fn into_Baz(self) -> () {
+                    pub fn into_Baz(self) {
                         ()
                     }
 
                     /// Other `as` methods return a payload, but since the Baz tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub unsafe fn as_Baz(&self) -> () {
+                    pub unsafe fn as_Baz(&self) {
                         ()
                     }
 
                     /// Construct a tag named Blah, with the appropriate payload
                     pub fn Blah(payload: i32) -> Self {
-                        Self {
-                            tag: tag_NonRecursive::Blah,
-                            variant: union_NonRecursive {
-                                Blah: payload
-                            },
-                        }
+                        let mut answer = Self {
+                            Blah: payload
+                        };
+
+                        answer.set_discriminant(tag_NonRecursive::Blah);
+
+                        answer
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Blah and convert it to Blah's payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Blah.
                     pub unsafe fn into_Blah(self) -> i32 {
-                        self.variant.Blah
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Blah);
+                        self.Blah
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Blah and return its payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Blah.
                     pub unsafe fn as_Blah(&self) -> i32 {
-                        self.variant.Blah
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Blah);
+                        self.Blah
                     }
 
                     /// Construct a tag named Foo, with the appropriate payload
                     pub fn Foo(payload: roc_std::RocStr) -> Self {
-                        Self {
-                            tag: tag_NonRecursive::Foo,
-                            variant: union_NonRecursive {
-                                Foo: core::mem::ManuallyDrop::new(payload)
-                            },
-                        }
+                        let mut answer = Self {
+                            Foo: core::mem::ManuallyDrop::new(payload)
+                        };
+
+                        answer.set_discriminant(tag_NonRecursive::Foo);
+
+                        answer
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Foo and convert it to Foo's payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Foo.
                     pub unsafe fn into_Foo(mut self) -> roc_std::RocStr {
-                        core::mem::ManuallyDrop::take(&mut self.variant.Foo)
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Foo);
+                        core::mem::ManuallyDrop::take(&mut self.Foo)
                     }
 
                     /// Unsafely assume the given NonRecursive has a .tag() of Foo and return its payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Foo.
                     pub unsafe fn as_Foo(&self) -> &roc_std::RocStr {
-                        &self.variant.Foo
+                        debug_assert_eq!(self.tag(), tag_NonRecursive::Foo);
+                        &self.Foo
                     }
                 }
 
                 impl Drop for NonRecursive {
                     fn drop(&mut self) {
-                        match self.tag {
+                        match self.tag() {
                             tag_NonRecursive::Bar => {}
                             tag_NonRecursive::Baz => {}
                             tag_NonRecursive::Blah => {}
-                            tag_NonRecursive::Foo => unsafe { core::mem::ManuallyDrop::drop(&mut self.variant.Foo) },
+                            tag_NonRecursive::Foo => unsafe { core::mem::ManuallyDrop::drop(&mut self.Foo) },
                         }
                     }
                 }
 
                 impl PartialEq for NonRecursive {
                     fn eq(&self, other: &Self) -> bool {
-                        if self.tag != other.tag {
+                        if self.tag() != other.tag() {
                             return false;
                         }
 
                         unsafe {
-                            match self.tag {
-                                tag_NonRecursive::Bar => self.variant.Bar == other.variant.Bar,
+                            match self.tag() {
+                                tag_NonRecursive::Bar => self.Bar == other.Bar,
                                 tag_NonRecursive::Baz => true,
-                                tag_NonRecursive::Blah => self.variant.Blah == other.variant.Blah,
-                                tag_NonRecursive::Foo => self.variant.Foo == other.variant.Foo,
+                                tag_NonRecursive::Blah => self.Blah == other.Blah,
+                                tag_NonRecursive::Foo => self.Foo == other.Foo,
                             }
                         }
                     }
@@ -337,17 +324,17 @@ fn tag_union_aliased() {
 
                 impl PartialOrd for NonRecursive {
                     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-                        match self.tag.partial_cmp(&other.tag) {
+                        match self.tag().partial_cmp(&other.tag()) {
                             Some(core::cmp::Ordering::Equal) => {}
                             not_eq => return not_eq,
                         }
 
                         unsafe {
-                            match self.tag {
-                                tag_NonRecursive::Bar => self.variant.Bar.partial_cmp(&other.variant.Bar),
+                            match self.tag() {
+                                tag_NonRecursive::Bar => self.Bar.partial_cmp(&other.Bar),
                                 tag_NonRecursive::Baz => Some(core::cmp::Ordering::Equal),
-                                tag_NonRecursive::Blah => self.variant.Blah.partial_cmp(&other.variant.Blah),
-                                tag_NonRecursive::Foo => self.variant.Foo.partial_cmp(&other.variant.Foo),
+                                tag_NonRecursive::Blah => self.Blah.partial_cmp(&other.Blah),
+                                tag_NonRecursive::Foo => self.Foo.partial_cmp(&other.Foo),
                             }
                         }
                     }
@@ -355,17 +342,17 @@ fn tag_union_aliased() {
 
                 impl Ord for NonRecursive {
                     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-                        match self.tag.cmp(&other.tag) {
+                        match self.tag().cmp(&other.tag()) {
                             core::cmp::Ordering::Equal => {}
                             not_eq => return not_eq,
                         }
 
                         unsafe {
-                            match self.tag {
-                                tag_NonRecursive::Bar => self.variant.Bar.cmp(&other.variant.Bar),
+                            match self.tag() {
+                                tag_NonRecursive::Bar => self.Bar.cmp(&other.Bar),
                                 tag_NonRecursive::Baz => core::cmp::Ordering::Equal,
-                                tag_NonRecursive::Blah => self.variant.Blah.cmp(&other.variant.Blah),
-                                tag_NonRecursive::Foo => self.variant.Foo.cmp(&other.variant.Foo),
+                                tag_NonRecursive::Blah => self.Blah.cmp(&other.Blah),
+                                tag_NonRecursive::Foo => self.Foo.cmp(&other.Foo),
                             }
                         }
                     }
@@ -373,33 +360,46 @@ fn tag_union_aliased() {
 
                 impl Clone for NonRecursive {
                     fn clone(&self) -> Self {
-                        match self.tag {
-                            tag_NonRecursive::Bar => Self {
-                                variant: union_NonRecursive {
-                                    Bar: unsafe { self.variant.Bar.clone() },
-                                },
-                                tag: tag_NonRecursive::Bar,
+                        let mut answer = unsafe {
+                            match self.tag() {
+                                tag_NonRecursive::Bar => Self {
+                                        Bar: self.Bar.clone(),
+                                    },
+                                tag_NonRecursive::Baz => core::mem::transmute::<
+                                        core::mem::MaybeUninit<NonRecursive>,
+                                        NonRecursive,
+                                    >(core::mem::MaybeUninit::uninit()),
+                                tag_NonRecursive::Blah => Self {
+                                        Blah: self.Blah.clone(),
+                                    },
+                                tag_NonRecursive::Foo => Self {
+                                        Foo: self.Foo.clone(),
+                                    },
+                            }
+
+                        };
+
+                        answer.set_discriminant(self.tag());
+
+                        answer
+                    }
+                }
+
+                impl core::hash::Hash for NonRecursive {
+                    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                        match self.tag() {
+                            tag_NonRecursive::Bar => unsafe {
+                                tag_NonRecursive::Bar.hash(state);
+                                self.Bar.hash(state);
                             },
-                            tag_NonRecursive::Baz => Self {
-                                variant: unsafe {
-                                    core::mem::transmute::<
-                                        core::mem::MaybeUninit<union_NonRecursive>,
-                                        union_NonRecursive,
-                                    >(core::mem::MaybeUninit::uninit())
-                                },
-                                tag: tag_NonRecursive::Baz,
+                            tag_NonRecursive::Baz => tag_NonRecursive::Baz.hash(state),
+                            tag_NonRecursive::Blah => unsafe {
+                                tag_NonRecursive::Blah.hash(state);
+                                self.Blah.hash(state);
                             },
-                            tag_NonRecursive::Blah => Self {
-                                variant: union_NonRecursive {
-                                    Blah: unsafe { self.variant.Blah.clone() },
-                                },
-                                tag: tag_NonRecursive::Blah,
-                            },
-                            tag_NonRecursive::Foo => Self {
-                                variant: union_NonRecursive {
-                                    Foo: unsafe { self.variant.Foo.clone() },
-                                },
-                                tag: tag_NonRecursive::Foo,
+                            tag_NonRecursive::Foo => unsafe {
+                                tag_NonRecursive::Foo.hash(state);
+                                self.Foo.hash(state);
                             },
                         }
                     }
@@ -410,125 +410,144 @@ fn tag_union_aliased() {
                         f.write_str("NonRecursive::")?;
 
                         unsafe {
-                            match self.tag {
-                                tag_NonRecursive::Bar => f.debug_tuple("Bar").field(&self.variant.Bar).finish(),
+                            match self.tag() {
+                                tag_NonRecursive::Bar => f.debug_tuple("Bar").field(&self.Bar).finish(),
                                 tag_NonRecursive::Baz => f.write_str("Baz"),
-                                tag_NonRecursive::Blah => f.debug_tuple("Blah").field(&self.variant.Blah).finish(),
-                                tag_NonRecursive::Foo => f.debug_tuple("Foo").field(&self.variant.Foo).finish(),
+                                tag_NonRecursive::Blah => f.debug_tuple("Blah").field(&self.Blah).finish(),
+                                tag_NonRecursive::Foo => f.debug_tuple("Foo").field(&*self.Foo).finish(),
                             }
                         }
                     }
                 }
 
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn tag_union_enumeration() {
-    let module = indoc!(
-        r#"
-            NonRecursive : [ Blah, Foo, Bar, ]
+    #[test]
+    fn tag_union_enumeration() {
+        let module = indoc!(
+            r#"
+            Enumeration : [ Blah, Foo, Bar, ]
 
-            main : NonRecursive
+            main : Enumeration
             main = Foo
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
-                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
+                #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
-                pub enum NonRecursive {
+                pub enum Enumeration {
                     Bar = 0,
                     Blah = 1,
                     Foo = 2,
                 }
-            "#
-        )
-    );
-}
 
-#[test]
-fn single_tag_union_with_payloads() {
-    let module = indoc!(
-        r#"
+                impl core::fmt::Debug for Enumeration {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        match self {
+                            Self::Bar => f.write_str("Enumeration::Bar"),
+                            Self::Blah => f.write_str("Enumeration::Blah"),
+                            Self::Foo => f.write_str("Enumeration::Foo"),
+                        }
+                    }
+                }
+            "#
+            )
+        );
+    }
+
+    #[test]
+    fn single_tag_union_with_payloads() {
+        let module = indoc!(
+            r#"
             UserId : [ Id U32 Str ]
 
             main : UserId
             main = Id 42 "blah"
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct UserId {
-                    f1: roc_std::RocStr,
-                    f0: u32,
+                    pub f1: roc_std::RocStr,
+                    pub f0: u32,
                 }
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn single_tag_union_with_one_payload_field() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn single_tag_union_with_one_payload_field() {
+        let module = indoc!(
+            r#"
             UserId : [ Id Str ]
 
             main : UserId
             main = Id "blah"
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(transparent)]
                 pub struct UserId(roc_std::RocStr);
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn cons_list_of_strings() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn cons_list_of_strings() {
+        let module = indoc!(
+            r#"
             StrConsList : [ Nil, Cons Str StrConsList ]
 
             main : StrConsList
             main = Cons "Hello, " (Cons "World!" Nil)
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
-                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
+                #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_StrConsList {
                     Cons = 0,
                     Nil = 1,
+                }
+
+                impl core::fmt::Debug for tag_StrConsList {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        match self {
+                            Self::Cons => f.write_str("tag_StrConsList::Cons"),
+                            Self::Nil => f.write_str("tag_StrConsList::Nil"),
+                        }
+                    }
                 }
 
                 #[derive(Clone, Eq, Ord, Hash, PartialEq, PartialOrd)]
@@ -561,8 +580,11 @@ fn cons_list_of_strings() {
                     }
 
                     /// Unsafely assume the given StrConsList has a .tag() of Cons and convert it to Cons's payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Cons.
                     pub unsafe fn into_Cons(self) -> roc_std::RocStr {
+                        debug_assert_eq!(self.tag(), tag_StrConsList::Cons);
+
                         let payload = core::mem::ManuallyDrop::take(&mut *self.pointer);
                         let align = core::mem::align_of::<roc_std::RocStr>() as u32;
 
@@ -572,8 +594,10 @@ fn cons_list_of_strings() {
                     }
 
                     /// Unsafely assume the given StrConsList has a .tag() of Cons and return its payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Cons.
                     pub unsafe fn as_Cons(&self) -> &roc_std::RocStr {
+                        debug_assert_eq!(self.tag(), tag_StrConsList::Cons);
                         &*self.pointer
                     }
 
@@ -586,13 +610,13 @@ fn cons_list_of_strings() {
 
                     /// Other `into_` methods return a payload, but since the Nil tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub fn into_Nil(self) -> () {
+                    pub fn into_Nil(self) {
                         ()
                     }
 
                     /// Other `as` methods return a payload, but since the Nil tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub unsafe fn as_Nil(&self) -> () {
+                    pub unsafe fn as_Nil(&self) {
                         ()
                     }
                 }
@@ -625,32 +649,41 @@ fn cons_list_of_strings() {
                 }
 
             "#
-        )
-    );
-}
+            )
+        );
+    }
 
-#[test]
-fn cons_list_of_ints() {
-    let module = indoc!(
-        r#"
+    #[test]
+    fn cons_list_of_ints() {
+        let module = indoc!(
+            r#"
             IntConsList : [ Empty, Prepend U16 IntConsList ]
 
             main : IntConsList
             main = Prepend 42 (Prepend 26 Empty)
         "#
-    );
+        );
 
-    assert_eq!(
-        generate_bindings(module)
-            .strip_prefix('\n')
-            .unwrap_or_default(),
-        indoc!(
-            r#"
-                #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+        assert_eq!(
+            generate_bindings(module)
+                .strip_prefix('\n')
+                .unwrap_or_default(),
+            indoc!(
+                r#"
+                #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum tag_IntConsList {
                     Empty = 0,
                     Prepend = 1,
+                }
+
+                impl core::fmt::Debug for tag_IntConsList {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        match self {
+                            Self::Empty => f.write_str("tag_IntConsList::Empty"),
+                            Self::Prepend => f.write_str("tag_IntConsList::Prepend"),
+                        }
+                    }
                 }
 
                 #[derive(Clone, Eq, Ord, Hash, PartialEq, PartialOrd)]
@@ -683,8 +716,11 @@ fn cons_list_of_ints() {
                     }
 
                     /// Unsafely assume the given IntConsList has a .tag() of Prepend and convert it to Prepend's payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Prepend.
                     pub unsafe fn into_Prepend(self) -> u16 {
+                        debug_assert_eq!(self.tag(), tag_IntConsList::Prepend);
+
                         let payload = *self.pointer;
                         let align = core::mem::align_of::<u16>() as u32;
 
@@ -694,8 +730,10 @@ fn cons_list_of_ints() {
                     }
 
                     /// Unsafely assume the given IntConsList has a .tag() of Prepend and return its payload.
-                    /// (always examine .tag() first to make sure this is the correct variant!)
+                    /// (Always examine .tag() first to make sure this is the correct variant!)
+                    /// Panics in debug builds if the .tag() doesn't return Prepend.
                     pub unsafe fn as_Prepend(&self) -> u16 {
+                        debug_assert_eq!(self.tag(), tag_IntConsList::Prepend);
                         *self.pointer
                     }
 
@@ -708,13 +746,13 @@ fn cons_list_of_ints() {
 
                     /// Other `into_` methods return a payload, but since the Empty tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub fn into_Empty(self) -> () {
+                    pub fn into_Empty(self) {
                         ()
                     }
 
                     /// Other `as` methods return a payload, but since the Empty tag
                     /// has no payload, this does nothing and is only here for completeness.
-                    pub unsafe fn as_Empty(&self) -> () {
+                    pub unsafe fn as_Empty(&self) {
                         ()
                     }
                 }
@@ -747,6 +785,7 @@ fn cons_list_of_ints() {
                 }
 
             "#
-        )
-    );
+            )
+        );
+    }
 }

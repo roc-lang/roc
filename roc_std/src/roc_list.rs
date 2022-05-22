@@ -1,7 +1,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use core::{
-    cell::Cell, cmp, fmt::Debug, intrinsics::copy_nonoverlapping, ops::Deref, ptr::NonNull,
+    cell::Cell,
+    cmp::{self, Ordering},
+    fmt::Debug,
+    intrinsics::copy_nonoverlapping,
+    ops::Deref,
+    ptr::NonNull,
 };
 
 use crate::{rc::ReferenceCount, roc_alloc, roc_dealloc, roc_realloc, storage::Storage};
@@ -181,6 +186,55 @@ where
 }
 
 impl<T> Eq for RocList<T> where T: Eq + ReferenceCount {}
+
+impl<T, U> PartialOrd<RocList<U>> for RocList<T>
+where
+    T: PartialOrd<U> + ReferenceCount,
+    U: ReferenceCount,
+{
+    fn partial_cmp(&self, other: &RocList<U>) -> Option<cmp::Ordering> {
+        // If one is longer than the other, use that as the ordering.
+        match self.length.partial_cmp(&other.length) {
+            Some(Ordering::Equal) => {}
+            ord => return ord,
+        }
+
+        // If they're the same length, compare their elements
+        for index in 0..self.len() {
+            match self[index].partial_cmp(&other[index]) {
+                Some(Ordering::Equal) => {}
+                ord => return ord,
+            }
+        }
+
+        // Capacity is ignored for ordering purposes.
+        Some(Ordering::Equal)
+    }
+}
+
+impl<T> Ord for RocList<T>
+where
+    T: Ord + ReferenceCount,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        // If one is longer than the other, use that as the ordering.
+        match self.length.cmp(&other.length) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+
+        // If they're the same length, compare their elements
+        for index in 0..self.len() {
+            match self[index].cmp(&other[index]) {
+                Ordering::Equal => {}
+                ord => return ord,
+            }
+        }
+
+        // Capacity is ignored for ordering purposes.
+        Ordering::Equal
+    }
+}
 
 impl<T> Debug for RocList<T>
 where

@@ -13,11 +13,11 @@ pub struct State<'a> {
     offset: usize,
 
     /// Position of the start of the current line
-    line_start: Position,
+    pub(crate) line_start: Position,
 
     /// Current indentation level, in columns
     /// (so no indent is col 1 - this saves an arithmetic operation.)
-    pub indent_column: u32,
+    pub(crate) indent_column: u32,
 }
 
 impl<'a> State<'a> {
@@ -43,18 +43,18 @@ impl<'a> State<'a> {
     }
 
     #[must_use]
-    pub(crate) fn advance(&self, offset: usize) -> State<'a> {
-        let mut state = self.clone();
-        state.offset += offset;
-        state
+    #[inline(always)]
+    pub(crate) const fn advance(mut self, offset: usize) -> State<'a> {
+        self.offset += offset;
+        self
     }
 
     #[must_use]
-    pub(crate) fn advance_newline(&self) -> State<'a> {
-        let mut state = self.clone();
-        state.offset += 1;
-        state.line_start = state.pos();
-        state
+    #[inline(always)]
+    pub(crate) const fn advance_newline(mut self) -> State<'a> {
+        self.offset += 1;
+        self.line_start = self.pos();
+        self
     }
 
     /// Returns the current position

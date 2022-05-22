@@ -1,5 +1,6 @@
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
+use roc_module::symbol::BUILTIN_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
     BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError, ShadowKind,
@@ -46,6 +47,7 @@ const ABILITY_MEMBER_BINDS_MULTIPLE_VARIABLES: &str = "ABILITY MEMBER BINDS MULT
 const ABILITY_NOT_ON_TOPLEVEL: &str = "ABILITY NOT ON TOP-LEVEL";
 const SPECIALIZATION_NOT_ON_TOPLEVEL: &str = "SPECIALIZATION NOT ON TOP-LEVEL";
 const ABILITY_USED_AS_TYPE: &str = "ABILITY USED AS TYPE";
+const ILLEGAL_DERIVE: &str = "ILLEGAL DERIVE";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -736,6 +738,18 @@ pub fn can_problem<'b>(
             title = SPECIALIZATION_NOT_ON_TOPLEVEL.to_string();
             severity = Severity::Warning;
         }
+        Problem::IllegalDerive(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This ability cannot be derived:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Only builtin abilities can be derived."),
+                alloc
+                    .note("The builtin abilities are ")
+                    .append(list_builtin_abilities(alloc)),
+            ]);
+            title = ILLEGAL_DERIVE.to_string();
+            severity = Severity::Warning;
+        }
     };
 
     Report {
@@ -744,6 +758,12 @@ pub fn can_problem<'b>(
         doc,
         severity,
     }
+}
+
+fn list_builtin_abilities<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
+    let doc = alloc.concat([alloc.symbol_qualified(BUILTIN_ABILITIES[0])]);
+    debug_assert!(BUILTIN_ABILITIES.len() == 1);
+    doc
 }
 
 fn to_invalid_optional_value_report<'b>(
@@ -1166,14 +1186,7 @@ fn pretty_runtime_error<'b>(
         }
 
         RuntimeError::LookupNotInScope(loc_name, options) => {
-            doc = not_found(
-                alloc,
-                lines,
-                loc_name.region,
-                &loc_name.value,
-                "value",
-                options,
-            );
+            doc = not_found(alloc, lines, loc_name.region, &loc_name.value, options);
             title = UNRECOGNIZED_NAME;
         }
         RuntimeError::CircularDef(entries) => {
@@ -1766,7 +1779,6 @@ fn not_found<'b>(
     lines: &LineInfo,
     region: roc_region::all::Region,
     name: &Ident,
-    thing: &'b str,
     options: MutSet<Box<str>>,
 ) -> RocDocBuilder<'b> {
     let mut suggestions = suggest::sort(
@@ -1800,10 +1812,9 @@ fn not_found<'b>(
 
     alloc.stack([
         alloc.concat([
-            alloc.reflow("I cannot find a `"),
+            alloc.reflow("Nothing is named `"),
             alloc.string(name.to_string()),
-            alloc.reflow("` "),
-            alloc.reflow(thing),
+            alloc.reflow("` in this scope."),
         ]),
         alloc.region(lines.convert_region(region)),
         to_details(default_no, default_yes),

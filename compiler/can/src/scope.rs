@@ -32,7 +32,11 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub fn new(home: ModuleId, initial_ident_ids: IdentIds) -> Scope {
+    pub fn new(
+        home: ModuleId,
+        initial_ident_ids: IdentIds,
+        starting_abilities_store: AbilitiesStore,
+    ) -> Scope {
         let imports = Symbol::default_in_scope()
             .into_iter()
             .map(|(a, (b, c))| (a, b, c))
@@ -43,22 +47,25 @@ impl Scope {
             exposed_ident_count: initial_ident_ids.len(),
             locals: ScopedIdentIds::from_ident_ids(home, initial_ident_ids),
             aliases: VecMap::default(),
-            // TODO(abilities): default abilities in scope
-            abilities_store: AbilitiesStore::default(),
+            abilities_store: starting_abilities_store,
             imports,
         }
     }
 
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
+        self.lookup_str(ident.as_str(), region)
+    }
+
+    pub fn lookup_str(&self, ident: &str, region: Region) -> Result<Symbol, RuntimeError> {
         use ContainsIdent::*;
 
-        match self.scope_contains_ident(ident.as_str()) {
+        match self.scope_contains_ident(ident) {
             InScope(symbol, _) => Ok(symbol),
             NotInScope(_) | NotPresent => {
                 let error = RuntimeError::LookupNotInScope(
                     Loc {
                         region,
-                        value: ident.clone(),
+                        value: Ident::from(ident),
                     },
                     self.idents_in_scope().map(|v| v.as_ref().into()).collect(),
                 );
@@ -560,7 +567,11 @@ mod test {
     #[test]
     fn scope_contains_introduced() {
         let _register_module_debug_names = ModuleIds::default();
-        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+        let mut scope = Scope::new(
+            ModuleId::ATTR,
+            IdentIds::default(),
+            AbilitiesStore::default(),
+        );
 
         let region = Region::zero();
         let ident = Ident::from("mezolit");
@@ -575,7 +586,11 @@ mod test {
     #[test]
     fn second_introduce_shadows() {
         let _register_module_debug_names = ModuleIds::default();
-        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+        let mut scope = Scope::new(
+            ModuleId::ATTR,
+            IdentIds::default(),
+            AbilitiesStore::default(),
+        );
 
         let region1 = Region::from_pos(Position { offset: 10 });
         let region2 = Region::from_pos(Position { offset: 20 });
@@ -600,7 +615,11 @@ mod test {
     #[test]
     fn inner_scope_does_not_influence_outer() {
         let _register_module_debug_names = ModuleIds::default();
-        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+        let mut scope = Scope::new(
+            ModuleId::ATTR,
+            IdentIds::default(),
+            AbilitiesStore::default(),
+        );
 
         let region = Region::zero();
         let ident = Ident::from("uránia");
@@ -617,7 +636,11 @@ mod test {
     #[test]
     fn default_idents_in_scope() {
         let _register_module_debug_names = ModuleIds::default();
-        let scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+        let scope = Scope::new(
+            ModuleId::ATTR,
+            IdentIds::default(),
+            AbilitiesStore::default(),
+        );
 
         let idents: Vec<_> = scope.idents_in_scope().collect();
 
@@ -640,7 +663,11 @@ mod test {
     #[test]
     fn idents_with_inner_scope() {
         let _register_module_debug_names = ModuleIds::default();
-        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+        let mut scope = Scope::new(
+            ModuleId::ATTR,
+            IdentIds::default(),
+            AbilitiesStore::default(),
+        );
 
         let idents: Vec<_> = scope.idents_in_scope().collect();
 
@@ -707,7 +734,11 @@ mod test {
     #[test]
     fn import_is_in_scope() {
         let _register_module_debug_names = ModuleIds::default();
-        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+        let mut scope = Scope::new(
+            ModuleId::ATTR,
+            IdentIds::default(),
+            AbilitiesStore::default(),
+        );
 
         let ident = Ident::from("product");
         let symbol = Symbol::LIST_PRODUCT;
@@ -725,7 +756,11 @@ mod test {
     #[test]
     fn shadow_of_import() {
         let _register_module_debug_names = ModuleIds::default();
-        let mut scope = Scope::new(ModuleId::ATTR, IdentIds::default());
+        let mut scope = Scope::new(
+            ModuleId::ATTR,
+            IdentIds::default(),
+            AbilitiesStore::default(),
+        );
 
         let ident = Ident::from("product");
         let symbol = Symbol::LIST_PRODUCT;

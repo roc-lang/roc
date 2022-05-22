@@ -69,7 +69,9 @@ check-clippy:
     FROM +build-rust-test
     RUN cargo clippy -V
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo clippy --workspace --tests -- -D warnings
+        cargo clippy --workspace --tests -- --deny warnings
+    RUN --mount=type=cache,target=$SCCACHE_DIR \
+        cargo clippy --workspace --tests --release -- --deny warnings
 
 check-rustfmt:
     FROM +build-rust-test
@@ -83,6 +85,7 @@ check-typos:
 
 test-rust:
     FROM +build-rust-test
+    ENV ROC_WORKSPACE_DIR=/earthbuild
     ENV RUST_BACKTRACE=1
     # for race condition problem with cli test
     ENV ROC_NUM_WORKERS=1

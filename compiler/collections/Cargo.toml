@@ -3,7 +3,7 @@ name = "roc_collections"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 im    = "15.0.0"

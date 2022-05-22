@@ -168,6 +168,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             visitor.visit_expr(&e1.value, e1.region, Variable::NULL);
             visitor.visit_expr(&e2.value, e2.region, Variable::NULL);
         }
+        Expr::TypedHole(_) => { /* terminal */ }
         Expr::RuntimeError(..) => { /* terminal */ }
     }
 }

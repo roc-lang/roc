@@ -10,13 +10,13 @@ use std::os::raw::c_char;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(output: *mut u8) -> ();
+    fn roc_main(output: *mut u8);
 
     #[link_name = "roc__mainForHost_size"]
     fn roc_main_size() -> i64;
 
     #[link_name = "roc__mainForHost_1_Fx_caller"]
-    fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8) -> ();
+    fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8);
 
     #[allow(dead_code)]
     #[link_name = "roc__mainForHost_1_Fx_size"]

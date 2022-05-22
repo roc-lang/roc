@@ -523,6 +523,7 @@ dependencies = [
  "roc_collections",
  "roc_load",
  "roc_module",
+ "roc_reporting",
  "serde",
  "serde-xml-rs",
  "strip-ansi-escapes",
@@ -1163,6 +1164,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3dd60d1080a57a05ab032377049e0591415d2b31afd7028356dbf3cc6dcb066"
 dependencies = [
  "generic-array 0.14.5",
+]
+
+[[package]]
+name = "dircpy"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70b2666334bac0698c34f849a823a049800f9fe86a950cfd192e2d2a817da920"
+dependencies = [
+ "jwalk",
+ "log",
+ "walkdir",
 ]
 
 [[package]]
@@ -1990,6 +2002,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "671a26f820db17c2a2750743f1dd03bafd15b98c9f30c7c2628c024c05d73397"
 dependencies = [
  "wasm-bindgen",
+]
+
+[[package]]
+name = "jwalk"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "172752e853a067cbce46427de8470ddf308af7fd8ceaf9b682ef31a5021b6bb9"
+dependencies = [
+ "crossbeam",
+ "rayon",
 ]
 
 [[package]]
@@ -3434,6 +3456,9 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "clap 3.1.17",
+ "cli_utils",
+ "ctor",
+ "dircpy",
  "indoc",
  "pretty_assertions",
  "roc_builtins",
@@ -3446,10 +3471,10 @@ dependencies = [
  "roc_reporting",
  "roc_std",
  "roc_target",
+ "roc_test_utils",
  "roc_types",
  "target-lexicon",
  "tempfile",
- "ven_graph",
 ]
 
 [[package]]
@@ -4039,6 +4064,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_std",
  "roc_target",
  "roc_test_utils",
  "roc_types",

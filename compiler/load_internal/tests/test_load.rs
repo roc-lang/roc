@@ -856,7 +856,7 @@ mod test_load {
                         "
                         ── UNRECOGNIZED NAME ────────── tmp/issue_2863_module_type_does_not_exist/Main ─
 
-                        I cannot find a `DoesNotExist` value
+                        Nothing is named `DoesNotExist` in this scope.
 
                         5│  main : DoesNotExist
                                    ^^^^^^^^^^^^

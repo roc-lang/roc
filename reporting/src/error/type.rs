@@ -7,7 +7,9 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_solve::solve::{self, IncompleteAbilityImplementation};
+use roc_solve::ability::{UnderivableReason, Unfulfilled};
+use roc_solve::solve;
+use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
     AliasKind, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
@@ -125,38 +127,26 @@ pub fn type_problem<'b>(
                 other => panic!("unhandled bad type: {:?}", other),
             }
         }
-        IncompleteAbilityImplementation(incomplete) => {
+        UnfulfilledAbility(incomplete) => {
             let title = "INCOMPLETE ABILITY IMPLEMENTATION".to_string();
 
-            let doc = report_incomplete_ability(alloc, lines, incomplete);
+            let doc = report_unfulfilled_ability(alloc, lines, incomplete);
 
             report(title, doc, filename)
         }
-        BadExprMissingAbility(region, category, found, incomplete) => {
-            let note = alloc.stack([
-                alloc.reflow("The ways this expression is used requires that the following types implement the following abilities, which they do not:"),
-                alloc.type_block(alloc.stack(incomplete.iter().map(|incomplete| {
-                    symbol_does_not_implement(alloc, incomplete.typ, incomplete.ability)
-                }))),
-            ]);
+        BadExprMissingAbility(region, _category, _found, incomplete) => {
+            let incomplete = incomplete
+                .into_iter()
+                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled));
+            let note = alloc.stack(incomplete);
             let snippet = alloc.region(lines.convert_region(region));
-            let mut stack = vec![
+            let stack = [
                 alloc.text(
                     "This expression has a type that does not implement the abilities it's expected to:",
                 ),
                 snippet,
-                lone_type(
-                    alloc,
-                    found.clone(),
-                    found,
-                    ExpectationContext::Arbitrary,
-                    add_category(alloc, alloc.text("Right now it's"), &category),
-                    note,
-                ),
+                note
             ];
-            incomplete.into_iter().for_each(|incomplete| {
-                stack.push(report_incomplete_ability(alloc, lines, incomplete))
-            });
 
             let report = Report {
                 title: "TYPE MISMATCH".to_string(),
@@ -166,31 +156,19 @@ pub fn type_problem<'b>(
             };
             Some(report)
         }
-        BadPatternMissingAbility(region, category, found, incomplete) => {
-            let note = alloc.stack([
-                alloc.reflow("The ways this expression is used requires that the following types implement the following abilities, which they do not:"),
-                alloc.type_block(alloc.stack(incomplete.iter().map(|incomplete| {
-                    symbol_does_not_implement(alloc, incomplete.typ, incomplete.ability)
-                }))),
-            ]);
+        BadPatternMissingAbility(region, _category, _found, incomplete) => {
+            let incomplete = incomplete
+                .into_iter()
+                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled));
+            let note = alloc.stack(incomplete);
             let snippet = alloc.region(lines.convert_region(region));
-            let mut stack = vec![
+            let stack = [
                 alloc.text(
                     "This expression has a type does not implement the abilities it's expected to:",
                 ),
                 snippet,
-                lone_type(
-                    alloc,
-                    found.clone(),
-                    found,
-                    ExpectationContext::Arbitrary,
-                    add_pattern_category(alloc, alloc.text("Right now it's"), &category),
-                    note,
-                ),
+                note,
             ];
-            incomplete.into_iter().for_each(|incomplete| {
-                stack.push(report_incomplete_ability(alloc, lines, incomplete))
-            });
 
             let report = Report {
                 title: "TYPE MISMATCH".to_string(),
@@ -213,59 +191,240 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
+        StructuralSpecialization {
+            region,
+            typ,
+            ability,
+            member,
+        } => {
+            let stack = [
+                alloc.concat([
+                    alloc.reflow("This specialization of "),
+                    alloc.symbol_unqualified(member),
+                    alloc.reflow(" is for a non-opaque type:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("It is specialized for"),
+                alloc.type_block(error_type_to_doc(alloc, typ)),
+                alloc.reflow("but structural types can never specialize abilities!"),
+                alloc.note("").append(alloc.concat([
+                    alloc.symbol_unqualified(member),
+                    alloc.reflow(" is a member of "),
+                    alloc.symbol_qualified(ability),
+                ])),
+            ];
+
+            Some(Report {
+                title: "ILLEGAL SPECIALIZATION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity: Severity::RuntimeError,
+            })
+        }
+        DominatedDerive {
+            opaque,
+            ability,
+            derive_region,
+            impl_region,
+        } => {
+            let stack = [
+                alloc.concat([
+                    alloc.symbol_unqualified(opaque),
+                    alloc.reflow(" both derives and custom-implements "),
+                    alloc.symbol_qualified(ability),
+                    alloc.reflow(". We found the derive here:"),
+                ]),
+                alloc.region(lines.convert_region(derive_region)),
+                alloc.concat([
+                    alloc.reflow("and one custom implementation of "),
+                    alloc.symbol_qualified(ability),
+                    alloc.reflow(" here:"),
+                ]),
+                alloc.region(lines.convert_region(impl_region)),
+                alloc.concat([
+                    alloc.reflow("Derived and custom implementations can conflict, so one of them needs to be removed!"),
+                ]),
+                alloc.note("").append(alloc.reflow("We'll try to compile your program using the custom implementation first, and fall-back on the derived implementation if needed. Make sure to disambiguate which one you want!")),
+            ];
+
+            Some(Report {
+                title: "CONFLICTING DERIVE AND IMPLEMENTATION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity: Severity::Warning,
+            })
+        }
     }
 }
 
-fn report_incomplete_ability<'a>(
+fn report_unfulfilled_ability<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
-    incomplete: IncompleteAbilityImplementation,
+    unfulfilled: Unfulfilled,
 ) -> RocDocBuilder<'a> {
-    let IncompleteAbilityImplementation {
-        typ,
-        ability,
-        specialized_members,
-        missing_members,
-    } = incomplete;
+    match unfulfilled {
+        Unfulfilled::Incomplete {
+            typ,
+            ability,
+            missing_members,
+        } => {
+            debug_assert!(!missing_members.is_empty());
 
-    debug_assert!(!missing_members.is_empty());
+            let mut stack = vec![alloc.concat([
+                alloc.reflow("The type "),
+                alloc.symbol_unqualified(typ),
+                alloc.reflow(" does not fully implement the ability "),
+                alloc.symbol_unqualified(ability),
+                alloc.reflow(". The following specializations are missing:"),
+            ])];
 
-    let mut stack = vec![alloc.concat([
-        alloc.reflow("The type "),
-        alloc.symbol_unqualified(typ),
-        alloc.reflow(" does not fully implement the ability "),
-        alloc.symbol_unqualified(ability),
-        alloc.reflow(". The following specializations are missing:"),
-    ])];
+            for member in missing_members.into_iter() {
+                stack.push(alloc.concat([
+                    alloc.reflow("A specialization for "),
+                    alloc.symbol_unqualified(member.value),
+                    alloc.reflow(", which is defined here:"),
+                ]));
+                stack.push(alloc.region(lines.convert_region(member.region)));
+            }
 
-    for member in missing_members.into_iter() {
-        stack.push(alloc.concat([
-            alloc.reflow("A specialization for "),
-            alloc.symbol_unqualified(member.value),
-            alloc.reflow(", which is defined here:"),
-        ]));
-        stack.push(alloc.region(lines.convert_region(member.region)));
-    }
+            alloc.stack(stack)
+        }
+        Unfulfilled::AdhocUnderivable {
+            typ,
+            ability,
+            reason,
+        } => {
+            let reason = report_underivable_reason(alloc, reason, ability, &typ);
+            let stack = [
+                alloc.concat([
+                    alloc.reflow("Roc can't generate an implementation of the "),
+                    alloc.symbol_qualified(ability),
+                    alloc.reflow(" ability for"),
+                ]),
+                alloc.type_block(error_type_to_doc(alloc, typ)),
+            ]
+            .into_iter()
+            .chain(reason);
 
-    if !specialized_members.is_empty() {
-        stack.push(alloc.concat([
-            alloc.note(""),
-            alloc.symbol_unqualified(typ),
-            alloc.reflow(" specializes the following members of "),
-            alloc.symbol_unqualified(ability),
-            alloc.reflow(":"),
-        ]));
+            alloc.stack(stack)
+        }
+        Unfulfilled::OpaqueUnderivable {
+            typ,
+            ability,
+            opaque,
+            derive_region,
+            reason,
+        } => {
+            let reason = report_underivable_reason(alloc, reason, ability, &typ);
+            let stack = [
+                alloc.concat([
+                    alloc.reflow("Roc can't derive an implementation of the "),
+                    alloc.symbol_qualified(ability),
+                    alloc.reflow(" for "),
+                    alloc.symbol_unqualified(opaque),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(lines.convert_region(derive_region)),
+            ]
+            .into_iter()
+            .chain(reason)
+            .chain(std::iter::once(alloc.tip().append(alloc.concat([
+                alloc.reflow("You can define a custom implementation of "),
+                alloc.symbol_qualified(ability),
+                alloc.reflow(" for "),
+                alloc.symbol_unqualified(opaque),
+                alloc.reflow("."),
+            ]))));
 
-        for spec in specialized_members {
-            stack.push(alloc.concat([
-                alloc.symbol_unqualified(spec.value),
-                alloc.reflow(", specialized here:"),
-            ]));
-            stack.push(alloc.region(lines.convert_region(spec.region)));
+            alloc.stack(stack)
         }
     }
+}
 
-    alloc.stack(stack)
+fn report_underivable_reason<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    reason: UnderivableReason,
+    ability: Symbol,
+    typ: &ErrorType,
+) -> Option<RocDocBuilder<'a>> {
+    match reason {
+        UnderivableReason::NotABuiltin => {
+            Some(alloc.reflow("Only builtin abilities can have generated implementations!"))
+        }
+        UnderivableReason::SurfaceNotDerivable => underivable_hint(alloc, ability, typ),
+        UnderivableReason::NestedNotDerivable(nested_typ) => {
+            let hint = underivable_hint(alloc, ability, &nested_typ);
+            let reason = alloc.stack(
+                [
+                    alloc.reflow("In particular, an implementation for"),
+                    alloc.type_block(error_type_to_doc(alloc, nested_typ)),
+                    alloc.reflow("cannot be generated."),
+                ]
+                .into_iter()
+                .chain(hint),
+            );
+            Some(reason)
+        }
+    }
+}
+
+fn underivable_hint<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    ability: Symbol,
+    typ: &ErrorType,
+) -> Option<RocDocBuilder<'b>> {
+    match typ {
+        ErrorType::Function(..) => Some(alloc.note("").append(alloc.concat([
+            alloc.symbol_unqualified(ability),
+            alloc.reflow(" cannot be generated for functions."),
+        ]))),
+        ErrorType::FlexVar(v) | ErrorType::RigidVar(v) => Some(alloc.tip().append(alloc.concat([
+            alloc.reflow("This type variable is not bound to "),
+            alloc.symbol_unqualified(ability),
+            alloc.reflow(". Consider adding a "),
+            alloc.keyword("has"),
+            alloc.reflow(" clause to bind the type variable, like "),
+            alloc.inline_type_block(alloc.concat([
+                alloc.string("| ".to_string()),
+                alloc.type_variable(v.clone()),
+                alloc.space(),
+                alloc.keyword("has"),
+                alloc.space(),
+                alloc.symbol_qualified(ability),
+            ])),
+        ]))),
+        ErrorType::Alias(symbol, _, _, AliasKind::Opaque) => {
+            Some(alloc.tip().append(alloc.concat([
+                alloc.symbol_unqualified(*symbol),
+                alloc.reflow(" does not implement "),
+                alloc.symbol_unqualified(ability),
+                alloc.reflow("."),
+                if symbol.module_id() == alloc.home {
+                    alloc.concat([
+                        alloc.reflow(" Consider adding a custom implementation"),
+                        if ability.is_builtin() {
+                            alloc.concat([
+                                alloc.reflow(" or "),
+                                alloc.inline_type_block(alloc.concat([
+                                    alloc.keyword("has"),
+                                    alloc.space(),
+                                    alloc.symbol_qualified(ability),
+                                ])),
+                                alloc.reflow(" to the definition of "),
+                                alloc.symbol_unqualified(*symbol),
+                            ])
+                        } else {
+                            alloc.nil()
+                        },
+                        alloc.reflow("."),
+                    ])
+                } else {
+                    alloc.nil()
+                },
+            ])))
+        }
+        _ => None,
+    }
 }
 
 fn report_shadowing<'b>(
@@ -775,9 +934,9 @@ fn to_expr_report<'b>(
                         alloc.text(" branch has the type:"),
                     ]),
                     Some(alloc.concat([
-                        alloc.text("I need all branches in an "),
+                        alloc.text("All branches in an "),
                         alloc.keyword("if"),
-                        alloc.text(" to have the same type!"),
+                        alloc.text(" must have the same type!"),
                     ])),
                 ),
                 _ => report_mismatch(
@@ -799,9 +958,9 @@ fn to_expr_report<'b>(
                     alloc.string(format!("The {} branch is", index.ordinal())),
                     alloc.reflow("But all the previous branches have type:"),
                     Some(alloc.concat([
-                        alloc.reflow("I need all branches in an "),
+                        alloc.reflow("All branches in an "),
                         alloc.keyword("if"),
-                        alloc.reflow(" to have the same type!"),
+                        alloc.reflow(" must have the same type!"),
                     ])),
                 ),
             },
@@ -828,9 +987,9 @@ fn to_expr_report<'b>(
                 ]),
                 alloc.reflow("But all the previous branches have type:"),
                 Some(alloc.concat([
-                    alloc.reflow("I need all branches of a "),
+                    alloc.reflow("All branches of a "),
                     alloc.keyword("when"),
-                    alloc.reflow(" to have the same type!"),
+                    alloc.reflow(" must have the same type!"),
                 ])),
             ),
             Reason::ElemInList { index } => {
@@ -856,7 +1015,7 @@ fn to_expr_report<'b>(
                     alloc.reflow("This list contains elements with different types:"),
                     alloc.string(format!("Its {} element is", ith)),
                     alloc.reflow(prev_elems_msg),
-                    Some(alloc.reflow("I need every element in a list to have the same type!")),
+                    Some(alloc.reflow("Every element in a list must have the same type!")),
                 )
             }
             Reason::RecordUpdateValue(field) => report_mismatch(
@@ -1301,18 +1460,6 @@ fn does_not_implement<'a>(
 ) -> RocDocBuilder<'a> {
     alloc.concat([
         to_doc(alloc, Parens::Unnecessary, err_type).0,
-        alloc.reflow(" does not implement "),
-        alloc.symbol_unqualified(ability),
-    ])
-}
-
-fn symbol_does_not_implement<'a>(
-    alloc: &'a RocDocAllocator<'a>,
-    symbol: Symbol,
-    ability: Symbol,
-) -> RocDocBuilder<'a> {
-    alloc.concat([
-        alloc.symbol_unqualified(symbol),
         alloc.reflow(" does not implement "),
         alloc.symbol_unqualified(ability),
     ])
@@ -2232,6 +2379,14 @@ fn type_with_able_vars<'b>(
     }
 
     alloc.concat(doc)
+}
+
+fn error_type_to_doc<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    error_type: ErrorType,
+) -> RocDocBuilder<'b> {
+    let (typ, able_vars) = to_doc(alloc, Parens::Unnecessary, error_type);
+    type_with_able_vars(alloc, typ, able_vars)
 }
 
 fn to_diff<'b>(
@@ -3696,13 +3851,13 @@ fn pattern_to_doc_help<'b>(
     match pattern {
         Anything => alloc.text("_"),
         Literal(l) => match l {
-            Int(i) => alloc.text(i.to_string()),
-            U128(i) => alloc.text(i.to_string()),
+            Int(i) => alloc.text(i128::from_ne_bytes(i).to_string()),
+            U128(i) => alloc.text(u128::from_ne_bytes(i).to_string()),
             Bit(true) => alloc.text("True"),
             Bit(false) => alloc.text("False"),
             Byte(b) => alloc.text(b.to_string()),
             Float(f) => alloc.text(f.to_string()),
-            Decimal(d) => alloc.text(d.to_string()),
+            Decimal(d) => alloc.text(RocDec::from_ne_bytes(d).to_string()),
             Str(s) => alloc.string(s.into()),
         },
         Ctor(union, tag_id, args) => {

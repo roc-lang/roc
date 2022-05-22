@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 #[doc(hidden)]
 pub use pretty_assertions::assert_eq as _pretty_assert_eq;
 
@@ -46,4 +48,9 @@ impl Drop for TmpDir {
         // we "discard" the Result because there is no problem when a dir was already removed before we call remove_dir_all
         let _ = remove_dir_all::remove_dir_all(&self.path);
     }
+}
+
+pub fn workspace_root() -> PathBuf {
+    let root = std::env::var("ROC_WORKSPACE_DIR").expect("Can't find the ROC_WORKSPACE_DIR variable expected to be set in .cargo/config.toml. Are you running tests outside of cargo?");
+    PathBuf::from(root)
 }

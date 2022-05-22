@@ -1176,6 +1176,15 @@ pub fn constrain_expr(
             arg_cons.push(eq);
             constraints.exists_many(vars, arg_cons)
         }
+        TypedHole(var) => {
+            // store the expected type for this position
+            constraints.equal_types_var(
+                *var,
+                expected,
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            )
+        }
         RuntimeError(_) => {
             // Runtime Errors have no constraints because they're going to crash.
             Constraint::True

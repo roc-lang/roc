@@ -1,6 +1,7 @@
 use crate::solve::{self, Aliases};
-use roc_can::abilities::AbilitiesStore;
+use roc_can::abilities::{AbilitiesStore, SolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
+use roc_can::expr::PendingDerives;
 use roc_can::module::RigidVariables;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
@@ -20,11 +21,15 @@ pub struct SolvedModule {
     /// to create the types for HostExposed. This
     /// has some overlap with the StorageSubs fields,
     /// so maybe we can get rid of this at some point
+    ///
+    /// Contains both variables of symbols that are explicitly exposed by the header,
+    /// and the variables of any solved ability specializations we have.
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
 
     /// Used when importing this module into another module
     pub stored_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub storage_subs: StorageSubs,
+    pub solved_specializations: SolvedSpecializations,
 }
 
 pub fn run_solve(
@@ -34,6 +39,7 @@ pub fn run_solve(
     mut subs: Subs,
     mut aliases: Aliases,
     mut abilities_store: AbilitiesStore,
+    pending_derives: PendingDerives,
 ) -> (
     Solved<Subs>,
     solve::Env,
@@ -63,6 +69,7 @@ pub fn run_solve(
         subs,
         &mut aliases,
         &constraint,
+        pending_derives,
         &mut abilities_store,
     );
 

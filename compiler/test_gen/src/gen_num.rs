@@ -3333,6 +3333,20 @@ fn dec_float_suffix() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn dec_no_decimal() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            3dec
+            "#
+        ),
+        RocDec::from_str_to_i128_unsafe("3.0"),
+        i128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn ceiling_to_u32() {
     assert_evals_to!(
         indoc!(

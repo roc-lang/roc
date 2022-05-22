@@ -8,7 +8,6 @@ use roc_exhaustive::{Ctor, CtorName, RenderAs, TagId, Union};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_std::RocDec;
 
 /// COMPILE CASES
 
@@ -86,10 +85,9 @@ enum Test<'a> {
         union: roc_exhaustive::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
-    IsInt(i128, IntWidth),
-    IsU128(u128),
+    IsInt([u8; 16], IntWidth),
     IsFloat(u64, FloatWidth),
-    IsDecimal(RocDec),
+    IsDecimal([u8; 16]),
     IsStr(Box<str>),
     IsBit(bool),
     IsByte {
@@ -135,10 +133,6 @@ impl<'a> Hash for Test<'a> {
             IsDecimal(v) => {
                 // TODO: Is this okay?
                 state.write_u8(6);
-                v.hash(state);
-            }
-            IsU128(v) => {
-                state.write_u8(7);
                 v.hash(state);
             }
         }
@@ -316,7 +310,6 @@ fn tests_are_complete_help(last_test: &Test, number_of_tests: usize) -> bool {
         Test::IsByte { num_alts, .. } => number_of_tests == *num_alts,
         Test::IsBit(_) => number_of_tests == 2,
         Test::IsInt(_, _) => false,
-        Test::IsU128(_) => false,
         Test::IsFloat(_, _) => false,
         Test::IsDecimal(_) => false,
         Test::IsStr(_) => false,
@@ -591,7 +584,6 @@ fn test_at_path<'a>(
                     num_alts: union.alternatives.len(),
                 },
                 IntLiteral(v, precision) => IsInt(*v, *precision),
-                U128Literal(v) => IsU128(*v),
                 FloatLiteral(v, precision) => IsFloat(*v, *precision),
                 DecimalLiteral(v) => IsDecimal(*v),
                 StrLiteral(v) => IsStr(v.clone()),
@@ -881,18 +873,6 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        U128Literal(int) => match test {
-            IsU128(is_int) if int == *is_int => {
-                start.extend(end);
-                Some(Branch {
-                    goal: branch.goal,
-                    guard: branch.guard.clone(),
-                    patterns: start,
-                })
-            }
-            _ => None,
-        },
-
         FloatLiteral(float, p1) => match test {
             IsFloat(test_float, p2) if float == *test_float => {
                 debug_assert_eq!(p1, *p2);
@@ -1005,7 +985,6 @@ fn needs_tests(pattern: &Pattern) -> bool {
         | BitLiteral { .. }
         | EnumLiteral { .. }
         | IntLiteral(_, _)
-        | U128Literal(_)
         | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | StrLiteral(_) => true,
@@ -1338,7 +1317,7 @@ fn test_to_equality<'a>(
 
             match test_layout {
                 Layout::Union(union_layout) => {
-                    let lhs = Expr::Literal(Literal::Int(tag_id as i128));
+                    let lhs = Expr::Literal(Literal::Int((tag_id as i128).to_ne_bytes()));
 
                     let rhs = Expr::GetTagId {
                         structure: path_symbol,
@@ -1370,18 +1349,10 @@ fn test_to_equality<'a>(
 
         Test::IsInt(test_int, precision) => {
             // TODO don't downcast i128 here
-            debug_assert!(test_int <= i64::MAX as i128);
-            let lhs = Expr::Literal(Literal::Int(test_int as i128));
+            debug_assert!(i128::from_ne_bytes(test_int) <= i64::MAX as i128);
+            let lhs = Expr::Literal(Literal::Int(test_int));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::int_width(precision), lhs));
-
-            (stores, lhs_symbol, rhs_symbol, None)
-        }
-
-        Test::IsU128(test_int) => {
-            let lhs = Expr::Literal(Literal::U128(test_int));
-            let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::int_width(IntWidth::U128), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }
@@ -1835,7 +1806,7 @@ fn decide_to_branching<'a>(
                 );
 
                 let tag = match test {
-                    Test::IsInt(v, _) => v as u64,
+                    Test::IsInt(v, _) => i128::from_ne_bytes(v) as u64,
                     Test::IsFloat(v, _) => v as u64,
                     Test::IsBit(v) => v as u64,
                     Test::IsByte { tag_id, .. } => tag_id as u64,

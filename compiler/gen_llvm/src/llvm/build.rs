@@ -1,6 +1,3 @@
-use std::convert::{TryFrom, TryInto};
-use std::path::Path;
-
 use crate::llvm::bitcode::{
     call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
     call_str_bitcode_fn, call_void_bitcode_fn,
@@ -56,7 +53,9 @@ use morphic_lib::{
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth, IntrinsicName};
 use roc_builtins::{float_intrinsic, llvm_int_intrinsic};
 use roc_collections::all::{ImMap, MutMap, MutSet};
-use roc_debug_flags::{dbg_do, ROC_PRINT_LLVM_FN_VERIFICATION};
+use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
+use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -65,7 +64,10 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
+use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
+use std::convert::{TryFrom, TryInto};
+use std::path::Path;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 use super::convert::zig_with_overflow_roc_dec;
@@ -780,17 +782,19 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
     use roc_mono::ir::Literal::*;
 
     match literal {
-        Int(int) => match layout {
-            Layout::Builtin(Builtin::Bool) => {
-                env.context.bool_type().const_int(*int as u64, false).into()
-            }
+        Int(bytes) => match layout {
+            Layout::Builtin(Builtin::Bool) => env
+                .context
+                .bool_type()
+                .const_int(i128::from_ne_bytes(*bytes) as u64, false)
+                .into(),
             Layout::Builtin(Builtin::Int(int_width)) => {
-                int_with_precision(env, *int, *int_width).into()
+                int_with_precision(env, i128::from_ne_bytes(*bytes), *int_width).into()
             }
             _ => panic!("Invalid layout for int literal = {:?}", layout),
         },
 
-        U128(int) => const_u128(env, *int).into(),
+        U128(bytes) => const_u128(env, u128::from_ne_bytes(*bytes)).into(),
 
         Float(float) => match layout {
             Layout::Builtin(Builtin::Float(float_width)) => {
@@ -799,8 +803,8 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             _ => panic!("Invalid layout for float literal = {:?}", layout),
         },
 
-        Decimal(int) => {
-            let (upper_bits, lower_bits) = int.as_bits();
+        Decimal(bytes) => {
+            let (upper_bits, lower_bits) = RocDec::from_ne_bytes(*bytes).as_bits();
             env.context
                 .i128_type()
                 .const_int_arbitrary_precision(&[lower_bits, upper_bits as u64])

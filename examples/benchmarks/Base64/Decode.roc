@@ -50,7 +50,6 @@ bitsToChars = \bits, missing ->
     when Str.fromUtf8 (bitsToCharsHelp bits missing) is
         Ok str ->
             str
-
         Err _ ->
             ""
 
@@ -90,13 +89,10 @@ bitsToCharsHelp = \bits, missing ->
     when missing is
         0 ->
             [ p, q, r, s ]
-
         1 ->
             [ p, q, r, equals ]
-
         2 ->
             [ p, q, equals, equals ]
-
         _ ->
             # unreachable
             []
@@ -119,11 +115,9 @@ unsafeToChar = \n ->
             62 ->
                 # '+'
                 43
-
             63 ->
                 # '/'
                 47
-
             _ ->
                 # anything else is invalid '\u{0000}'
                 0

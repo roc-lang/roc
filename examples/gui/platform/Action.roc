@@ -15,6 +15,5 @@ map = \action, transform ->
     when action is
         None ->
             None
-
         Update state ->
             Update (transform state)

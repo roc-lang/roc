@@ -1,3 +1,4 @@
+use crate::num::NumericRange;
 use crate::pretty_print::Parens;
 use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
@@ -254,7 +255,7 @@ pub enum Type {
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
     Apply(Symbol, Vec<Type>, Region),
     Variable(Variable),
-    RangedNumber(Box<Type>, Vec<Variable>),
+    RangedNumber(Box<Type>, NumericRange),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }
@@ -324,7 +325,7 @@ impl Clone for Type {
             }
             Self::Apply(arg0, arg1, arg2) => Self::Apply(*arg0, arg1.clone(), *arg2),
             Self::Variable(arg0) => Self::Variable(*arg0),
-            Self::RangedNumber(arg0, arg1) => Self::RangedNumber(arg0.clone(), arg1.clone()),
+            Self::RangedNumber(arg0, arg1) => Self::RangedNumber(arg0.clone(), *arg1),
             Self::Erroneous(arg0) => Self::Erroneous(arg0.clone()),
         }
     }
@@ -1089,9 +1090,7 @@ impl Type {
             } => actual_type.contains_variable(rep_variable),
             HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
             Apply(_, args, _) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
-            RangedNumber(typ, vars) => {
-                typ.contains_variable(rep_variable) || vars.iter().any(|&v| v == rep_variable)
-            }
+            RangedNumber(typ, _) => typ.contains_variable(rep_variable),
             EmptyRec | EmptyTagUnion | Erroneous(_) => false,
         }
     }
@@ -1422,7 +1421,7 @@ impl Type {
     pub fn expect_variable(&self, reason: &'static str) -> Variable {
         match self {
             Type::Variable(v) => *v,
-            _ => internal_error!(reason),
+            _ => internal_error!("{}", reason),
         }
     }
 }
@@ -1594,9 +1593,8 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             }
             variables_help(actual, accum);
         }
-        RangedNumber(typ, vars) => {
+        RangedNumber(typ, _) => {
             variables_help(typ, accum);
-            accum.extend(vars.iter().copied());
         }
         Apply(_, args, _) => {
             for x in args {
@@ -1730,9 +1728,8 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             }
             variables_help_detailed(actual, accum);
         }
-        RangedNumber(typ, vars) => {
+        RangedNumber(typ, _) => {
             variables_help_detailed(typ, accum);
-            accum.type_variables.extend(vars);
         }
         Apply(_, args, _) => {
             for x in args {

@@ -1,6 +1,9 @@
+use crate::abilities::AbilityMemberData;
+use crate::abilities::MemberTypeInfo;
 use crate::abilities::MemberVariables;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::find_type_def_symbols;
+use crate::annotation::make_apply_symbol;
 use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::env::Env;
@@ -31,6 +34,7 @@ use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::IllegalCycleMark;
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::AliasCommon;
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
 use roc_types::types::LambdaSet;
@@ -58,7 +62,6 @@ pub struct Annotation {
 pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
     def_ordering: DefOrdering,
-    pub(crate) abilities_in_scope: Vec<Symbol>,
     aliases: VecMap<Symbol, Alias>,
 }
 
@@ -100,12 +103,19 @@ impl PendingValueDef<'_> {
 
 #[derive(Debug, Clone)]
 enum PendingTypeDef<'a> {
-    /// A structural or opaque type alias, e.g. `Ints : List Int` or `Age := U32` respectively.
+    /// A structural type alias, e.g. `Ints : List Int`
     Alias {
         name: Loc<Symbol>,
         vars: Vec<Loc<Lowercase>>,
         ann: &'a Loc<ast::TypeAnnotation<'a>>,
-        kind: AliasKind,
+    },
+
+    /// An opaque type alias, e.g. `Age := U32`.
+    Opaque {
+        name: Loc<Symbol>,
+        vars: Vec<Loc<Lowercase>>,
+        ann: &'a Loc<ast::TypeAnnotation<'a>>,
+        derived: Option<&'a Loc<ast::Derived<'a>>>,
     },
 
     Ability {
@@ -142,6 +152,17 @@ impl PendingTypeDef<'_> {
         match self {
             PendingTypeDef::Alias { name, ann, .. } => {
                 let region = Region::span_across(&name.region, &ann.region);
+
+                Some((name.value, region))
+            }
+            PendingTypeDef::Opaque {
+                name,
+                vars: _,
+                ann,
+                derived,
+            } => {
+                let end = derived.map(|d| d.region).unwrap_or(ann.region);
+                let region = Region::span_across(&name.region, &end);
 
                 Some((name.value, region))
             }
@@ -207,6 +228,202 @@ fn sort_type_defs_before_introduction(
 }
 
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn canonicalize_alias<'a>(
+    env: &mut Env<'a>,
+    output: &mut Output,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    pending_abilities_in_scope: &[Symbol],
+
+    name: Loc<Symbol>,
+    ann: &'a Loc<ast::TypeAnnotation<'a>>,
+    vars: &[Loc<Lowercase>],
+    kind: AliasKind,
+) -> Result<Alias, ()> {
+    let symbol = name.value;
+    let can_ann = canonicalize_annotation(
+        env,
+        scope,
+        &ann.value,
+        ann.region,
+        var_store,
+        pending_abilities_in_scope,
+    );
+
+    // Record all the annotation's references in output.references.lookups
+    for symbol in can_ann.references {
+        output.references.insert_type_lookup(symbol);
+    }
+
+    let mut can_vars: Vec<Loc<AliasVar>> = Vec::with_capacity(vars.len());
+    let mut is_phantom = false;
+
+    let IntroducedVariables {
+        named,
+        able,
+        wildcards,
+        inferred,
+        ..
+    } = can_ann.introduced_variables;
+
+    let mut named: Vec<_> = (named.into_iter().map(OwnedNamedOrAble::Named))
+        .chain(able.into_iter().map(OwnedNamedOrAble::Able))
+        .collect();
+    for loc_lowercase in vars.iter() {
+        let opt_index = named
+            .iter()
+            .position(|nv| nv.ref_name() == &loc_lowercase.value);
+        match opt_index {
+            Some(index) => {
+                // This is a valid lowercase rigid var for the type def.
+                let named_variable = named.swap_remove(index);
+                let var = named_variable.variable();
+                let opt_bound_ability = named_variable.opt_ability();
+                let name = named_variable.name();
+
+                can_vars.push(Loc {
+                    value: AliasVar {
+                        name,
+                        var,
+                        opt_bound_ability,
+                    },
+                    region: loc_lowercase.region,
+                });
+            }
+            None => {
+                is_phantom = true;
+
+                env.problems.push(Problem::PhantomTypeArgument {
+                    typ: symbol,
+                    variable_region: loc_lowercase.region,
+                    variable_name: loc_lowercase.value.clone(),
+                });
+            }
+        }
+    }
+
+    if is_phantom {
+        // Bail out
+        return Err(());
+    }
+
+    let num_unbound = named.len() + wildcards.len() + inferred.len();
+    if num_unbound > 0 {
+        let one_occurrence = named
+            .iter()
+            .map(|nv| Loc::at(nv.first_seen(), nv.variable()))
+            .chain(wildcards)
+            .chain(inferred)
+            .next()
+            .unwrap()
+            .region;
+
+        env.problems.push(Problem::UnboundTypeVariable {
+            typ: symbol,
+            num_unbound,
+            one_occurrence,
+            kind,
+        });
+
+        // Bail out
+        return Err(());
+    }
+
+    Ok(create_alias(
+        symbol,
+        name.region,
+        can_vars.clone(),
+        can_ann.typ,
+        kind,
+    ))
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn canonicalize_opaque<'a>(
+    env: &mut Env<'a>,
+    output: &mut Output,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    pending_abilities_in_scope: &[Symbol],
+
+    name: Loc<Symbol>,
+    ann: &'a Loc<ast::TypeAnnotation<'a>>,
+    vars: &[Loc<Lowercase>],
+    derives: Option<&'a Loc<ast::Derived<'a>>>,
+) -> Result<Alias, ()> {
+    let alias = canonicalize_alias(
+        env,
+        output,
+        var_store,
+        scope,
+        pending_abilities_in_scope,
+        name,
+        ann,
+        vars,
+        AliasKind::Opaque,
+    )?;
+
+    if let Some(derives) = derives {
+        let derives = derives.value.collection();
+
+        let mut can_derives = vec![];
+
+        for derived in derives.items {
+            let region = derived.region;
+            match derived.value.extract_spaces().item {
+                ast::TypeAnnotation::Apply(module_name, ident, []) => {
+                    match make_apply_symbol(env, region, scope, module_name, ident) {
+                        Ok(ability) if ability.is_builtin_ability() => {
+                            can_derives.push(Loc::at(region, ability));
+                        }
+                        Ok(_) => {
+                            // Register the problem but keep going, we may still be able to compile the
+                            // program even if a derive is missing.
+                            env.problem(Problem::IllegalDerive(region));
+                        }
+                        Err(_) => {
+                            // This is bad apply; an error will have been reported for it
+                            // already.
+                        }
+                    }
+                }
+                _ => {
+                    // Register the problem but keep going, we may still be able to compile the
+                    // program even if a derive is missing.
+                    env.problem(Problem::IllegalDerive(region));
+                }
+            }
+        }
+
+        if !can_derives.is_empty() {
+            // Fresh instance of this opaque to be checked for derivability during solving.
+            let fresh_inst = Type::DelayedAlias(AliasCommon {
+                symbol: name.value,
+                type_arguments: alias
+                    .type_variables
+                    .iter()
+                    .map(|_| Type::Variable(var_store.fresh()))
+                    .collect(),
+                lambda_set_variables: alias
+                    .lambda_set_variables
+                    .iter()
+                    .map(|_| LambdaSet(Type::Variable(var_store.fresh())))
+                    .collect(),
+            });
+
+            let old = output
+                .pending_derives
+                .insert(name.value, (fresh_inst, can_derives));
+            debug_assert!(old.is_none());
+        }
+    }
+
+    Ok(alias)
+}
+
+#[inline(always)]
 pub(crate) fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
@@ -250,17 +467,22 @@ pub(crate) fn canonicalize_defs<'a>(
     }
 
     enum TypeDef<'a> {
-        AliasLike(
+        Alias(
             Loc<Symbol>,
             Vec<Loc<Lowercase>>,
             &'a Loc<ast::TypeAnnotation<'a>>,
-            AliasKind,
+        ),
+        Opaque(
+            Loc<Symbol>,
+            Vec<Loc<Lowercase>>,
+            &'a Loc<ast::TypeAnnotation<'a>>,
+            Option<&'a Loc<ast::Derived<'a>>>,
         ),
         Ability(Loc<Symbol>, &'a [AbilityMember<'a>]),
     }
 
     let mut type_defs = MutMap::default();
-    let mut abilities_in_scope = Vec::new();
+    let mut pending_abilities_in_scope = Vec::new();
 
     let mut referenced_type_symbols = VecMap::default();
 
@@ -273,17 +495,27 @@ pub(crate) fn canonicalize_defs<'a>(
         }
 
         match pending_def {
-            PendingTypeDef::Alias {
-                name,
-                vars,
-                ann,
-                kind,
-            } => {
+            PendingTypeDef::Alias { name, vars, ann } => {
                 let referenced_symbols = find_type_def_symbols(scope, &ann.value);
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
 
-                type_defs.insert(name.value, TypeDef::AliasLike(name, vars, ann, kind));
+                type_defs.insert(name.value, TypeDef::Alias(name, vars, ann));
+            }
+            PendingTypeDef::Opaque {
+                name,
+                vars,
+                ann,
+                derived,
+            } => {
+                let referenced_symbols = find_type_def_symbols(scope, &ann.value);
+
+                referenced_type_symbols.insert(name.value, referenced_symbols);
+                // Don't need to insert references for derived types, because these can only contain
+                // builtin abilities, and hence do not affect the type def sorting. We'll insert
+                // references of usages when canonicalizing the derives.
+
+                type_defs.insert(name.value, TypeDef::Opaque(name, vars, ann, derived));
             }
             PendingTypeDef::Ability { name, members } => {
                 let mut referenced_symbols = Vec::with_capacity(2);
@@ -297,7 +529,7 @@ pub(crate) fn canonicalize_defs<'a>(
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
                 type_defs.insert(name.value, TypeDef::Ability(name, members));
-                abilities_in_scope.push(name.value);
+                pending_abilities_in_scope.push(name.value);
             }
             PendingTypeDef::InvalidAlias { .. }
             | PendingTypeDef::InvalidAbility { .. }
@@ -313,105 +545,40 @@ pub(crate) fn canonicalize_defs<'a>(
 
     for type_name in sorted {
         match type_defs.remove(&type_name).unwrap() {
-            TypeDef::AliasLike(name, vars, ann, kind) => {
-                let symbol = name.value;
-                let can_ann = canonicalize_annotation(
+            TypeDef::Alias(name, vars, ann) => {
+                let alias = canonicalize_alias(
                     env,
-                    scope,
-                    &ann.value,
-                    ann.region,
+                    &mut output,
                     var_store,
-                    &abilities_in_scope,
+                    scope,
+                    &pending_abilities_in_scope,
+                    name,
+                    ann,
+                    &vars,
+                    AliasKind::Structural,
                 );
 
-                // Record all the annotation's references in output.references.lookups
-                for symbol in can_ann.references {
-                    output.references.insert_type_lookup(symbol);
+                if let Ok(alias) = alias {
+                    aliases.insert(name.value, alias);
                 }
+            }
 
-                let mut can_vars: Vec<Loc<AliasVar>> = Vec::with_capacity(vars.len());
-                let mut is_phantom = false;
-
-                let IntroducedVariables {
-                    named,
-                    able,
-                    wildcards,
-                    inferred,
-                    ..
-                } = can_ann.introduced_variables;
-
-                let mut named: Vec<_> = (named.into_iter().map(OwnedNamedOrAble::Named))
-                    .chain(able.into_iter().map(OwnedNamedOrAble::Able))
-                    .collect();
-                for loc_lowercase in vars.iter() {
-                    let opt_index = named
-                        .iter()
-                        .position(|nv| nv.ref_name() == &loc_lowercase.value);
-                    match opt_index {
-                        Some(index) => {
-                            // This is a valid lowercase rigid var for the type def.
-                            let named_variable = named.swap_remove(index);
-                            let var = named_variable.variable();
-                            let opt_bound_ability = named_variable.opt_ability();
-                            let name = named_variable.name();
-
-                            can_vars.push(Loc {
-                                value: AliasVar {
-                                    name,
-                                    var,
-                                    opt_bound_ability,
-                                },
-                                region: loc_lowercase.region,
-                            });
-                        }
-                        None => {
-                            is_phantom = true;
-
-                            env.problems.push(Problem::PhantomTypeArgument {
-                                typ: symbol,
-                                variable_region: loc_lowercase.region,
-                                variable_name: loc_lowercase.value.clone(),
-                            });
-                        }
-                    }
-                }
-
-                if is_phantom {
-                    // Bail out
-                    continue;
-                }
-
-                let num_unbound = named.len() + wildcards.len() + inferred.len();
-                if num_unbound > 0 {
-                    let one_occurrence = named
-                        .iter()
-                        .map(|nv| Loc::at(nv.first_seen(), nv.variable()))
-                        .chain(wildcards)
-                        .chain(inferred)
-                        .next()
-                        .unwrap()
-                        .region;
-
-                    env.problems.push(Problem::UnboundTypeVariable {
-                        typ: symbol,
-                        num_unbound,
-                        one_occurrence,
-                        kind,
-                    });
-
-                    // Bail out
-                    continue;
-                }
-
-                let alias = create_alias(
-                    symbol,
-                    name.region,
-                    can_vars.clone(),
-                    can_ann.typ.clone(),
-                    kind,
+            TypeDef::Opaque(name, vars, ann, derived) => {
+                let alias_and_derives = canonicalize_opaque(
+                    env,
+                    &mut output,
+                    var_store,
+                    scope,
+                    &pending_abilities_in_scope,
+                    name,
+                    ann,
+                    &vars,
+                    derived,
                 );
 
-                aliases.insert(symbol, alias);
+                if let Ok(alias) = alias_and_derives {
+                    aliases.insert(name.value, alias);
+                }
             }
 
             TypeDef::Ability(name, members) => {
@@ -443,7 +610,7 @@ pub(crate) fn canonicalize_defs<'a>(
         var_store,
         scope,
         abilities,
-        &abilities_in_scope,
+        &pending_abilities_in_scope,
         pattern_type,
     );
 
@@ -511,7 +678,6 @@ pub(crate) fn canonicalize_defs<'a>(
             var_store,
             pattern_type,
             &mut aliases,
-            &abilities_in_scope,
         );
 
         output = temp_output.output;
@@ -525,7 +691,6 @@ pub(crate) fn canonicalize_defs<'a>(
         CanDefs {
             defs,
             def_ordering,
-            abilities_in_scope,
             // The result needs a thread-safe `SendMap`
             aliases,
         },
@@ -542,7 +707,7 @@ fn resolve_abilities<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     abilities: MutMap<Symbol, (Loc<Symbol>, &[AbilityMember])>,
-    abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &[Symbol],
     pattern_type: PatternType,
 ) {
     for (loc_ability_name, members) in abilities.into_values() {
@@ -555,7 +720,7 @@ fn resolve_abilities<'a>(
                 &member.typ.value,
                 member.typ.region,
                 var_store,
-                abilities_in_scope,
+                pending_abilities_in_scope,
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -647,10 +812,15 @@ fn resolve_abilities<'a>(
 
             can_members.push((
                 member_sym,
-                name_region,
-                var_store.fresh(),
-                member_annot.typ,
-                variables,
+                AbilityMemberData {
+                    parent_ability: loc_ability_name.value,
+                    region: name_region,
+                    typ: MemberTypeInfo::Local {
+                        variables,
+                        signature: member_annot.typ,
+                        signature_var: var_store.fresh(),
+                    },
+                },
             ));
         }
 
@@ -760,15 +930,12 @@ pub(crate) fn sort_can_defs_new(
         defs,
         def_ordering,
         aliases,
-        abilities_in_scope,
     } = defs;
 
     // TODO: inefficient, but I want to make this what CanDefs contains in the future
     let mut defs: Vec<_> = defs.into_iter().map(|x| x.unwrap()).collect();
 
     let mut declarations = Declarations::with_capacity(defs.len());
-
-    output.abilities_in_scope = abilities_in_scope;
 
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
@@ -962,10 +1129,7 @@ pub(crate) fn sort_can_defs(
         mut defs,
         def_ordering,
         aliases,
-        abilities_in_scope,
     } = defs;
-
-    output.abilities_in_scope = abilities_in_scope;
 
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
@@ -1203,9 +1367,11 @@ fn canonicalize_pending_value_def<'a>(
     var_store: &mut VarStore,
     pattern_type: PatternType,
     aliases: &mut VecMap<Symbol, Alias>,
-    abilities_in_scope: &[Symbol],
 ) -> DefOutput {
     use PendingValueDef::*;
+
+    // All abilities should be resolved by the time we're canonicalizing value defs.
+    let pending_abilities_in_scope = &[];
 
     let output = match pending_def {
         AnnotationOnly(_, loc_can_pattern, loc_ann) => {
@@ -1221,7 +1387,7 @@ fn canonicalize_pending_value_def<'a>(
                 &loc_ann.value,
                 loc_ann.region,
                 var_store,
-                abilities_in_scope,
+                pending_abilities_in_scope,
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -1318,7 +1484,7 @@ fn canonicalize_pending_value_def<'a>(
                 &loc_ann.value,
                 loc_ann.region,
                 var_store,
-                abilities_in_scope,
+                pending_abilities_in_scope,
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -1527,6 +1693,86 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Expr {
     }
 }
 
+fn to_pending_alias_or_opaque<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    name: &'a Loc<&'a str>,
+    vars: &'a [Loc<ast::Pattern<'a>>],
+    ann: &'a Loc<ast::TypeAnnotation<'a>>,
+    opt_derived: Option<&'a Loc<ast::Derived<'a>>>,
+    kind: AliasKind,
+) -> PendingTypeDef<'a> {
+    let shadow_kind = match kind {
+        AliasKind::Structural => ShadowKind::Alias,
+        AliasKind::Opaque => ShadowKind::Opaque,
+    };
+
+    let region = Region::span_across(&name.region, &ann.region);
+
+    match scope.introduce_without_shadow_symbol(&Ident::from(name.value), region) {
+        Ok(symbol) => {
+            let mut can_rigids: Vec<Loc<Lowercase>> = Vec::with_capacity(vars.len());
+
+            for loc_var in vars.iter() {
+                match loc_var.value {
+                    ast::Pattern::Identifier(name)
+                        if name.chars().next().unwrap().is_lowercase() =>
+                    {
+                        let lowercase = Lowercase::from(name);
+                        can_rigids.push(Loc {
+                            value: lowercase,
+                            region: loc_var.region,
+                        });
+                    }
+                    _ => {
+                        // any other pattern in this position is a syntax error.
+                        let problem = Problem::InvalidAliasRigid {
+                            alias_name: symbol,
+                            region: loc_var.region,
+                        };
+                        env.problems.push(problem);
+
+                        return PendingTypeDef::InvalidAlias {
+                            kind,
+                            symbol,
+                            region,
+                        };
+                    }
+                }
+            }
+
+            let name = Loc {
+                region: name.region,
+                value: symbol,
+            };
+
+            match kind {
+                AliasKind::Structural => PendingTypeDef::Alias {
+                    name,
+                    vars: can_rigids,
+                    ann,
+                },
+                AliasKind::Opaque => PendingTypeDef::Opaque {
+                    name,
+                    vars: can_rigids,
+                    ann,
+                    derived: opt_derived,
+                },
+            }
+        }
+
+        Err((original_region, loc_shadowed_symbol)) => {
+            env.problem(Problem::Shadowing {
+                original_region,
+                shadow: loc_shadowed_symbol,
+                kind: shadow_kind,
+            });
+
+            PendingTypeDef::ShadowedAlias
+        }
+    }
+}
+
 fn to_pending_type_def<'a>(
     env: &mut Env<'a>,
     def: &'a ast::TypeDef<'a>,
@@ -1539,75 +1785,20 @@ fn to_pending_type_def<'a>(
         Alias {
             header: TypeHeader { name, vars },
             ann,
-        }
-        | Opaque {
+        } => to_pending_alias_or_opaque(env, scope, name, vars, ann, None, AliasKind::Structural),
+        Opaque {
             header: TypeHeader { name, vars },
             typ: ann,
-        } => {
-            let (kind, shadow_kind) = if matches!(def, Alias { .. }) {
-                (AliasKind::Structural, ShadowKind::Alias)
-            } else {
-                (AliasKind::Opaque, ShadowKind::Opaque)
-            };
-
-            let region = Region::span_across(&name.region, &ann.region);
-
-            match scope.introduce_without_shadow_symbol(&Ident::from(name.value), region) {
-                Ok(symbol) => {
-                    let mut can_rigids: Vec<Loc<Lowercase>> = Vec::with_capacity(vars.len());
-
-                    for loc_var in vars.iter() {
-                        match loc_var.value {
-                            ast::Pattern::Identifier(name)
-                                if name.chars().next().unwrap().is_lowercase() =>
-                            {
-                                let lowercase = Lowercase::from(name);
-                                can_rigids.push(Loc {
-                                    value: lowercase,
-                                    region: loc_var.region,
-                                });
-                            }
-                            _ => {
-                                // any other pattern in this position is a syntax error.
-                                let problem = Problem::InvalidAliasRigid {
-                                    alias_name: symbol,
-                                    region: loc_var.region,
-                                };
-                                env.problems.push(problem);
-
-                                return PendingTypeDef::InvalidAlias {
-                                    kind,
-                                    symbol,
-                                    region,
-                                };
-                            }
-                        }
-                    }
-
-                    let name = Loc {
-                        region: name.region,
-                        value: symbol,
-                    };
-
-                    PendingTypeDef::Alias {
-                        name,
-                        vars: can_rigids,
-                        ann,
-                        kind,
-                    }
-                }
-
-                Err((original_region, loc_shadowed_symbol)) => {
-                    env.problem(Problem::Shadowing {
-                        original_region,
-                        shadow: loc_shadowed_symbol,
-                        kind: shadow_kind,
-                    });
-
-                    PendingTypeDef::ShadowedAlias
-                }
-            }
-        }
+            derived,
+        } => to_pending_alias_or_opaque(
+            env,
+            scope,
+            name,
+            vars,
+            ann,
+            derived.as_ref(),
+            AliasKind::Opaque,
+        ),
 
         Ability {
             header, members, ..

@@ -4,46 +4,36 @@ interface Num
             Num,
             Int,
             Frac,
-
             Integer,
             FloatingPoint,
-
             I128,
             I64,
             I32,
             I16,
             I8,
-
             U128,
             U64,
             U32,
             U16,
             U8,
-
             Signed128,
             Signed64,
             Signed32,
             Signed16,
             Signed8,
-
             Unsigned128,
             Unsigned64,
             Unsigned32,
             Unsigned16,
             Unsigned8,
-
             Nat,
             Dec,
-
             F32,
             F64,
-
             Natural,
             Decimal,
-
             Binary32,
             Binary64,
-
             abs,
             neg,
             add,
@@ -155,7 +145,7 @@ interface Num
         ]
     imports
         [
-            Bool.{ Bool }
+            Bool.{ Bool },
         ]
 
 ## Represents a number that could be either an [Int] or a [Frac].
@@ -343,7 +333,6 @@ Num range := range
 ##
 ## As such, it's very important to design your code not to exceed these bounds!
 ## If you need to do math outside these bounds, consider using a larger numeric size.
-
 Int range : Num (Integer range)
 
 ## A fixed-size number with a fractional component.
@@ -501,7 +490,6 @@ F32 : Num (FloatingPoint Binary32)
 Dec : Num (FloatingPoint Decimal)
 
 # ------- Functions
-
 ## Convert a number to a [Str].
 ##
 ## This is the same as calling `Num.format {}` - so for more details on
@@ -875,7 +863,6 @@ subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
 
 mulWrap : Int range, Int range -> Int range
 # mulSaturated : Num a, Num a -> Num a
-
 ## Multiply two numbers and check for overflow.
 ##
 ## This is the same as [Num.mul] except if the operation overflows, instead of
@@ -1086,7 +1073,6 @@ minF64 = -1.7976931348623157e308
 maxF64 : F64
 maxF64 = 1.7976931348623157e308
 
-
 ## Converts an [Int] to an [I8]. If the given number can't be precisely represented in an [I8],
 ## the returned number may be different from the given number.
 toI8 : Int * -> I8
@@ -1142,9 +1128,7 @@ toNatChecked : Int * -> Result Nat [ OutOfBounds ]*
 toF32Checked : Num * -> Result F32 [ OutOfBounds ]*
 toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 
-
 # Special Floating-Point operations
-
 ## When given a [F64] or [F32] value, returns `False` if that value is
 ## [*NaN*](Num.isNaN), ∞ or -∞, and `True` otherwise.
 ##
@@ -1152,8 +1136,7 @@ toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 ##
 ## This is the opposite of [isInfinite], except when given [*NaN*](Num.isNaN). Both
 ## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
-#isFinite : Frac * -> Bool
-
+# isFinite : Frac * -> Bool
 ## When given a [F64] or [F32] value, returns `True` if that value is either
 ## ∞ or -∞, and `False` otherwise.
 ##
@@ -1161,8 +1144,7 @@ toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 ##
 ## This is the opposite of [isFinite], except when given [*NaN*](Num.isNaN). Both
 ## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
-#isInfinite : Frac * -> Bool
-
+# isInfinite : Frac * -> Bool
 ## When given a [F64] or [F32] value, returns `True` if that value is
 ## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `False` otherwise.
 ##
@@ -1185,21 +1167,17 @@ toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 ## Note that you should never put a *NaN* into a [Set], or use it as the key in
 ## a [Dict]. The result is entries that can never be removed from those
 ## collections! See the documentation for [Set.add] and [Dict.insert] for details.
-#isNaN : Frac * -> Bool
-
-
+# isNaN : Frac * -> Bool
 ## Returns the higher of two numbers.
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-#max : Num a, Num a -> Num a
-
+# max : Num a, Num a -> Num a
 ## Returns the lower of two numbers.
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-#min : Num a, Num a -> Num a
-
+# min : Num a, Num a -> Num a
 # Branchless implementation that works for all numeric types:
 #
 # let is_lt = arg1 < arg2;
@@ -1209,57 +1187,46 @@ toF64Checked : Num * -> Result F64 [ OutOfBounds ]*
 # 1, 1 -> (0 - 1) + 1 == 0 # Eq
 # 5, 1 -> (0 - 0) + 1 == 1 # Gt
 # 1, 5 -> (1 - 0) + 1 == 2 # Lt
-
 ## Returns `Lt` if the first number is less than the second, `Gt` if
 ## the first is greater than the second, and `Eq` if they're equal.
 ##
 ## Although this can be passed to `List.sort`, you'll get better performance
 ## by using `List.sortAsc` or `List.sortDesc` instead.
-#compare : Num a, Num a -> [ Lt, Eq, Gt ]
-
+# compare : Num a, Num a -> [ Lt, Eq, Gt ]
 ## [Endianness](https://en.wikipedia.org/wiki/Endianness)
 # Endi : [ Big, Little, Native ]
-
 ## The `Endi` argument does not matter for [U8] and [I8], since they have
 ## only one byte.
 # toBytes : Num *, Endi -> List U8
-
 ## when Num.parseBytes bytes Big is
 ##     Ok { val: f64, rest } -> ...
 ##     Err (ExpectedNum (Frac Binary64)) -> ...
 # parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ ExpectedNum a ]*
-
 ## when Num.fromBytes bytes Big is
 ##     Ok f64 -> ...
 ##     Err (ExpectedNum (Frac Binary64)) -> ...
 # fromBytes : List U8, Endi -> Result (Num a) [ ExpectedNum a ]*
-
 # Bit shifts
-
 ## [Logical bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Logical_shift) left.
 ##
 ## `a << b` is shorthand for `Num.shl a b`.
-#shl : Int a, Int a -> Int a
-
+# shl : Int a, Int a -> Int a
 ## [Arithmetic bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Arithmetic_shift) left.
 ##
 ## This is called `shlWrap` because any bits shifted
 ## off the beginning of the number will be wrapped around to
 ## the end. (In contrast, [shl] replaces discarded bits with zeroes.)
-#shlWrap : Int a, Int a -> Int a
-
+# shlWrap : Int a, Int a -> Int a
 ## [Logical bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Logical_shift) right.
 ##
 ## `a >> b` is shorthand for `Num.shr a b`.
-#shr : Int a, Int a -> Int a
-
+# shr : Int a, Int a -> Int a
 ## [Arithmetic bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Arithmetic_shift) right.
 ##
 ## This is called `shrWrap` because any bits shifted
 ## off the end of the number will be wrapped around to
 ## the beginning. (In contrast, [shr] replaces discarded bits with zeroes.)
-#shrWrap : Int a, Int a -> Int a
-
+# shrWrap : Int a, Int a -> Int a
 # ## Convert a number into a [Str], formatted with the given options.
 # ##
 # ## Default options:

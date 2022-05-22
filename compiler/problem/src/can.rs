@@ -130,6 +130,7 @@ pub enum Problem {
     },
     AbilityUsedAsType(Lowercase, Symbol, Region),
     NestedSpecialization(Symbol, Region),
+    IllegalDerive(Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]
