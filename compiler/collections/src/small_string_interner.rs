@@ -301,6 +301,7 @@ fn find_i16_slice_x86_64(slice: &[i16], key: i16) -> Option<usize> {
     None
 }
 
+#[allow(unused)]
 fn find_i16_slice_fallback(slice: &[i16], key: i16) -> Option<usize> {
     let mut index = 0;
     let length = slice.len();
