@@ -543,7 +543,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
         }
         _ => {
             if cfg!(target_family = "unix") {
-                roc_run_unix(cwd, args, binary_bytes)
+                roc_run_unix(arena, cwd, args, binary_bytes)
             } else {
                 roc_run_non_unix(arena, cwd, args, binary_bytes)
             }
@@ -552,23 +552,45 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 }
 
 fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+    arena: Bump,
     cwd: &Path,
-    _args: I,
+    args: I,
     binary_bytes: &mut [u8],
 ) -> std::io::Result<i32> {
+    use bumpalo::collections::CollectIn;
     use std::os::unix::ffi::OsStrExt;
 
     unsafe {
         let path = roc_run_executable_file_path(cwd, binary_bytes)?;
         let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
 
-        let array_with_null_pointer = &[0usize];
+        // argv is an array of pointers to strings passed to the new program
+        // as its command-line arguments.  By convention, the first of these
+        // strings (i.e., argv[0]) should contain the filename associated
+        // with the file being executed.  The argv array must be terminated
+        // by a NULL pointer. (Thus, in the new program, argv[argc] will be NULL.)
+        let c_strings: bumpalo::collections::Vec<CString> = args
+            .into_iter()
+            .map(|x| CString::new(x.as_ref().as_bytes()).unwrap())
+            .collect_in(&arena);
 
-        let execve_result = libc::execve(
-            path_cstring.as_ptr().cast(),
-            array_with_null_pointer.as_ptr().cast(),
-            array_with_null_pointer.as_ptr().cast(),
-        );
+        let c_string_pointers = c_strings
+            .iter()
+            .map(|x| x.as_bytes_with_nul().as_ptr().cast());
+
+        let argv: bumpalo::collections::Vec<*const libc::c_char> =
+            std::iter::once(path_cstring.as_ptr())
+                .chain(c_string_pointers)
+                .chain([std::ptr::null()])
+                .collect_in(&arena);
+
+        // envp is an array of pointers to strings, conventionally of the
+        // form key=value, which are passed as the environment of the new
+        // program.  The envp array must be terminated by a NULL pointer.
+        let envp = &[std::ptr::null()];
+
+        let execve_result =
+            libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr());
 
         if execve_result != 0 {
             internal_error!(
