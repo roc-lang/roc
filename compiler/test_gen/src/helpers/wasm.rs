@@ -120,15 +120,15 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     };
 
     let (mut module, called_preload_fns, main_fn_index) =
-        roc_gen_wasm::build_module_unserialized(&env, &mut interns, preload_bytes, procedures).unwrap();
+        roc_gen_wasm::build_module_unserialized(&env, &mut interns, preload_bytes, procedures)
+            .unwrap();
 
     T::insert_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
 
     // Export the initialiser function for refcount tests
-    let init_refcount_bytes = INIT_REFCOUNT_NAME.as_bytes();
-    let init_refcount_idx = module.names.functions[init_refcount_bytes];
+    let init_refcount_idx = module.names.functions[INIT_REFCOUNT_NAME];
     module.export.append(Export {
-        name: arena.alloc_slice_copy(init_refcount_bytes),
+        name: INIT_REFCOUNT_NAME,
         ty: ExportType::Func,
         index: init_refcount_idx,
     });

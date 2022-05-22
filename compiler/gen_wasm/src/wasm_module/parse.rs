@@ -52,15 +52,15 @@ impl Parse<()> for u32 {
     }
 }
 
-// Parse string bytes without utf8 validation
-impl<'a> Parse<&'a Bump> for &'a [u8] {
+impl<'a> Parse<&'a Bump> for &'a str {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let len = u32::parse((), bytes, cursor)?;
         let end = *cursor + len as usize;
         let bytes: &[u8] = &bytes[*cursor..end];
         let copy = arena.alloc_slice_copy(bytes);
+        let s = unsafe { std::str::from_utf8_unchecked(copy) };
         *cursor = end;
-        Ok(copy)
+        Ok(s)
     }
 }
 

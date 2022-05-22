@@ -1,5 +1,4 @@
-use bumpalo::{self, collections::Vec};
-use std::fmt::Write;
+use bumpalo::collections::{String, Vec};
 
 use code_builder::Align;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -90,18 +89,20 @@ impl<'a> WasmBackend<'a> {
 
         // The preloaded binary has a global to tell us where its data section ends
         // Note: We need this to account for zero data (.bss), which doesn't have an explicit DataSegment!
-        let data_end_name = "__data_end".as_bytes();
         let data_end_idx = app_exports
             .iter()
-            .find(|ex| ex.name == data_end_name)
+            .find(|ex| ex.name == "__data_end")
             .map(|ex| ex.index)
             .unwrap_or_else(|| {
                 internal_error!("Preloaded Wasm binary must export global constant `__data_end`")
             });
         // TODO: move this to module parsing
-        let next_constant_addr = module.global.parse_u32_at_index(data_end_idx).unwrap_or_else(|e| {
-            internal_error!("Failed to parse __data_end from object file: {:?}", e);
-        });
+        let next_constant_addr = module
+            .global
+            .parse_u32_at_index(data_end_idx)
+            .unwrap_or_else(|e| {
+                internal_error!("Failed to parse __data_end from object file: {:?}", e);
+            });
 
         module.export.exports = app_exports;
 
@@ -145,6 +146,7 @@ impl<'a> WasmBackend<'a> {
             .layout_ids
             .get_toplevel(symbol, &layout)
             .to_symbol_string(symbol, self.interns);
+        let name = String::from_str_in(&name, self.env.arena).into_bump_str();
 
         self.proc_lookup.push(ProcLookupData {
             name: symbol,
@@ -302,10 +304,8 @@ impl<'a> WasmBackend<'a> {
             .unwrap();
         let wasm_fn_index = self.fn_index_offset + proc_index as u32;
 
-        let mut debug_name = bumpalo::collections::String::with_capacity_in(64, self.env.arena);
-        write!(debug_name, "{:?}", sym).unwrap();
-        let name_bytes = debug_name.into_bytes().into_bump_slice();
-        self.module.names.append_function(wasm_fn_index, name_bytes);
+        let name = String::from_str_in(sym.as_str(self.interns), self.env.arena).into_bump_str();
+        self.module.names.append_function(wasm_fn_index, name);
     }
 
     /// Build a wrapper around a Roc procedure so that it can be called from our higher-order Zig builtins.
@@ -952,10 +952,11 @@ impl<'a> WasmBackend<'a> {
             .layout_ids
             .get(sym, &Layout::Builtin(Builtin::Str))
             .to_symbol_string(sym, self.interns);
+        let name = String::from_str_in(&name, self.env.arena).into_bump_str();
 
         let linker_symbol = SymInfo::Data(DataSymbol::Defined {
             flags: 0,
-            name: name.clone(),
+            name,
             segment_index,
             segment_offset: 4,
             size: bytes.len() as u32,
@@ -1102,7 +1103,7 @@ impl<'a> WasmBackend<'a> {
         num_wasm_args: usize,
         has_return_val: bool,
     ) {
-        let fn_index = self.module.names.functions[name.as_bytes()];
+        let fn_index = self.module.names.functions[name];
         self.called_preload_fns.push(fn_index);
         let linker_symbol_index = u32::MAX;
 

@@ -787,14 +787,14 @@ impl From<u8> for ExportType {
 
 #[derive(Debug)]
 pub struct Export<'a> {
-    pub name: &'a [u8],
+    pub name: &'a str,
     pub ty: ExportType,
     pub index: u32,
 }
 
 impl<'a> Export<'a> {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Self {
-        let name = <&'a [u8]>::parse(arena, bytes, cursor).unwrap();
+        let name = <&'a str>::parse(arena, bytes, cursor).unwrap();
 
         let ty = ExportType::from(bytes[*cursor]);
         *cursor += 1;
@@ -1257,7 +1257,7 @@ enum NameSubSections {
 
 pub struct NameSection<'a> {
     pub bytes: Vec<'a, u8>,
-    pub functions: MutMap<&'a [u8], u32>,
+    pub functions: MutMap<&'a str, u32>,
 }
 
 impl<'a> NameSection<'a> {
@@ -1268,7 +1268,7 @@ impl<'a> NameSection<'a> {
         self.bytes.len()
     }
 
-    pub fn append_function(&mut self, index: u32, name: &'a [u8]) {
+    pub fn append_function(&mut self, index: u32, name: &'a str) {
         index.serialize(&mut self.bytes);
         name.serialize(&mut self.bytes);
         self.functions.insert(name, index);
@@ -1315,12 +1315,12 @@ impl<'a> NameSection<'a> {
         cursor: &mut usize,
         section_end: usize,
     ) {
-        let section_name = <&'a [u8]>::parse(arena, module_bytes, cursor).unwrap();
-        if section_name != Self::NAME.as_bytes() {
+        let section_name = <&'a str>::parse(arena, module_bytes, cursor).unwrap();
+        if section_name != Self::NAME {
             internal_error!(
                 "Expected Custom section {:?}, found {:?}",
                 Self::NAME,
-                std::str::from_utf8(section_name)
+                section_name
             );
         }
 
@@ -1348,9 +1348,8 @@ impl<'a> NameSection<'a> {
         let fn_names_start = *cursor;
         for _ in 0..num_entries {
             let fn_index = u32::parse((), module_bytes, cursor).unwrap();
-            let name_bytes = <&'a [u8]>::parse(arena, module_bytes, cursor).unwrap();
-            self.functions
-                .insert(arena.alloc_slice_copy(name_bytes), fn_index);
+            let name_bytes = <&'a str>::parse(arena, module_bytes, cursor).unwrap();
+            self.functions.insert(name_bytes, fn_index);
         }
 
         // Copy only the bytes for the function names segment
@@ -1395,8 +1394,7 @@ impl<'a> Debug for NameSection<'a> {
         by_index.sort_unstable();
 
         for (index, name) in by_index.iter() {
-            let name_str = unsafe { std::str::from_utf8_unchecked(name) };
-            writeln!(f, "  {:4}: {}", index, name_str)?;
+            writeln!(f, "  {:4}: {}", index, name)?;
         }
 
         Ok(())

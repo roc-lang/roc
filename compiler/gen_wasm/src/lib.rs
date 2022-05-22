@@ -8,7 +8,8 @@ pub mod wasm_module;
 pub mod wasm32_result;
 pub mod wasm32_sized;
 
-use bumpalo::{self, collections::Vec, Bump};
+use bumpalo::collections::{String, Vec};
+use bumpalo::{self, Bump};
 
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevelWrapperType;
@@ -58,7 +59,7 @@ pub fn build_module<'a>(
     interns: &'a mut Interns,
     preload_bytes: &[u8],
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Result<std::vec::Vec<u8>, String> {
+) -> Result<std::vec::Vec<u8>, std::string::String> {
     let (mut wasm_module, called_preload_fns, _) =
         build_module_unserialized(env, interns, preload_bytes, procedures)
             .map_err(|e| format!("{:?}", e))?;
@@ -102,17 +103,18 @@ pub fn build_module_unserialized<'a>(
         let fn_name = layout_ids
             .get_toplevel(sym, &proc_layout)
             .to_symbol_string(sym, interns);
+        let name = String::from_str_in(&fn_name, env.arena).into_bump_str();
 
         if env.exposed_to_host.contains(&sym) {
             maybe_main_fn_index = Some(fn_index);
             exports.push(Export {
-                name: env.arena.alloc_slice_copy(fn_name.as_bytes()),
+                name,
                 ty: ExportType::Func,
                 index: fn_index,
             });
         }
 
-        let linker_sym = SymInfo::for_function(fn_index, fn_name);
+        let linker_sym = SymInfo::for_function(fn_index, name);
         let linker_sym_index = linker_symbols.len() as u32;
 
         // linker_sym_index is redundant for these procs from user code, but needed for generated helpers!
