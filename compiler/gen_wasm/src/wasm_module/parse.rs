@@ -1,7 +1,5 @@
 use super::serialize::MAX_SIZE_ENCODED_U32;
-use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_error_macros::internal_error;
 
 /// Parse serialized bytes into a data structure
 /// Specific parsers may need contextual data from other parts of the .wasm file
@@ -41,32 +39,16 @@ impl Parse<()> for u32 {
     }
 }
 
-// Parse a vector of bytes (used for strings, but we don't bother with utf8 validation)
-impl<'a> Parse<&'a Bump> for Vec<'a, u8> {
+// Parse string bytes without utf8 validation
+impl<'a> Parse<&'a Bump> for &'a [u8] {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, String> {
-        let len = parse_u32_or_panic(bytes, cursor);
+        let len = u32::parse((), bytes, cursor)?;
         let end = *cursor + len as usize;
         let bytes: &[u8] = &bytes[*cursor..end];
-        let mut copy = Vec::with_capacity_in(bytes.len(), arena);
-        copy.extend_from_slice(bytes);
+        let copy = arena.alloc_slice_copy(bytes);
         *cursor = end;
         Ok(copy)
     }
-}
-
-pub fn parse_u32_or_panic(bytes: &[u8], cursor: &mut usize) -> u32 {
-    let (value, len) = decode_u32(&bytes[*cursor..]).unwrap_or_else(|e| internal_error!("{}", e));
-    *cursor += len;
-    value
-}
-
-pub fn parse_string_bytes<'a>(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> &'a [u8] {
-    let len = parse_u32_or_panic(bytes, cursor);
-    let end = *cursor + len as usize;
-    let bytes: &[u8] = &bytes[*cursor..end];
-    let copy = arena.alloc_slice_copy(bytes);
-    *cursor = end;
-    copy
 }
 
 impl SkipBytes for u32 {
@@ -105,7 +87,7 @@ impl SkipBytes for u8 {
 /// Note: This is just for skipping over Wasm bytes. We don't actually care about String vs str!
 impl SkipBytes for String {
     fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), String> {
-        let len = parse_u32_or_panic(bytes, cursor);
+        let len = u32::parse((), bytes, cursor)?;
 
         if false {
             let str_bytes = &bytes[*cursor..(*cursor + len as usize)];
@@ -123,7 +105,7 @@ impl SkipBytes for String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wasm_module::parse::{decode_u32, parse_u32_or_panic};
+    use crate::wasm_module::parse::decode_u32;
 
     #[test]
     fn test_decode_u32() {
@@ -148,13 +130,13 @@ mod tests {
         let expected = [0, 128, u32::MAX];
         let mut cursor = 0;
 
-        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[0]);
+        assert_eq!(u32::parse((), bytes, &mut cursor).unwrap(), expected[0]);
         assert_eq!(cursor, 1);
 
-        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[1]);
+        assert_eq!(u32::parse((), bytes, &mut cursor).unwrap(), expected[1]);
         assert_eq!(cursor, 3);
 
-        assert_eq!(parse_u32_or_panic(bytes, &mut cursor), expected[2]);
+        assert_eq!(u32::parse((), bytes, &mut cursor).unwrap(), expected[2]);
         assert_eq!(cursor, 8);
     }
 }

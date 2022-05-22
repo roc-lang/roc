@@ -2,7 +2,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
 use super::opcodes::OpCode;
-use super::parse::{parse_u32_or_panic, SkipBytes};
+use super::parse::{Parse, SkipBytes};
 use super::serialize::{SerialBuffer, Serialize};
 use super::CodeBuilder;
 
@@ -92,13 +92,13 @@ pub fn parse_preloads_call_graph<'a>(
         call_graph.code_offsets.push(cursor as u32);
         call_graph.calls_offsets.push(call_graph.calls.len() as u32);
 
-        let func_size = parse_u32_or_panic(code_section_body, &mut cursor);
+        let func_size = u32::parse((), code_section_body, &mut cursor).unwrap();
         let func_end = cursor + func_size as usize;
 
         // Skip over local variable declarations
-        let local_groups_count = parse_u32_or_panic(code_section_body, &mut cursor);
+        let local_groups_count = u32::parse((), code_section_body, &mut cursor).unwrap();
         for _ in 0..local_groups_count {
-            parse_u32_or_panic(code_section_body, &mut cursor);
+            u32::parse((), code_section_body, &mut cursor).unwrap();
             cursor += 1; // ValueType
         }
 
@@ -107,12 +107,12 @@ pub fn parse_preloads_call_graph<'a>(
             let opcode_byte: u8 = code_section_body[cursor];
             if opcode_byte == OpCode::CALL as u8 {
                 cursor += 1;
-                let call_index = parse_u32_or_panic(code_section_body, &mut cursor);
+                let call_index = u32::parse((), code_section_body, &mut cursor).unwrap();
                 call_graph.calls.push(call_index as u32);
             } else if opcode_byte == OpCode::CALLINDIRECT as u8 {
                 cursor += 1;
                 // Insert all indirect callees with a matching type signature
-                let sig = parse_u32_or_panic(code_section_body, &mut cursor);
+                let sig = u32::parse((), code_section_body, &mut cursor).unwrap();
                 call_graph.calls.extend(
                     indirect_callees
                         .iter()

@@ -11,7 +11,7 @@ use super::dead_code::{
 };
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
-use super::parse::{parse_string_bytes, parse_u32_or_panic, Parse, SkipBytes};
+use super::parse::{Parse, SkipBytes};
 use super::serialize::{SerialBuffer, Serialize, MAX_SIZE_ENCODED_U32};
 use super::{CodeBuilder, ValueType};
 
@@ -118,9 +118,9 @@ fn parse_section<'a>(id: SectionId, module_bytes: &'a [u8], cursor: &mut usize) 
     }
     *cursor += 1;
 
-    let section_size = parse_u32_or_panic(module_bytes, cursor);
+    let section_size = u32::parse((), module_bytes, cursor).unwrap();
     let count_start = *cursor;
-    let count = parse_u32_or_panic(module_bytes, cursor);
+    let count = u32::parse((), module_bytes, cursor).unwrap();
     let body_start = *cursor;
 
     let next_section_start = count_start + section_size as usize;
@@ -237,7 +237,7 @@ impl<'a> TypeSection<'a> {
             debug_assert!(self.bytes[i] == Signature::SEPARATOR);
             i += 1;
 
-            let n_params = parse_u32_or_panic(&self.bytes, &mut i);
+            let n_params = u32::parse((), &self.bytes, &mut i).unwrap();
             i += n_params as usize; // skip over one byte per param type
 
             let n_return_values = self.bytes[i];
@@ -421,7 +421,7 @@ impl<'a> FunctionSection<'a> {
         let mut signatures = Vec::with_capacity_in(count, arena);
         let mut cursor = 0;
         for _ in 0..count {
-            signatures.push(parse_u32_or_panic(&self.bytes, &mut cursor));
+            signatures.push(u32::parse((), &self.bytes, &mut cursor).unwrap());
         }
         signatures
     }
@@ -579,9 +579,9 @@ impl Limits {
         let variant_id = bytes[*cursor];
         *cursor += 1;
 
-        let min = parse_u32_or_panic(bytes, cursor);
+        let min = u32::parse((), bytes, cursor).unwrap();
         if variant_id == LimitsId::MinMax as u8 {
-            let max = parse_u32_or_panic(bytes, cursor);
+            let max = u32::parse((), bytes, cursor).unwrap();
             Limits::MinMax(min, max)
         } else {
             Limits::Min(min)
@@ -663,7 +663,7 @@ impl ConstExpr {
         }
         *cursor += 1;
 
-        let value = parse_u32_or_panic(bytes, cursor);
+        let value = u32::parse((), bytes, cursor).unwrap();
 
         if bytes[*cursor] != OpCode::END as u8 {
             return err;
@@ -791,12 +791,12 @@ pub struct Export<'a> {
 
 impl<'a> Export<'a> {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Self {
-        let name = parse_string_bytes(arena, bytes, cursor);
+        let name = <&'a [u8]>::parse(arena, bytes, cursor).unwrap();
 
         let ty = ExportType::from(bytes[*cursor]);
         *cursor += 1;
 
-        let index = parse_u32_or_panic(bytes, cursor);
+        let index = u32::parse((), bytes, cursor).unwrap();
 
         Export { name, ty, index }
     }
@@ -895,14 +895,14 @@ impl<'a> ElementSegment<'a> {
         let const_expr_opcode = bytes[*cursor];
         debug_assert!(const_expr_opcode == OpCode::I32CONST as u8);
         *cursor += 1;
-        let offset = parse_u32_or_panic(bytes, cursor);
+        let offset = u32::parse((), bytes, cursor).unwrap();
         debug_assert!(bytes[*cursor] == OpCode::END as u8);
         *cursor += 1;
 
-        let num_elems = parse_u32_or_panic(bytes, cursor);
+        let num_elems = u32::parse((), bytes, cursor).unwrap();
         let mut fn_indices = Vec::with_capacity_in(num_elems as usize, arena);
         for _ in 0..num_elems {
-            let fn_idx = parse_u32_or_panic(bytes, cursor);
+            let fn_idx = u32::parse((), bytes, cursor).unwrap();
 
             fn_indices.push(fn_idx);
         }
@@ -1219,7 +1219,7 @@ impl<'a> OpaqueSection<'a> {
         } else {
             let section_start = *cursor;
             *cursor += 1;
-            let section_size = parse_u32_or_panic(module_bytes, cursor);
+            let section_size = u32::parse((), module_bytes, cursor).unwrap();
             let next_section_start = *cursor + section_size as usize;
             bytes = &module_bytes[section_start..next_section_start];
             *cursor = next_section_start;
@@ -1293,7 +1293,7 @@ impl<'a> NameSection<'a> {
         *cursor += 1;
 
         // Section size
-        let section_size = parse_u32_or_panic(module_bytes, cursor) as usize;
+        let section_size = u32::parse((), module_bytes, cursor).unwrap() as usize;
         let section_end = *cursor + section_size;
 
         let mut section = NameSection {
@@ -1312,7 +1312,7 @@ impl<'a> NameSection<'a> {
         cursor: &mut usize,
         section_end: usize,
     ) {
-        let section_name = parse_string_bytes(arena, module_bytes, cursor);
+        let section_name = <&'a [u8]>::parse(arena, module_bytes, cursor).unwrap();
         if section_name != Self::NAME.as_bytes() {
             internal_error!(
                 "Expected Custom section {:?}, found {:?}",
@@ -1326,7 +1326,7 @@ impl<'a> NameSection<'a> {
         for _possible_subsection_id in 0..2 {
             let subsection_id = module_bytes[*cursor];
             *cursor += 1;
-            let subsection_size = parse_u32_or_panic(module_bytes, cursor);
+            let subsection_size = u32::parse((), module_bytes, cursor).unwrap();
             if subsection_id == NameSubSections::FunctionNames as u8 {
                 found_function_names = true;
                 break;
@@ -1341,12 +1341,11 @@ impl<'a> NameSection<'a> {
         }
 
         // Function names
-        let num_entries = parse_u32_or_panic(module_bytes, cursor) as usize;
+        let num_entries = u32::parse((), module_bytes, cursor).unwrap() as usize;
         let fn_names_start = *cursor;
         for _ in 0..num_entries {
-            let fn_index = parse_u32_or_panic(module_bytes, cursor);
-            let name_bytes = parse_string_bytes(arena, module_bytes, cursor);
-
+            let fn_index = u32::parse((), module_bytes, cursor).unwrap();
+            let name_bytes = <&'a [u8]>::parse(arena, module_bytes, cursor).unwrap();
             self.functions
                 .insert(arena.alloc_slice_copy(name_bytes), fn_index);
         }
