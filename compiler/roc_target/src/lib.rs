@@ -2,6 +2,8 @@
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]
 
+use strum_macros::EnumIter;
+
 #[derive(Debug, Clone, Copy)]
 pub struct TargetInfo {
     pub architecture: Architecture,
@@ -50,6 +52,12 @@ impl From<&target_lexicon::Triple> for TargetInfo {
     }
 }
 
+impl From<Architecture> for TargetInfo {
+    fn from(architecture: Architecture) -> Self {
+        Self { architecture }
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PtrWidth {
@@ -57,7 +65,7 @@ pub enum PtrWidth {
     Bytes8 = 8,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
 pub enum Architecture {
     X86_64,
     X86_32,
