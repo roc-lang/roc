@@ -5,13 +5,14 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command};
 use roc_build::link::LinkType;
-use roc_error_macros::user_error;
+use roc_error_macros::{internal_error, user_error};
 use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use std::env;
 use std::ffi::{CString, OsStr};
-use std::io;
-use std::path::Path;
+use std::io::{self, Write};
+use std::os::unix::prelude::FromRawFd;
+use std::path::{Path, PathBuf};
 use std::process;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
@@ -160,6 +161,14 @@ pub fn build_app<'a>() -> Command<'a> {
         )
         .subcommand(Command::new(CMD_RUN)
             .about("Run a .roc file even if it has build errors")
+            .arg(
+                Arg::new(FLAG_TARGET)
+                    .long(FLAG_TARGET)
+                    .help("Choose a different target")
+                    .default_value(Target::default().as_str())
+                    .possible_values(Target::OPTIONS)
+                    .required(false),
+            )
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -504,35 +513,35 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
-            todo!("figure out what to do with wasm");
-            //            // If possible, report the generated executable name relative to the current dir.
-            //            let generated_filename = binary_bytes
-            //                .strip_prefix(env::current_dir().unwrap())
-            //                .unwrap_or(binary_bytes);
-            //
-            //            // No need to waste time freeing this memory,
-            //            // since the process is about to exit anyway.
-            //            std::mem::forget(arena);
-            //
-            //            if cfg!(target_family = "unix") {
-            //                use std::os::unix::ffi::OsStrExt;
-            //
-            //                run_with_wasmer(
-            //                    generated_filename,
-            //                    args.into_iter().map(|os_str| os_str.as_bytes()),
-            //                );
-            //            } else {
-            //                run_with_wasmer(
-            //                    generated_filename,
-            //                    args.into_iter().map(|os_str| {
-            //                        os_str.to_str().expect(
-            //                            "Roc does not currently support passing non-UTF8 arguments to Wasmer.",
-            //                        )
-            //                    }),
-            //                );
-            //            }
-            //
-            //            Ok(0)
+            let path = roc_run_executable_file_path(cwd, binary_bytes)?;
+            // If possible, report the generated executable name relative to the current dir.
+            let generated_filename = path
+                .strip_prefix(env::current_dir().unwrap())
+                .unwrap_or(&path);
+
+            // No need to waste time freeing this memory,
+            // since the process is about to exit anyway.
+            std::mem::forget(arena);
+
+            if cfg!(target_family = "unix") {
+                use std::os::unix::ffi::OsStrExt;
+
+                run_with_wasmer(
+                    generated_filename,
+                    args.into_iter().map(|os_str| os_str.as_bytes()),
+                );
+            } else {
+                run_with_wasmer(
+                    generated_filename,
+                    args.into_iter().map(|os_str| {
+                        os_str.to_str().expect(
+                            "Roc does not currently support passing non-UTF8 arguments to Wasmer.",
+                        )
+                    }),
+                );
+            }
+
+            Ok(0)
         }
         _ => {
             if cfg!(target_family = "unix") {
@@ -546,38 +555,75 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
 fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     cwd: &Path,
-    args: I,
+    _args: I,
     binary_bytes: &mut [u8],
-) -> ! {
+) -> std::io::Result<i32> {
+    use std::os::unix::ffi::OsStrExt;
+
     unsafe {
-        let flags = 0;
-        let fd = libc::memfd_create("roc_file_descriptor\0".as_ptr().cast(), flags);
-
-        libc::write(fd, binary_bytes.as_ptr().cast(), binary_bytes.len());
-
-        // use std::path::PathBuf;
-        let path = format!("/proc/self/fd/{}\0", fd);
+        let path = roc_run_executable_file_path(cwd, binary_bytes)?;
+        let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
 
         let array_with_null_pointer = &[0usize];
 
-        let c = libc::execve(
-            path.as_ptr().cast(),
+        let execve_result = libc::execve(
+            path_cstring.as_ptr().cast(),
             array_with_null_pointer.as_ptr().cast(),
             array_with_null_pointer.as_ptr().cast(),
         );
 
-        // Get the current value of errno
-        let e = errno::errno();
-
-        // Extract the error code as an i32
-        let code = e.0;
-
-        // Display a human-friendly error message
-        println!("Error {}: {}", code, e);
-        println!("after {:?}", c);
+        if execve_result != 0 {
+            internal_error!(
+                "libc::execve({:?}, ..., ...) failed: {:?}",
+                path,
+                errno::errno()
+            );
+        }
     }
 
-    unreachable!()
+    Ok(1)
+}
+
+fn roc_run_executable_file_path(cwd: &Path, binary_bytes: &mut [u8]) -> std::io::Result<PathBuf> {
+    if cfg!(target_os = "linux") {
+        // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
+        let flags = 0;
+        let anonymous_file_name = "roc_file_descriptor\0";
+        let fd = unsafe { libc::memfd_create(anonymous_file_name.as_ptr().cast(), flags) };
+
+        if fd == 0 {
+            internal_error!(
+                "libc::memfd_create({:?}, {}) failed: file descriptor is 0",
+                anonymous_file_name,
+                flags
+            );
+        }
+
+        // NOTE: this `fd` is special, using the rust `std::fs::File` functions does not work
+        let write_result =
+            unsafe { libc::write(fd, binary_bytes.as_ptr().cast(), binary_bytes.len()) };
+
+        if write_result != 0 {
+            internal_error!(
+                "libc::write({:?}, ..., {}) failed: {:?}",
+                fd,
+                binary_bytes.len(),
+                errno::errno()
+            );
+        }
+
+        let path = format!("/proc/self/fd/{}", fd);
+
+        Ok(PathBuf::from(path))
+    } else {
+        // we have not found a way yet to use a virtual file on MacOs. Hence we fall back to just
+        // writing the file to the file system, and using that file.
+        let app_path_buf = cwd.join("roc_app_binary");
+
+        std::fs::write(&app_path_buf, binary_bytes)?;
+
+        Ok(app_path_buf)
+    }
 }
 
 fn roc_run_non_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
