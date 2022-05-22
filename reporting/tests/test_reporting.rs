@@ -1225,9 +1225,9 @@ mod test_reporting {
                 r#"
                 ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                I'm inferring a weird self-referential type for `g`:
+                I'm inferring a weird self-referential type for `f`:
 
-                2│  g = \x -> f [x]
+                1│  f = \x -> g x
                     ^
 
                 Here is my best effort at writing down the type. You will see ∞ for
@@ -1238,9 +1238,9 @@ mod test_reporting {
 
                 ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                I'm inferring a weird self-referential type for `f`:
+                I'm inferring a weird self-referential type for `g`:
 
-                1│  f = \x -> g x
+                2│  g = \x -> f [x]
                     ^
 
                 Here is my best effort at writing down the type. You will see ∞ for
@@ -10178,12 +10178,14 @@ All branches in an `if` must have the same type!
                     └─────┘
                 "#
             ),
-            )
+        )
     }
 
     fn derive_non_builtin_ability() {
         new_report_problem_as(
             "derive_non_builtin_ability",
+            indoc!(
+                r#"
                 app "test" provides [ A ] to "./platform"
 
                 Ab has ab : a -> a | a has Ab
@@ -10344,7 +10346,8 @@ All branches in an `if` must have the same type!
 
                 toEncoder = \@A {} -> custom \l, _ -> l
                 "#
-                ), indoc!(
+            ),
+            indoc!(
                 r#"
                 ── CONFLICTING DERIVE AND IMPLEMENTATION ───────────────── /code/proj/Main.roc ─
 
