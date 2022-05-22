@@ -1,6 +1,7 @@
 use roc_bindgen::bindgen_rs;
 use roc_bindgen::load::load_types;
 use roc_load::Threading;
+use roc_target::Architecture;
 use std::env;
 use std::fs::File;
 use std::io::Write;
@@ -38,7 +39,13 @@ pub fn generate_bindings(decl_src: &str) -> String {
         dir.close().expect("Unable to close tempdir");
 
         result.expect("had problems loading")
-    };
+    }
+    .iter()
+    // Only use the X86_64 types for these tests
+    .find(|(architecture, _)| *architecture == Architecture::X86_64)
+    .unwrap()
+    .1
+    .clone();
 
     // Reuse the `src` allocation since we're done with it.
     let mut buf = src;
