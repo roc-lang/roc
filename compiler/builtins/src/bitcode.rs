@@ -99,6 +99,7 @@ impl IntWidth {
 
         matches!(self, I8 | I16 | I32 | I64 | I128)
     }
+
     pub const fn stack_size(&self) -> u32 {
         use IntWidth::*;
 

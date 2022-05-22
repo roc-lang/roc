@@ -272,7 +272,8 @@ mod test_load {
                     &def,
                     &mut expected_types,
                 ),
-                DeclareRec(defs) => {
+                DeclareRec(defs, cycle_mark) => {
+                    assert!(!cycle_mark.is_illegal(&subs));
                     for def in defs {
                         expect_def(
                             &loaded_module.interns,
@@ -856,7 +857,7 @@ mod test_load {
                         "
                         ── UNRECOGNIZED NAME ────────── tmp/issue_2863_module_type_does_not_exist/Main ─
 
-                        I cannot find a `DoesNotExist` value
+                        Nothing is named `DoesNotExist` in this scope.
 
                         5│  main : DoesNotExist
                                    ^^^^^^^^^^^^

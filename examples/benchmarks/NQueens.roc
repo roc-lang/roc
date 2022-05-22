@@ -25,7 +25,6 @@ lengthHelp = \foobar, acc ->
     when foobar is
         Cons _ lrest ->
             lengthHelp lrest (1 + acc)
-
         Nil ->
             acc
 
@@ -34,7 +33,6 @@ safe = \queen, diagonal, xs ->
     when xs is
         Nil ->
             True
-
         Cons q t ->
             queen != q && queen != q + diagonal && queen != q - diagonal && safe queen (diagonal + 1) t
 
@@ -51,7 +49,6 @@ extend = \n, acc, solutions ->
     when solutions is
         Nil ->
             acc
-
         Cons soln rest ->
             extend n (appendSafe n soln acc) rest
 

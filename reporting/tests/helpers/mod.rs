@@ -5,7 +5,7 @@ use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::env::Env;
 use roc_can::expected::Expected;
-use roc_can::expr::{canonicalize_expr, Expr, Output};
+use roc_can::expr::{canonicalize_expr, Expr, Output, PendingDerives};
 use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, SendSet};
@@ -26,11 +26,13 @@ pub fn test_home() -> ModuleId {
 }
 
 #[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub fn infer_expr(
     subs: Subs,
     problems: &mut Vec<solve::TypeError>,
     constraints: &Constraints,
     constraint: &Constraint,
+    pending_derives: PendingDerives,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
     expr_var: Variable,
@@ -41,6 +43,7 @@ pub fn infer_expr(
         subs,
         aliases,
         constraint,
+        pending_derives,
         abilities_store,
     );
 
@@ -82,7 +85,7 @@ where
 #[inline(always)]
 pub fn with_larger_debug_stack<F>(run_test: F)
 where
-    F: FnOnce() -> (),
+    F: FnOnce(),
     F: Send,
     F: 'static,
 {
@@ -149,7 +152,7 @@ pub fn can_expr_with<'a>(
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
-    let mut scope = Scope::new(home, IdentIds::default());
+    let mut scope = Scope::new(home, IdentIds::default(), Default::default());
 
     // to skip loading other modules, we populate the scope with the builtin aliases
     // that makes the reporting tests much faster
@@ -168,9 +171,10 @@ pub fn can_expr_with<'a>(
     let mut constraints = Constraints::new();
     let constraint = constrain_expr(
         &mut constraints,
-        &roc_constrain::expr::Env {
+        &mut roc_constrain::expr::Env {
             rigids: MutMap::default(),
             home,
+            resolutions_to_make: vec![],
         },
         loc_expr.region,
         &loc_expr.value,

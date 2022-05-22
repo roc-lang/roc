@@ -26,7 +26,6 @@ partition = \low, high, initialList ->
             when partitionHelp low low initialList high pivot is
                 Pair newI newList ->
                     Pair newI (swap newI high newList)
-
         Err _ ->
             Pair low initialList
 
@@ -39,7 +38,6 @@ partitionHelp = \i, j, list, high, pivot ->
                     partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
                 else
                     partitionHelp i (j + 1) list high pivot
-
             Err _ ->
                 Pair i list
     else
@@ -52,7 +50,6 @@ swap = \i, j, list ->
             list
                 |> List.set i atJ
                 |> List.set j atI
-
         _ ->
             # to prevent a decrement on list
             # turns out this is very important for optimizations

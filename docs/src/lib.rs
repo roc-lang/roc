@@ -636,6 +636,9 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
 
             type_annotation_to_html(next_indent_level, buf, output);
         }
+        TypeAnnotation::Ability { members: _ } => {
+            // TODO(abilities): fill me in
+        }
         TypeAnnotation::ObscuredTagUnion => {
             buf.push_str("[ @.. ]");
         }
@@ -712,6 +715,7 @@ fn should_be_multiline(type_ann: &TypeAnnotation) -> bool {
 
             is_multiline
         }
+        TypeAnnotation::Ability { .. } => true,
         TypeAnnotation::Wildcard => false,
         TypeAnnotation::NoTypeAnn => false,
     }
@@ -734,7 +738,7 @@ fn doc_url<'a>(
     if module_name.is_empty() {
         // This is an unqualified lookup, so look for the ident
         // in scope!
-        match scope.lookup(&ident.into(), Region::zero()) {
+        match scope.lookup_str(ident, Region::zero()) {
             Ok(symbol) => {
                 // Get the exact module_name from scope. It could be the
                 // current module's name, but it also could be a different

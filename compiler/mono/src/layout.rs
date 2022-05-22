@@ -276,6 +276,12 @@ pub enum UnionLayout<'a> {
     /// It has more than one other variant, so they need tag IDs (payloads are "wrapped")
     /// e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
+    ///
+    /// nullable_id refers to the index of the tag that is represented at runtime as NULL.
+    /// For example, in `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`,
+    /// the ids would be Empty = 0, More = 1, Single = 2, because that's how those tags are
+    /// ordered alphabetically. Since the Empty tag will be represented at runtime as NULL,
+    /// and since Empty's tag id is 0, here nullable_id would be 0.
     NullableWrapped {
         nullable_id: u16,
         other_tags: &'a [&'a [Layout<'a>]],
@@ -283,6 +289,14 @@ pub enum UnionLayout<'a> {
     /// A recursive tag union with only two variants, where one is empty.
     /// Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
     /// e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
+    ///
+    /// nullable_id is a bool because it's only ever 0 or 1, but (as with the NullableWrapped
+    /// variant), it reprsents the index of the tag that will be represented at runtime as NULL.
+    ///
+    /// So for example, in `ConsList a : [ Nil, Cons a (ConsList a) ]`, Nil is tag id 1 and
+    /// Cons is tag id 0 because Nil comes alphabetically after Cons. Here, Nil will be
+    /// represented as NULL at runtime, so nullable_id is 1 - which is to say, `true`, because
+    /// `(1 as bool)` is `true`.
     NullableUnwrapped {
         nullable_id: bool,
         other_fields: &'a [Layout<'a>],
@@ -417,11 +431,11 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    fn tag_id_builtin_help(union_size: usize) -> Builtin<'a> {
-        if union_size <= u8::MAX as usize {
-            Builtin::Int(IntWidth::U8)
-        } else if union_size <= u16::MAX as usize {
-            Builtin::Int(IntWidth::U16)
+    pub fn discriminant_size(num_tags: usize) -> IntWidth {
+        if num_tags <= u8::MAX as usize {
+            IntWidth::U8
+        } else if num_tags <= u16::MAX as usize {
+            IntWidth::U16
         } else {
             panic!("tag union is too big")
         }
@@ -431,16 +445,16 @@ impl<'a> UnionLayout<'a> {
         match self {
             UnionLayout::NonRecursive(tags) => {
                 let union_size = tags.len();
-                Self::tag_id_builtin_help(union_size)
+                Builtin::Int(Self::discriminant_size(union_size))
             }
             UnionLayout::Recursive(tags) => {
                 let union_size = tags.len();
 
-                Self::tag_id_builtin_help(union_size)
+                Builtin::Int(Self::discriminant_size(union_size))
             }
 
             UnionLayout::NullableWrapped { other_tags, .. } => {
-                Self::tag_id_builtin_help(other_tags.len() + 1)
+                Builtin::Int(Self::discriminant_size(other_tags.len() + 1))
             }
             UnionLayout::NonNullableUnwrapped(_) => Builtin::Bool,
             UnionLayout::NullableUnwrapped { .. } => Builtin::Bool,
@@ -1104,7 +1118,42 @@ impl<'a> Layout<'a> {
         // For this calculation, we don't need an accurate
         // stack size, we just need to know whether it's zero,
         // so it's fine to use a pointer size of 1.
-        false
+        false // TODO this should use is_zero_sized once doing so doesn't break things!
+    }
+
+    /// Like stack_size, but doesn't require target info because
+    /// whether something is zero sized is not target-dependent.
+    #[allow(dead_code)]
+    fn is_zero_sized(&self) -> bool {
+        match self {
+            // There are no zero-sized builtins
+            Layout::Builtin(_) => false,
+            // Functions are never zero-sized
+            Layout::LambdaSet(_) => false,
+            // Empty structs, or structs with all zero-sized fields, are zero-sized
+            Layout::Struct { field_layouts, .. } => field_layouts.iter().all(Self::is_zero_sized),
+            // A Box that points to nothing should be unwrapped
+            Layout::Boxed(content) => content.is_zero_sized(),
+            Layout::Union(union_layout) => match union_layout {
+                UnionLayout::NonRecursive(tags)
+                | UnionLayout::Recursive(tags)
+                | UnionLayout::NullableWrapped {
+                    other_tags: tags, ..
+                } => tags
+                    .iter()
+                    .all(|payloads| payloads.iter().all(Self::is_zero_sized)),
+                UnionLayout::NonNullableUnwrapped(tags)
+                | UnionLayout::NullableUnwrapped {
+                    other_fields: tags, ..
+                } => tags.iter().all(Self::is_zero_sized),
+            },
+            // Recursive pointers are considered zero-sized because
+            // if you have a recursive data structure where everything
+            // else but the recutsive pointer is zero-sized, then
+            // the whole thing is unnecessary at runtime and should
+            // be zero-sized.
+            Layout::RecursivePointer => true,
+        }
     }
 
     pub fn is_passed_by_reference(&self, target_info: TargetInfo) -> bool {

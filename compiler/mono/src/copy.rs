@@ -67,7 +67,9 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 loc_elems: loc_elems.iter().map(|le| le.map(go_help)).collect(),
             },
             Var(sym) => Var(*sym),
-            AbilityMember(sym, specialization) => AbilityMember(*sym, *specialization),
+            &AbilityMember(sym, specialization, specialization_var) => {
+                AbilityMember(sym, specialization, specialization_var)
+            }
             When {
                 loc_cond,
                 cond_var,
@@ -115,7 +117,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 final_else: Box::new(final_else.map(go_help)),
             },
 
-            LetRec(defs, body) => LetRec(
+            LetRec(defs, body, cycle_mark) => LetRec(
                 defs.iter()
                     .map(
                         |Def {
@@ -137,6 +139,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                     )
                     .collect(),
                 Box::new(body.map(go_help)),
+                *cycle_mark,
             ),
             LetNonRec(def, body) => {
                 let Def {
@@ -363,6 +366,8 @@ pub fn deep_copy_type_vars_into_expr<'a>(
 
             Expect(e1, e2) => Expect(Box::new(e1.map(go_help)), Box::new(e2.map(go_help))),
 
+            TypedHole(v) => TypedHole(sub!(*v)),
+
             RuntimeError(err) => RuntimeError(err.clone()),
         }
     }
@@ -386,14 +391,14 @@ fn deep_copy_type_vars<'a>(
     // in one go (without looking at the UnificationTable) and clear the copy field
     let mut result = Vec::with_capacity_in(copied.len(), arena);
     for var in copied {
-        let descriptor = subs.get_ref_mut(var);
-
-        if let Some(copy) = descriptor.copy.into_variable() {
-            result.push((var, copy));
-            descriptor.copy = OptVariable::NONE;
-        } else {
-            debug_assert!(false, "{:?} marked as copied but it wasn't", var);
-        }
+        subs.modify(var, |descriptor| {
+            if let Some(copy) = descriptor.copy.into_variable() {
+                result.push((var, copy));
+                descriptor.copy = OptVariable::NONE;
+            } else {
+                debug_assert!(false, "{:?} marked as copied but it wasn't", var);
+            }
+        })
     }
 
     debug_assert!(result.contains(&(var, cloned_var)));
@@ -408,7 +413,7 @@ fn deep_copy_type_vars<'a>(
         // Always deal with the root, so that unified variables are treated the same.
         let var = subs.get_root_key_without_compacting(var);
 
-        let desc = subs.get_ref_mut(var);
+        let desc = subs.get(var);
 
         // Unlike `deep_copy_var` in solve, here we are cloning *all* flex and rigid vars.
         // So we only want to short-circuit if we've already done the cloning work for a particular
@@ -427,7 +432,7 @@ fn deep_copy_type_vars<'a>(
         };
 
         let copy = subs.fresh(copy_descriptor);
-        subs.get_ref_mut(var).copy = copy.into();
+        subs.set_copy(var, copy.into());
 
         visited.push(var);
 
@@ -451,7 +456,7 @@ fn deep_copy_type_vars<'a>(
                 let new_arguments = VariableSubsSlice::reserve_into_subs(subs, $slice.len());
                 for (target_index, var_index) in (new_arguments.indices()).zip($slice) {
                     let var = subs[var_index];
-                    let copy_var = subs.get_ref(var).copy.into_variable().unwrap_or(var);
+                    let copy_var = subs.get_copy(var).into_variable().unwrap_or(var);
                     subs.variables[target_index] = copy_var;
                 }
                 new_arguments

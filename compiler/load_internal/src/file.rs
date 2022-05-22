@@ -6,18 +6,21 @@ use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_builtins::std::borrow_stdlib;
-use roc_can::abilities::AbilitiesStore;
+use roc_can::abilities::{AbilitiesStore, SolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
+use roc_can::expr::PendingDerives;
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecSet};
+use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::{
     constrain_builtin_imports, constrain_module, ExposedByModule, ExposedForModule,
     ExposedModuleTypes,
 };
+use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
 use roc_debug_flags::{
-    dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
-    ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_LOAD_LOG,
+    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
+    ROC_PRINT_LOAD_LOG,
 };
 use roc_error_macros::internal_error;
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
@@ -125,6 +128,7 @@ struct ModuleCache<'a> {
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
     parsed: MutMap<ModuleId, ParsedModule<'a>>,
     aliases: MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
+    abilities: MutMap<ModuleId, AbilitiesStore>,
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
@@ -136,7 +140,6 @@ struct ModuleCache<'a> {
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
-    mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
@@ -145,51 +148,34 @@ impl Default for ModuleCache<'_> {
     fn default() -> Self {
         let mut module_names = MutMap::default();
 
-        module_names.insert(
-            ModuleId::RESULT,
-            PQModuleName::Unqualified(ModuleName::from(ModuleName::RESULT)),
-        );
+        macro_rules! insert_builtins {
+            ($($name:ident,)*) => {$(
+                module_names.insert(
+                    ModuleId::$name,
+                    PQModuleName::Unqualified(ModuleName::from(ModuleName::$name)),
+                );
+            )*}
+        }
 
-        module_names.insert(
-            ModuleId::LIST,
-            PQModuleName::Unqualified(ModuleName::from(ModuleName::LIST)),
-        );
-
-        module_names.insert(
-            ModuleId::STR,
-            PQModuleName::Unqualified(ModuleName::from(ModuleName::STR)),
-        );
-
-        module_names.insert(
-            ModuleId::DICT,
-            PQModuleName::Unqualified(ModuleName::from(ModuleName::DICT)),
-        );
-
-        module_names.insert(
-            ModuleId::SET,
-            PQModuleName::Unqualified(ModuleName::from(ModuleName::SET)),
-        );
-
-        module_names.insert(
-            ModuleId::BOOL,
-            PQModuleName::Unqualified(ModuleName::from(ModuleName::BOOL)),
-        );
-
-        module_names.insert(
-            ModuleId::NUM,
-            PQModuleName::Unqualified(ModuleName::from(ModuleName::NUM)),
-        );
-
-        module_names.insert(
-            ModuleId::BOX,
-            PQModuleName::Unqualified(ModuleName::from(ModuleName::BOX)),
-        );
+        insert_builtins! {
+            RESULT,
+            LIST,
+            STR,
+            DICT,
+            SET,
+            BOOL,
+            NUM,
+            BOX,
+            ENCODE,
+            JSON,
+        }
 
         Self {
             module_names,
             headers: Default::default(),
             parsed: Default::default(),
             aliases: Default::default(),
+            abilities: Default::default(),
             constrained: Default::default(),
             typechecked: Default::default(),
             found_specializations: Default::default(),
@@ -199,7 +185,6 @@ impl Default for ModuleCache<'_> {
             documentation: Default::default(),
             can_problems: Default::default(),
             type_problems: Default::default(),
-            mono_problems: Default::default(),
             sources: Default::default(),
         }
     }
@@ -305,10 +290,12 @@ fn start_phase<'a>(
 
                 let exposed_symbols = state
                     .exposed_symbols_by_module
-                    .remove(&module_id)
-                    .expect("Could not find listener ID in exposed_symbols_by_module");
+                    .get(&module_id)
+                    .expect("Could not find listener ID in exposed_symbols_by_module")
+                    .clone();
 
                 let mut aliases = MutMap::default();
+                let mut abilities_store = AbilitiesStore::default();
 
                 for imported in parsed.imported_modules.keys() {
                     match state.module_cache.aliases.get(imported) {
@@ -327,6 +314,27 @@ fn start_phase<'a>(
                             }));
                         }
                     }
+
+                    match state.module_cache.abilities.get(imported) {
+                        None => unreachable!(
+                            r"imported module {:?} did not register its abilities, so {:?} cannot use them",
+                            imported, parsed.module_id,
+                        ),
+                        Some(import_store) => {
+                            let exposed_symbols = state
+                                .exposed_symbols_by_module
+                                .get(imported)
+                                .unwrap_or_else(|| {
+                                    internal_error!(
+                                        "Could not find exposed symbols of imported {:?}",
+                                        imported
+                                    )
+                                });
+
+                            abilities_store
+                                .union(import_store.closure_from_imported(exposed_symbols));
+                        }
+                    }
                 }
 
                 let skip_constraint_gen = {
@@ -341,6 +349,7 @@ fn start_phase<'a>(
                     exposed_symbols,
                     module_ids,
                     aliases,
+                    abilities_store,
                     skip_constraint_gen,
                 }
             }
@@ -358,6 +367,7 @@ fn start_phase<'a>(
                     imported_modules,
                     declarations,
                     dep_idents,
+                    pending_derives,
                     ..
                 } = constrained;
 
@@ -367,9 +377,10 @@ fn start_phase<'a>(
                     module_timing,
                     constraints,
                     constraint,
+                    pending_derives,
                     var_store,
                     imported_modules,
-                    &mut state.exposed_types,
+                    &state.exposed_types,
                     dep_idents,
                     declarations,
                     state.cached_subs.clone(),
@@ -528,6 +539,9 @@ struct ConstrainedModule {
     var_store: VarStore,
     dep_idents: IdentIdsByModule,
     module_timing: ModuleTiming,
+    // Rather than adding pending derives as constraints, hand them directly to solve because they
+    // must be solved at the end of a module.
+    pending_derives: PendingDerives,
 }
 
 #[derive(Debug)]
@@ -639,7 +653,6 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
         procs_base: ProcsBase<'a>,
-        problems: Vec<roc_mono::ir::MonoProblem>,
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
@@ -650,7 +663,6 @@ enum Msg<'a> {
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-        problems: Vec<roc_mono::ir::MonoProblem>,
         update_mode_ids: UpdateModeIds,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -868,6 +880,7 @@ enum BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         exposed_symbols: VecSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
+        abilities_store: AbilitiesStore,
         skip_constraint_gen: bool,
     },
     Solve {
@@ -878,6 +891,7 @@ enum BuildTask<'a> {
         module_timing: ModuleTiming,
         constraints: Constraints,
         constraint: ConstraintSoa,
+        pending_derives: PendingDerives,
         var_store: VarStore,
         declarations: Vec<Declaration>,
         dep_idents: IdentIdsByModule,
@@ -2032,6 +2046,11 @@ fn update<'a>(
 
             state
                 .module_cache
+                .abilities
+                .insert(module_id, constrained_module.module.abilities_store.clone());
+
+            state
+                .module_cache
                 .constrained
                 .insert(module_id, constrained_module);
 
@@ -2075,7 +2094,13 @@ fn update<'a>(
                     solved_module
                         .exposed_vars_by_symbol
                         .iter()
-                        .map(|(k, v)| (*k, *v)),
+                        .filter_map(|(k, v)| {
+                            if abilities_store.is_specialization_name(*k) {
+                                None
+                            } else {
+                                Some((*k, *v))
+                            }
+                        }),
                 );
 
                 state
@@ -2118,9 +2143,10 @@ fn update<'a>(
             } else {
                 state.exposed_types.insert(
                     module_id,
-                    ExposedModuleTypes::Valid {
+                    ExposedModuleTypes {
                         stored_vars_by_symbol: solved_module.stored_vars_by_symbol,
                         storage_subs: solved_module.storage_subs,
+                        solved_specializations: solved_module.solved_specializations,
                     },
                 );
 
@@ -2160,13 +2186,10 @@ fn update<'a>(
             solved_subs,
             ident_ids,
             layout_cache,
-            problems,
             module_timing,
             abilities_store,
         } => {
             log!("found specializations for {:?}", module_id);
-
-            debug_assert!(problems.is_empty());
 
             let subs = solved_subs.into_inner();
 
@@ -2207,7 +2230,6 @@ fn update<'a>(
             subs,
             procedures,
             external_specializations_requested,
-            problems,
             module_timing,
             layout_cache,
             ..
@@ -2216,8 +2238,6 @@ fn update<'a>(
 
             // in the future, layouts will be in SoA form and we'll want to hold on to this data
             let _ = layout_cache;
-
-            state.module_cache.mono_problems.insert(module_id, problems);
 
             state.procedures.extend(procedures);
             state.timings.insert(module_id, module_timing);
@@ -2652,90 +2672,37 @@ fn load_module<'a>(
 
     module_timing.read_roc_file = Default::default();
     module_timing.parse_header = parse_header_duration;
-    match module_name.as_inner().as_str() {
-        "Result" => {
-            return Ok(load_builtin_module(
-                arena,
-                module_ids,
-                ident_ids_by_module,
-                module_timing,
-                ModuleId::RESULT,
-                "Result.roc",
-            ));
-        }
-        "List" => {
-            return Ok(load_builtin_module(
-                arena,
-                module_ids,
-                ident_ids_by_module,
-                module_timing,
-                ModuleId::LIST,
-                "List.roc",
-            ));
-        }
-        "Str" => {
-            return Ok(load_builtin_module(
-                arena,
-                module_ids,
-                ident_ids_by_module,
-                module_timing,
-                ModuleId::STR,
-                "Str.roc",
-            ));
-        }
-        "Dict" => {
-            return Ok(load_builtin_module(
-                arena,
-                module_ids,
-                ident_ids_by_module,
-                module_timing,
-                ModuleId::DICT,
-                "Dict.roc",
-            ));
-        }
-        "Set" => {
-            return Ok(load_builtin_module(
-                arena,
-                module_ids,
-                ident_ids_by_module,
-                module_timing,
-                ModuleId::SET,
-                "Set.roc",
-            ));
-        }
-        "Num" => {
-            return Ok(load_builtin_module(
-                arena,
-                module_ids,
-                ident_ids_by_module,
-                module_timing,
-                ModuleId::NUM,
-                "Num.roc",
-            ));
-        }
-        "Bool" => {
-            return Ok(load_builtin_module(
-                arena,
-                module_ids,
-                ident_ids_by_module,
-                module_timing,
-                ModuleId::BOOL,
-                "Bool.roc",
-            ));
-        }
-        "Box" => {
-            return Ok(load_builtin_module(
-                arena,
-                module_ids,
-                ident_ids_by_module,
-                module_timing,
-                ModuleId::BOX,
-                "Box.roc",
-            ));
-        }
-        _ => {
-            // fall through
-        }
+
+    macro_rules! load_builtins {
+        ($($name:literal, $module_id:path)*) => {
+            match module_name.as_inner().as_str() {
+            $(
+                $name => {
+                    return Ok(load_builtin_module(
+                        arena,
+                        module_ids,
+                        ident_ids_by_module,
+                        module_timing,
+                        $module_id,
+                        concat!($name, ".roc")
+                    ));
+                }
+            )*
+                _ => { /* fall through */ }
+            }}
+    }
+
+    load_builtins! {
+        "Result", ModuleId::RESULT
+        "List", ModuleId::LIST
+        "Str", ModuleId::STR
+        "Dict", ModuleId::DICT
+        "Set", ModuleId::SET
+        "Num", ModuleId::NUM
+        "Bool", ModuleId::BOOL
+        "Box", ModuleId::BOX
+        "Encode", ModuleId::ENCODE
+        "Json", ModuleId::JSON
     }
 
     let (filename, opt_shorthand) = module_name_to_path(src_dir, module_name, arc_shorthands);
@@ -3535,19 +3502,36 @@ impl<'a> BuildTask<'a> {
     // TODO trim down these arguments - possibly by moving Constraint into Module
     #[allow(clippy::too_many_arguments)]
     fn solve_module(
-        module: Module,
+        mut module: Module,
         ident_ids: IdentIds,
         module_timing: ModuleTiming,
         constraints: Constraints,
         constraint: ConstraintSoa,
+        pending_derives: PendingDerives,
         var_store: VarStore,
         imported_modules: MutMap<ModuleId, Region>,
-        exposed_types: &mut ExposedByModule,
+        exposed_types: &ExposedByModule,
         dep_idents: IdentIdsByModule,
         declarations: Vec<Declaration>,
         cached_subs: CachedSubs,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
+
+        let abilities_store = &mut module.abilities_store;
+
+        for module in imported_modules.keys() {
+            let exposed = exposed_by_module
+                .get(module)
+                .unwrap_or_else(|| internal_error!("No exposed types for {:?}", module));
+            let ExposedModuleTypes {
+                solved_specializations,
+                ..
+            } = exposed;
+            for ((member, typ), specialization) in solved_specializations.iter() {
+                abilities_store.register_specialization_for_type(*member, *typ, *specialization);
+            }
+        }
+
         let exposed_for_module =
             ExposedForModule::new(module.referenced_values.iter(), exposed_by_module);
 
@@ -3566,6 +3550,7 @@ impl<'a> BuildTask<'a> {
             exposed_for_module,
             constraints,
             constraint,
+            pending_derives,
             var_store,
             declarations,
             dep_idents,
@@ -3577,6 +3562,7 @@ impl<'a> BuildTask<'a> {
 
 fn add_imports(
     subs: &mut Subs,
+    abilities_store: &mut AbilitiesStore,
     mut exposed_for_module: ExposedForModule,
     def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
     rigid_vars: &mut Vec<Variable>,
@@ -3586,51 +3572,44 @@ fn add_imports(
     for symbol in exposed_for_module.imported_values {
         let module_id = symbol.module_id();
         match exposed_for_module.exposed_by_module.get_mut(&module_id) {
-            Some(t) => match t {
-                ExposedModuleTypes::Invalid => {
-                    // make the type a flex var, so it unifies with anything
-                    // this way the error is only reported in the module it originates in
-                    let variable = subs.fresh_unnamed_flex_var();
+            Some(ExposedModuleTypes {
+                stored_vars_by_symbol,
+                storage_subs,
+                solved_specializations: _,
+            }) => {
+                let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
+                    None => {
+                        // Today we define builtins in each module that uses them
+                        // so even though they have a different module name from
+                        // the surrounding module, they are not technically imported
+                        debug_assert!(symbol.is_builtin());
+                        continue;
+                    }
+                    Some((_, x)) => *x,
+                };
 
-                    def_types.push((
-                        symbol,
-                        Loc::at_zero(roc_types::types::Type::Variable(variable)),
-                    ));
+                let copied_import = storage_subs.export_variable_to(subs, variable);
+
+                def_types.push((
+                    symbol,
+                    Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+                ));
+
+                // not a typo; rigids are turned into flex during type inference, but when imported we must
+                // consider them rigid variables
+                rigid_vars.extend(copied_import.rigid);
+                rigid_vars.extend(copied_import.flex);
+
+                // Rigid vars bound to abilities are also treated like rigids.
+                rigid_vars.extend(copied_import.rigid_able);
+                rigid_vars.extend(copied_import.flex_able);
+
+                import_variables.extend(copied_import.registered);
+
+                if abilities_store.is_ability_member_name(symbol) {
+                    abilities_store.resolved_imported_member_var(symbol, copied_import.variable);
                 }
-                ExposedModuleTypes::Valid {
-                    stored_vars_by_symbol,
-                    storage_subs,
-                } => {
-                    let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
-                        None => {
-                            // Today we define builtins in each module that uses them
-                            // so even though they have a different module name from
-                            // the surrounding module, they are not technically imported
-                            debug_assert!(symbol.is_builtin());
-                            continue;
-                        }
-                        Some((_, x)) => *x,
-                    };
-
-                    let copied_import = storage_subs.export_variable_to(subs, variable);
-
-                    // not a typo; rigids are turned into flex during type inference, but when imported we must
-                    // consider them rigid variables
-                    rigid_vars.extend(copied_import.rigid);
-                    rigid_vars.extend(copied_import.flex);
-
-                    // Rigid vars bound to abilities are also treated like rigids.
-                    rigid_vars.extend(copied_import.rigid_able);
-                    rigid_vars.extend(copied_import.flex_able);
-
-                    import_variables.extend(copied_import.registered);
-
-                    def_types.push((
-                        symbol,
-                        Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
-                    ));
-                }
-            },
+            }
             None => {
                 internal_error!("Imported module {:?} is not available", module_id)
             }
@@ -3646,10 +3625,12 @@ fn run_solve_solve(
     exposed_for_module: ExposedForModule,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
+    pending_derives: PendingDerives,
     mut var_store: VarStore,
     module: Module,
 ) -> (
     Solved<Subs>,
+    SolvedSpecializations,
     Vec<(Symbol, Variable)>,
     Vec<solve::TypeError>,
     AbilitiesStore,
@@ -3658,7 +3639,7 @@ fn run_solve_solve(
         exposed_symbols,
         aliases,
         rigid_variables,
-        abilities_store,
+        mut abilities_store,
         ..
     } = module;
 
@@ -3669,6 +3650,7 @@ fn run_solve_solve(
 
     let import_variables = add_imports(
         &mut subs,
+        &mut abilities_store,
         exposed_for_module,
         &mut def_types,
         &mut rigid_vars,
@@ -3683,7 +3665,7 @@ fn run_solve_solve(
         solve_aliases.insert(*name, alias.clone());
     }
 
-    let (solved_subs, exposed_vars_by_symbol, problems, abilities_store) = {
+    let (solved_subs, solved_specializations, exposed_vars_by_symbol, problems, abilities_store) = {
         let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
             &constraints,
             actual_constraint,
@@ -3691,15 +3673,33 @@ fn run_solve_solve(
             subs,
             solve_aliases,
             abilities_store,
+            pending_derives,
         );
 
+        let module_id = module.module_id;
+        // Figure out what specializations belong to this module
+        let solved_specializations: SolvedSpecializations = abilities_store
+            .iter_specializations()
+            .filter(|((member, typ), _)| {
+                // This module solved this specialization if either the member or the type comes from the
+                // module.
+                member.module_id() == module_id || typ.module_id() == module_id
+            })
+            .collect();
+
+        let is_specialization_symbol =
+            |sym| solved_specializations.values().any(|ms| ms.symbol == sym);
+
+        // Expose anything that is explicitly exposed by the header, or is a specialization of an
+        // ability.
         let exposed_vars_by_symbol: Vec<_> = solved_env
             .vars_by_symbol()
-            .filter(|(k, _)| exposed_symbols.contains(k))
+            .filter(|(k, _)| exposed_symbols.contains(k) || is_specialization_symbol(*k))
             .collect();
 
         (
             solved_subs,
+            solved_specializations,
             exposed_vars_by_symbol,
             problems,
             abilities_store,
@@ -3708,6 +3708,7 @@ fn run_solve_solve(
 
     (
         solved_subs,
+        solved_specializations,
         exposed_vars_by_symbol,
         problems,
         abilities_store,
@@ -3723,6 +3724,7 @@ fn run_solve<'a>(
     exposed_for_module: ExposedForModule,
     constraints: Constraints,
     constraint: ConstraintSoa,
+    pending_derives: PendingDerives,
     var_store: VarStore,
     decls: Vec<Declaration>,
     dep_idents: IdentIdsByModule,
@@ -3735,7 +3737,7 @@ fn run_solve<'a>(
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
 
-    let (solved_subs, exposed_vars_by_symbol, problems, abilities_store) = {
+    let (solved_subs, solved_specializations, exposed_vars_by_symbol, problems, abilities_store) = {
         if module_id.is_builtin() {
             match cached_subs.lock().remove(&module_id) {
                 None => run_solve_solve(
@@ -3743,15 +3745,18 @@ fn run_solve<'a>(
                     exposed_for_module,
                     constraints,
                     constraint,
+                    pending_derives,
                     var_store,
                     module,
                 ),
                 Some((subs, exposed_vars_by_symbol)) => {
                     (
                         Solved(subs),
+                        // TODO(abilities) cache abilities for builtins
+                        VecMap::default(),
                         exposed_vars_by_symbol.to_vec(),
                         vec![],
-                        // TODO(abilities) replace when we have abilities for builtins
+                        // TODO(abilities) cache abilities for builtins
                         AbilitiesStore::default(),
                     )
                 }
@@ -3762,6 +3767,7 @@ fn run_solve<'a>(
                 exposed_for_module,
                 constraints,
                 constraint,
+                pending_derives,
                 var_store,
                 module,
             )
@@ -3777,6 +3783,7 @@ fn run_solve<'a>(
         problems,
         aliases,
         stored_vars_by_symbol,
+        solved_specializations,
         storage_subs,
     };
 
@@ -3855,6 +3862,7 @@ fn canonicalize_and_constrain<'a>(
     dep_idents: IdentIdsByModule,
     exposed_symbols: VecSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
+    imported_abilities_state: AbilitiesStore,
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
 ) -> CanAndCon {
@@ -3873,7 +3881,8 @@ fn canonicalize_and_constrain<'a>(
         ..
     } = parsed;
 
-    let before = roc_types::types::get_type_clone_count();
+    // _before has an underscore because it's unused in --release builds
+    let _before = roc_types::types::get_type_clone_count();
 
     let mut var_store = VarStore::default();
     let module_output = canonicalize_module_defs(
@@ -3885,20 +3894,22 @@ fn canonicalize_and_constrain<'a>(
         exposed_ident_ids,
         &dep_idents,
         aliases,
+        imported_abilities_state,
         exposed_imports,
         &exposed_symbols,
         &symbols_from_requires,
         &mut var_store,
     );
 
-    let after = roc_types::types::get_type_clone_count();
+    // _after has an underscore because it's unused in --release builds
+    let _after = roc_types::types::get_type_clone_count();
 
     log!(
         "canonicalize of {:?} cloned Type {} times ({} -> {})",
         module_id,
-        after - before,
-        before,
-        after
+        _after - _before,
+        _before,
+        _after
     );
 
     let canonicalize_end = SystemTime::now();
@@ -3921,7 +3932,8 @@ fn canonicalize_and_constrain<'a>(
         }
     };
 
-    let before = roc_types::types::get_type_clone_count();
+    // _before has an underscore because it's unused in --release builds
+    let _before = roc_types::types::get_type_clone_count();
 
     let mut constraints = Constraints::new();
 
@@ -3937,14 +3949,15 @@ fn canonicalize_and_constrain<'a>(
         )
     };
 
-    let after = roc_types::types::get_type_clone_count();
+    // _after has an underscore because it's unused in --release builds
+    let _after = roc_types::types::get_type_clone_count();
 
     log!(
         "constraint gen of {:?} cloned Type {} times ({} -> {})",
         module_id,
-        after - before,
-        before,
-        after
+        _after - _before,
+        _before,
+        _after
     );
 
     // scope has imported aliases, but misses aliases from inner scopes
@@ -3960,7 +3973,7 @@ fn canonicalize_and_constrain<'a>(
                 // do nothing
             }
             Vacant(vacant) => {
-                if !name.is_builtin() {
+                if !name.is_builtin() || name.module_id() == ModuleId::ENCODE {
                     vacant.insert((false, alias));
                 }
             }
@@ -3988,6 +4001,7 @@ fn canonicalize_and_constrain<'a>(
         ident_ids: module_output.scope.locals.ident_ids,
         dep_idents,
         module_timing,
+        pending_derives: module_output.pending_derives,
     };
 
     CanAndCon {
@@ -4110,12 +4124,10 @@ fn make_specializations<'a>(
     mut abilities_store: AbilitiesStore,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
-    let mut mono_problems = Vec::new();
     let mut update_mode_ids = UpdateModeIds::new();
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
         arena,
-        problems: &mut mono_problems,
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
@@ -4163,7 +4175,6 @@ fn make_specializations<'a>(
         ident_ids,
         layout_cache,
         procedures,
-        problems: mono_problems,
         update_mode_ids,
         subs,
         external_specializations_requested,
@@ -4208,12 +4219,10 @@ fn build_pending_specializations<'a>(
         imported_module_thunks,
     };
 
-    let mut mono_problems = std::vec::Vec::new();
     let mut update_mode_ids = UpdateModeIds::new();
     let mut subs = solved_subs.into_inner();
     let mut mono_env = roc_mono::ir::Env {
         arena,
-        problems: &mut mono_problems,
         subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
@@ -4238,7 +4247,7 @@ fn build_pending_specializations<'a>(
                 &exposed_to_host.values,
                 false,
             ),
-            DeclareRec(defs) => {
+            DeclareRec(defs, cycle_mark) if !cycle_mark.is_illegal(mono_env.subs) => {
                 for def in defs {
                     add_def_to_module(
                         &mut layout_cache,
@@ -4251,7 +4260,7 @@ fn build_pending_specializations<'a>(
                     )
                 }
             }
-            InvalidCycle(_entries) => {
+            InvalidCycle(_) | DeclareRec(..) => {
                 // do nothing?
                 // this may mean the loc_symbols are not defined during codegen; is that a problem?
             }
@@ -4259,8 +4268,6 @@ fn build_pending_specializations<'a>(
     }
 
     procs_base.module_thunks = module_thunks.into_bump_slice();
-
-    let problems = mono_env.problems.to_vec();
 
     let find_specializations_end = SystemTime::now();
     module_timing.find_specializations = find_specializations_end
@@ -4273,7 +4280,6 @@ fn build_pending_specializations<'a>(
         ident_ids,
         layout_cache,
         procs_base,
-        problems,
         module_timing,
         abilities_store,
     }
@@ -4462,6 +4468,7 @@ fn run_task<'a>(
             dep_idents,
             exposed_symbols,
             aliases,
+            abilities_store,
             skip_constraint_gen,
         } => {
             let can_and_con = canonicalize_and_constrain(
@@ -4470,6 +4477,7 @@ fn run_task<'a>(
                 dep_idents,
                 exposed_symbols,
                 aliases,
+                abilities_store,
                 parsed,
                 skip_constraint_gen,
             );
@@ -4483,6 +4491,7 @@ fn run_task<'a>(
             exposed_for_module,
             constraints,
             constraint,
+            pending_derives,
             var_store,
             ident_ids,
             declarations,
@@ -4496,6 +4505,7 @@ fn run_task<'a>(
             exposed_for_module,
             constraints,
             constraint,
+            pending_derives,
             var_store,
             declarations,
             dep_idents,

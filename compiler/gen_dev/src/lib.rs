@@ -640,7 +640,11 @@ trait Backend<'a> {
                     "NumIsZero: expected to have return layout of type Bool"
                 );
 
-                self.load_literal(&Symbol::DEV_TMP, &arg_layouts[0], &Literal::Int(0));
+                self.load_literal(
+                    &Symbol::DEV_TMP,
+                    &arg_layouts[0],
+                    &Literal::Int(0i128.to_ne_bytes()),
+                );
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }

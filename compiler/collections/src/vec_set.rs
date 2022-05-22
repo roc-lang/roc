@@ -1,3 +1,5 @@
+use std::iter::FromIterator;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct VecSet<T> {
     elements: Vec<T>,
@@ -55,13 +57,15 @@ impl<T: PartialEq> VecSet<T> {
         self.elements.contains(value)
     }
 
-    pub fn remove(&mut self, value: &T) {
+    /// Performs a swap_remove if the element was present in the set,
+    /// then returns whether the value was present in the set.
+    pub fn remove(&mut self, value: &T) -> bool {
         match self.elements.iter().position(|x| x == value) {
-            None => {
-                // just do nothing
-            }
+            None => false,
             Some(index) => {
                 self.elements.swap_remove(index);
+
+                true
             }
         }
     }
@@ -96,6 +100,14 @@ impl<A: Ord> Extend<A> for VecSet<A> {
                 self.elements.dedup();
             }
         }
+    }
+}
+
+impl<A: Ord> FromIterator<A> for VecSet<A> {
+    fn from_iter<T: IntoIterator<Item = A>>(iter: T) -> Self {
+        let mut set = VecSet::default();
+        set.extend(iter);
+        set
     }
 }
 

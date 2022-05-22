@@ -3,7 +3,7 @@ use crate::annotation::canonicalize_annotation;
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
-use crate::expr::{ClosureData, Expr, Output};
+use crate::expr::{ClosureData, Expr, Output, PendingDerives};
 use crate::operator::desugar_def;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
@@ -51,6 +51,7 @@ pub struct ModuleOutput {
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
     pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
+    pub pending_derives: PendingDerives,
     pub scope: Scope,
 }
 
@@ -166,13 +167,14 @@ pub fn canonicalize_module_defs<'a>(
     exposed_ident_ids: IdentIds,
     dep_idents: &'a IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
+    imported_abilities_state: AbilitiesStore,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home, exposed_ident_ids);
+    let mut scope = Scope::new(home, exposed_ident_ids, imported_abilities_state);
     let mut env = Env::new(home, dep_idents, module_ids);
     let num_deps = dep_idents.len();
 
@@ -254,12 +256,12 @@ pub fn canonicalize_module_defs<'a>(
         {
             // These are not aliases but Apply's and we make sure they are always in scope
         } else {
-            // This is a type alias
+            // This is a type alias or ability
 
             // the symbol should already be added to the scope when this module is canonicalized
             debug_assert!(
-                scope.contains_alias(symbol),
-                "The {:?} is not a type alias known in {:?}",
+                scope.contains_alias(symbol) || scope.abilities_store.is_ability(symbol),
+                "The {:?} is not a type alias or ability known in {:?}",
                 symbol,
                 home
             );
@@ -288,6 +290,8 @@ pub fn canonicalize_module_defs<'a>(
         &desugared,
         PatternType::TopLevelDef,
     );
+
+    let pending_derives = output.pending_derives;
 
     // See if any of the new idents we defined went unused.
     // If any were unused and also not exposed, report it.
@@ -351,18 +355,26 @@ pub fn canonicalize_module_defs<'a>(
         ..Default::default()
     };
 
-    let (mut declarations, mut output) = sort_can_defs(&mut env, defs, new_output);
+    let (mut declarations, mut output) = sort_can_defs(&mut env, var_store, defs, new_output);
+
+    debug_assert!(
+        output.pending_derives.is_empty(),
+        "I thought pending derives are only found during def introduction"
+    );
 
     let symbols_from_requires = symbols_from_requires
         .iter()
         .map(|(symbol, loc_ann)| {
+            // We've already canonicalized the module, so there are no pending abilities.
+            let pending_abilities_in_scope = &[];
+
             let ann = canonicalize_annotation(
                 &mut env,
                 &mut scope,
                 &loc_ann.value,
                 loc_ann.region,
                 var_store,
-                &output.abilities_in_scope,
+                pending_abilities_in_scope,
             );
 
             ann.add_to(
@@ -463,7 +475,7 @@ pub fn canonicalize_module_defs<'a>(
                     }
                 }
             }
-            DeclareRec(defs) => {
+            DeclareRec(defs, _) => {
                 for def in defs {
                     for (symbol, _) in def.pattern_vars.iter() {
                         if exposed_but_not_defined.contains(symbol) {
@@ -517,8 +529,16 @@ pub fn canonicalize_module_defs<'a>(
         aliases.insert(symbol, alias);
     }
 
-    for member in scope.abilities_store.root_ability_members().keys() {
-        exposed_but_not_defined.remove(member);
+    for (ability, members) in scope
+        .abilities_store
+        .iter_abilities()
+        .filter(|(ab, _)| ab.module_id() == home)
+    {
+        exposed_but_not_defined.remove(&ability);
+        members.iter().for_each(|member| {
+            debug_assert!(member.module_id() == home);
+            exposed_but_not_defined.remove(member);
+        });
     }
 
     // By this point, all exposed symbols should have been removed from
@@ -559,7 +579,9 @@ pub fn canonicalize_module_defs<'a>(
     for declaration in declarations.iter_mut() {
         match declaration {
             Declare(def) => fix_values_captured_in_closure_def(def, &mut VecSet::default()),
-            DeclareRec(defs) => fix_values_captured_in_closure_defs(defs, &mut VecSet::default()),
+            DeclareRec(defs, _) => {
+                fix_values_captured_in_closure_defs(defs, &mut VecSet::default())
+            }
             InvalidCycle(_) | Builtin(_) => {}
         }
     }
@@ -574,6 +596,7 @@ pub fn canonicalize_module_defs<'a>(
         exposed_imports: can_exposed_imports,
         problems: env.problems,
         symbols_from_requires,
+        pending_derives,
         lookups,
     }
 }
@@ -594,7 +617,9 @@ fn fix_values_captured_in_closure_defs(
 ) {
     // recursive defs cannot capture each other
     for def in defs.iter() {
-        no_capture_symbols.extend(crate::pattern::symbols_from_pattern(&def.loc_pattern.value));
+        no_capture_symbols.extend(
+            crate::traverse::symbols_introduced_from_pattern(&def.loc_pattern).map(|ls| ls.value),
+        );
     }
 
     // TODO mutually recursive functions should both capture the union of both their capture sets
@@ -665,7 +690,7 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_def(def, no_capture_symbols);
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
-        LetRec(defs, loc_expr) => {
+        LetRec(defs, loc_expr, _) => {
             // LetRec(Vec<Def>, Box<Located<Expr>>, Variable, Aliases),
             fix_values_captured_in_closure_defs(defs, no_capture_symbols);
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
@@ -706,6 +731,7 @@ fn fix_values_captured_in_closure_expr(
         | Var(_)
         | AbilityMember(..)
         | EmptyRecord
+        | TypedHole { .. }
         | RuntimeError(_)
         | ZeroArgumentTag { .. }
         | Accessor { .. } => {}

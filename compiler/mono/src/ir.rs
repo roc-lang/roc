@@ -11,17 +11,19 @@ use roc_can::abilities::{AbilitiesStore, SpecializationId};
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::{MutSet, VecMap};
+use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
 use roc_debug_flags::{
-    dbg_do, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
-    ROC_PRINT_IR_AFTER_SPECIALIZATION,
+    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
 };
+use roc_error_macros::todo_abilities;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
-use roc_solve::ability::resolve_ability_specialization;
+use roc_solve::ability::{resolve_ability_specialization, Resolved};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
@@ -50,14 +52,6 @@ pub fn pretty_print_ir_symbols() -> bool {
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
 
-// i128 alignment is different on arm
-roc_error_macros::assert_sizeof_aarch64!(Literal, 4 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Expr, 10 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Stmt, 20 * 8);
-roc_error_macros::assert_sizeof_aarch64!(ProcLayout, 6 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Call, 7 * 8);
-roc_error_macros::assert_sizeof_aarch64!(CallType, 5 * 8);
-
 roc_error_macros::assert_sizeof_wasm!(Literal, 24);
 roc_error_macros::assert_sizeof_wasm!(Expr, 48);
 roc_error_macros::assert_sizeof_wasm!(Stmt, 120);
@@ -65,12 +59,12 @@ roc_error_macros::assert_sizeof_wasm!(ProcLayout, 32);
 roc_error_macros::assert_sizeof_wasm!(Call, 36);
 roc_error_macros::assert_sizeof_wasm!(CallType, 28);
 
-roc_error_macros::assert_sizeof_default!(Literal, 3 * 8);
-roc_error_macros::assert_sizeof_default!(Expr, 10 * 8);
-roc_error_macros::assert_sizeof_default!(Stmt, 19 * 8);
-roc_error_macros::assert_sizeof_default!(ProcLayout, 6 * 8);
-roc_error_macros::assert_sizeof_default!(Call, 7 * 8);
-roc_error_macros::assert_sizeof_default!(CallType, 5 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Literal, 3 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Expr, 10 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Stmt, 19 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(ProcLayout, 6 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Call, 7 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(CallType, 5 * 8);
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -108,11 +102,6 @@ pub enum OptLevel {
     Normal,
     Size,
     Optimize,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum MonoProblem {
-    PatternProblem(roc_exhaustive::Error),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1247,7 +1236,6 @@ impl<'a> Specializations<'a> {
 pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'i mut Subs,
-    pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub target_info: TargetInfo,
@@ -1456,10 +1444,13 @@ impl ModifyRc {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Literal<'a> {
     // Literals
-    Int(i128),
-    U128(u128),
+    /// stored as raw bytes rather than a number to avoid an alignment bump
+    Int([u8; 16]),
+    /// stored as raw bytes rather than a number to avoid an alignment bump
+    U128([u8; 16]),
     Float(f64),
-    Decimal(RocDec),
+    /// stored as raw bytes rather than a number to avoid an alignment bump
+    Decimal([u8; 16]),
     Str(&'a str),
     /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
     /// so they can (at least potentially) be emitted as 1-bit machine bools.
@@ -1711,10 +1702,10 @@ impl<'a> Literal<'a> {
         use Literal::*;
 
         match self {
-            Int(lit) => alloc.text(format!("{}i64", lit)),
-            U128(lit) => alloc.text(format!("{}u128", lit)),
+            Int(bytes) => alloc.text(format!("{}i64", i128::from_ne_bytes(*bytes))),
+            U128(bytes) => alloc.text(format!("{}u128", u128::from_ne_bytes(*bytes))),
             Float(lit) => alloc.text(format!("{}f64", lit)),
-            Decimal(lit) => alloc.text(format!("{}dec", lit)),
+            Decimal(bytes) => alloc.text(format!("{}dec", RocDec::from_ne_bytes(*bytes))),
             Bool(lit) => alloc.text(format!("{}", lit)),
             Byte(lit) => alloc.text(format!("{}u8", lit)),
             Str(lit) => alloc.text(format!("{:?}", lit)),
@@ -2124,7 +2115,7 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
-            Var(original) | AbilityMember(original, _) => {
+            Var(original) | AbilityMember(original, _, _) => {
                 // a variable is aliased, e.g.
                 //
                 //  foo = bar
@@ -2190,7 +2181,7 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, new_outer)
             }
-            LetRec(nested_defs, nested_cont) => {
+            LetRec(nested_defs, nested_cont, cycle_mark) => {
                 use roc_can::expr::Expr::*;
                 // We must transform
                 //
@@ -2223,7 +2214,7 @@ fn from_can_let<'a>(
 
                 let new_inner = LetNonRec(Box::new(new_def), cont);
 
-                let new_outer = LetRec(nested_defs, Box::new(Loc::at_zero(new_inner)));
+                let new_outer = LetRec(nested_defs, Box::new(Loc::at_zero(new_inner)), cycle_mark);
 
                 lower_rest!(variable, new_outer)
             }
@@ -2785,7 +2776,7 @@ fn resolve_abilities_in_specialized_body<'a>(
     body_var: Variable,
 ) -> std::vec::Vec<SpecializationId> {
     use roc_can::expr::Expr;
-    use roc_can::traverse::{walk_expr, PatternVisitor, Visitor};
+    use roc_can::traverse::{walk_expr, Visitor};
     use roc_unify::unify::unify;
 
     struct Resolver<'a> {
@@ -2795,7 +2786,6 @@ fn resolve_abilities_in_specialized_body<'a>(
         seen_defs: MutSet<Symbol>,
         specialized: std::vec::Vec<SpecializationId>,
     }
-    impl PatternVisitor for Resolver<'_> {}
     impl Visitor for Resolver<'_> {
         fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
             match expr {
@@ -2810,39 +2800,65 @@ fn resolve_abilities_in_specialized_body<'a>(
                     // So, we'll resolve any nested abilities when we know their specialized type
                     // during def construction.
                 }
-                Expr::AbilityMember(member_sym, specialization_id) => {
-                    if self
+                Expr::AbilityMember(member_sym, specialization_id, _specialization_var) => {
+                    let (specialization, specialization_def) = match self
                         .abilities_store
                         .get_resolved(*specialization_id)
-                        .is_some()
                     {
-                        // We already know the specialization from type solving; we are good to go.
-                        return;
-                    }
+                        Some(specialization) => (
+                            specialization,
+                            // If we know the specialization at this point, the specialization must
+                            // be static. That means the relevant type state was populated during
+                            // solving, so we don't need additional unification here.
+                            //
+                            // However, we do need to walk the specialization def, because it may
+                            // itself contain unspecialized defs.
+                            self.procs
+                                .partial_procs
+                                .get_symbol(specialization)
+                                .expect("Specialization found, but it's not in procs"),
+                        ),
+                        None => {
+                            let specialization = resolve_ability_specialization(
+                                self.subs,
+                                self.abilities_store,
+                                *member_sym,
+                                var,
+                            )
+                            .expect("Ability specialization is unknown - code generation cannot proceed!");
 
-                    let specialization = resolve_ability_specialization(
-                        self.subs,
-                        self.abilities_store,
-                        *member_sym,
-                        var,
-                    )
-                    .expect("Ability specialization is unknown - code generation cannot proceed!");
+                            let specialization = match specialization {
+                                Resolved::Specialization(symbol) => symbol,
+                                Resolved::NeedsGenerated => {
+                                    todo_abilities!("Generate impls for structural types")
+                                }
+                            };
 
-                    // We must now refine the current type state to account for this specialization,
-                    // since `var` may only have partial specialization information - enough to
-                    // figure out what specialization we need, but not the types of all arguments
-                    // and return types. So, unify with the variable with the specialization's type.
-                    let specialization_def = self
-                        .procs
-                        .partial_procs
-                        .get_symbol(specialization)
-                        .expect("Specialization found, but it's not in procs");
-                    let specialization_var = specialization_def.annotation;
+                            self.abilities_store
+                                .insert_resolved(*specialization_id, specialization);
 
-                    let unified = unify(self.subs, var, specialization_var, Mode::EQ);
-                    unified.expect_success(
-                        "Specialization does not unify - this is a typechecker bug!",
-                    );
+                            debug_assert!(!self.specialized.contains(specialization_id));
+                            self.specialized.push(*specialization_id);
+
+                            // We must now refine the current type state to account for this specialization,
+                            // since `var` may only have partial specialization information - enough to
+                            // figure out what specialization we need, but not the types of all arguments
+                            // and return types. So, unify with the variable with the specialization's type.
+                            let specialization_def = self
+                                .procs
+                                .partial_procs
+                                .get_symbol(specialization)
+                                .expect("Specialization found, but it's not in procs");
+                            let specialization_var = specialization_def.annotation;
+
+                            let unified = unify(self.subs, var, specialization_var, Mode::EQ);
+                            unified.expect_success(
+                                "Specialization does not unify - this is a typechecker bug!",
+                            );
+
+                            (specialization, specialization_def)
+                        }
+                    };
 
                     // Now walk the specialization def to pick up any more needed types. Of course,
                     // we only want to pass through it once to avoid unbounded recursion.
@@ -2854,28 +2870,22 @@ fn resolve_abilities_in_specialized_body<'a>(
                         );
                         self.seen_defs.insert(specialization);
                     }
-
-                    self.abilities_store
-                        .insert_resolved(*specialization_id, specialization);
-
-                    debug_assert!(!self.specialized.contains(specialization_id));
-                    self.specialized.push(*specialization_id);
                 }
                 _ => walk_expr(self, expr, var),
             }
         }
     }
 
-    let mut specializer = Resolver {
+    let mut resolver = Resolver {
         subs: env.subs,
         procs,
         abilities_store: env.abilities_store,
         seen_defs: MutSet::default(),
         specialized: vec![],
     };
-    specializer.visit_expr(specialized_body, Region::zero(), body_var);
+    resolver.visit_expr(specialized_body, Region::zero(), body_var);
 
-    specializer.specialized
+    resolver.specialized
 }
 
 fn specialize_external<'a>(
@@ -3674,7 +3684,7 @@ fn try_make_literal<'a>(
                         ),
                     };
 
-                    Some(Literal::Decimal(dec))
+                    Some(Literal::Decimal(dec.to_ne_bytes()))
                 }
                 _ => unreachable!("unexpected float precision for integer"),
             }
@@ -3690,8 +3700,8 @@ fn try_make_literal<'a>(
                     IntValue::U128(n) => Literal::U128(n),
                 }),
                 IntOrFloat::Float(_) => Some(match *num {
-                    IntValue::I128(n) => Literal::Float(n as f64),
-                    IntValue::U128(n) => Literal::Float(n as f64),
+                    IntValue::I128(n) => Literal::Float(i128::from_ne_bytes(n) as f64),
+                    IntValue::U128(n) => Literal::Float(u128::from_ne_bytes(n) as f64),
                 }),
                 IntOrFloat::DecimalFloatType => {
                     let dec = match RocDec::from_str(num_str) {
@@ -3702,7 +3712,7 @@ fn try_make_literal<'a>(
                         ),
                     };
 
-                    Some(Literal::Decimal(dec))
+                    Some(Literal::Decimal(dec.to_ne_bytes()))
                 }
             }
         }
@@ -3754,7 +3764,7 @@ pub fn with_hole<'a>(
                         };
                     Stmt::Let(
                         assigned,
-                        Expr::Literal(Literal::Decimal(dec)),
+                        Expr::Literal(Literal::Decimal(dec.to_ne_bytes())),
                         Layout::Builtin(Builtin::Decimal),
                         hole,
                     )
@@ -3772,7 +3782,7 @@ pub fn with_hole<'a>(
 
         SingleQuote(character) => Stmt::Let(
             assigned,
-            Expr::Literal(Literal::Int(character as _)),
+            Expr::Literal(Literal::Int((character as i128).to_ne_bytes())),
             Layout::int_width(IntWidth::I32),
             hole,
         ),
@@ -3792,8 +3802,8 @@ pub fn with_hole<'a>(
                 IntOrFloat::Float(precision) => Stmt::Let(
                     assigned,
                     Expr::Literal(match num {
-                        IntValue::I128(n) => Literal::Float(n as f64),
-                        IntValue::U128(n) => Literal::Float(n as f64),
+                        IntValue::I128(n) => Literal::Float(i128::from_ne_bytes(n) as f64),
+                        IntValue::U128(n) => Literal::Float(u128::from_ne_bytes(n) as f64),
                     }),
                     Layout::float_width(precision),
                     hole,
@@ -3805,7 +3815,7 @@ pub fn with_hole<'a>(
                         };
                     Stmt::Let(
                         assigned,
-                        Expr::Literal(Literal::Decimal(dec)),
+                        Expr::Literal(Literal::Decimal(dec.to_ne_bytes())),
                         Layout::Builtin(Builtin::Decimal),
                         hole,
                     )
@@ -3821,7 +3831,7 @@ pub fn with_hole<'a>(
             variable,
             Some((assigned, hole)),
         ),
-        LetRec(defs, cont) => {
+        LetRec(defs, cont, _cycle_mark) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -3858,7 +3868,7 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
-        AbilityMember(_member, specialization_id) => {
+        AbilityMember(_member, specialization_id, _) => {
             let specialization_symbol = env
                 .abilities_store
                 .get_resolved(specialization_id)
@@ -4732,7 +4742,7 @@ pub fn with_hole<'a>(
                         hole,
                     )
                 }
-                roc_can::expr::Expr::AbilityMember(_, specialization_id) => {
+                roc_can::expr::Expr::AbilityMember(_, specialization_id, _) => {
                     let proc_name = env.abilities_store.get_resolved(specialization_id).expect(
                         "Ability specialization is unknown - code generation cannot proceed!",
                     );
@@ -4866,14 +4876,21 @@ pub fn with_hole<'a>(
                         UnspecializedExpr(symbol) => {
                             match procs.ability_member_aliases.get(symbol).unwrap() {
                                 &self::AbilityMember(member) => {
-                                    let proc_name = resolve_ability_specialization(env.subs, env.abilities_store, member, fn_var).expect("Recorded as an ability member, but it doesn't have a specialization");
+                                    let resolved_proc = resolve_ability_specialization(env.subs, env.abilities_store, member, fn_var).expect("Recorded as an ability member, but it doesn't have a specialization");
+
+                                    let resolved_proc = match resolved_proc {
+                                        Resolved::Specialization(symbol) => symbol,
+                                        Resolved::NeedsGenerated => {
+                                            todo_abilities!("Generate impls for structural types")
+                                        }
+                                    };
 
                                     // a call by a known name
                                     return call_by_name(
                                         env,
                                         procs,
                                         fn_var,
-                                        proc_name,
+                                        resolved_proc,
                                         loc_args,
                                         layout_cache,
                                         assigned,
@@ -5222,6 +5239,7 @@ pub fn with_hole<'a>(
                 }
             }
         }
+        TypedHole(_) => Stmt::RuntimeError("Hit a blank"),
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
     }
 }
@@ -5945,7 +5963,7 @@ pub fn from_can<'a>(
             )
         }
 
-        LetRec(defs, cont) => {
+        LetRec(defs, cont, _cycle_mark) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -6565,7 +6583,6 @@ fn store_pattern_help<'a>(
             return StorePattern::NotProductive(stmt);
         }
         IntLiteral(_, _)
-        | U128Literal(_)
         | FloatLiteral(_, _)
         | DecimalLiteral(_)
         | EnumLiteral { .. }
@@ -6961,7 +6978,7 @@ fn can_reuse_symbol<'a>(
     use ReuseSymbol::*;
 
     let symbol = match expr {
-        AbilityMember(_, specialization_id) => env
+        AbilityMember(_, specialization_id, _) => env
             .abilities_store
             .get_resolved(*specialization_id)
             .expect("Specialization must be known!"),
@@ -8066,10 +8083,9 @@ fn call_specialized_proc<'a>(
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
-    U128Literal(u128),
-    IntLiteral(i128, IntWidth),
+    IntLiteral([u8; 16], IntWidth),
     FloatLiteral(u64, FloatWidth),
-    DecimalLiteral(RocDec),
+    DecimalLiteral([u8; 16]),
     BitLiteral {
         value: bool,
         tag_name: TagName,
@@ -8155,13 +8171,9 @@ fn from_can_pattern_help<'a>(
         AbilityMemberSpecialization { ident, .. } => Ok(Pattern::Identifier(*ident)),
         IntLiteral(_, precision_var, _, int, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, false) {
-                IntOrFloat::Int(precision) => {
-                    let int = match *int {
-                        IntValue::I128(n) => Pattern::IntLiteral(n, precision),
-                        IntValue::U128(n) => Pattern::U128Literal(n),
-                    };
-                    Ok(int)
-                }
+                IntOrFloat::Int(precision) => match *int {
+                    IntValue::I128(n) | IntValue::U128(n) => Ok(Pattern::IntLiteral(n, precision)),
+                },
                 other => {
                     panic!(
                         "Invalid precision for int pattern: {:?} has {:?}",
@@ -8187,12 +8199,15 @@ fn from_can_pattern_help<'a>(
                             float_str
                         ),
                     };
-                    Ok(Pattern::DecimalLiteral(dec))
+                    Ok(Pattern::DecimalLiteral(dec.to_ne_bytes()))
                 }
             }
         }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
-        SingleQuote(c) => Ok(Pattern::IntLiteral(*c as _, IntWidth::I32)),
+        SingleQuote(c) => Ok(Pattern::IntLiteral(
+            (*c as i128).to_ne_bytes(),
+            IntWidth::I32,
+        )),
         Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
             original_region: *region,
             shadow: ident.clone(),
@@ -8210,14 +8225,15 @@ fn from_can_pattern_help<'a>(
         NumLiteral(var, num_str, num, _bound) => {
             match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
                 IntOrFloat::Int(precision) => Ok(match num {
-                    IntValue::I128(num) => Pattern::IntLiteral(*num, precision),
-                    IntValue::U128(num) => Pattern::U128Literal(*num),
+                    IntValue::I128(num) | IntValue::U128(num) => {
+                        Pattern::IntLiteral(*num, precision)
+                    }
                 }),
                 IntOrFloat::Float(precision) => {
                     // TODO: this may be lossy
                     let num = match *num {
-                        IntValue::I128(n) => f64::to_bits(n as f64),
-                        IntValue::U128(n) => f64::to_bits(n as f64),
+                        IntValue::I128(n) => f64::to_bits(i128::from_ne_bytes(n) as f64),
+                        IntValue::U128(n) => f64::to_bits(u128::from_ne_bytes(n) as f64),
                     };
                     Ok(Pattern::FloatLiteral(num, precision))
                 }
@@ -8226,7 +8242,7 @@ fn from_can_pattern_help<'a>(
                             Some(d) => d,
                             None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", num_str),
                         };
-                    Ok(Pattern::DecimalLiteral(dec))
+                    Ok(Pattern::DecimalLiteral(dec.to_ne_bytes()))
                 }
             }
         }

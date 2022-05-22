@@ -24,7 +24,7 @@ fn bench_group_wall_time(c: &mut Criterion) {
 
     group.sample_size(nr_of_runs);
 
-    let bench_funcs: Vec<fn(Option<&mut BenchmarkGroup<WallTime>>) -> ()> = vec![
+    let bench_funcs: Vec<fn(Option<&mut BenchmarkGroup<WallTime>>)> = vec![
         bench_nqueens,   // queens 11
         bench_cfold,     // e = mkExpr 17 1
         bench_deriv,     // nest deriv 8 f

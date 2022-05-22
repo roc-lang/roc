@@ -1,3 +1,5 @@
+use std::iter::FromIterator;
+
 #[derive(Debug, Clone)]
 pub struct VecMap<K, V> {
     keys: Vec<K>,
@@ -123,7 +125,7 @@ impl<K: PartialEq, V> VecMap<K, V> {
     }
 }
 
-impl<K: Ord, V> Extend<(K, V)> for VecMap<K, V> {
+impl<K: PartialEq, V> Extend<(K, V)> for VecMap<K, V> {
     #[inline(always)]
     fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
         let it = iter.into_iter();
@@ -182,5 +184,17 @@ impl<K, V> Iterator for IntoIter<K, V> {
 impl<K, V> ExactSizeIterator for IntoIter<K, V> {
     fn len(&self) -> usize {
         self.len
+    }
+}
+
+impl<K: PartialEq, V> FromIterator<(K, V)> for VecMap<K, V> {
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let size_hint = iter.size_hint();
+        let mut map = VecMap::with_capacity(size_hint.1.unwrap_or(size_hint.0));
+        for (k, v) in iter {
+            map.insert(k, v);
+        }
+        map
     }
 }

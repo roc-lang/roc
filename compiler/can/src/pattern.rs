@@ -175,61 +175,6 @@ pub enum DestructType {
     Guard(Variable, Loc<Pattern>),
 }
 
-pub fn symbols_from_pattern(pattern: &Pattern) -> Vec<Symbol> {
-    let mut symbols = Vec::new();
-    symbols_from_pattern_help(pattern, &mut symbols);
-
-    symbols
-}
-
-pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
-    use Pattern::*;
-
-    match pattern {
-        Identifier(symbol) | Shadowed(_, _, symbol) => {
-            symbols.push(*symbol);
-        }
-
-        AbilityMemberSpecialization { ident, specializes } => {
-            symbols.push(*ident);
-            symbols.push(*specializes);
-        }
-
-        AppliedTag { arguments, .. } => {
-            for (_, nested) in arguments {
-                symbols_from_pattern_help(&nested.value, symbols);
-            }
-        }
-        UnwrappedOpaque {
-            opaque, argument, ..
-        } => {
-            symbols.push(*opaque);
-            let (_, nested) = &**argument;
-            symbols_from_pattern_help(&nested.value, symbols);
-        }
-        RecordDestructure { destructs, .. } => {
-            for destruct in destructs {
-                // when a record field has a pattern guard, only symbols in the guard are introduced
-                if let DestructType::Guard(_, subpattern) = &destruct.value.typ {
-                    symbols_from_pattern_help(&subpattern.value, symbols);
-                } else {
-                    symbols.push(destruct.value.symbol);
-                }
-            }
-        }
-
-        NumLiteral(..)
-        | IntLiteral(..)
-        | FloatLiteral(..)
-        | StrLiteral(_)
-        | SingleQuote(_)
-        | Underscore
-        | MalformedPattern(_, _)
-        | UnsupportedPattern(_)
-        | OpaqueNotInScope(..) => {}
-    }
-}
-
 pub fn canonicalize_def_header_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
@@ -246,15 +191,20 @@ pub fn canonicalize_def_header_pattern<'a>(
         Identifier(name) => {
             match scope.introduce_or_shadow_ability_member((*name).into(), region) {
                 Ok((symbol, shadowing_ability_member)) => {
-                    output.references.insert_bound(symbol);
                     let can_pattern = match shadowing_ability_member {
                         // A fresh identifier.
-                        None => Pattern::Identifier(symbol),
+                        None => {
+                            output.references.insert_bound(symbol);
+                            Pattern::Identifier(symbol)
+                        }
                         // Likely a specialization of an ability.
-                        Some(ability_member_name) => Pattern::AbilityMemberSpecialization {
-                            ident: symbol,
-                            specializes: ability_member_name,
-                        },
+                        Some(ability_member_name) => {
+                            output.references.insert_value_lookup(ability_member_name);
+                            Pattern::AbilityMemberSpecialization {
+                                ident: symbol,
+                                specializes: ability_member_name,
+                            }
+                        }
                     };
                     Loc::at(region, can_pattern)
                 }
@@ -415,20 +365,20 @@ pub fn canonicalize_pattern<'a>(
                     let problem = MalformedPatternProblem::MalformedInt;
                     malformed_pattern(env, problem, region)
                 }
-                Ok(ParsedNumResult::UnknownNum(int, bound)) => {
-                    Pattern::NumLiteral(var_store.fresh(), (str).into(), int, bound)
+                Ok((parsed, ParsedNumResult::UnknownNum(int, bound))) => {
+                    Pattern::NumLiteral(var_store.fresh(), (parsed).into(), int, bound)
                 }
-                Ok(ParsedNumResult::Int(int, bound)) => Pattern::IntLiteral(
+                Ok((parsed, ParsedNumResult::Int(int, bound))) => Pattern::IntLiteral(
                     var_store.fresh(),
                     var_store.fresh(),
-                    (str).into(),
+                    (parsed).into(),
                     int,
                     bound,
                 ),
-                Ok(ParsedNumResult::Float(float, bound)) => Pattern::FloatLiteral(
+                Ok((parsed, ParsedNumResult::Float(float, bound))) => Pattern::FloatLiteral(
                     var_store.fresh(),
                     var_store.fresh(),
-                    (str).into(),
+                    (parsed).into(),
                     float,
                     bound,
                 ),
@@ -452,11 +402,15 @@ pub fn canonicalize_pattern<'a>(
                     malformed_pattern(env, problem, region)
                 }
                 Ok((int, bound)) => {
+                    use std::ops::Neg;
+
                     let sign_str = if is_negative { "-" } else { "" };
                     let int_str = format!("{}{}", sign_str, int).into_boxed_str();
                     let i = match int {
                         // Safety: this is fine because I128::MAX = |I128::MIN| - 1
-                        IntValue::I128(n) if is_negative => IntValue::I128(-n),
+                        IntValue::I128(n) if is_negative => {
+                            IntValue::I128(i128::from_ne_bytes(n).neg().to_ne_bytes())
+                        }
                         IntValue::I128(n) => IntValue::I128(n),
                         IntValue::U128(_) => unreachable!(),
                     };

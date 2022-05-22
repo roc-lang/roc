@@ -1,7 +1,7 @@
 [package]
 authors = ["The Roc Contributors"]
 description = "Rust representations of Roc data structures"
-edition = "2018"
+edition = "2021"
 license = "UPL-1.0"
 name = "roc_std"
 readme = "README.md"

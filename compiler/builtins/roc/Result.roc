@@ -12,8 +12,10 @@ Result ok err : [ Ok ok, Err err ]
 isOk : Result ok err -> Bool
 isOk = \result ->
     when result is
-        Ok _ -> True
-        Err _ -> False
+        Ok _ ->
+            True
+        Err _ ->
+            False
 
 ## Return True if the result indicates a failure, else return False
 ##
@@ -21,8 +23,10 @@ isOk = \result ->
 isErr : Result ok err -> Bool
 isErr = \result ->
     when result is
-        Ok _ -> False
-        Err _ -> True
+        Ok _ ->
+            False
+        Err _ ->
+            True
 
 ## If the result is `Ok`, return the value it holds. Otherwise, return
 ## the given default value.
@@ -33,8 +37,10 @@ isErr = \result ->
 withDefault : Result ok err, ok -> ok
 withDefault = \result, default ->
     when result is
-        Ok value -> value
-        Err _ -> default
+        Ok value ->
+            value
+        Err _ ->
+            default
 
 ## If the result is `Ok`, transform the value it holds by running a conversion
 ## function on it. Then return a new `Ok` holding the transformed value.
@@ -50,8 +56,10 @@ withDefault = \result, default ->
 map : Result a err, (a -> b) -> Result b err
 map = \result, transform ->
     when result is
-        Ok v -> Ok (transform v)
-        Err e -> Err e
+        Ok v ->
+            Ok (transform v)
+        Err e ->
+            Err e
 
 ## If the result is `Err`, transform the value it holds by running a conversion
 ## function on it. Then return a new `Err` holding the transformed value.
@@ -64,8 +72,10 @@ map = \result, transform ->
 mapErr : Result ok a, (a -> b) -> Result ok b
 mapErr = \result, transform ->
     when result is
-        Ok v -> Ok v
-        Err e -> Err (transform e)
+        Ok v ->
+            Ok v
+        Err e ->
+            Err (transform e)
 
 ## If the result is `Ok`, transform the entire result by running a conversion
 ## function on the value the `Ok` holds. Then return that new result.
@@ -78,5 +88,7 @@ mapErr = \result, transform ->
 after : Result a err, (a -> Result b err) -> Result b err
 after = \result, transform ->
     when result is
-        Ok v -> transform v
-        Err e -> Err e
+        Ok v ->
+            transform v
+        Err e ->
+            Err e

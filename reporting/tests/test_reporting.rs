@@ -12,6 +12,7 @@ mod test_reporting {
     use bumpalo::Bump;
     use indoc::indoc;
     use roc_can::abilities::AbilitiesStore;
+    use roc_can::expr::PendingDerives;
     use roc_load::{self, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_region::all::LineInfo;
@@ -229,6 +230,9 @@ mod test_reporting {
             &mut unify_problems,
             &constraints,
             &constraint,
+            // Use `new_report_problem_as` in order to get proper derives.
+            // TODO: remove the non-new reporting test infra.
+            PendingDerives::default(),
             &mut solve_aliases,
             &mut abilities_store,
             var,
@@ -670,7 +674,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `bar` value
+                Nothing is named `bar` in this scope.
 
                 8│          4 -> bar baz "yay"
                                  ^^^
@@ -698,7 +702,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `true` value
+                Nothing is named `true` in this scope.
 
                 1│  if true then 1 else 2
                        ^^^^
@@ -863,7 +867,7 @@ mod test_reporting {
                 r#"
                 <cyan>── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─<reset>
 
-                I cannot find a `theAdmin` value
+                Nothing is named `theAdmin` in this scope.
 
                 <cyan>3<reset><cyan>│<reset>  <white>theAdmin<reset>
                     <red>^^^^^^^^<reset>
@@ -1009,7 +1013,7 @@ mod test_reporting {
 
                     Num a
 
-                I need all branches in an `if` to have the same type!
+                All branches in an `if` must have the same type!
                 "#
             ),
         )
@@ -1040,7 +1044,7 @@ mod test_reporting {
 
                     Num a
 
-                I need all branches in an `if` to have the same type!
+                All branches in an `if` must have the same type!
                 "#
             ),
         )
@@ -1076,7 +1080,7 @@ mod test_reporting {
 
                     Str
 
-                I need all branches of a `when` to have the same type!
+                All branches of a `when` must have the same type!
                 "#
             ),
         )
@@ -1107,7 +1111,7 @@ mod test_reporting {
 
                     Num a
 
-                I need every element in a list to have the same type!
+                Every element in a list must have the same type!
                 "#
             ),
         )
@@ -1201,6 +1205,128 @@ mod test_reporting {
                 infinitely.
 
                     List ∞ -> a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = \x -> g x
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `g`:
+
+                2│  g = \x -> f [x]
+                    ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> a
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `f`:
+
+                1│  f = \x -> g x
+                    ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion_annotated() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> List a
+                f = \x -> g x
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression is used in an unexpected way:
+
+                2│  f = \x -> g x
+                              ^^^
+
+                This `g` call produces:
+
+                    List List a
+
+                But you are trying to use it as:
+
+                    List a
+
+                Tip: The type annotation uses the type variable `a` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `List` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_mutual_recursion_dually_annotated_lie() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a -> List a
+                f = \x -> g x
+                g : b -> List b
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression is used in an unexpected way:
+
+                4│  g = \x -> f [x]
+                              ^^^^^
+
+                This `f` call produces:
+
+                    List List b
+
+                But you are trying to use it as:
+
+                    List b
+
+                Tip: The type annotation uses the type variable `b` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `List` value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
                 "#
             ),
         )
@@ -1653,7 +1779,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `foo` value
+                Nothing is named `foo` in this scope.
 
                 2│      { foo: _ } -> foo
                                       ^^^
@@ -2110,7 +2236,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `ok` value
+                Nothing is named `ok` in this scope.
 
                 2│  f = \_ -> ok 4
                               ^^
@@ -5685,7 +5811,7 @@ mod test_reporting {
 
                     Num a
 
-                I need all branches in an `if` to have the same type!
+                All branches in an `if` must have the same type!
                 "#
             ),
         )
@@ -5714,7 +5840,7 @@ but the `then` branch has the type:
 
     Str
 
-I need all branches in an `if` to have the same type!
+All branches in an `if` must have the same type!
 "#,
                         $op, "^".repeat($op.len())
                     ),
@@ -5949,7 +6075,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `bar` value
+                Nothing is named `bar` in this scope.
 
                 1│  [ "foo", bar("") ]
                              ^^^
@@ -8640,7 +8766,7 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `UnknownType` value
+                Nothing is named `UnknownType` in this scope.
 
                 1│  Type : [ Constructor UnknownType ]
                                          ^^^^^^^^^^^
@@ -8654,7 +8780,7 @@ I need all branches in an `if` to have the same type!
 
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `UnknownType` value
+                Nothing is named `UnknownType` in this scope.
 
                 3│  insertHelper : UnknownType, Type -> Type
                                    ^^^^^^^^^^^
@@ -9174,25 +9300,20 @@ I need all branches in an `if` to have the same type!
             ),
             indoc!(
                 r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+                ── ILLEGAL SPECIALIZATION ──────────────────────────────── /code/proj/Main.roc ─
 
-                Something is off with this specialization of `hash`:
+                This specialization of `hash` is for a non-opaque type:
 
                 5│  hash = \{} -> 0u64
                     ^^^^
 
-                This value is a declared specialization of type:
+                It is specialized for
 
-                    {}a -> U64
+                    {}a
 
-                But the type annotation on `hash` says it must match:
+                but structural types can never specialize abilities!
 
-                    a -> U64 | a has Hash
-
-                Note: Some types in this specialization don't implement the abilities
-                they are expected to. I found the following missing implementations:
-
-                    {}a does not implement Hash
+                Note: `hash` is a member of `#UserApp.Hash`
                 "#
             ),
         )
@@ -9262,13 +9383,6 @@ I need all branches in an `if` to have the same type!
 
                 5│      le : a, a -> Bool | a has Eq
                         ^^
-
-                Note: `Id` specializes the following members of `Eq`:
-
-                `eq`, specialized here:
-
-                9│  eq = \@Id m, @Id n -> m == n
-                    ^^
                 "#
             ),
         )
@@ -9441,18 +9555,16 @@ I need all branches in an `if` to have the same type!
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st argument to `hash` is not what I expect:
+                This expression has a type that does not implement the abilities it's expected to:
 
                 15│          notYet: hash (A 1),
                                            ^^^
 
-                This `A` tag application has the type:
+                Roc can't generate an implementation of the `#UserApp.Hash` ability for
 
                     [ A (Num a) ]b
 
-                But `hash` needs the 1st argument to be:
-
-                    a | a has Hash
+                Only builtin abilities can have generated implementations!
 
                 ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -9460,15 +9572,6 @@ I need all branches in an `if` to have the same type!
 
                 14│          nope: hash (@User {}),
                                          ^^^^^^^^
-
-                This User opaque wrapping has the type:
-
-                    User
-
-                The ways this expression is used requires that the following types
-                implement the following abilities, which they do not:
-
-                    User does not implement Hash
 
                 The type `User` does not fully implement the ability `Hash`. The following
                 specializations are missing:
@@ -9879,19 +9982,6 @@ I need all branches in an `if` to have the same type!
 
                 ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                I'm inferring a weird self-referential type for `model`:
-
-                6│  go = \goal, model ->
-                                ^^^^^
-
-                Here is my best effort at writing down the type. You will see ∞ for
-                parts of the type that repeat something already printed out
-                infinitely.
-
-                    S (Set ∞)
-
-                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
-
                 I'm inferring a weird self-referential type for `goal`:
 
                 6│  go = \goal, model ->
@@ -9902,6 +9992,312 @@ I need all branches in an `if` to have the same type!
                 infinitely.
 
                     Set ∞
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn cycle_through_non_function() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                force : ({} -> I64) -> I64
+                force = \eval -> eval {}
+
+                t1 = \_ -> force (\_ -> t2)
+
+                t2 = t1 {}
+
+                t2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+
+                The `t1` definition is causing a very tricky infinite loop:
+
+                7│      t1 = \_ -> force (\_ -> t2)
+                        ^^
+
+                The `t1` value depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     t1
+                    │     ↓
+                    │     t2
+                    └─────┘
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn function_does_not_implement_encoding() {
+        new_report_problem_as(
+            "function_does_not_implement_encoding",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ main ] to "./platform"
+
+                main = Encode.toEncoder \x -> x
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression has a type that does not implement the abilities it's expected to:
+
+                3│  main = Encode.toEncoder \x -> x
+                                            ^^^^^^^
+
+                Roc can't generate an implementation of the `Encode.Encoding` ability
+                for
+
+                    a -> a
+
+                Note: `Encoding` cannot be generated for functions.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unbound_type_in_record_does_not_implement_encoding() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ main ] to "./platform"
+
+                main = \x -> Encode.toEncoder { x: x }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression has a type that does not implement the abilities it's expected to:
+
+                3│  main = \x -> Encode.toEncoder { x: x }
+                                                  ^^^^^^^^
+
+                Roc can't generate an implementation of the `Encode.Encoding` ability
+                for
+
+                    { x : a }
+
+                In particular, an implementation for
+
+                    a
+
+                cannot be generated.
+
+                Tip: This type variable is not bound to `Encoding`. Consider adding a
+                `has` clause to bind the type variable, like `| a has Encode.Encoding`
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn nested_opaque_does_not_implement_encoding() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ main ] to "./platform"
+
+                A := {}
+                main = Encode.toEncoder { x: @A {} }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This expression has a type that does not implement the abilities it's expected to:
+
+                4│  main = Encode.toEncoder { x: @A {} }
+                                            ^^^^^^^^^^^^
+
+                Roc can't generate an implementation of the `Encode.Encoding` ability
+                for
+
+                    { x : A }
+
+                In particular, an implementation for
+
+                    A
+
+                cannot be generated.
+
+                Tip: `A` does not implement `Encoding`. Consider adding a custom
+                implementation or `has Encode.Encoding` to the definition of `A`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn derive_non_builtin_ability() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                app "test" provides [ A ] to "./platform"
+
+                Ab has ab : a -> a | a has Ab
+
+                A := {} has [ Ab ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ILLEGAL DERIVE ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                This ability cannot be derived:
+
+                5│  A := {} has [ Ab ]
+                                  ^^
+
+                Only builtin abilities can be derived.
+
+                Note: The builtin abilities are `Encode.Encoding`
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn has_encoding_for_function() {
+        new_report_problem_as(
+            "has_encoding_for_function",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ A ] to "./platform"
+
+                A a := a -> a has [ Encode.Encoding ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+                Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+
+                3│  A a := a -> a has [ Encode.Encoding ]
+                                        ^^^^^^^^^^^^^^^
+
+                Note: `Encoding` cannot be generated for functions.
+
+                Tip: You can define a custom implementation of `Encode.Encoding` for `A`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn has_encoding_for_non_encoding_alias() {
+        new_report_problem_as(
+            "has_encoding_for_non_encoding_alias",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ A ] to "./platform"
+
+                A := B has [ Encode.Encoding ]
+
+                B := {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+                Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+
+                3│  A := B has [ Encode.Encoding ]
+                                 ^^^^^^^^^^^^^^^
+
+                Tip: `B` does not implement `Encoding`. Consider adding a custom
+                implementation or `has Encode.Encoding` to the definition of `B`.
+
+                Tip: You can define a custom implementation of `Encode.Encoding` for `A`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn has_encoding_for_other_has_encoding() {
+        new_report_problem_as(
+            "has_encoding_for_other_has_encoding",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ A ] to "./platform"
+
+                A := B has [ Encode.Encoding ]
+
+                B := {} has [ Encode.Encoding ]
+                "#
+            ),
+            indoc!(""), // no error
+        )
+    }
+
+    #[test]
+    fn has_encoding_for_recursive_deriving() {
+        new_report_problem_as(
+            "has_encoding_for_recursive_deriving",
+            indoc!(
+                r#"
+                app "test" imports [ Encode ] provides [ MyNat ] to "./platform"
+
+                MyNat := [ S MyNat, Z ] has [ Encode.Encoding ]
+                "#
+            ),
+            indoc!(""), // no error
+        )
+    }
+
+    #[test]
+    fn has_encoding_dominated_by_custom() {
+        new_report_problem_as(
+            "has_encoding_dominated_by_custom",
+            indoc!(
+                r#"
+                app "test" imports [ Encode.{ Encoding, toEncoder, custom } ] provides [ A ] to "./platform"
+
+                A := {} has [ Encode.Encoding ]
+
+                toEncoder = \@A {} -> custom \l, _ -> l
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CONFLICTING DERIVE AND IMPLEMENTATION ───────────────── /code/proj/Main.roc ─
+
+                `A` both derives and custom-implements `Encode.Encoding`. We found the
+                derive here:
+
+                3│  A := {} has [ Encode.Encoding ]
+                                  ^^^^^^^^^^^^^^^
+
+                and one custom implementation of `Encode.Encoding` here:
+
+                5│  toEncoder = \@A {} -> custom \l, _ -> l
+                    ^^^^^^^^^
+
+                Derived and custom implementations can conflict, so one of them needs
+                to be removed!
+
+                Note: We'll try to compile your program using the custom
+                implementation first, and fall-back on the derived implementation if
+                needed. Make sure to disambiguate which one you want!
                 "#
             ),
         )

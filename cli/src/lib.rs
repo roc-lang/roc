@@ -4,14 +4,13 @@ extern crate const_format;
 use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command};
-use roc_build::link::LinkType;
+use roc_build::link::{LinkType, LinkingStrategy};
 use roc_error_macros::{internal_error, user_error};
 use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use std::env;
 use std::ffi::{CString, OsStr};
-use std::io::{self, Write};
-use std::os::unix::prelude::FromRawFd;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
 use target_lexicon::BinaryFormat;
@@ -161,14 +160,6 @@ pub fn build_app<'a>() -> Command<'a> {
         )
         .subcommand(Command::new(CMD_RUN)
             .about("Run a .roc file even if it has build errors")
-            .arg(
-                Arg::new(FLAG_TARGET)
-                    .long(FLAG_TARGET)
-                    .help("Choose a different target")
-                    .default_value(Target::default().as_str())
-                    .possible_values(Target::OPTIONS)
-                    .required(false),
-            )
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -297,19 +288,26 @@ pub fn build(
         Some(n) => Threading::AtMost(n),
     };
 
-    // Use surgical linking when supported, or when explicitly requested with --linker surgical
-    let surgically_link = if matches.is_present(FLAG_LINKER) {
-        matches.value_of(FLAG_LINKER) == Some("surgical")
+    let wasm_dev_backend = matches!(opt_level, OptLevel::Development)
+        && matches!(triple.architecture, Architecture::Wasm32);
+
+    let linking_strategy = if wasm_dev_backend {
+        LinkingStrategy::Additive
+    } else if !roc_linker::supported(&link_type, &triple)
+        || matches.value_of(FLAG_LINKER) == Some("legacy")
+    {
+        LinkingStrategy::Legacy
     } else {
-        roc_linker::supported(&link_type, &triple)
+        LinkingStrategy::Surgical
     };
 
     let precompiled = if matches.is_present(FLAG_PRECOMPILED) {
         matches.value_of(FLAG_PRECOMPILED) == Some("true")
     } else {
         // When compiling for a different target, default to assuming a precompiled host.
-        // Otherwise compilation would most likely fail!
-        triple != Triple::host()
+        // Otherwise compilation would most likely fail because many toolchains assume you're compiling for the host
+        // We make an exception for Wasm, because cross-compiling is the norm in that case.
+        triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
     };
     let path = Path::new(filename);
 
@@ -343,7 +341,7 @@ pub fn build(
         emit_debug_info,
         emit_timings,
         link_type,
-        surgically_link,
+        linking_strategy,
         precompiled,
         target_valgrind,
         threading,
@@ -600,15 +598,17 @@ fn roc_run_executable_file_path(cwd: &Path, binary_bytes: &mut [u8]) -> std::io:
         }
 
         // NOTE: this `fd` is special, using the rust `std::fs::File` functions does not work
-        let write_result =
-            unsafe { libc::write(fd, binary_bytes.as_ptr().cast(), binary_bytes.len()) };
+        let written = unsafe { libc::write(fd, binary_bytes.as_ptr().cast(), binary_bytes.len()) };
 
-        if write_result != 0 {
+        if written == -1 {
+            internal_error!("libc::write() failed: {:?}", errno::errno());
+        }
+
+        if written != binary_bytes.len() as isize {
             internal_error!(
-                "libc::write({:?}, ..., {}) failed: {:?}",
-                fd,
+                "libc::write() did not write the correct number of bytes: reported {}, should be {}",
+                written,
                 binary_bytes.len(),
-                errno::errno()
             );
         }
 

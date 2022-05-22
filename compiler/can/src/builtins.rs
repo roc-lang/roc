@@ -5436,7 +5436,7 @@ where
         num_var,
         precision_var,
         ii.to_string().into_boxed_str(),
-        IntValue::I128(ii),
+        IntValue::I128(ii.to_ne_bytes()),
         bound,
     )
 }
@@ -5458,7 +5458,7 @@ fn num<I: Into<i128>>(num_var: Variable, i: I, bound: NumericBound) -> Expr {
     Num(
         num_var,
         i.to_string().into_boxed_str(),
-        IntValue::I128(i),
+        IntValue::I128(i.to_ne_bytes()),
         bound,
     )
 }

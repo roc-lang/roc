@@ -1,6 +1,6 @@
 interface Box
     exposes [ box, unbox ]
-    imports [ ]
+    imports []
 
 box : a -> Box a
 unbox : Box a -> a

@@ -211,6 +211,7 @@ mod test_parse {
         pass/one_minus_two.expr,
         pass/one_plus_two.expr,
         pass/one_spaced_def.expr,
+        pass/opaque_has_abilities.expr,
         pass/opaque_simple.module,
         pass/opaque_with_type_arguments.module,
         pass/opaque_reference_expr.expr,

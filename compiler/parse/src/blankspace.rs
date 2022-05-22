@@ -180,56 +180,143 @@ fn spaces_help_help<'a, E>(
 where
     E: 'a + SpaceProblem,
 {
-    use SpaceState::*;
+    move |arena, state: State<'a>| match fast_eat_spaces(&state) {
+        FastSpaceState::HasTab(position) => Err((
+            MadeProgress,
+            E::space_problem(BadInputError::HasTab, position),
+            state,
+        )),
+        FastSpaceState::Good {
+            newlines,
+            consumed,
+            column,
+        } => {
+            if consumed == 0 {
+                Ok((NoProgress, &[] as &[_], state))
+            } else if column < min_indent {
+                Err((MadeProgress, indent_problem(state.pos()), state))
+            } else {
+                let comments_and_newlines = Vec::with_capacity_in(newlines, arena);
+                let mut spaces = eat_spaces(state, false, comments_and_newlines);
 
-    move |arena, state: State<'a>| {
-        let comments_and_newlines = Vec::new_in(arena);
-        match eat_spaces(state.clone(), false, comments_and_newlines) {
-            HasTab(state) => Err((
-                MadeProgress,
-                E::space_problem(BadInputError::HasTab, state.pos()),
-                state,
-            )),
-            Good {
-                state: mut new_state,
-                multiline,
-                comments_and_newlines,
-            } => {
-                if new_state.bytes() == state.bytes() {
-                    Ok((NoProgress, &[] as &[_], state))
-                } else if multiline {
-                    // we parsed at least one newline
-
-                    new_state.indent_column = new_state.column();
-
-                    if new_state.column() >= min_indent {
-                        Ok((
-                            MadeProgress,
-                            comments_and_newlines.into_bump_slice(),
-                            new_state,
-                        ))
-                    } else {
-                        Err((MadeProgress, indent_problem(state.pos()), state))
-                    }
-                } else {
-                    Ok((
-                        MadeProgress,
-                        comments_and_newlines.into_bump_slice(),
-                        new_state,
-                    ))
+                if spaces.multiline {
+                    spaces.state.indent_column = spaces.state.column();
                 }
+
+                Ok((
+                    MadeProgress,
+                    spaces.comments_and_newlines.into_bump_slice(),
+                    spaces.state,
+                ))
             }
         }
     }
 }
 
-enum SpaceState<'a> {
+enum FastSpaceState {
     Good {
-        state: State<'a>,
-        multiline: bool,
-        comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
+        newlines: usize,
+        consumed: usize,
+        column: u32,
     },
-    HasTab(State<'a>),
+    HasTab(Position),
+}
+
+fn fast_eat_spaces(state: &State) -> FastSpaceState {
+    use FastSpaceState::*;
+
+    let mut newlines = 0;
+    let mut line_start = state.line_start.offset as usize;
+    let base_offset = state.pos().offset as usize;
+
+    let mut index = base_offset;
+    let bytes = state.original_bytes();
+    let length = bytes.len();
+
+    'outer: while index < length {
+        match bytes[index] {
+            b' ' => {
+                index += 1;
+            }
+            b'\n' => {
+                newlines += 1;
+                index += 1;
+                line_start = index;
+            }
+            b'\r' => {
+                index += 1;
+                line_start = index;
+            }
+            b'\t' => {
+                return HasTab(Position::new(index as u32));
+            }
+            b'#' => {
+                index += 1;
+
+                // try to use SIMD instructions explicitly
+                #[cfg(target_arch = "x86_64")]
+                {
+                    use std::arch::x86_64::*;
+
+                    // a bytestring with the three characters we're looking for (the rest is ignored)
+                    let needle = b"\r\n\t=============";
+                    let needle = unsafe { _mm_loadu_si128(needle.as_ptr() as *const _) };
+
+                    while index < length {
+                        let remaining = length - index;
+                        let length = if remaining < 16 { remaining as i32 } else { 16 };
+
+                        // the source bytes we'll be looking at
+                        let haystack =
+                            unsafe { _mm_loadu_si128(bytes.as_ptr().add(index) as *const _) };
+
+                        // use first 3 characters of needle, first `length` characters of haystack
+                        // finds the first index where one of the `needle` characters occurs
+                        // or 16 when none of the needle characters occur
+                        let first_special_char = unsafe {
+                            _mm_cmpestri(needle, 3, haystack, length, _SIDD_CMP_EQUAL_ANY)
+                        };
+
+                        // we've made `first_special_char` characters of progress
+                        index += usize::min(first_special_char as usize, remaining);
+
+                        // if we found a special char, let the outer loop handle it
+                        if first_special_char != 16 {
+                            continue 'outer;
+                        }
+                    }
+                }
+
+                #[cfg(not(target_arch = "x86_64"))]
+                {
+                    while index < length {
+                        match bytes[index] {
+                            b'\n' | b'\t' | b'\r' => {
+                                continue 'outer;
+                            }
+
+                            _ => {
+                                index += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+
+    Good {
+        newlines,
+        consumed: index - base_offset,
+        column: (index - line_start) as u32,
+    }
+}
+
+struct SpaceState<'a> {
+    state: State<'a>,
+    multiline: bool,
+    comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 }
 
 fn eat_spaces<'a>(
@@ -237,8 +324,6 @@ fn eat_spaces<'a>(
     mut multiline: bool,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
-    use SpaceState::*;
-
     for c in state.bytes() {
         match c {
             b' ' => {
@@ -252,9 +337,8 @@ fn eat_spaces<'a>(
             b'\r' => {
                 state = state.advance_newline();
             }
-            b'\t' => {
-                return HasTab(state);
-            }
+            b'\t' => unreachable!(),
+
             b'#' => {
                 state = state.advance(1);
                 return eat_line_comment(state, multiline, comments_and_newlines);
@@ -263,7 +347,7 @@ fn eat_spaces<'a>(
         }
     }
 
-    Good {
+    SpaceState {
         state,
         multiline,
         comments_and_newlines,
@@ -275,81 +359,238 @@ fn eat_line_comment<'a>(
     mut multiline: bool,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
-    use SpaceState::*;
+    let mut index = state.pos().offset as usize;
+    let bytes = state.original_bytes();
+    let length = bytes.len();
 
-    let is_doc_comment = if let Some(b'#') = state.bytes().get(0) {
-        match state.bytes().get(1) {
-            Some(b' ') => {
-                state = state.advance(2);
+    'outer: loop {
+        let is_doc_comment = if let Some(b'#') = bytes.get(index) {
+            match bytes.get(index + 1) {
+                Some(b' ') => {
+                    state = state.advance(2);
+                    index += 2;
 
-                true
-            }
-            Some(b'\n') => {
-                // consume the second # and the \n
-                state = state.advance(1);
-                state = state.advance_newline();
-
-                comments_and_newlines.push(CommentOrNewline::DocComment(""));
-                multiline = true;
-                return eat_spaces(state, multiline, comments_and_newlines);
-            }
-            None => {
-                // consume the second #
-                state = state.advance(1);
-
-                return Good {
-                    state,
-                    multiline,
-                    comments_and_newlines,
-                };
-            }
-
-            _ => false,
-        }
-    } else {
-        false
-    };
-
-    let initial = state.bytes();
-
-    for c in state.bytes() {
-        match c {
-            b'\t' => return HasTab(state),
-            b'\n' => {
-                let delta = initial.len() - state.bytes().len();
-                let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
-
-                if is_doc_comment {
-                    comments_and_newlines.push(CommentOrNewline::DocComment(comment));
-                } else {
-                    comments_and_newlines.push(CommentOrNewline::LineComment(comment));
+                    true
                 }
-                state = state.advance_newline();
-                multiline = true;
-                return eat_spaces(state, multiline, comments_and_newlines);
+                Some(b'\n') => {
+                    // consume the second # and the \n
+                    state = state.advance(1);
+                    state = state.advance_newline();
+                    index += 2;
+
+                    comments_and_newlines.push(CommentOrNewline::DocComment(""));
+                    multiline = true;
+
+                    for c in state.bytes() {
+                        match c {
+                            b' ' => {
+                                state = state.advance(1);
+                            }
+                            b'\n' => {
+                                state = state.advance_newline();
+                                multiline = true;
+                                comments_and_newlines.push(CommentOrNewline::Newline);
+                            }
+                            b'\r' => {
+                                state = state.advance_newline();
+                            }
+                            b'\t' => unreachable!(),
+                            b'#' => {
+                                state = state.advance(1);
+                                index += 1;
+                                continue 'outer;
+                            }
+                            _ => break,
+                        }
+
+                        index += 1;
+                    }
+
+                    return SpaceState {
+                        state,
+                        multiline,
+                        comments_and_newlines,
+                    };
+                }
+                None => {
+                    // consume the second #
+                    state = state.advance(1);
+
+                    return SpaceState {
+                        state,
+                        multiline,
+                        comments_and_newlines,
+                    };
+                }
+
+                Some(_) => false,
             }
-            b'\r' => {
-                state = state.advance_newline();
-            }
-            _ => {
-                state = state.advance(1);
+        } else {
+            false
+        };
+
+        let loop_start = index;
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            use std::arch::x86_64::*;
+
+            // a bytestring with the three characters we're looking for (the rest is ignored)
+            let needle = b"\r\n\t=============";
+            let needle = unsafe { _mm_loadu_si128(needle.as_ptr() as *const _) };
+
+            while index < length {
+                let remaining = length - index;
+                let chunk = if remaining < 16 { remaining as i32 } else { 16 };
+
+                // the source bytes we'll be looking at
+                let haystack = unsafe { _mm_loadu_si128(bytes.as_ptr().add(index) as *const _) };
+
+                // use first 3 characters of needle, first  chunk` characters of haystack
+                // finds the first index where one of the `needle` characters occurs
+                // or 16 when none of the needle characters occur
+                let first_special_char =
+                    unsafe { _mm_cmpestri(needle, 3, haystack, chunk, _SIDD_CMP_EQUAL_ANY) };
+
+                // we've made `first_special_char` characters of progress
+                let progress = usize::min(first_special_char as usize, remaining);
+                index += progress;
+                state = state.advance(progress);
+
+                if first_special_char != 16 {
+                    match bytes[index] {
+                        b'\t' => unreachable!(),
+                        b'\n' => {
+                            let comment =
+                                unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..index]) };
+
+                            if is_doc_comment {
+                                comments_and_newlines.push(CommentOrNewline::DocComment(comment));
+                            } else {
+                                comments_and_newlines.push(CommentOrNewline::LineComment(comment));
+                            }
+                            state = state.advance_newline();
+                            multiline = true;
+
+                            index += 1;
+                            while index < length {
+                                match bytes[index] {
+                                    b' ' => {
+                                        state = state.advance(1);
+                                    }
+                                    b'\n' => {
+                                        state = state.advance_newline();
+                                        multiline = true;
+                                        comments_and_newlines.push(CommentOrNewline::Newline);
+                                    }
+                                    b'\r' => {
+                                        state = state.advance_newline();
+                                    }
+                                    b'\t' => unreachable!(),
+                                    b'#' => {
+                                        state = state.advance(1);
+                                        index += 1;
+                                        continue 'outer;
+                                    }
+                                    _ => break,
+                                }
+
+                                index += 1;
+                            }
+
+                            return SpaceState {
+                                state,
+                                multiline,
+                                comments_and_newlines,
+                            };
+                        }
+                        b'\r' => {
+                            state = state.advance_newline();
+                            index += 1;
+                        }
+                        odd_character => {
+                            unreachable!(
+                                "unexpected_character {} {}",
+                                odd_character, odd_character as char
+                            )
+                        }
+                    }
+                }
             }
         }
-    }
 
-    // We made it to the end of the bytes. This means there's a comment without a trailing newline.
-    let delta = initial.len() - state.bytes().len();
-    let comment = unsafe { std::str::from_utf8_unchecked(&initial[..delta]) };
+        #[cfg(not(target_arch = "x86_64"))]
+        while index < length {
+            match bytes[index] {
+                b'\t' => unreachable!(),
+                b'\n' => {
+                    let comment =
+                        unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..index]) };
 
-    if is_doc_comment {
-        comments_and_newlines.push(CommentOrNewline::DocComment(comment));
-    } else {
-        comments_and_newlines.push(CommentOrNewline::LineComment(comment));
-    }
+                    if is_doc_comment {
+                        comments_and_newlines.push(CommentOrNewline::DocComment(comment));
+                    } else {
+                        comments_and_newlines.push(CommentOrNewline::LineComment(comment));
+                    }
+                    state = state.advance_newline();
+                    multiline = true;
 
-    Good {
-        state,
-        multiline,
-        comments_and_newlines,
+                    index += 1;
+                    while index < length {
+                        match bytes[index] {
+                            b' ' => {
+                                state = state.advance(1);
+                            }
+                            b'\n' => {
+                                state = state.advance_newline();
+                                multiline = true;
+                                comments_and_newlines.push(CommentOrNewline::Newline);
+                            }
+                            b'\r' => {
+                                state = state.advance_newline();
+                            }
+                            b'\t' => unreachable!(),
+                            b'#' => {
+                                state = state.advance(1);
+                                index += 1;
+                                continue 'outer;
+                            }
+                            _ => break,
+                        }
+
+                        index += 1;
+                    }
+
+                    return SpaceState {
+                        state,
+                        multiline,
+                        comments_and_newlines,
+                    };
+                }
+                b'\r' => {
+                    state = state.advance_newline();
+                }
+                _ => {
+                    state = state.advance(1);
+                }
+            }
+
+            index += 1;
+        }
+
+        // We made it to the end of the bytes. This means there's a comment without a trailing newline.
+        let comment = unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..index]) };
+
+        if is_doc_comment {
+            comments_and_newlines.push(CommentOrNewline::DocComment(comment));
+        } else {
+            comments_and_newlines.push(CommentOrNewline::LineComment(comment));
+        }
+
+        return SpaceState {
+            state,
+            multiline,
+            comments_and_newlines,
+        };
     }
 }
