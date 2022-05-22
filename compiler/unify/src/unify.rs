@@ -5,6 +5,7 @@ use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
+use roc_types::num::NumericRange;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
@@ -413,7 +414,7 @@ fn unify_ranged_number(
     pool: &mut Pool,
     ctx: &Context,
     real_var: Variable,
-    range_vars: VariableSubsSlice,
+    range_vars: NumericRange,
 ) -> Outcome {
     let other_content = &ctx.second_desc.content;
 
@@ -431,7 +432,7 @@ fn unify_ranged_number(
         &RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, real_var, other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, ctx.first, other_range_vars, ctx.mode)
+                check_valid_range(subs, ctx.first, other_range_vars)
             } else {
                 outcome
             }
@@ -444,41 +445,41 @@ fn unify_ranged_number(
         return outcome;
     }
 
-    check_valid_range(subs, pool, ctx.second, range_vars, ctx.mode)
+    check_valid_range(subs, ctx.second, range_vars)
 }
 
-fn check_valid_range(
-    subs: &mut Subs,
-    pool: &mut Pool,
-    var: Variable,
-    range: VariableSubsSlice,
-    mode: Mode,
-) -> Outcome {
-    let slice = subs.get_subs_slice(range).to_vec();
+fn check_valid_range(subs: &mut Subs, var: Variable, range: NumericRange) -> Outcome {
+    let content = subs.get_content_without_compacting(var);
 
-    let mut it = slice.iter().peekable();
-    while let Some(&possible_var) = it.next() {
-        let snapshot = subs.snapshot();
-        let old_pool = pool.clone();
-        let outcome = unify_pool(subs, pool, var, possible_var, mode | Mode::RIGID_AS_FLEX);
-        if outcome.mismatches.is_empty() {
-            // Okay, we matched some type in the range.
-            subs.rollback_to(snapshot);
-            *pool = old_pool;
-            return Outcome::default();
-        } else if it.peek().is_some() {
-            // We failed to match something in the range, but there are still things we can try.
-            subs.rollback_to(snapshot);
-            *pool = old_pool;
-        } else {
-            subs.commit_snapshot(snapshot);
+    match content {
+        &Content::Alias(symbol, _, actual, _) => {
+            match range.contains_symbol(symbol) {
+                None => {
+                    // symbol not recognized; go into the alias
+                    return check_valid_range(subs, actual, range);
+                }
+                Some(false) => {
+                    let outcome = Outcome {
+                        mismatches: vec![Mismatch::TypeNotInRange],
+                        must_implement_ability: Default::default(),
+                    };
+
+                    return outcome;
+                }
+                Some(true) => { /* fall through */ }
+            }
+        }
+
+        Content::RangedNumber(_, _) => {
+            // these ranges always intersect, we need more information before we can say more
+        }
+
+        _ => {
+            // anything else is definitely a type error, and will be reported elsewhere
         }
     }
 
-    Outcome {
-        mismatches: vec![Mismatch::TypeNotInRange],
-        ..Outcome::default()
-    }
+    Outcome::default()
 }
 
 #[inline(always)]
@@ -576,7 +577,7 @@ fn unify_alias(
         RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, real_var, *other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, real_var, *other_range_vars, ctx.mode)
+                check_valid_range(subs, real_var, *other_range_vars)
             } else {
                 outcome
             }
@@ -637,7 +638,7 @@ fn unify_opaque(
             // This opaque might be a number, check if it unifies with the target ranged number var.
             let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, ctx.first, *other_range_vars, ctx.mode)
+                check_valid_range(subs, ctx.first, *other_range_vars)
             } else {
                 outcome
             }
@@ -768,7 +769,7 @@ fn unify_structure(
         RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, ctx.first, *other_range_vars, ctx.mode)
+                check_valid_range(subs, ctx.first, *other_range_vars)
             } else {
                 outcome
             }

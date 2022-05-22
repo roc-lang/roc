@@ -713,8 +713,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             )
         }
         Content::RangedNumber(typ, range) => {
-            let slice = subs.get_subs_slice(*range);
-            write!(f, "RangedNumber({:?}, {:?})", typ, slice)
+            write!(f, "RangedNumber({:?}, {:?})", typ, range)
         }
         Content::Error => write!(f, "Error"),
     }
@@ -2009,7 +2008,7 @@ pub enum Content {
     },
     Structure(FlatType),
     Alias(Symbol, AliasVariables, Variable, AliasKind),
-    RangedNumber(Variable, VariableSubsSlice),
+    RangedNumber(Variable, crate::num::NumericRange),
     Error,
 }
 
@@ -3025,16 +3024,10 @@ fn explicit_substitute(
 
                     in_var
                 }
-                RangedNumber(typ, vars) => {
-                    for index in vars.into_iter() {
-                        let var = subs[index];
-                        let new_var = explicit_substitute(subs, from, to, var, seen);
-                        subs[index] = new_var;
-                    }
-
+                RangedNumber(typ, range) => {
                     let new_typ = explicit_substitute(subs, from, to, typ, seen);
 
-                    subs.set_content(in_var, RangedNumber(new_typ, vars));
+                    subs.set_content(in_var, RangedNumber(new_typ, range));
 
                     in_var
                 }
@@ -3094,12 +3087,7 @@ fn get_var_names(
                 get_var_names(subs, subs[arg_var], answer)
             }),
 
-            RangedNumber(typ, vars) => {
-                let taken_names = get_var_names(subs, typ, taken_names);
-                vars.into_iter().fold(taken_names, |answer, var| {
-                    get_var_names(subs, subs[var], answer)
-                })
-            }
+            RangedNumber(typ, _) => get_var_names(subs, typ, taken_names),
 
             Structure(flat_type) => match flat_type {
                 FlatType::Apply(_, args) => {
@@ -3340,12 +3328,12 @@ fn content_to_err_type(
         RangedNumber(typ, range) => {
             let err_type = var_to_err_type(subs, state, typ);
 
-            if state.context == ErrorTypeContext::ExpandRanges {
-                let mut types = Vec::with_capacity(range.len());
-                for var_index in range {
-                    let var = subs[var_index];
+            dbg!(range);
 
-                    types.push(var_to_err_type(subs, state, var));
+            if state.context == ErrorTypeContext::ExpandRanges {
+                let mut types = Vec::new();
+                for var in range.variable_slice() {
+                    types.push(var_to_err_type(subs, state, *var));
                 }
                 ErrorType::Range(Box::new(err_type), types)
             } else {
@@ -3645,9 +3633,8 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
                 stack.push(*var);
             }
 
-            RangedNumber(typ, vars) => {
+            RangedNumber(typ, _vars) => {
                 stack.push(*typ);
-                stack.extend(var_slice(*vars));
             }
         }
     }
@@ -3833,10 +3820,7 @@ impl StorageSubs {
                 Self::offset_variable(offsets, *actual),
                 *kind,
             ),
-            RangedNumber(typ, vars) => RangedNumber(
-                Self::offset_variable(offsets, *typ),
-                Self::offset_variable_slice(offsets, *vars),
-            ),
+            RangedNumber(typ, range) => RangedNumber(Self::offset_variable(offsets, *typ), *range),
             Error => Content::Error,
         }
     }
@@ -4262,18 +4246,10 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
             copy
         }
 
-        RangedNumber(typ, vars) => {
+        RangedNumber(typ, range) => {
             let new_typ = deep_copy_var_to_help(env, typ);
 
-            let new_vars = SubsSlice::reserve_into_subs(env.target, vars.len());
-
-            for (target_index, var_index) in (new_vars.indices()).zip(vars) {
-                let var = env.source[var_index];
-                let copy_var = deep_copy_var_to_help(env, var);
-                env.target.variables[target_index] = copy_var;
-            }
-
-            let new_content = RangedNumber(new_typ, new_vars);
+            let new_content = RangedNumber(new_typ, range);
 
             env.target.set(copy, make_descriptor(new_content));
             copy
@@ -4731,18 +4707,10 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             copy
         }
 
-        RangedNumber(typ, vars) => {
+        RangedNumber(typ, range) => {
             let new_typ = copy_import_to_help(env, max_rank, typ);
 
-            let new_vars = SubsSlice::reserve_into_subs(env.target, vars.len());
-
-            for (target_index, var_index) in (new_vars.indices()).zip(vars) {
-                let var = env.source[var_index];
-                let copy_var = copy_import_to_help(env, max_rank, var);
-                env.target.variables[target_index] = copy_var;
-            }
-
-            let new_content = RangedNumber(new_typ, new_vars);
+            let new_content = RangedNumber(new_typ, range);
 
             env.target.set(copy, make_descriptor(new_content));
             copy

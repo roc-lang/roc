@@ -1,9 +1,10 @@
 use arrayvec::ArrayVec;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::Expected::{self, *};
-use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumericBound, SignDemand};
+use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumBound, SignDemand};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
+use roc_types::num::NumericRange;
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{AliasKind, Category};
@@ -19,14 +20,18 @@ pub fn add_numeric_bound_constr(
     region: Region,
     category: Category,
 ) -> Type {
-    let range = bound.bounded_range();
-
+    let range = bound.numeric_bound();
     let total_num_type = num_type;
 
-    match range.len() {
-        0 => total_num_type,
-        1 => {
-            let actual_type = Variable(range[0]);
+    use roc_types::num::{float_width_to_variable, int_width_to_variable};
+
+    match range {
+        NumericBound::None => {
+            // no additional constraints
+            total_num_type
+        }
+        NumericBound::FloatExact(width) => {
+            let actual_type = Variable(float_width_to_variable(width));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
             let because_suffix =
                 constraints.equal_types(total_num_type.clone(), expected, category, region);
@@ -35,7 +40,17 @@ pub fn add_numeric_bound_constr(
 
             total_num_type
         }
-        _ => RangedNumber(Box::new(total_num_type), range),
+        NumericBound::IntExact(width) => {
+            let actual_type = Variable(int_width_to_variable(width));
+            let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
+            let because_suffix =
+                constraints.equal_types(total_num_type.clone(), expected, category, region);
+
+            num_constraints.extend([because_suffix]);
+
+            total_num_type
+        }
+        NumericBound::Range(range) => RangedNumber(Box::new(total_num_type), range),
     }
 }
 
@@ -117,7 +132,7 @@ pub fn num_literal(
     num_var: Variable,
     expected: Expected<Type>,
     region: Region,
-    bound: NumericBound,
+    bound: NumBound,
 ) -> Constraint {
     let open_number_type = crate::builtins::num_num(Type::Variable(num_var));
 
@@ -264,83 +279,57 @@ pub fn num_num(typ: Type) -> Type {
 }
 
 pub trait TypedNumericBound {
-    fn bounded_range(&self) -> Vec<Variable>;
+    fn numeric_bound(&self) -> NumericBound;
 }
 
 impl TypedNumericBound for IntBound {
-    fn bounded_range(&self) -> Vec<Variable> {
+    fn numeric_bound(&self) -> NumericBound {
         match self {
-            IntBound::None => vec![],
-            IntBound::Exact(w) => vec![match w {
-                IntWidth::U8 => Variable::U8,
-                IntWidth::U16 => Variable::U16,
-                IntWidth::U32 => Variable::U32,
-                IntWidth::U64 => Variable::U64,
-                IntWidth::U128 => Variable::U128,
-                IntWidth::I8 => Variable::I8,
-                IntWidth::I16 => Variable::I16,
-                IntWidth::I32 => Variable::I32,
-                IntWidth::I64 => Variable::I64,
-                IntWidth::I128 => Variable::I128,
-                IntWidth::Nat => Variable::NAT,
-            }],
-            IntBound::AtLeast { sign, width } => {
-                let whole_range: &[(IntWidth, Variable)] = match sign {
-                    SignDemand::NoDemand => {
-                        &[
-                            (IntWidth::I8, Variable::I8),
-                            (IntWidth::U8, Variable::U8),
-                            (IntWidth::I16, Variable::I16),
-                            (IntWidth::U16, Variable::U16),
-                            (IntWidth::I32, Variable::I32),
-                            (IntWidth::U32, Variable::U32),
-                            (IntWidth::I64, Variable::I64),
-                            (IntWidth::Nat, Variable::NAT), // FIXME: Nat's order here depends on the platform!
-                            (IntWidth::U64, Variable::U64),
-                            (IntWidth::I128, Variable::I128),
-                            (IntWidth::U128, Variable::U128),
-                        ]
-                    }
-                    SignDemand::Signed => &[
-                        (IntWidth::I8, Variable::I8),
-                        (IntWidth::I16, Variable::I16),
-                        (IntWidth::I32, Variable::I32),
-                        (IntWidth::I64, Variable::I64),
-                        (IntWidth::I128, Variable::I128),
-                    ],
-                };
-                whole_range
-                    .iter()
-                    .skip_while(|(lower_bound, _)| *lower_bound != *width)
-                    .map(|(_, var)| *var)
-                    .collect()
-            }
+            IntBound::None => NumericBound::None,
+            IntBound::Exact(w) => NumericBound::IntExact(*w),
+            IntBound::AtLeast {
+                sign: SignDemand::NoDemand,
+                width,
+            } => NumericBound::Range(NumericRange::IntAtLeastEitherSign(*width)),
+            IntBound::AtLeast {
+                sign: SignDemand::Signed,
+                width,
+            } => NumericBound::Range(NumericRange::IntAtLeastSigned(*width)),
         }
     }
 }
 
 impl TypedNumericBound for FloatBound {
-    fn bounded_range(&self) -> Vec<Variable> {
+    fn numeric_bound(&self) -> NumericBound {
         match self {
-            FloatBound::None => vec![],
-            FloatBound::Exact(w) => vec![match w {
-                FloatWidth::Dec => Variable::DEC,
-                FloatWidth::F32 => Variable::F32,
-                FloatWidth::F64 => Variable::F64,
-            }],
+            FloatBound::None => NumericBound::None,
+            FloatBound::Exact(w) => NumericBound::FloatExact(*w),
         }
     }
 }
 
-impl TypedNumericBound for NumericBound {
-    fn bounded_range(&self) -> Vec<Variable> {
+impl TypedNumericBound for NumBound {
+    fn numeric_bound(&self) -> NumericBound {
         match self {
-            NumericBound::None => vec![],
-            &NumericBound::AtLeastIntOrFloat { sign, width } => {
-                let mut range = IntBound::AtLeast { sign, width }.bounded_range();
-                range.extend_from_slice(&[Variable::F32, Variable::F64, Variable::DEC]);
-                range
-            }
+            NumBound::None => NumericBound::None,
+            &NumBound::AtLeastIntOrFloat {
+                sign: SignDemand::NoDemand,
+                width,
+            } => NumericBound::Range(NumericRange::NumAtLeastEitherSign(width)),
+            &NumBound::AtLeastIntOrFloat {
+                sign: SignDemand::Signed,
+                width,
+            } => NumericBound::Range(NumericRange::NumAtLeastSigned(width)),
         }
     }
+}
+
+/// A bound placed on a number because of its literal value.
+/// e.g. `-5` cannot be unsigned, and 300 does not fit in a U8
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericBound {
+    None,
+    FloatExact(FloatWidth),
+    IntExact(IntWidth),
+    Range(NumericRange),
 }

@@ -1854,10 +1854,9 @@ fn type_to_variable<'a>(
             Variable(_) | EmptyRec | EmptyTagUnion => {
                 unreachable!("This variant should never be deferred!")
             }
-            RangedNumber(typ, vars) => {
+            RangedNumber(typ, range) => {
                 let ty_var = helper!(typ);
-                let vars = VariableSubsSlice::insert_into_subs(subs, vars.iter().copied());
-                let content = Content::RangedNumber(ty_var, vars);
+                let content = Content::RangedNumber(ty_var, *range);
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
@@ -3015,10 +3014,8 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 
                 stack.push(var);
             }
-            &RangedNumber(typ, vars) => {
+            &RangedNumber(typ, _) => {
                 stack.push(typ);
-
-                stack.extend(var_slice!(vars));
             }
         }
     }
@@ -3267,12 +3264,10 @@ fn deep_copy_var_help(
             copy
         }
 
-        RangedNumber(typ, range_vars) => {
+        RangedNumber(typ, range) => {
             let new_type_var = deep_copy_var_help(subs, max_rank, pool, visited, typ);
 
-            let new_variables = copy_sequence!(range_vars.len(), range_vars);
-
-            let new_content = RangedNumber(new_type_var, new_variables);
+            let new_content = RangedNumber(new_type_var, range);
 
             subs.set_content_unchecked(copy, new_content);
 
