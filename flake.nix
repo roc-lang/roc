@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-21.11";
     rust-overlay.url = "github:oxalica/rust-overlay"; # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
-    zig.url = "github:roarkanize/zig-overlay"; # zig 8.1 is broken on nixpkgs for M1 macs
+    zig.url = "github:roarkanize/zig-overlay"; # using an overlay allows for quick updates after zig releases
     flake-utils.url = "github:numtide/flake-utils"; # to easily make configs for all architectures
   };
 
@@ -21,21 +21,32 @@
         cwd = builtins.toString ./.;
         rust = pkgs.rust-bin.fromRustupToolchainFile "${cwd}/rust-toolchain.toml";
 
-        linuxInputs = with pkgs; [
-          valgrind # used in cli tests, see cli/tests/cli_run.rs
-          vulkan-headers
-          vulkan-loader
-          vulkan-tools
-          vulkan-validation-layers
-          xorg.libX11
-          xorg.libXcursor
-          xorg.libXrandr
-          xorg.libXi
-          xorg.libxcb
-          alsa-lib
-        ];
+        linuxInputs = with pkgs;
+          lib.optionals stdenv.isLinux [
+            valgrind # used in cli tests, see cli/tests/cli_run.rs
+            vulkan-headers
+            vulkan-loader
+            vulkan-tools
+            vulkan-validation-layers
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXrandr
+            xorg.libXi
+            xorg.libxcb
+            alsa-lib
+          ];
 
-        # zig 0.9.1 from pkgs is broken on aarch64-darwin, hence the workaround
+        darwinInputs = with pkgs;
+          lib.optionals stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks; [
+            AppKit
+            CoreFoundation
+            CoreServices
+            CoreVideo
+            Foundation
+            Metal
+            Security
+        ]);
+
         zig-toolchain = zig.packages.${system}."0.9.1";
 
         sharedInputs = (with pkgs; [
@@ -59,13 +70,12 @@
           # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           llvmPkgs.lld
           # debugir
-
           rust
         ]);
       in {
 
         devShell = pkgs.mkShell {
-          buildInputs = sharedInputs ++ linuxInputs;
+          buildInputs = sharedInputs ++ darwinInputs ++ linuxInputs;
 
           LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
           NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
