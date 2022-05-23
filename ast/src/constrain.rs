@@ -2170,7 +2170,7 @@ pub mod test_constrain {
         infer_eq(
             indoc!(
                 r#"
-                [ 1, 2 ]
+                [1, 2]
                 "#
             ),
             "List (Num *)",
@@ -2182,7 +2182,7 @@ pub mod test_constrain {
         infer_eq(
             indoc!(
                 r#"
-                [ { x: 1 }, { x: 3 } ]
+                [{ x: 1 }, { x: 3 }]
                 "#
             ),
             "List { x : Num * }",
@@ -2197,7 +2197,7 @@ pub mod test_constrain {
                 Foo
                 "#
             ),
-            "[ Foo ]*",
+            "[Foo]*",
         )
     }
 
@@ -2233,7 +2233,7 @@ pub mod test_constrain {
                 if True then Green else Red
                 "#
             ),
-            "[ Green, Red ]*",
+            "[Green, Red]*",
         )
     }
 
@@ -2247,7 +2247,7 @@ pub mod test_constrain {
                     Red -> Purple
                 "#
             ),
-            "[ Blue, Purple ]*",
+            "[Blue, Purple]*",
         )
     }
 
@@ -2285,7 +2285,7 @@ pub mod test_constrain {
         infer_eq(
             indoc!(
                 r#"
-                List.map [ { name: "roc" }, { name: "bird" } ] .name
+                List.map [{ name: "roc" }, { name: "bird" }] .name
                 "#
             ),
             "List Str",
@@ -2300,7 +2300,7 @@ pub mod test_constrain {
                     \a, b -> Pair a b
                 "#
             ),
-            "a, b -> [ Pair a b ]*",
+            "a, b -> [Pair a b]*",
         );
     }
 
@@ -2443,7 +2443,7 @@ pub mod test_constrain {
                     curryPair
                 "#
             ),
-            "a -> (b -> [ Pair a b ]*)",
+            "a -> (b -> [Pair a b]*)",
         );
     }
 
@@ -2558,7 +2558,7 @@ pub mod test_constrain {
                 canIGo
                 "#
             ),
-            "Str -> Result Str [ SlowIt Str, StopIt Str, UnknownColor Str ]*",
+            "Str -> Result Str [SlowIt Str, StopIt Str, UnknownColor Str]*",
         )
     }
 
@@ -2597,7 +2597,7 @@ pub mod test_constrain {
         infer_eq(
             indoc!(
                 r#"
-                badComics: Bool -> [ CowTools _, Thagomizer _ ]
+                badComics: Bool -> [CowTools _, Thagomizer _]
                 badComics = \c ->
                     when c is
                         True -> CowTools "The Far Side"
@@ -2605,18 +2605,18 @@ pub mod test_constrain {
                 badComics
                 "#
             ),
-            "Bool -> [ CowTools Str, Thagomizer Str ]",
+            "Bool -> [CowTools Str, Thagomizer Str]",
         )
     }
 
     #[test]
     fn inference_var_tag_union_ext() {
-        // TODO: we should really be inferring [ Blue, Orange ]a -> [ Lavender, Peach ]a here.
+        // TODO: we should really be inferring [Blue, Orange]a -> [Lavender, Peach]a here.
         // See https://github.com/rtfeldman/roc/issues/2053
         infer_eq(
             indoc!(
                 r#"
-                pastelize: _ -> [ Lavender, Peach ]_
+                pastelize: _ -> [Lavender, Peach]_
                 pastelize = \color ->
                     when color is
                         Blue -> Lavender
@@ -2625,7 +2625,7 @@ pub mod test_constrain {
                 pastelize
                 "#
             ),
-            "[ Blue, Lavender, Orange, Peach ]a -> [ Blue, Lavender, Orange, Peach ]a",
+            "[Blue, Lavender, Orange, Peach]a -> [Blue, Lavender, Orange, Peach]a",
         )
     }
 
@@ -2656,7 +2656,7 @@ pub mod test_constrain {
                        B -> Y
                  "#
             ),
-            "[ A, B ] -> [ X, Y ]*",
+            "[A, B] -> [X, Y]*",
         )
     }
 
@@ -2672,7 +2672,7 @@ pub mod test_constrain {
                        _ -> Z
                  "#
             ),
-            "[ A, B ]* -> [ X, Y, Z ]*",
+            "[A, B]* -> [X, Y, Z]*",
         )
     }
 
@@ -2687,7 +2687,7 @@ pub mod test_constrain {
                        A N -> Y
                  "#
             ),
-            "[ A [ M, N ] ] -> [ X, Y ]*",
+            "[A [M, N]] -> [X, Y]*",
         )
     }
 
@@ -2703,12 +2703,12 @@ pub mod test_constrain {
                        A _ -> Z
                  "#
             ),
-            "[ A [ M, N ]* ] -> [ X, Y, Z ]*",
+            "[A [M, N]*] -> [X, Y, Z]*",
         )
     }
 
     #[test]
-    #[ignore = "TODO: currently [ A [ M [ J ]*, N [ K ]* ] ] -> [ X ]*"]
+    #[ignore = "TODO: currently [A [M [J]*, N [K]*]] -> [X]*"]
     fn infer_union_input_position5() {
         infer_eq(
             indoc!(
@@ -2719,7 +2719,7 @@ pub mod test_constrain {
                        A (N K) -> X
                  "#
             ),
-            "[ A [ M [ J ], N [ K ] ] ] -> [ X ]*",
+            "[A [M [J], N [K]]] -> [X]*",
         )
     }
 
@@ -2735,12 +2735,12 @@ pub mod test_constrain {
                        A N -> X
                  "#
             ),
-            "[ A [ M, N ], B ] -> [ X ]*",
+            "[A [M, N], B] -> [X]*",
         )
     }
 
     #[test]
-    #[ignore = "TODO: currently [ A ]* -> [ A, X ]*"]
+    #[ignore = "TODO: currently [A]* -> [A, X]*"]
     fn infer_union_input_position7() {
         infer_eq(
             indoc!(
@@ -2753,8 +2753,8 @@ pub mod test_constrain {
             ),
             // TODO: we could be a bit smarter by subtracting "A" as a possible
             // tag in the union known by t, which would yield the principal type
-            // [ A, ]a -> [ X ]a
-            "[ A, X ]a -> [ A, X ]a",
+            // [A,]a -> [X]a
+            "[A, X]a -> [A, X]a",
         )
     }
 
@@ -2770,7 +2770,7 @@ pub mod test_constrain {
                          None -> 0
                  "#
             ),
-            "[ None, Some { tag : [ A, B ] }* ] -> Num *",
+            "[None, Some { tag : [A, B] }*] -> Num *",
         )
     }
 
@@ -2780,7 +2780,7 @@ pub mod test_constrain {
         infer_eq(
             indoc!(
                 r#"
-                 opt : [ Some Str, None ]
+                 opt : [Some Str, None]
                  opt = Some ""
                  rcd = { opt }
 
@@ -2805,7 +2805,7 @@ pub mod test_constrain {
                          { x: Red, y ? 5 } -> y
                  "#
             ),
-            "{ x : [ Blue, Red ], y ? Num a }* -> Num a",
+            "{ x : [Blue, Red], y ? Num a }* -> Num a",
         )
     }
 }
