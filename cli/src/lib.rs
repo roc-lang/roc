@@ -5,13 +5,13 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command};
 use roc_build::link::{LinkType, LinkingStrategy};
-use roc_error_macros::user_error;
+use roc_error_macros::{internal_error, user_error};
 use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{CString, OsStr};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
@@ -428,7 +428,11 @@ pub fn build(
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                    roc_run(arena, &original_cwd, triple, args, &binary_path)
+                    let mut bytes = std::fs::read(&binary_path).unwrap();
+
+                    let x = roc_run(arena, &original_cwd, triple, args, &mut bytes);
+                    std::mem::forget(bytes);
+                    x
                 }
                 BuildAndRunIfNoErrors => {
                     if problems.errors == 0 {
@@ -448,7 +452,11 @@ pub fn build(
 
                         let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                        roc_run(arena, &original_cwd, triple, args, &binary_path)
+                        let mut bytes = std::fs::read(&binary_path).unwrap();
+
+                        let x = roc_run(arena, &original_cwd, triple, args, &mut bytes);
+                        std::mem::forget(bytes);
+                        x
                     } else {
                         println!(
                             "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with: \x1B[32mroc run {}\x1B[39m",
@@ -499,14 +507,16 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     cwd: &Path,
     triple: Triple,
     args: I,
-    binary_path: &Path,
+    binary_bytes: &mut [u8],
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
+            let executable = roc_run_executable_file_path(cwd, binary_bytes)?;
+            let path = executable.as_path();
             // If possible, report the generated executable name relative to the current dir.
-            let generated_filename = binary_path
+            let generated_filename = path
                 .strip_prefix(env::current_dir().unwrap())
-                .unwrap_or(binary_path);
+                .unwrap_or(path);
 
             // No need to waste time freeing this memory,
             // since the process is about to exit anyway.
@@ -534,48 +544,145 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
         }
         _ => {
             if cfg!(target_family = "unix") {
-                roc_run_unix(cwd, args, binary_path)
+                roc_run_unix(arena, cwd, args, binary_bytes)
             } else {
-                roc_run_non_unix(arena, cwd, args, binary_path)
+                roc_run_non_unix(arena, cwd, args, binary_bytes)
             }
         }
     }
 }
 
 fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+    arena: Bump,
     cwd: &Path,
     args: I,
-    binary_path: &Path,
-) -> io::Result<i32> {
-    use std::os::unix::process::CommandExt;
+    binary_bytes: &mut [u8],
+) -> std::io::Result<i32> {
+    use bumpalo::collections::CollectIn;
+    use std::os::unix::ffi::OsStrExt;
 
-    let mut cmd = std::process::Command::new(&binary_path);
+    unsafe {
+        let executable = roc_run_executable_file_path(cwd, binary_bytes)?;
+        let path = executable.as_path();
+        let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
 
-    // Forward all the arguments after the .roc file argument
-    // to the new process. This way, you can do things like:
-    //
-    // roc app.roc foo bar baz
-    //
-    // ...and have it so that app.roc will receive only `foo`,
-    // `bar`, and `baz` as its arguments.
-    for arg in args {
-        cmd.arg(arg);
+        // argv is an array of pointers to strings passed to the new program
+        // as its command-line arguments.  By convention, the first of these
+        // strings (i.e., argv[0]) should contain the filename associated
+        // with the file being executed.  The argv array must be terminated
+        // by a NULL pointer. (Thus, in the new program, argv[argc] will be NULL.)
+        let c_strings: bumpalo::collections::Vec<CString> = args
+            .into_iter()
+            .map(|x| CString::new(x.as_ref().as_bytes()).unwrap())
+            .collect_in(&arena);
+
+        let c_string_pointers = c_strings
+            .iter()
+            .map(|x| x.as_bytes_with_nul().as_ptr().cast());
+
+        let argv: bumpalo::collections::Vec<*const libc::c_char> =
+            std::iter::once(path_cstring.as_ptr())
+                .chain(c_string_pointers)
+                .chain([std::ptr::null()])
+                .collect_in(&arena);
+
+        // envp is an array of pointers to strings, conventionally of the
+        // form key=value, which are passed as the environment of the new
+        // program.  The envp array must be terminated by a NULL pointer.
+        let envp_cstrings: bumpalo::collections::Vec<CString> = std::env::vars_os()
+            .flat_map(|(k, v)| {
+                [
+                    CString::new(k.as_bytes()).unwrap(),
+                    CString::new(v.as_bytes()).unwrap(),
+                ]
+            })
+            .collect_in(&arena);
+
+        let envp: bumpalo::collections::Vec<*const libc::c_char> = envp_cstrings
+            .iter()
+            .map(|s| s.as_ptr())
+            .chain([std::ptr::null()])
+            .collect_in(&arena);
+
+        match executable {
+            ExecutableFile::MemFd(fd, _) => {
+                if libc::fexecve(fd, argv.as_ptr(), envp.as_ptr()) != 0 {
+                    internal_error!(
+                        "libc::fexecve({:?}, ..., ...) failed: {:?}",
+                        path,
+                        errno::errno()
+                    );
+                }
+            }
+            ExecutableFile::OnDisk(_) => {
+                if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
+                    internal_error!(
+                        "libc::execve({:?}, ..., ...) failed: {:?}",
+                        path,
+                        errno::errno()
+                    );
+                }
+            }
+        }
     }
 
-    // This is much faster than spawning a subprocess if we're on a UNIX system!
-    let err = cmd.current_dir(cwd).exec();
+    Ok(1)
+}
 
-    // If exec actually returned, it was definitely an error! (Otherwise,
-    // this process would have been replaced by the other one, and we'd
-    // never actually reach this line of code.)
-    Err(err)
+#[derive(Debug, Clone)]
+enum ExecutableFile {
+    MemFd(libc::c_int, PathBuf),
+    OnDisk(PathBuf),
+}
+
+impl ExecutableFile {
+    fn as_path(&self) -> &Path {
+        match self {
+            ExecutableFile::MemFd(_, path_buf) => path_buf.as_ref(),
+            ExecutableFile::OnDisk(path_buf) => path_buf.as_ref(),
+        }
+    }
+}
+
+fn roc_run_executable_file_path(
+    cwd: &Path,
+    binary_bytes: &mut [u8],
+) -> std::io::Result<ExecutableFile> {
+    if cfg!(target_os = "linux") {
+        // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
+        let flags = 0;
+        let anonymous_file_name = "roc_file_descriptor\0";
+        let fd = unsafe { libc::memfd_create(anonymous_file_name.as_ptr().cast(), flags) };
+
+        if fd == 0 {
+            internal_error!(
+                "libc::memfd_create({:?}, {}) failed: file descriptor is 0",
+                anonymous_file_name,
+                flags
+            );
+        }
+
+        let path = PathBuf::from(format!("/proc/self/fd/{}", fd));
+
+        std::fs::write(&path, binary_bytes)?;
+
+        Ok(ExecutableFile::MemFd(fd, path))
+    } else {
+        // we have not found a way yet to use a virtual file on MacOs. Hence we fall back to just
+        // writing the file to the file system, and using that file.
+        let app_path_buf = cwd.join("roc_app_binary");
+
+        std::fs::write(&app_path_buf, binary_bytes)?;
+
+        Ok(ExecutableFile::OnDisk(app_path_buf))
+    }
 }
 
 fn roc_run_non_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     _cwd: &Path,
     _args: I,
-    _binary_path: &Path,
+    _binary_bytes: &mut [u8],
 ) -> io::Result<i32> {
     todo!("TODO support running roc programs on non-UNIX targets");
     // let mut cmd = std::process::Command::new(&binary_path);
