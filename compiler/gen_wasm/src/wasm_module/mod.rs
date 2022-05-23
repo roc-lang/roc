@@ -12,7 +12,7 @@ pub use linking::SymInfo;
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
 use self::linking::{LinkingSection, RelocationSection};
-use self::parse::ParseError;
+use self::parse::{Parse, ParseError};
 use self::sections::{
     CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
     ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId, TableSection,
@@ -170,7 +170,7 @@ impl<'a> WasmModule<'a> {
         let data = DataSection::preload(arena, bytes, &mut cursor);
 
         // Metadata sections
-        let names = NameSection::parse(arena, bytes, &mut cursor);
+        let names = NameSection::parse(arena, bytes, &mut cursor)?;
         let linking = LinkingSection::new(arena);
         let relocations = RelocationSection::new(arena, "reloc.CODE");
 
