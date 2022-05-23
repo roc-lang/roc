@@ -423,7 +423,7 @@ fn optional_field_when_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 f = \r ->
                     when r is
@@ -475,7 +475,7 @@ fn optional_field_when_no_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -514,7 +514,7 @@ fn optional_field_let_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -535,7 +535,7 @@ fn optional_field_let_no_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -591,7 +591,7 @@ fn optional_field_function_no_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 f = \{ x ? 10, y } -> x + y
 
@@ -1014,7 +1014,7 @@ fn different_proc_types_specialized_to_same_layout() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ nums ] to "./platform"
+            app "test" provides [nums] to "./platform"
 
             # Top-level values compile to procedure calls with no args
             # alpha has the generic type { a: Num *, b: Num * }
@@ -1029,7 +1029,7 @@ fn different_proc_types_specialized_to_same_layout() {
                 [
                     alpha.a,   # alpha specialized to layout { b: I64, a: U8 }
                     alpha.b,   # alpha specialized to layout { a: I64, b: U8 }
-                ]
+               ]
             "#
         ),
         RocList::from_slice(&[1, 2]),
@@ -1047,7 +1047,7 @@ fn different_proc_types_specialized_to_same_layout() {
 fn call_with_bad_record_runtime_error() {
     expect_runtime_error_panic!(indoc!(
         r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main =
                 get : {a: Bool} -> Bool
@@ -1063,7 +1063,7 @@ fn call_with_bad_record_runtime_error() {
 fn call_with_bad_record_runtime_error() {
     expect_runtime_error_panic!(indoc!(
         r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main =
                 get : {a: Bool} -> Bool

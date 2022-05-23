@@ -1192,20 +1192,20 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]*
 ##
 ## Although this can be passed to `List.sort`, you'll get better performance
 ## by using `List.sortAsc` or `List.sortDesc` instead.
-# compare : Num a, Num a -> [ Lt, Eq, Gt ]
+# compare : Num a, Num a -> [Lt, Eq, Gt]
 ## [Endianness](https://en.wikipedia.org/wiki/Endianness)
-# Endi : [ Big, Little, Native ]
+# Endi : [Big, Little, Native]
 ## The `Endi` argument does not matter for [U8] and [I8], since they have
 ## only one byte.
 # toBytes : Num *, Endi -> List U8
 ## when Num.parseBytes bytes Big is
 ##     Ok { val: f64, rest } -> ...
 ##     Err (ExpectedNum (Frac Binary64)) -> ...
-# parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ ExpectedNum a ]*
+# parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ExpectedNum a]*
 ## when Num.fromBytes bytes Big is
 ##     Ok f64 -> ...
 ##     Err (ExpectedNum (Frac Binary64)) -> ...
-# fromBytes : List U8, Endi -> Result (Num a) [ ExpectedNum a ]*
+# fromBytes : List U8, Endi -> Result (Num a) [ExpectedNum a]*
 # Bit shifts
 ## [Logical bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Logical_shift) left.
 ##
@@ -1280,10 +1280,10 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]*
 # format :
 #     Num *,
 #     {
-#         base ? [ Decimal, Hexadecimal, Octal, Binary ],
-#         notation ? [ Standard, Scientific ],
-#         decimalMark ? [ AlwaysShow Str, HideForIntegers ],
-#         decimalDigits ? { min : U16, max : [ All, Trunc U16, Round U16, Floor U16, Ceil U16 ] },
+#         base ? [Decimal, Hexadecimal, Octal, Binary],
+#         notation ? [Standard, Scientific],
+#         decimalMark ? [AlwaysShow Str, HideForIntegers],
+#         decimalDigits ? { min : U16, max : [All, Trunc U16, Round U16, Floor U16, Ceil U16] },
 #         minWholeDigits ? U16,
 #         wholeSep ? { mark : Str, places : U64 }
 #     }

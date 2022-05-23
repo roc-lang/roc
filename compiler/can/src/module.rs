@@ -213,7 +213,7 @@ pub fn canonicalize_module_defs<'a>(
 
     // Exposed values are treated like defs that appear before any others, e.g.
     //
-    // imports [ Foo.{ bar, baz } ]
+    // imports [Foo.{ bar, baz }]
     //
     // ...is basically the same as if we'd added these extra defs at the start of the module:
     //
@@ -233,7 +233,7 @@ pub fn canonicalize_module_defs<'a>(
                 Ok(()) => {
                     // Add an entry to exposed_imports using the current module's name
                     // as the key; e.g. if this is the Foo module and we have
-                    // exposes [ Bar.{ baz } ] then insert Foo.baz as the key, so when
+                    // exposes [Bar.{ baz }] then insert Foo.baz as the key, so when
                     // anything references `baz` in this Foo module, it will resolve to Bar.baz.
                     can_exposed_imports.insert(symbol, expr_var);
 

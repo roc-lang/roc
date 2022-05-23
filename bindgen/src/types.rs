@@ -486,20 +486,20 @@ pub enum RocTagUnion {
         tags: Vec<String>,
     },
     /// A non-recursive tag union
-    /// e.g. `Result a e : [ Ok a, Err e ]`
+    /// e.g. `Result a e : [Ok a, Err e]`
     NonRecursive {
         name: String,
         tags: Vec<(String, Option<TypeId>)>,
     },
     /// A recursive tag union (general case)
-    /// e.g. `Expr : [ Sym Str, Add Expr Expr ]`
+    /// e.g. `Expr : [Sym Str, Add Expr Expr]`
     Recursive {
         name: String,
         tags: Vec<(String, Option<TypeId>)>,
     },
     /// A recursive tag union with just one constructor
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
-    /// e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
+    /// e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
     NonNullableUnwrapped {
         name: String,
         content: TypeId,
@@ -508,7 +508,7 @@ pub enum RocTagUnion {
     /// A recursive tag union that has an empty variant
     /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
     /// It has more than one other variant, so they need tag IDs (payloads are "wrapped")
-    /// e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
+    /// e.g. `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
     NullableWrapped {
         name: String,
@@ -518,12 +518,12 @@ pub enum RocTagUnion {
 
     /// A recursive tag union with only two variants, where one is empty.
     /// Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
-    /// e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
+    /// e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
     NullableUnwrapped {
         name: String,
-        /// e.g. Nil in `StrConsList : [ Nil, Cons Str (ConsList Str) ]`
+        /// e.g. Nil in `StrConsList : [Nil, Cons Str (ConsList Str)]`
         null_tag: String,
-        /// e.g. Cons in `StrConsList : [ Nil, Cons Str (ConsList Str) ]`
+        /// e.g. Cons in `StrConsList : [Nil, Cons Str (ConsList Str)]`
         non_null_tag: String,
         /// There must be a payload associated with the non-null tag.
         /// Otherwise, this would have been an Enumeration!

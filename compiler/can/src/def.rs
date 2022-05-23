@@ -1810,19 +1810,19 @@ fn correct_mutual_recursive_type_alias<'a>(
             // Within a recursive group, we must instantiate all aliases like how they came to the
             // loop. e.g. given
             //
-            // A : [ ConsA B, NilA ]
-            // B : [ ConsB A, NilB ]
+            // A : [ConsA B, NilA]
+            // B : [ConsB A, NilB]
             //
             // Our goal is
             //
-            // A : [ ConsA [ ConsB A, NilB ], NilA ]
-            // B : [ ConsB [ ConsA B, NilA ], NilB ]
+            // A : [ConsA [ConsB A, NilB], NilA]
+            // B : [ConsB [ConsA B, NilA], NilB]
             //
             // But if we would first instantiate B into A, then use the updated A to instantiate B,
             // we get
             //
-            // A : [ ConsA [ ConsB A, NilB ], NilA ]
-            // B : [ ConsB [ ConsA [ ConsB A, NilB ], NilA ], NilB ]
+            // A : [ConsA [ConsB A, NilB], NilA]
+            // B : [ConsB [ConsA [ConsB A, NilB], NilA], NilB]
             //
             // Which is incorrect. We do need the instantiated version however.
             // e.g. if in a next group we have:
@@ -1831,7 +1831,7 @@ fn correct_mutual_recursive_type_alias<'a>(
             //
             // Then we must use the instantiated version
             //
-            // C : [ ConsA [ ConsB A, NilB ], NilA ]
+            // C : [ConsA [ConsB A, NilB], NilA]
             //
             // So, we cannot replace the original version of A with its instantiated version
             // while we process A's group. We have to store the instantiated version until the
@@ -1997,21 +1997,21 @@ enum MakeTagUnionRecursive {
 /// Attempt to make a tag union recursive at the position of `recursive_alias`; for example,
 ///
 /// ```roc
-/// [ Cons a (ConsList a), Nil ] as ConsList a
+/// [Cons a (ConsList a), Nil] as ConsList a
 /// ```
 ///
 /// can be made recursive at the position "ConsList a" with a fresh recursive variable, say r1:
 ///
 /// ```roc
-/// [ Cons a r1, Nil ] as r1
+/// [Cons a r1, Nil] as r1
 /// ```
 ///
 /// Returns `Err` if the tag union is recursive, but there is no structure-preserving recursion
 /// variable for it. This can happen when the type is a nested datatype, for example in either of
 ///
 /// ```roc
-/// Nested a : [ Chain a (Nested (List a)), Term ]
-/// DuoList a b : [ Cons a (DuoList b a), Nil ]
+/// Nested a : [Chain a (Nested (List a)), Term]
+/// DuoList a b : [Cons a (DuoList b a), Nil]
 /// ```
 ///
 /// When `Err` is returned, a problem will be added to `env`.

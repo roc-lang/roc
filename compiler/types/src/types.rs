@@ -565,8 +565,8 @@ impl fmt::Debug for Type {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
-                        // e.g. the "*" at the end of `[ Foo ]*`
-                        // or the "r" at the end of `[ DivByZero ]r`
+                        // e.g. the "*" at the end of `[Foo]*`
+                        // or the "r" at the end of `[DivByZero]r`
                         other.fmt(f)
                     }
                 }
@@ -585,8 +585,8 @@ impl fmt::Debug for Type {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
-                        // e.g. the "*" at the end of `[ Foo ]*`
-                        // or the "r" at the end of `[ DivByZero ]r`
+                        // e.g. the "*" at the end of `[Foo]*`
+                        // or the "r" at the end of `[DivByZero]r`
                         other.fmt(f)
                     }
                 }
@@ -635,8 +635,8 @@ impl fmt::Debug for Type {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
-                        // e.g. the "*" at the end of `[ Foo ]*`
-                        // or the "r" at the end of `[ DivByZero ]r`
+                        // e.g. the "*" at the end of `[Foo]*`
+                        // or the "r" at the end of `[DivByZero]r`
                         other.fmt(f)
                     }
                 }?;
@@ -1380,17 +1380,17 @@ impl Type {
     ///
     /// ```roc
     /// U8
-    /// [ A I8 ]
-    /// [ A [ B [ C U8 ] ] ]
-    /// [ A (R a) ] as R a
+    /// [A I8]
+    /// [A [B [C U8]]]
+    /// [A (R a)] as R a
     /// ```
     ///
     /// The following are not:
     ///
     /// ```roc
-    /// [ A I8, B U8 ]
-    /// [ A [ B [ Result U8 {} ] ] ]         (Result U8 {} is actually [ Ok U8, Err {} ])
-    /// [ A { lst: List (R a) } ] as R a     (List a is morally [ Cons (List a), Nil ] as List a)
+    /// [A I8, B U8 ]
+    /// [A [B [Result U8 {}]]]         (Result U8 {} is actually [Ok U8, Err {}])
+    /// [A { lst: List (R a) }] as R a     (List a is morally [Cons (List a), Nil] as List a)
     /// ```
     pub fn is_narrow(&self) -> bool {
         match self.shallow_dealias() {
@@ -1920,8 +1920,8 @@ pub enum PatternCategory {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum AliasKind {
     /// A structural alias is something like
-    ///   List a : [ Nil, Cons a (List a) ]
-    /// It is typed structurally, so that a `List U8` is always equal to a `[ Nil ]_`, for example.
+    ///   List a : [Nil, Cons a (List a)]
+    /// It is typed structurally, so that a `List U8` is always equal to a `[Nil]_`, for example.
     Structural,
     /// An opaque alias corresponds to an opaque type from the language syntax, like
     ///   Age := U32

@@ -38,7 +38,7 @@ pub enum SolvedType {
     Rigid(Lowercase),
     Flex(VarId),
     Wildcard,
-    /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
+    /// Inline type alias, e.g. `as List a` in `[Cons a (List a), Nil] as List a`
     Record {
         fields: Vec<(Lowercase, RecordField<SolvedType>)>,
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.

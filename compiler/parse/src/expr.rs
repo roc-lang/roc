@@ -600,7 +600,7 @@ fn append_body_definition<'a>(
                 }),
             )) => {
                 // This is a case like
-                //   UserId x : [ UserId Int ]
+                //   UserId x : [UserId Int]
                 //   UserId x = UserId 42
                 // We optimistically parsed the first line as an alias; we now turn it
                 // into an annotation.

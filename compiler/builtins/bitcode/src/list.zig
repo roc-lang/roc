@@ -705,7 +705,7 @@ pub fn listWalkUntil(
     dec: Dec,
     output: Opaque,
 ) callconv(.C) void {
-    // [ Continue a, Stop a ]
+    // [Continue a, Stop a]
 
     if (accum_width == 0) {
         return;
@@ -734,7 +734,7 @@ pub fn listWalkUntil(
 
             caller(data, bytes_ptr, element, bytes_ptr);
 
-            // [ Continue ..., Stop ]
+            // [Continue ..., Stop]
             const tag_id = has_tag_id(0, bytes_ptr);
 
             if (!tag_id.matched) {

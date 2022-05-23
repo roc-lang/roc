@@ -336,7 +336,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // Bool : [ True, False ]
+    // Bool : [True, False]
     add_alias(
         Symbol::BOOL_BOOL,
         BuiltinAlias {
@@ -347,7 +347,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // Utf8ByteProblem : [ InvalidStartByte, UnexpectedEndOfSequence, ExpectedContinuation, OverlongEncoding, CodepointTooLarge, EncodesSurrogateHalf ]
+    // Utf8ByteProblem : [InvalidStartByte, UnexpectedEndOfSequence, ExpectedContinuation, OverlongEncoding, CodepointTooLarge, EncodesSurrogateHalf]
     add_alias(
         Symbol::STR_UT8_BYTE_PROBLEM,
         BuiltinAlias {
@@ -964,7 +964,7 @@ fn bool_alias_content() -> SolvedType {
 
 #[inline(always)]
 pub fn ordering_type() -> SolvedType {
-    // [ LT, EQ, GT ]
+    // [LT, EQ, GT]
     SolvedType::TagUnion(
         vec![
             (TagName::Tag("EQ".into()), vec![]),
@@ -1053,7 +1053,7 @@ pub fn str_utf8_byte_problem_alias_content() -> SolvedType {
     // 1. This must have the same values as the Zig struct Utf8ByteProblem in src/str.zig
     // 2. This must be in alphabetical order
     //
-    // [ CodepointTooLarge, EncodesSurrogateHalf, OverlongEncoding, InvalidStartByte, UnexpectedEndOfSequence, ExpectedContinuation ]
+    // [CodepointTooLarge, EncodesSurrogateHalf, OverlongEncoding, InvalidStartByte, UnexpectedEndOfSequence, ExpectedContinuation]
     SolvedType::TagUnion(
         vec![
             (TagName::Tag("CodepointTooLarge".into()), vec![]),

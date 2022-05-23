@@ -844,33 +844,33 @@ fn write_flat_type<'a>(
             }
         }
         TagUnion(tags, ext_var) => {
-            buf.push_str("[ ");
+            buf.push('[');
 
             let ext_content = write_sorted_tags2(env, ctx, subs, buf, tags, *ext_var);
 
-            buf.push_str(" ]");
+            buf.push(']');
 
             write_ext_content(env, ctx, subs, buf, ext_content, parens)
         }
 
         FunctionOrTagUnion(tag_name, _, ext_var) => {
-            buf.push_str("[ ");
+            buf.push('[');
 
             let mut tags: MutMap<TagName, _> = MutMap::default();
             tags.insert(subs[*tag_name].clone(), vec![]);
             let ext_content = write_sorted_tags(env, ctx, subs, buf, &tags, *ext_var);
 
-            buf.push_str(" ]");
+            buf.push(']');
 
             write_ext_content(env, ctx, subs, buf, ext_content, parens)
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {
-            buf.push_str("[ ");
+            buf.push('[');
 
             let ext_content = write_sorted_tags2(env, ctx, subs, buf, tags, *ext_var);
 
-            buf.push_str(" ]");
+            buf.push(']');
 
             write_ext_content(env, ctx, subs, buf, ext_content, parens);
 

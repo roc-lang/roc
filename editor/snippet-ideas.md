@@ -41,7 +41,7 @@ Fish hooks are used when subvariants should be created e.g.: <collection> means 
 - command: current date/datetime
     + example: current datetime >> `now <- Time.now\n`
 - command: list range 1 to 5
-    + example: [ 1, 2, 3, 4, 5 ]
+    + example: [1, 2, 3, 4, 5]
 - command: use commandline args
 - command: post/get/put request
 - command: extract float(s)/number/emal addresses  from string. regex match float/number/email address/...

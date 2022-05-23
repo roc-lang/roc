@@ -876,11 +876,11 @@ fn type_to_variable<'a>(
             // for uniqueness types only: recursive aliases "introduce" an unbound uniqueness
             // attribute in the body, when
             //
-            // Peano : [ S Peano, Z ]
+            // Peano : [S Peano, Z]
             //
             // becomes
             //
-            // Peano : [ S (Attr u Peano), Z ]
+            // Peano : [S (Attr u Peano), Z]
             //
             // This `u` variable can be different between lists, so giving just one variable to
             // this type is incorrect.

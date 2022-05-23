@@ -1455,11 +1455,11 @@ pub enum Literal<'a> {
     /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
     /// so they can (at least potentially) be emitted as 1-bit machine bools.
     ///
-    /// So [ True, False ] compiles to this, and so do [ A, B ] and [ Foo, Bar ].
-    /// However, a union like [ True, False, Other Int ] would not.
+    /// So [True, False] compiles to this, and so do [A, B] and [Foo, Bar].
+    /// However, a union like [True, False, Other Int] would not.
     Bool(bool),
     /// Closed tag unions containing between 3 and 256 tags (all of 0 arity)
-    /// compile to bytes, e.g. [ Blue, Black, Red, Green, White ]
+    /// compile to bytes, e.g. [Blue, Black, Red, Green, White]
     Byte(u8),
 }
 

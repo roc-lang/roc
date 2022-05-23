@@ -392,7 +392,7 @@ pub struct HasClause<'a> {
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Derived<'a> {
-    /// `has [ Eq, Hash ]`
+    /// `has [Eq, Hash]`
     Has(Collection<'a, AbilityName<'a>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
@@ -429,7 +429,7 @@ pub enum TypeAnnotation<'a> {
     /// A bound type variable, e.g. `a` in `(a -> a)`
     BoundVariable(&'a str),
 
-    /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
+    /// Inline type alias, e.g. `as List a` in `[Cons a (List a), Nil] as List a`
     As(
         &'a Loc<TypeAnnotation<'a>>,
         &'a [CommentOrNewline<'a>],
@@ -445,8 +445,8 @@ pub enum TypeAnnotation<'a> {
 
     /// A tag union, e.g. `[
     TagUnion {
-        /// The row type variable in an open tag union, e.g. the `a` in `[ Foo, Bar ]a`.
-        /// This is None if it's a closed tag union like `[ Foo, Bar]`.
+        /// The row type variable in an open tag union, e.g. the `a` in `[Foo, Bar]a`.
+        /// This is None if it's a closed tag union like `[Foo, Bar]`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
         tags: Collection<'a, Loc<Tag<'a>>>,
     },

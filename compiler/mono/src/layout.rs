@@ -262,23 +262,23 @@ pub enum Layout<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UnionLayout<'a> {
     /// A non-recursive tag union
-    /// e.g. `Result a e : [ Ok a, Err e ]`
+    /// e.g. `Result a e : [Ok a, Err e]`
     NonRecursive(&'a [&'a [Layout<'a>]]),
     /// A recursive tag union (general case)
-    /// e.g. `Expr : [ Sym Str, Add Expr Expr ]`
+    /// e.g. `Expr : [Sym Str, Add Expr Expr]`
     Recursive(&'a [&'a [Layout<'a>]]),
     /// A recursive tag union with just one constructor
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
-    /// e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
+    /// e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
     NonNullableUnwrapped(&'a [Layout<'a>]),
     /// A recursive tag union that has an empty variant
     /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
     /// It has more than one other variant, so they need tag IDs (payloads are "wrapped")
-    /// e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
+    /// e.g. `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
     ///
     /// nullable_id refers to the index of the tag that is represented at runtime as NULL.
-    /// For example, in `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`,
+    /// For example, in `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`,
     /// the ids would be Empty = 0, More = 1, Single = 2, because that's how those tags are
     /// ordered alphabetically. Since the Empty tag will be represented at runtime as NULL,
     /// and since Empty's tag id is 0, here nullable_id would be 0.
@@ -288,12 +288,12 @@ pub enum UnionLayout<'a> {
     },
     /// A recursive tag union with only two variants, where one is empty.
     /// Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
-    /// e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
+    /// e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
     ///
     /// nullable_id is a bool because it's only ever 0 or 1, but (as with the NullableWrapped
     /// variant), it reprsents the index of the tag that will be represented at runtime as NULL.
     ///
-    /// So for example, in `ConsList a : [ Nil, Cons a (ConsList a) ]`, Nil is tag id 1 and
+    /// So for example, in `ConsList a : [Nil, Cons a (ConsList a)]`, Nil is tag id 1 and
     /// Cons is tag id 0 because Nil comes alphabetically after Cons. Here, Nil will be
     /// represented as NULL at runtime, so nullable_id is 1 - which is to say, `true`, because
     /// `(1 as bool)` is `true`.
@@ -2145,7 +2145,7 @@ pub fn union_sorted_tags<'a>(
         Ok(())
         // Admit type variables in the extension for now. This may come from things that never got
         // monomorphized, like in
-        //   x : [ A ]*
+        //   x : [A]*
         //   x = A
         //   x
         // In such cases it's fine to drop the variable. We may be proven wrong in the future...

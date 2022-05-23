@@ -132,7 +132,7 @@ concat : Str, Str -> Str
 ## Combine a list of strings into a single string, with a separator
 ## string in between each.
 ##
-## >>> Str.joinWith [ "one", "two", "three" ] ", "
+## >>> Str.joinWith ["one", "two", "three"] ", "
 joinWith : List Str, Str -> Str
 
 ## Split a string around a separator.
@@ -185,8 +185,8 @@ startsWithCodePt : Str, U32 -> Bool
 ## >>> Str.toUtf8 "🐦"
 toUtf8 : Str -> List U8
 
-# fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
-# fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem Nat, OutOfBounds ]*
+# fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8Problem]*
+# fromUtf8Range : List U8 -> Result Str [BadUtf8 Utf8Problem Nat, OutOfBounds]*
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
 fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf8ByteProblem Nat, OutOfBounds]*
 

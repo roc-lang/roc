@@ -547,7 +547,7 @@ fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
 }
 
 test "strSplitInPlace: empty delimiter" {
-    // Str.split "abc" "" == [ "abc" ]
+    // Str.split "abc" "" == ["abc"]
     const str_arr = "abc";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -581,7 +581,7 @@ test "strSplitInPlace: empty delimiter" {
 }
 
 test "strSplitInPlace: no delimiter" {
-    // Str.split "abc" "!" == [ "abc" ]
+    // Str.split "abc" "!" == ["abc"]
     const str_arr = "abc";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -700,7 +700,7 @@ test "strSplitInPlace: delimiter on sides" {
 }
 
 test "strSplitInPlace: three pieces" {
-    // Str.split "a!b!c" "!" == [ "a", "b", "c" ]
+    // Str.split "a!b!c" "!" == ["a", "b", "c"]
     const str_arr = "a!b!c";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -786,7 +786,7 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
 }
 
 test "countSegments: long delimiter" {
-    // Str.split "str" "delimiter" == [ "str" ]
+    // Str.split "str" "delimiter" == ["str"]
     // 1 segment
     const str_arr = "str";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -804,7 +804,7 @@ test "countSegments: long delimiter" {
 }
 
 test "countSegments: delimiter at start" {
-    // Str.split "hello there" "hello" == [ "", " there" ]
+    // Str.split "hello there" "hello" == ["", " there"]
     // 2 segments
     const str_arr = "hello there";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -823,7 +823,7 @@ test "countSegments: delimiter at start" {
 }
 
 test "countSegments: delimiter interspered" {
-    // Str.split "a!b!c" "!" == [ "a", "b", "c" ]
+    // Str.split "a!b!c" "!" == ["a", "b", "c"]
     // 3 segments
     const str_arr = "a!b!c";
     const str = RocStr.init(str_arr, str_arr.len);

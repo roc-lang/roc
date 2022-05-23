@@ -3,7 +3,7 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [ mainForHost ]
+    provides [mainForHost]
 
 MyRcd : { a : U64, b : U128 }
 

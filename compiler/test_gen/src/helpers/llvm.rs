@@ -12,7 +12,7 @@ use roc_reporting::report::RenderTarget;
 use target_lexicon::Triple;
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
+    let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!

@@ -59,9 +59,9 @@ interface List
 ## Types
 ## A sequential list of values.
 ##
-## >>> [ 1, 2, 3 ] # a list of numbers
-## >>> [ "a", "b", "c" ] # a list of strings
-## >>> [ [ 1.1 ], [], [ 2.2, 3.3 ] ] # a list of lists of numbers
+## >>> [1, 2, 3] # a list of numbers
+## >>> ["a", "b", "c"] # a list of strings
+## >>> [[1.1], [], [2.2, 3.3]] # a list of lists of numbers
 ##
 ## The maximum size of a [List] is limited by the amount of heap memory available
 ## to the current process. If there is not enough memory available, attempting to
@@ -92,11 +92,11 @@ interface List
 ##
 ## Let's look at an example.
 ##
-##     ratings = [ 5, 4, 3 ]
+##     ratings = [5, 4, 3]
 ##
 ##     { foo: ratings, bar: ratings }
 ##
-## The first line binds the name `ratings` to the list `[ 5, 4, 3 ]`. The list
+## The first line binds the name `ratings` to the list `[5, 4, 3]`. The list
 ## begins with a refcount of 1, because so far only `ratings` is referencing it.
 ##
 ## The second line alters this refcount. `{ foo: ratings` references
@@ -107,7 +107,7 @@ interface List
 ## Let's turn this example into a function.
 ##
 ##     getRatings = \first ->
-##         ratings = [ first, 4, 3 ]
+##         ratings = [first, 4, 3]
 ##
 ##         { foo: ratings, bar: ratings }
 ##
@@ -129,7 +129,7 @@ interface List
 ## Let's change the last line to be `(getRatings 5).bar` instead of `getRatings 5`:
 ##
 ##     getRatings = \first ->
-##         ratings = [ first, 4, 3 ]
+##         ratings = [first, 4, 3]
 ##
 ##         { foo: ratings, bar: ratings }
 ##
@@ -155,7 +155,7 @@ interface List
 ##
 ## Here's the example using a list of numbers.
 ##
-##     nums = [ 1, 2, 3, 4, 5, 6, 7 ]
+##     nums = [1, 2, 3, 4, 5, 6, 7]
 ##
 ##     first = List.first nums
 ##     last = List.last nums
@@ -166,7 +166,7 @@ interface List
 ##
 ## Here's the equivalent code with a list of lists:
 ##
-##     lists = [ [ 1 ], [ 2, 3 ], [], [ 4, 5, 6, 7 ] ]
+##     lists = [[1], [2, 3], [], [4, 5, 6, 7]]
 ##
 ##     first = List.first lists
 ##     last = List.last lists
@@ -181,7 +181,7 @@ interface List
 ## because the function returned `first`, that element will actually end up
 ## *not* getting freed at the end - but all the others will be.
 ##
-## In the `lists` example, `lists = [ ... ]` also creates a list with an initial
+## In the `lists` example, `lists = [...]` also creates a list with an initial
 ## refcount of 1. Separately, it also creates several other lists - each with
 ## their own refcounts - to go inside that list. (The empty list at the end
 ## does not use heap memory, and thus has no refcount.)
@@ -194,7 +194,7 @@ interface List
 ## * If possible, it is usually best for performance to use large lists in a way where the optimizer can turn them into in-place mutations. If this is not possible, a persistent data structure might be faster - but this is a rare enough scenario that it would not be good for the average Roc program's performance if this were the way [List] worked by default. Instead, you can look outside Roc's standard modules for an implementation of a persistent data structure - likely built using [List] under the hood!
 ##  Check if the list is empty.
 ##
-## >>> List.isEmpty [ 1, 2, 3 ]
+## >>> List.isEmpty [1, 2, 3]
 ##
 ## >>> List.isEmpty []
 isEmpty : List a -> Bool
@@ -206,7 +206,7 @@ replace : List a, Nat, a -> { list : List a, value : a }
 
 ## Replaces the element at the given index with a replacement.
 ##
-## >>> List.set [ "a", "b", "c" ] 1 "B"
+## >>> List.set ["a", "b", "c"] 1 "B"
 ##
 ## If the given index is outside the bounds of the list, returns the original
 ## list unmodified.
@@ -218,17 +218,17 @@ set = \list, index, value ->
 
 ## Add a single element to the end of a list.
 ##
-## >>> List.append [ 1, 2, 3 ] 4
+## >>> List.append [1, 2, 3] 4
 ##
-## >>> [ 0, 1, 2 ]
+## >>> [0, 1, 2]
 ## >>>     |> List.append 3
 append : List a, a -> List a
 
 ## Add a single element to the beginning of a list.
 ##
-## >>> List.prepend [ 1, 2, 3 ] 0
+## >>> List.prepend [1, 2, 3] 0
 ##
-## >>> [ 2, 3, 4 ]
+## >>> [2, 3, 4]
 ## >>>     |> List.prepend 1
 prepend : List a, a -> List a
 
@@ -241,10 +241,10 @@ len : List a -> Nat
 
 ## Put two lists together.
 ##
-## >>> List.concat [ 1, 2, 3 ] [ 4, 5 ]
+## >>> List.concat [1, 2, 3] [4, 5]
 ##
-## >>> [ 0, 1, 2 ]
-## >>>     |> List.concat [ 3, 4 ]
+## >>> [0, 1, 2]
+## >>>     |> List.concat [3, 4]
 concat : List a, List a -> List a
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
@@ -266,14 +266,14 @@ repeat : a, Nat -> List a
 
 ## Returns the list with its elements reversed.
 ##
-## >>> List.reverse [ 1, 2, 3 ]
+## >>> List.reverse [1, 2, 3]
 reverse : List a -> List a
 
 ## Join the given lists together into one list.
 ##
-## >>> List.join [ [ 1, 2, 3 ], [ 4, 5 ], [], [ 6, 7 ] ]
+## >>> List.join [[1, 2, 3], [4, 5], [], [6, 7]]
 ##
-## >>> List.join [ [], [] ]
+## >>> List.join [[], []]
 ##
 ## >>> List.join []
 join : List (List a) -> List a
@@ -287,7 +287,7 @@ contains : List a, a -> Bool
 ##
 ## You can use it in a pipeline:
 ##
-##     [ 2, 4, 8 ]
+##     [2, 4, 8]
 ##         |> List.walk { start: 0, step: Num.add }
 ##
 ## This returns 14 because:
@@ -295,7 +295,7 @@ contains : List a, a -> Bool
 ## * Each `step` runs `Num.add state elem`, and the return value becomes the new `state`.
 ##
 ## Here is a table of how `state` changes as [List.walk] walks over the elements
-## `[ 2, 4, 8 ]` using #Num.add as its `step` function to determine the next `state`.
+## `[2, 4, 8]` using #Num.add as its `step` function to determine the next `state`.
 ##
 ## `state` | `elem` | `step state elem` (`Num.add state elem`)
 ## --------+--------+-----------------------------------------
@@ -308,7 +308,7 @@ contains : List a, a -> Bool
 ## 1. `0` (because of `start: 0`)
 ## 2. `1` (because of `Num.add state elem` with `state` = 0 and `elem` = 1
 ##
-##     [ 1, 2, 3 ]
+##     [1, 2, 3]
 ##         |> List.walk { start: 0, step: Num.sub }
 ##
 ## This returns -6 because
@@ -353,7 +353,7 @@ all : List a, (a -> Bool) -> Bool
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `True`.
 ##
-## >>> List.keepIf [ 1, 2, 3, 4 ] (\num -> num > 2)
+## >>> List.keepIf [1, 2, 3, 4] (\num -> num > 2)
 ##
 ## ## Performance Details
 ##
@@ -376,7 +376,7 @@ keepIf : List a, (a -> Bool) -> List a
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `False`.
 ##
-## >>> List.dropIf [ 1, 2, 3, 4 ] (\num -> num > 2)
+## >>> List.dropIf [1, 2, 3, 4] (\num -> num > 2)
 ##
 ## ## Performance Details
 ##
@@ -389,29 +389,29 @@ dropIf = \list, predicate ->
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
 ##
-## >>> List.keepOks [ [ "a", "b" ], [], [], [ "c", "d", "e" ] ] List.last
+## >>> List.keepOks [["a", "b"], [], [], ["c", "d", "e"]] List.last
 ##
 ## >>> fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
 ## >>>
-## >>> List.keepOks [ "", "a", "bc", "", "d", "ef", "" ]
+## >>> List.keepOks ["", "a", "bc", "", "d", "ef", ""]
 keepOks : List before, (before -> Result after *) -> List after
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Err` are kept. Any that are wrapped in `Ok` are dropped.
 ##
-## >>> List.keepErrs [ [ "a", "b" ], [], [], [ "c", "d", "e" ] ] List.last
+## >>> List.keepErrs [["a", "b"], [], [], ["c", "d", "e"]] List.last
 ##
 ## >>> fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
 ## >>>
-## >>> List.keepErrs [ "", "a", "bc", "", "d", "ef", "" ]
+## >>> List.keepErrs ["", "a", "bc", "", "d", "ef", ""]
 keepErrs : List before, (before -> Result * after) -> List after
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
 ##
-## > List.map [ 1, 2, 3 ] (\num -> num + 1)
+## > List.map [1, 2, 3] (\num -> num + 1)
 ##
-## > List.map [ "", "a", "bc" ] Str.isEmpty
+## > List.map ["", "a", "bc"] Str.isEmpty
 map : List a, (a -> b) -> List b
 
 ## Run a transformation function on the first element of each list,
@@ -421,7 +421,7 @@ map : List a, (a -> b) -> List b
 ## Some languages have a function named `zip`, which does something similar to
 ## calling [List.map2] passing two lists and `Pair`:
 ##
-## >>> zipped = List.map2 [ "a", "b", "c" ] [ 1, 2, 3 ] Pair
+## >>> zipped = List.map2 ["a", "b", "c"] [1, 2, 3] Pair
 map2 : List a, List b, (a, b -> c) -> List c
 
 ## Run a transformation function on the first element of each list,
@@ -476,12 +476,12 @@ dropLast : List elem -> List elem
 
 ## Returns the given number of elements from the beginning of the list.
 ##
-## >>> List.takeFirst 4 [ 1, 2, 3, 4, 5, 6, 7, 8 ]
+## >>> List.takeFirst 4 [1, 2, 3, 4, 5, 6, 7, 8]
 ##
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
 ##
-## >>> List.takeFirst 5 [ 1, 2 ]
+## >>> List.takeFirst 5 [1, 2]
 ##
 ## To *remove* elements from the beginning of the list, use `List.takeLast`.
 ##
@@ -503,12 +503,12 @@ takeFirst : List elem, Nat -> List elem
 
 ## Returns the given number of elements from the end of the list.
 ##
-## >>> List.takeLast 4 [ 1, 2, 3, 4, 5, 6, 7, 8 ]
+## >>> List.takeLast 4 [1, 2, 3, 4, 5, 6, 7, 8]
 ##
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
 ##
-## >>> List.takeLast 5 [ 1, 2 ]
+## >>> List.takeLast 5 [1, 2]
 ##
 ## To *remove* elements from the end of the list, use `List.takeFirst`.
 ##
@@ -588,11 +588,11 @@ find : List elem, (elem -> Bool) -> Result elem [NotFound]*
 ##
 ## If `start` is outside the bounds of the given list, returns the empty list.
 ##
-## >>> List.sublist { start: 4, len: 0 } [ 1, 2, 3 ]
+## >>> List.sublist { start: 4, len: 0 } [1, 2, 3]
 ##
 ## If more elements are requested than exist in the list, returns as many as it can.
 ##
-## >>> List.sublist { start: 2, len: 10 } [ 1, 2, 3, 4, 5 ]
+## >>> List.sublist { start: 2, len: 10 } [1, 2, 3, 4, 5]
 ##
 ## > If you want a sublist which goes all the way to the end of the list, no
 ## > matter how long the list is, `List.takeLast` can do that more efficiently.

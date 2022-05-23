@@ -1,7 +1,7 @@
 app "type-error"
     packages { pf: "platform" }
-    imports [ pf.Stdout.{ line }, pf.Task.{ await } ]
-    provides [ main ] to pf
+    imports [pf.Stdout.{ line }, pf.Task.{ await }]
+    provides [main] to pf
 
 main =
     _ <- await (line "a")

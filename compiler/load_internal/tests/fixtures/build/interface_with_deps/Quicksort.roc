@@ -1,5 +1,5 @@
 interface Quicksort
-    exposes [ swap, partition, quicksort ]
+    exposes [swap, partition, quicksort]
     imports []
 
 quicksort : List (Num a), Nat, Nat -> List (Num a)
@@ -23,7 +23,7 @@ swap = \i, j, list ->
             []
 
 
-partition : Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]
+partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
 partition = \low, high, initialList ->
     when List.get initialList high is
         Ok pivot ->
@@ -35,7 +35,7 @@ partition = \low, high, initialList ->
             Pair (low - 1) initialList
 
 
-partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [ Pair Nat (List (Num a)) ]
+partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [Pair Nat (List (Num a))]
 partitionHelp = \i, j, list, high, pivot ->
     if j < high then
         when List.get list j is
