@@ -26,6 +26,8 @@ pub fn generate_bindings(decl_src: &str) -> String {
 
     src.push_str(decl_src);
 
+    // Only use the X86_64 types for these tests
+    let target_arch = Architecture::X86_64;
     let types = {
         let dir = tempdir().expect("Unable to create tempdir");
         let filename = PathBuf::from("Package-Config.roc");
@@ -41,8 +43,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
         result.expect("had problems loading")
     }
     .iter()
-    // Only use the X86_64 types for these tests
-    .find(|(architecture, _)| *architecture == Architecture::X86_64)
+    .find(|(architecture, _)| *architecture == target_arch)
     .unwrap()
     .1
     .clone();
@@ -51,7 +52,8 @@ pub fn generate_bindings(decl_src: &str) -> String {
     let mut buf = src;
     buf.clear();
 
-    bindgen_rs::write_types(&types, &mut buf).expect("I/O error when writing bindgen string");
+    bindgen_rs::write_types(target_arch, &types, &mut buf)
+        .expect("I/O error when writing bindgen string");
 
     buf
 }

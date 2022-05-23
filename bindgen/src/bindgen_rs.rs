@@ -1,5 +1,5 @@
 use roc_mono::layout::UnionLayout;
-use roc_target::TargetInfo;
+use roc_target::{Architecture, TargetInfo};
 
 use crate::types::{RocTagUnion, RocType, TypeId, Types};
 use std::{
@@ -11,17 +11,24 @@ pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
 pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 const INDENT: &str = "    ";
 
-pub fn write_types(types: &Types, buf: &mut String) -> fmt::Result {
+pub fn write_types(architecture: Architecture, types: &Types, buf: &mut String) -> fmt::Result {
     for id in types.sorted_ids() {
-        write_type(id, types, buf)?;
+        write_type(architecture, id, types, buf)?;
     }
 
     Ok(())
 }
 
-fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
+fn write_type(
+    architecture: Architecture,
+    id: TypeId,
+    types: &Types,
+    buf: &mut String,
+) -> fmt::Result {
     match types.get(id) {
-        RocType::Struct { name, fields } => write_struct(name, fields, id, types, buf),
+        RocType::Struct { name, fields } => {
+            write_struct(name, architecture, fields, id, types, buf)
+        }
         RocType::TagUnion(tag_union) => {
             match tag_union {
                 RocTagUnion::Enumeration { tags, name } => {
@@ -31,14 +38,21 @@ fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
                         write_derive(types.get(id), types, buf)?;
                         writeln!(buf, "\nstruct {}();", type_name(id, types))
                     } else {
-                        write_enumeration(name, types.get(id), tags.iter(), types, buf)
+                        write_enumeration(
+                            name,
+                            architecture,
+                            types.get(id),
+                            tags.iter(),
+                            types,
+                            buf,
+                        )
                     }
                 }
                 RocTagUnion::NonRecursive { tags, name } => {
                     // Empty tag unions can never come up at runtime,
                     // and so don't need declared types.
                     if !tags.is_empty() {
-                        write_tag_union(name, id, tags, types, buf)
+                        write_tag_union(name, architecture, id, tags, types, buf)
                     } else {
                         Ok(())
                     }
@@ -56,6 +70,7 @@ fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
                     non_null_payload,
                 } => write_nullable_unwrapped(
                     name,
+                    architecture,
                     id,
                     null_tag,
                     non_null_tag,
@@ -102,6 +117,7 @@ fn write_type(id: TypeId, types: &Types, buf: &mut String) -> fmt::Result {
 
 fn write_discriminant(
     name: &str,
+    architecture: Architecture,
     tag_names: Vec<String>,
     types: &Types,
     buf: &mut String,
@@ -121,6 +137,7 @@ fn write_discriminant(
 
     write_enumeration(
         &discriminant_name,
+        architecture,
         &discriminant_type,
         tag_names.into_iter(),
         types,
@@ -132,13 +149,14 @@ fn write_discriminant(
 
 fn write_tag_union(
     name: &str,
+    architecture: Architecture,
     type_id: TypeId,
     tags: &[(String, Option<TypeId>)],
     types: &Types,
     buf: &mut String,
 ) -> fmt::Result {
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
-    let discriminant_name = write_discriminant(name, tag_names, types, buf)?;
+    let discriminant_name = write_discriminant(name, architecture, tag_names, types, buf)?;
     let typ = types.get(type_id);
     // TODO also do this for other targets. Remember, these can change based on more
     // than just pointer width; e.g. on wasm, the alignments of U16 and U8 are both 4!
@@ -683,6 +701,7 @@ fn write_impl_tags<
 
 fn write_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + fmt::Display>(
     name: &str,
+    architecture: Architecture,
     typ: &RocType,
     tags: I,
     types: &Types,
@@ -693,6 +712,7 @@ fn write_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + fmt::Displa
         .try_into()
         .unwrap();
 
+    write_arch_cfg(architecture, 0, buf)?;
     write_derive(typ, types, buf)?;
 
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
@@ -724,6 +744,7 @@ impl core::fmt::Debug for {name} {{
 
 fn write_struct(
     name: &str,
+    architecture: Architecture,
     fields: &[(String, TypeId)],
     struct_id: TypeId,
     types: &Types,
@@ -736,9 +757,10 @@ fn write_struct(
         }
         1 => {
             // Unwrap single-field records
-            write_type(fields.first().unwrap().1, types, buf)
+            write_type(architecture, fields.first().unwrap().1, types, buf)
         }
         _ => {
+            write_arch_cfg(architecture, 0, buf)?;
             write_derive(types.get(struct_id), types, buf)?;
 
             writeln!(buf, "#[repr(C)]\npub struct {name} {{")?;
@@ -814,6 +836,7 @@ fn write_derive(typ: &RocType, types: &Types, buf: &mut String) -> fmt::Result {
 
 fn write_nullable_unwrapped(
     name: &str,
+    architecture: Architecture,
     id: TypeId,
     null_tag: &str,
     non_null_tag: &str,
@@ -825,7 +848,7 @@ fn write_nullable_unwrapped(
 
     tag_names.sort();
 
-    let discriminant_name = write_discriminant(name, tag_names, types, buf)?;
+    let discriminant_name = write_discriminant(name, architecture, tag_names, types, buf)?;
     let payload_type = types.get(non_null_payload);
     let payload_type_name = type_name(non_null_payload, types);
     let has_pointer = payload_type.has_pointer(types);
@@ -1035,4 +1058,24 @@ impl core::fmt::Debug for {name} {{
     }
 
     Ok(())
+}
+
+fn write_arch_cfg(
+    architecture: Architecture,
+    indentations: usize,
+    buf: &mut String,
+) -> fmt::Result {
+    let arch_cfg_str = match architecture {
+        Architecture::X86_64 => "x86_64",
+        Architecture::X86_32 => "x86",
+        Architecture::Aarch64 => "aarch64",
+        Architecture::Arm => "arm",
+        Architecture::Wasm32 => "wasm32",
+    };
+
+    for _ in 0..indentations {
+        buf.write_str(INDENT)?;
+    }
+
+    write!(buf, "\n#[cfg(target_arch = \"{arch_cfg_str}\")]")
 }

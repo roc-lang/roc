@@ -2,7 +2,6 @@ use clap::Parser;
 use roc_bindgen::bindgen_rs;
 use roc_bindgen::load::load_types;
 use roc_load::Threading;
-use roc_target::Architecture;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{ErrorKind, Write};
@@ -66,22 +65,7 @@ pub fn main() {
                     buf = std::str::from_utf8(bindgen_rs::HEADER).unwrap().to_string();
 
                     for (architecture, types) in types_by_architecture {
-                        use std::fmt::Write;
-
-                        let arch_cfg_str = match architecture {
-                            Architecture::X86_64 => "x86_64",
-                            Architecture::X86_32 => "x86",
-                            Architecture::Aarch64 => "aarch64",
-                            Architecture::Arm => "arm",
-                            Architecture::Wasm32 => "wasm32",
-                        };
-
-                        let result =
-                            writeln!(buf, "if cfg!(target_arch = \"{arch_cfg_str}\")]\n{{")
-                                .and_then(|()| bindgen_rs::write_types(&types, &mut buf))
-                                .and_then(|()| buf.write_str("}\n"));
-
-                        if let Err(err) = result {
+                        if let Err(err) = bindgen_rs::write_types(architecture, &types, &mut buf) {
                             eprintln!(
                                 "Unable to generate binding string {} - {:?}",
                                 output_path.display(),
