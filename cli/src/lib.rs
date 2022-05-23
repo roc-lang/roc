@@ -589,7 +589,20 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         // envp is an array of pointers to strings, conventionally of the
         // form key=value, which are passed as the environment of the new
         // program.  The envp array must be terminated by a NULL pointer.
-        let envp = &[std::ptr::null()];
+        let envp_cstrings: bumpalo::collections::Vec<CString> = std::env::vars_os()
+            .flat_map(|(k, v)| {
+                [
+                    CString::new(k.as_bytes()).unwrap(),
+                    CString::new(v.as_bytes()).unwrap(),
+                ]
+            })
+            .collect_in(&arena);
+
+        let envp: bumpalo::collections::Vec<*const libc::c_char> = envp_cstrings
+            .iter()
+            .map(|s| s.as_ptr())
+            .chain([std::ptr::null()])
+            .collect_in(&arena);
 
         match executable {
             ExecutableFile::MemFd(fd, _) => {
