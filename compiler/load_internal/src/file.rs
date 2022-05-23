@@ -504,14 +504,14 @@ pub enum BuildProblem<'a> {
 #[derive(Debug)]
 pub struct ModuleHeader<'a> {
     module_id: ModuleId,
-    module_name: ModuleNameEnum<'a>,
+    pub module_name: ModuleNameEnum<'a>,
     module_path: PathBuf,
     is_root_module: bool,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
-    packages: MutMap<&'a str, PackageName<'a>>,
-    imported_modules: MutMap<ModuleId, Region>,
-    package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
+    pub packages: MutMap<&'a str, PackageName<'a>>,
+    pub imported_modules: MutMap<ModuleId, Region>,
+    pub package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parse_state: roc_parse::state::State<'a>,
@@ -988,7 +988,11 @@ pub fn load_and_typecheck_str<'a>(
         threading,
     )? {
         Monomorphized(_) => unreachable!(""),
-        TypeChecked(module) => Ok(module),
+        TypeChecked {
+            loaded_module,
+            headers:_,
+            module_names:_,
+        } => Ok(loaded_module),
     }
 }
 
@@ -1099,7 +1103,11 @@ impl<'a> LoadStart<'a> {
 }
 
 pub enum LoadResult<'a> {
-    TypeChecked(LoadedModule),
+    TypeChecked {
+        loaded_module: LoadedModule,
+        headers: MutMap<ModuleId, ModuleHeader<'a>>,
+        module_names: MutMap<ModuleId, PQModuleName<'a>>,
+    },
     Monomorphized(MonomorphizedModule<'a>),
 }
 
@@ -1323,7 +1331,7 @@ fn state_thread_step<'a>(
                         .map(|(k, (_, v))| (k, v))
                         .collect();
 
-                    let typechecked = finish(
+                    let load_result = finish(
                         state,
                         solved_subs,
                         exposed_aliases_by_symbol,
@@ -1333,7 +1341,7 @@ fn state_thread_step<'a>(
                         abilities_store,
                     );
 
-                    Ok(ControlFlow::Break(LoadResult::TypeChecked(typechecked)))
+                    Ok(ControlFlow::Break(load_result))
                 }
                 Msg::FinishedAllSpecialization {
                     subs,
@@ -2447,15 +2455,15 @@ fn finish_specialization(
     })
 }
 
-fn finish(
-    state: State,
+fn finish<'a>(
+    state: State<'a>,
     solved: Solved<Subs>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     dep_idents: IdentIdsByModule,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
-) -> LoadedModule {
+) -> LoadResult {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
@@ -2475,21 +2483,28 @@ fn finish(
 
     let exposed_values = exposed_vars_by_symbol.iter().map(|x| x.0).collect();
 
-    LoadedModule {
-        module_id: state.root_id,
-        interns,
-        solved,
-        can_problems: state.module_cache.can_problems,
-        type_problems: state.module_cache.type_problems,
-        declarations_by_id: state.declarations_by_id,
-        dep_idents,
-        exposed_aliases: exposed_aliases_by_symbol,
-        exposed_values,
-        exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
-        sources,
-        timings: state.timings,
-        documentation,
-        abilities_store,
+    let loaded_module =
+        LoadedModule {
+            module_id: state.root_id,
+            interns,
+            solved,
+            can_problems: state.module_cache.can_problems,
+            type_problems: state.module_cache.type_problems,
+            declarations_by_id: state.declarations_by_id,
+            dep_idents,
+            exposed_aliases: exposed_aliases_by_symbol,
+            exposed_values,
+            exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
+            sources,
+            timings: state.timings,
+            documentation,
+            abilities_store,
+        };
+
+    LoadResult::TypeChecked {
+        loaded_module,
+        headers: state.module_cache.headers,
+        module_names: state.module_cache.module_names,
     }
 }
 

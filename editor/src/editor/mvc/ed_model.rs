@@ -26,7 +26,7 @@ use std::path::Path;
 /// Contains nearly all state related to a single roc file in the editor.
 #[derive(Debug)]
 pub struct EdModel<'a> {
-    pub module: EdModule<'a>, // contains Abstract Syntax Tree of code
+    pub ast: AST<'a>, // contains Abstract Syntax Tree of code and header of module
     pub file_path: &'a Path,
     pub code_lines: CodeLines, // Vec<String> of all code, this Vec is written to disk when saving a file.
     pub grid_node_map: GridNodeMap, // allows us to map window coordinates to MarkNodeId's
@@ -55,6 +55,7 @@ pub fn init_model<'a>(
     file_path: &'a Path,
     env: Env<'a>, // contains all variables, identifiers, closures, top level symbols...
     loaded_module: LoadedModule, // contains all roc symbols, exposed values, exposed aliases, solved types... in the file(=module)
+    module_header: ModuleHeader<'a>, // contains all data extracted from the roc file header
     code_arena: &'a Bump,        // bump allocation arena, used for fast memory allocation
     caret_pos: CaretPos,         // to set caret position when the file is displayed
 ) -> EdResult<EdModel<'a>> {
@@ -62,7 +63,8 @@ pub fn init_model<'a>(
     //println!("{}", code_str);
     let mut owned_loaded_module = loaded_module;
 
-    let mut module = EdModule::new(code_str, env, &mut owned_loaded_module.interns, code_arena)?;
+    //let mut module = EdModule::new(code_str, env, &mut owned_loaded_module.interns, code_arena)?;
+    let ast = AST::new(&owned_loaded_module, module_header);
 
     let mut mark_node_pool = SlowPool::default();
 
@@ -70,8 +72,7 @@ pub fn init_model<'a>(
         EmptyCodeString {}.fail()
     } else {
         Ok(ast_to_mark_nodes(
-            &mut module.env,
-            &module.ast,
+            &ast,
             &mut mark_node_pool,
             &owned_loaded_module.interns,
         )?)
@@ -103,7 +104,7 @@ pub fn init_model<'a>(
     };
 
     Ok(EdModel {
-        module,
+        ast,
         file_path,
         code_lines,
         grid_node_map,
@@ -330,7 +331,7 @@ pub mod test_ed_model {
         writeln!(file, "{}", clean_code_str)
             .unwrap_or_else(|_| panic!("Failed to write {:?} to file: {:?}", clean_code_str, file));
 
-        let loaded_module = load_module(&temp_file_full_path, Threading::AllAvailable);
+        let loaded_module = load_module(code_arena, &temp_file_full_path, Threading::AllAvailable);
 
         let mut ed_model = init_dummy_model(
             clean_code_str,

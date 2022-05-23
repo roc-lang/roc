@@ -1,6 +1,6 @@
 use roc_ast::{
     ast_error::ASTResult,
-    lang::{core::ast::AST, env::Env},
+    lang::{core::ast::AST, env::Env}, ast::AST,
 };
 use roc_module::symbol::Interns;
 
@@ -14,14 +14,13 @@ use crate::{
 };
 
 pub fn ast_to_mark_nodes<'a>(
-    env: &mut Env<'a>,
     ast: &AST,
     mark_node_pool: &mut SlowPool,
     interns: &Interns,
 ) -> ASTResult<(Vec<MarkNodeId>, MarkIdAstIdMap)> {
     let mut mark_id_ast_id_map = MarkIdAstIdMap::default();
     let mut all_mark_node_ids = vec![header_to_markup(
-        &ast.header,
+        &ast.module_header,
         mark_node_pool,
         &mut mark_id_ast_id_map,
     )];

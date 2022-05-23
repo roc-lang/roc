@@ -1,3 +1,4 @@
+use roc_load_internal::file::ModuleHeader;
 pub use roc_load_internal::file::Threading;
 
 use bumpalo::Bump;
@@ -90,7 +91,7 @@ pub fn load_and_monomorphize_from_str<'a>(
         threading,
     )? {
         Monomorphized(module) => Ok(module),
-        TypeChecked(_) => unreachable!(""),
+        TypeChecked(_, _) => unreachable!(""),
     }
 }
 
@@ -118,7 +119,7 @@ pub fn load_and_monomorphize<'a>(
         threading,
     )? {
         Monomorphized(module) => Ok(module),
-        TypeChecked(_) => unreachable!(""),
+        TypeChecked(_, _) => unreachable!(""),
     }
 }
 
@@ -146,7 +147,39 @@ pub fn load_and_typecheck<'a>(
         threading,
     )? {
         Monomorphized(_) => unreachable!(""),
-        TypeChecked(module) => Ok(module),
+        TypeChecked(module, _) => Ok(module),
+    }
+}
+
+pub fn load_and_typecheck_editor<'a>(
+    arena: &'a Bump,
+    filename: PathBuf,
+    src_dir: &Path,
+    exposed_types: ExposedByModule,
+    target_info: TargetInfo,
+    render: RenderTarget,
+    threading: Threading,
+) -> Result<(LoadedModule, ModuleHeader<'a>), LoadingProblem<'a>> {
+    use LoadResult::*;
+
+    let load_start = LoadStart::from_path(arena, filename, render)?;
+
+    match load(
+        arena,
+        load_start,
+        src_dir,
+        exposed_types,
+        Phase::SolveTypes,
+        target_info,
+        render,
+        threading,
+    )? {
+        Monomorphized(_) => unreachable!(""),
+        TypeChecked(module, headers) => {
+
+            let mut headers: Vec<ModuleHeader> = headers.into_values().collect();
+            Ok((module, headers.pop().unwrap()))
+        },
     }
 }
 
@@ -176,7 +209,7 @@ pub fn load_and_typecheck_str<'a>(
         render,
     )? {
         Monomorphized(_) => unreachable!(""),
-        TypeChecked(module) => Ok(module),
+        TypeChecked(module, _) => Ok(module),
     }
 }
 

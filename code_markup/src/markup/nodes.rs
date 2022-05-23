@@ -11,10 +11,6 @@ use super::{
 
 use crate::markup_error::{ExpectedTextNode, NestedNodeMissingChild, NestedNodeRequired};
 use itertools::Itertools;
-use roc_ast::{
-    lang::{core::ast::ASTNodeId, env::Env},
-    mem_pool::pool_str::PoolStr,
-};
 use roc_utils::{index_of, slice_get};
 use std::fmt;
 

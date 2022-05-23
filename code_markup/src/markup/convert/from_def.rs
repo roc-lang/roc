@@ -25,13 +25,9 @@ use roc_parse::ast::Def;
 
 pub fn add_node(
     mark_node: MarkupNode,
-    ast_node_id: ASTNodeId,
     mark_node_pool: &mut SlowPool,
-    mark_id_ast_id_map: &mut MarkIdAstIdMap,
 ) -> MarkNodeId {
     let mark_node_id = mark_node_pool.add(mark_node);
-
-    mark_id_ast_id_map.insert(mark_node_id, ast_node_id);
 
     mark_node_id
 }

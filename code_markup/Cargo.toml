@@ -9,6 +9,7 @@ description = "Our own markup language for Roc code. Used by the editor and the 
 [dependencies]
 roc_ast = { path = "../ast" }
 roc_module = { path = "../compiler/module" }
+roc_load_internal = { path = "../compiler/load_internal" }
 roc_utils = { path = "../utils" }
 roc_parse = { path = "../compiler/parse" }
 serde = { version = "1.0.130", features = ["derive"] }

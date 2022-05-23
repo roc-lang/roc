@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, self};
 
 use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PlatformHeader};
 use crate::ident::Ident;
@@ -138,6 +138,18 @@ pub enum StrLiteral<'a> {
     PlainLine(&'a str),
     Line(&'a [StrSegment<'a>]),
     Block(&'a [&'a [StrSegment<'a>]]),
+}
+
+impl<'a> fmt::Display for StrLiteral<'a> {
+   
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use crate::ast::StrLiteral::*;
+
+        match *self {
+            PlainLine(inner_str) => write!(f, "{}", inner_str),
+            _ => unimplemented!("TODO") 
+        }
+    }
 }
 
 /// A parsed expression. This uses lifetimes extensively for two reasons:
