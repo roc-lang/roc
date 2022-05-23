@@ -544,12 +544,12 @@ mod test_reporting {
                 The `Booly` name is first defined here:
 
                 1│  Booly : [Yes, No]
-                    ^^^^^^^^^^^^^^^^^^^
+                    ^^^^^^^^^^^^^^^^^
 
                 But then it's defined a second time here:
 
                 3│  Booly : [Yes, No, Maybe]
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since these aliases have the same name, it's easy to use the wrong one
                 on accident. Give one of them a new name.
@@ -1100,7 +1100,7 @@ mod test_reporting {
                 This list contains elements with different types:
 
                 1│  [1, 3, "foo"]
-                            ^^^^^
+                           ^^^^^
 
                 Its 3rd element is a string of type:
 
@@ -3286,12 +3286,12 @@ mod test_reporting {
                 This tag union type defines the `Foo` tag twice!
 
                 1│  a : [Foo Num.I64, Bar {}, Foo Str]
-                          ^^^^^^^^^^^          ^^^^^^^
+                         ^^^^^^^^^^^          ^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
                 1│  a : [Foo Num.I64, Bar {}, Foo Str]
-                                               ^^^^^^^
+                                              ^^^^^^^
 
                 For clarity, remove the previous `Foo` definitions from this tag union
                 type.
@@ -3633,10 +3633,8 @@ mod test_reporting {
 
                 This `ACons` tag application has the type:
 
-                    [ACons (Num (Integer Signed64)) [
-                    BCons (Num (Integer Signed64)) [ACons Str [BCons I64 [
-                    ACons I64 (BList I64 I64), ANil] as ∞, BNil], ANil], BNil],
-                    ANil]
+                    [ACons (Num (Integer Signed64)) [BCons (Num (Integer Signed64)) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
+                    ANil] as ∞, BNil], ANil], BNil], ANil]
 
                 But the type annotation on `x` says it should be:
 
@@ -4564,8 +4562,8 @@ mod test_reporting {
                 1│  f : [
                          ^
 
-                Tag unions look like [Many I64, None], so I was expecting to see a
-                tag name next.
+                Tag unions look like [Many I64, None], so I was expecting to see a tag
+                name next.
             "#
             ),
         )
@@ -4586,10 +4584,10 @@ mod test_reporting {
                 I am partway through parsing a tag union type, but I got stuck here:
 
                 1│  f : [Yes,
-                              ^
+                             ^
 
                 I was expecting to see a closing square bracket before this, so try
-                adding a] and see if that helps?
+                adding a ] and see if that helps?
             "#
             ),
         )
@@ -4610,7 +4608,7 @@ mod test_reporting {
                 I am partway through parsing a tag union type, but I got stuck here:
 
                 1│  f : [lowercase]
-                          ^
+                         ^
 
                 I was expecting to see a tag name.
 
@@ -4635,7 +4633,7 @@ mod test_reporting {
                 I am partway through parsing a tag union type, but I got stuck here:
 
                 1│  f : [Good, bad]
-                                ^
+                               ^
 
                 I was expecting to see a tag name.
 
@@ -5588,7 +5586,7 @@ mod test_reporting {
                 I am partway through started parsing a list, but I got stuck here:
 
                 1│  [1, 2, , 3]
-                            ^
+                           ^
 
                 I was expecting to see a list entry before this comma, so try adding a
                 list entry and see if that helps?
@@ -5612,10 +5610,10 @@ mod test_reporting {
                 I am partway through started parsing a list, but I got stuck here:
 
                 1│  [1, 2,
-                           ^
+                          ^
 
                 I was expecting to see a closing square bracket before this, so try
-                adding a] and see if that helps?
+                adding a ] and see if that helps?
 
                 Note: When I get stuck like this, it usually means that there is a
                 missing parenthesis or bracket somewhere earlier. It could also be a
@@ -6077,7 +6075,7 @@ All branches in an `if` must have the same type!
                 Nothing is named `bar` in this scope.
 
                 1│  ["foo", bar("")]
-                             ^^^
+                            ^^^
 
                 Did you mean one of these?
 
@@ -6221,7 +6219,7 @@ All branches in an `if` must have the same type!
 
                 3│      imports [pf.Task, Base64]
                 4│      provides [main, @Foo] to pf
-                                         ^
+                                        ^
 
                 I was expecting a type name, value name or function name next, like
 
@@ -6285,7 +6283,7 @@ All branches in an `if` must have the same type!
                 I am partway through parsing a header, but I got stuck here:
 
                 2│      exposes [main, Foo]
-                                             ^
+                                           ^
 
                 I am expecting the `imports` keyword next, like
 
@@ -6313,7 +6311,7 @@ All branches in an `if` must have the same type!
 
                 1│  interface Foobar
                 2│      exposes [main, @Foo]
-                                        ^
+                                       ^
 
                 I was expecting a type name, value name or function name next, like
 
@@ -6444,7 +6442,7 @@ All branches in an `if` must have the same type!
 
                 1│  x : List [Foo Str]
                 2│  x = List.map [1, 2] Foo
-                        ^^^^^^^^^^^^^^^^^^^^^
+                        ^^^^^^^^^^^^^^^^^^^
 
                 This `map` call produces:
 
@@ -7024,7 +7022,7 @@ All branches in an `if` must have the same type!
                 The inline type after this `as` is not a type alias:
 
                 1│  f : List elem -> [Nil, Cons elem a] as a
-                                                             ^
+                                                           ^
 
                 Inline alias types must start with an uppercase identifier and be
                 followed by zero or more type arguments, like Point or List a.
@@ -7048,7 +7046,7 @@ All branches in an `if` must have the same type!
                 This type alias has a qualified name:
 
                 1│  f : List elem -> [Nil, Cons elem a] as Module.LinkedList a
-                                                             ^
+                                                           ^
 
                 An alias introduces a new name to the current scope, so it must be
                 unqualified.
@@ -7072,7 +7070,7 @@ All branches in an `if` must have the same type!
                 This alias type argument is not lowercase:
 
                 1│  f : List elem -> [Nil, Cons elem a] as LinkedList U
-                                                                        ^
+                                                                      ^
 
                 All type arguments must be lowercase.
                 "#
@@ -7333,7 +7331,7 @@ All branches in an `if` must have the same type!
                 `Nested` is a nested datatype. Here is one recursive usage of it:
 
                 1│  Nested a : [Chain a (Nested (List a)), Term]
-                                          ^^^^^^^^^^^^^^^
+                                         ^^^^^^^^^^^^^^^
 
                 But recursive usages of `Nested` must match its definition:
 
@@ -7365,12 +7363,12 @@ All branches in an `if` must have the same type!
                 `Nested` is a nested datatype. Here is one recursive usage of it:
 
                 1│  f : {} -> [Chain a (Nested (List a)), Term] as Nested a
-                                         ^^^^^^^^^^^^^^^
+                                        ^^^^^^^^^^^^^^^
 
                 But recursive usages of `Nested` must match its definition:
 
                 1│  f : {} -> [Chain a (Nested (List a)), Term] as Nested a
-                                                                     ^^^^^^^^
+                                                                   ^^^^^^^^
 
                 Nested datatypes are not supported in Roc.
 
@@ -8737,7 +8735,7 @@ All branches in an `if` must have the same type!
                 This tag union extension type is invalid:
 
                 1│  f : [A]Str
-                             ^^^
+                           ^^^
 
                 Note: A tag union extension variable can only contain a type variable
                 or another tag union.
@@ -8768,7 +8766,7 @@ All branches in an `if` must have the same type!
                 Nothing is named `UnknownType` in this scope.
 
                 1│  Type : [Constructor UnknownType]
-                                         ^^^^^^^^^^^
+                                        ^^^^^^^^^^^
 
                 Did you mean one of these?
 
@@ -8979,7 +8977,7 @@ All branches in an `if` must have the same type!
                 Here is one occurrence:
 
                 1│  I : [A (Num.Int *), B (Num.Int *)]
-                                     ^
+                                    ^
 
                 Tip: Type variables must be bound before the `:`. Perhaps you intended
                 to add a type parameter to this type?
@@ -9796,7 +9794,7 @@ All branches in an `if` must have the same type!
 
                 2│      packages { pf: "platform" }
                 3│      imports [pf.Task Base64]
-                                          ^
+                                         ^
 
                 I am expecting a comma or end of list, like
 
@@ -10162,7 +10160,7 @@ All branches in an `if` must have the same type!
                 This ability cannot be derived:
 
                 5│  A := {} has [Ab]
-                                  ^^
+                                 ^^
 
                 Only builtin abilities can be derived.
 
@@ -10190,7 +10188,7 @@ All branches in an `if` must have the same type!
                 Roc can't derive an implementation of the `Encode.Encoding` for `A`:
 
                 3│  A a := a -> a has [Encode.Encoding]
-                                        ^^^^^^^^^^^^^^^
+                                       ^^^^^^^^^^^^^^^
 
                 Note: `Encoding` cannot be generated for functions.
 
@@ -10220,7 +10218,7 @@ All branches in an `if` must have the same type!
                 Roc can't derive an implementation of the `Encode.Encoding` for `A`:
 
                 3│  A := B has [Encode.Encoding]
-                                 ^^^^^^^^^^^^^^^
+                                ^^^^^^^^^^^^^^^
 
                 Tip: `B` does not implement `Encoding`. Consider adding a custom
                 implementation or `has Encode.Encoding` to the definition of `B`.
@@ -10284,7 +10282,7 @@ All branches in an `if` must have the same type!
                 derive here:
 
                 3│  A := {} has [Encode.Encoding]
-                                  ^^^^^^^^^^^^^^^
+                                 ^^^^^^^^^^^^^^^
 
                 and one custom implementation of `Encode.Encoding` here:
 

@@ -5652,7 +5652,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_join(env, list, element_layout)
         }
         ListGetUnsafe => {
-            // List.get : List elem, Nat -> [ Ok elem, OutOfBounds ]*
+            // List.get : List elem, Nat -> [Ok elem, OutOfBounds]*
             debug_assert_eq!(args.len(), 2);
 
             let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -7258,7 +7258,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             )
         }
         NumToIntChecked => {
-            // return_layout : Result N [ OutOfBounds ]* ~ { result: N, out_of_bounds: bool }
+            // return_layout : Result N [OutOfBounds]* ~ { result: N, out_of_bounds: bool }
 
             let target_int_width = match return_layout {
                 Layout::Struct { field_layouts, .. } if field_layouts.len() == 2 => {

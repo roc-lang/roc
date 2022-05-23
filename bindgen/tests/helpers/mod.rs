@@ -17,7 +17,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
                 exposes []
                 packages {}
                 imports []
-                provides [ main ]
+                provides [main]
 
         "#
     )

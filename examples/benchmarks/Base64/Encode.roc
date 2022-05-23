@@ -4,7 +4,7 @@ interface Base64.Encode
 
 InvalidChar : U8
 
-# State : [ None, One U8, Two U8, Three U8 ]
+# State : [None, One U8, Two U8, Three U8]
 toBytes : Str -> List U8
 toBytes = \str ->
     str

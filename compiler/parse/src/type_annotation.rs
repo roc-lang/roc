@@ -48,7 +48,7 @@ fn tag_union_type<'a>(
         )
         .parse(arena, state)?;
 
-        // This could be an open tag union, e.g. `[ Foo, Bar ]a`
+        // This could be an open tag union, e.g. `[Foo, Bar]a`
         let (_, ext, state) = optional(allocated(specialize_ref(
             ETypeTagUnion::Type,
             term(min_indent, stop_at_surface_has),
@@ -135,7 +135,7 @@ fn term<'a>(
                 loc!(parse_type_variable(stop_at_surface_has)),
                 fail_type_start(),
             ),
-            // Inline alias notation, e.g. [ Nil, Cons a (List a) ] as List a
+            // Inline alias notation, e.g. [Nil, Cons a (List a)] as List a
             one_of![
                 map!(
                     and!(
@@ -478,7 +478,7 @@ fn has_clause_chain<'a>(
     }
 }
 
-/// Parse a has-derived clause, e.g. `has [ Eq, Hash ]`.
+/// Parse a has-derived clause, e.g. `has [Eq, Hash]`.
 pub fn has_derived<'a>(min_indent: u32) -> impl Parser<'a, Loc<Derived<'a>>, EType<'a>> {
     skip_first!(
         // Parse "has"; we don't care about this keyword

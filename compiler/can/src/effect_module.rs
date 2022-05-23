@@ -78,7 +78,7 @@ pub(crate) fn build_effect_builtins(
         ));
     }
 
-    // Effect.loop : a, (a -> Effect [ Step a, Done b ]) -> Effect b
+    // Effect.loop : a, (a -> Effect [Step a, Done b]) -> Effect b
     if generated_functions.loop_ {
         let def = helper!(build_effect_loop);
         declarations.push(Declaration::DeclareRec(
@@ -708,7 +708,7 @@ fn build_effect_forever(
     //      thunk2 = Effect.forever effect
     //      thunk2 {}
     //
-    //  Effect.forever : [ C foreverInner { effect : T } ]
+    //  Effect.forever : [C foreverInner { effect : T }]
     //  Effect.forever = \effect ->
     //      C { effect }
     //

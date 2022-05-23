@@ -1216,7 +1216,7 @@ fn to_expr_report<'b>(
                     region,
                     Some(expr_region),
                     alloc.concat([
-                        alloc.string(format!("The {} argument to ", ith)),
+                        alloc.string(format!("The {ith} argument to ")),
                         this_function.clone(),
                         alloc.text(" is not what I expect:"),
                     ]),
@@ -1224,7 +1224,7 @@ fn to_expr_report<'b>(
                     alloc.concat([
                         alloc.text("But "),
                         this_function,
-                        alloc.string(format!(" needs the {} argument to be:", ith)),
+                        alloc.string(format!(" needs the {ith} argument to be:")),
                     ]),
                     None,
                 )
@@ -3281,7 +3281,7 @@ mod report_text {
             };
 
             let starts =
-                std::iter::once(alloc.reflow("[ ")).chain(std::iter::repeat(alloc.reflow(", ")));
+                std::iter::once(alloc.reflow("[")).chain(std::iter::repeat(alloc.reflow(", ")));
 
             let entries_doc = alloc.concat(
                 entries
@@ -3291,7 +3291,7 @@ mod report_text {
             );
 
             entries_doc
-                .append(alloc.reflow(" ]"))
+                .append(alloc.reflow("]"))
                 .append(ext_doc)
                 .append(alloc.text(" as "))
                 .append(rec_var)

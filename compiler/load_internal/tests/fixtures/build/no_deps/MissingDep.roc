@@ -1,8 +1,8 @@
 interface MissingDep
-    exposes [ unit ]
-    imports [ ThisFileIsMissing ]
+    exposes [unit]
+    imports [ThisFileIsMissing]
 
-Unit : [ Unit ]
+Unit : [Unit]
 
 unit : Unit
 unit = Unit

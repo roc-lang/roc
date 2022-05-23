@@ -268,7 +268,7 @@ fn from_list_result() {
             x : Result Str {}
             x = Ok "foo"
 
-            [ x ]
+            [x]
                 |> Set.fromList
                 |> Set.toList
                 |> List.len

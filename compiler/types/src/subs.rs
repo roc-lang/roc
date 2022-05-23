@@ -766,7 +766,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             write!(f, "}}<{:?}>", new_ext)
         }
         FlatType::TagUnion(tags, ext) => {
-            write!(f, "[ ")?;
+            write!(f, "[")?;
 
             let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
             for (name, slice) in it {
@@ -794,7 +794,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             )
         }
         FlatType::RecursiveTagUnion(rec, tags, ext) => {
-            write!(f, "[ ")?;
+            write!(f, "[")?;
 
             let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
             for (name, slice) in it {

@@ -1,6 +1,6 @@
 interface Primary
-    exposes [ blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay ]
-    imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Res ]
+    exposes [blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay]
+    imports [Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Res]
 
 blah2 = Dep2.two
 blah3 = bar

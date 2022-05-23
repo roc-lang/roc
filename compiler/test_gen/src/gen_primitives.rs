@@ -161,7 +161,7 @@ fn when_one_element_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : [ Pair (Int a) (Int a) ]
+            x : [Pair (Int a) (Int a)]
             x = Pair 0x2 0x3
 
             when x is
@@ -537,7 +537,7 @@ fn peano1() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-                Peano : [ S Peano, Z ]
+                Peano : [S Peano, Z]
 
                 three : Peano
                 three = S (S (S Z))
@@ -558,7 +558,7 @@ fn peano2() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-                Peano : [ S Peano, Z ]
+                Peano : [S Peano, Z]
 
                 three : Peano
                 three = S (S (S Z))
@@ -580,7 +580,7 @@ fn top_level_constant() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             float = 1.2315
 
@@ -600,7 +600,7 @@ fn top_level_destructure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             {a, b} = { a: 1, b: 2 }
 
@@ -620,9 +620,9 @@ fn linked_list_len_0() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            LinkedList a : [ Nil, Cons a (LinkedList a) ]
+            LinkedList a : [Nil, Cons a (LinkedList a)]
 
             len : LinkedList a -> Int *
             len = \list ->
@@ -648,9 +648,9 @@ fn linked_list_len_twice_0() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            LinkedList a : [ Nil, Cons a (LinkedList a) ]
+            LinkedList a : [Nil, Cons a (LinkedList a)]
 
             nil : LinkedList I64
             nil = Nil
@@ -676,9 +676,9 @@ fn linked_list_len_1() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            LinkedList a : [ Nil, Cons a (LinkedList a) ]
+            LinkedList a : [Nil, Cons a (LinkedList a)]
 
             one : LinkedList (Int *)
             one = Cons 1 Nil
@@ -704,9 +704,9 @@ fn linked_list_len_twice_1() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            LinkedList a : [ Nil, Cons a (LinkedList a) ]
+            LinkedList a : [Nil, Cons a (LinkedList a)]
 
             one : LinkedList (Int *)
             one = Cons 1 Nil
@@ -732,9 +732,9 @@ fn linked_list_len_3() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            LinkedList a : [ Nil, Cons a (LinkedList a) ]
+            LinkedList a : [Nil, Cons a (LinkedList a)]
 
             three : LinkedList (Int *)
             three = Cons 3 (Cons 2 (Cons 1 Nil))
@@ -761,9 +761,9 @@ fn linked_list_sum_num_a() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            LinkedList a : [ Nil, Cons a (LinkedList a) ]
+            LinkedList a : [Nil, Cons a (LinkedList a)]
 
             three : LinkedList (Int *)
             three = Cons 3 (Cons 2 (Cons 1 Nil))
@@ -790,9 +790,9 @@ fn linked_list_sum_int() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            LinkedList a : [ Nil, Cons a (LinkedList a) ]
+            LinkedList a : [Nil, Cons a (LinkedList a)]
 
             zero : LinkedList (Int *)
             zero = Nil
@@ -818,9 +818,9 @@ fn linked_list_map() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            LinkedList a : [ Nil, Cons a (LinkedList a) ]
+            LinkedList a : [Nil, Cons a (LinkedList a)]
 
             three : LinkedList (Int *)
             three = Cons 3 (Cons 2 (Cons 1 Nil))
@@ -852,7 +852,7 @@ fn when_nested_maybe() {
     assert_evals_to!(
         indoc!(
             r#"
-            Maybe a : [ Nothing, Just a ]
+            Maybe a : [Nothing, Just a]
 
             x : Maybe (Maybe (Int a))
             x = Just (Just 41)
@@ -869,7 +869,7 @@ fn when_nested_maybe() {
     assert_evals_to!(
         indoc!(
             r#"
-            Maybe a : [ Nothing, Just a ]
+            Maybe a : [Nothing, Just a]
 
             x : Maybe (Maybe (Int *))
             x = Just Nothing
@@ -887,7 +887,7 @@ fn when_nested_maybe() {
     assert_evals_to!(
         indoc!(
             r#"
-            Maybe a : [ Nothing, Just a ]
+            Maybe a : [Nothing, Just a]
 
             x : Maybe (Maybe (Int *))
             x = Nothing
@@ -909,7 +909,7 @@ fn when_peano() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-                Peano : [ S Peano, Z ]
+                Peano : [S Peano, Z]
 
                 three : Peano
                 three = S (S (S Z))
@@ -927,7 +927,7 @@ fn when_peano() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-                Peano : [ S Peano, Z ]
+                Peano : [S Peano, Z]
 
                 three : Peano
                 three = S Z
@@ -945,7 +945,7 @@ fn when_peano() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-                Peano : [ S Peano, Z ]
+                Peano : [S Peano, Z]
 
                 three : Peano
                 three = Z
@@ -1028,7 +1028,7 @@ fn simple_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             x = 42
 
@@ -1050,7 +1050,7 @@ fn nested_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             foo = \{} ->
                 x = 41
@@ -1074,14 +1074,14 @@ fn closure_in_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             foo = \{} ->
                 x = 41
 
                 f = \{} -> x
 
-                [ f ]
+                [f]
 
             main =
                 items = foo {}
@@ -1102,7 +1102,7 @@ fn specialize_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             foo = \{} ->
                 x = 41
@@ -1111,7 +1111,7 @@ fn specialize_closure() {
                 f = \{} -> x
                 g = \{} -> x + Num.intCast (List.len y)
 
-                [ f, g ]
+                [f, g]
 
             apply = \f -> f {}
 
@@ -1132,7 +1132,7 @@ fn io_poc_effect() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             Effect a := {} -> a
 
@@ -1163,7 +1163,7 @@ fn io_poc_desugared() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             # succeed : a -> ({} -> a)
             succeed = \x -> \_ -> x
@@ -1191,7 +1191,7 @@ fn return_wrapped_function_pointer() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             Effect a := {} -> a
 
@@ -1214,7 +1214,7 @@ fn return_wrapped_function_pointer_b() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
 
             foo : { x: (I64 -> Str) }
@@ -1236,7 +1236,7 @@ fn return_wrapped_closure() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             Effect a := {} -> a
 
@@ -1262,9 +1262,9 @@ fn linked_list_is_singleton() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             empty : ConsList a
             empty = Nil
@@ -1297,9 +1297,9 @@ fn linked_list_is_empty_1() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             empty : ConsList a
             empty = Nil
@@ -1332,9 +1332,9 @@ fn linked_list_is_empty_2() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             isEmpty : ConsList a -> Bool
             isEmpty = \list ->
@@ -1365,9 +1365,9 @@ fn linked_list_singleton() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             main : ConsList I64
             main = Cons 0x1 Nil
@@ -1385,7 +1385,7 @@ fn recursive_function_with_rigid() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             State a : { count : I64, x : a }
 
@@ -1412,11 +1412,11 @@ fn rbtree_insert() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            NodeColor : [ Red, Black ]
+            NodeColor : [Red, Black]
 
-            RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
+            RedBlackTree k v : [Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty]
 
             Key k : Num k
 
@@ -1500,9 +1500,9 @@ fn rbtree_balance_3() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            RedBlackTree k : [ Node k (RedBlackTree k) (RedBlackTree k), Empty ]
+            RedBlackTree k : [Node k (RedBlackTree k) (RedBlackTree k), Empty]
 
             balance : k, RedBlackTree k -> RedBlackTree k
             balance = \key, left ->
@@ -1527,11 +1527,11 @@ fn rbtree_layout_issue() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            NodeColor : [ Red, Black ]
+            NodeColor : [Red, Black]
 
-            RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
+            RedBlackTree k v : [Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty]
 
             # balance : NodeColor, k, v, RedBlackTree k v -> RedBlackTree k v
             balance = \color, key, value, right ->
@@ -1574,11 +1574,11 @@ fn rbtree_balance_mono_problem() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            NodeColor : [ Red, Black ]
+            NodeColor : [Red, Black]
 
-            RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
+            RedBlackTree k v : [Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty]
 
             # balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
             balance = \color, key, value, left, right ->
@@ -1621,11 +1621,11 @@ fn rbtree_balance_full() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            NodeColor : [ Red, Black ]
+            NodeColor : [Red, Black]
 
-            RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
+            RedBlackTree k v : [Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty]
 
             balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
             balance = \color, key, value, left, right ->
@@ -1674,9 +1674,9 @@ fn nested_pattern_match_two_ways() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             balance : ConsList (Int *) -> Int *
             balance = \right ->
@@ -1700,9 +1700,9 @@ fn nested_pattern_match_two_ways() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             balance : ConsList (Int *) -> Int *
             balance = \right ->
@@ -1729,9 +1729,9 @@ fn linked_list_guarded_double_pattern_match() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             balance : ConsList (Int *) -> Int *
             balance = \right ->
@@ -1759,9 +1759,9 @@ fn linked_list_double_pattern_match() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             foo : ConsList (Int a) -> Int a
             foo = \list ->
@@ -1785,9 +1785,9 @@ fn binary_tree_double_pattern_match() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            BTree : [ Node BTree BTree, Leaf I64 ]
+            BTree : [Node BTree BTree, Leaf I64]
 
             foo : BTree -> I64
             foo = \btree ->
@@ -1813,7 +1813,7 @@ fn unified_empty_closure_bool() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             foo = \{} ->
                 when A is
@@ -1838,7 +1838,7 @@ fn unified_empty_closure_byte() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             foo = \{} ->
                 when A is
@@ -1862,7 +1862,7 @@ fn task_always_twice() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             Effect a := {} -> a
 
@@ -1907,7 +1907,7 @@ fn wildcard_rigid() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             Effect a := {} -> a
 
@@ -1937,7 +1937,7 @@ fn alias_of_alias_with_type_arguments() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             Effect a := a
 
@@ -1967,7 +1967,7 @@ fn todo_bad_error_message() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             Effect a := {} -> a
 
@@ -2028,7 +2028,7 @@ fn hof_conditional() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[should_panic(
-    expected = "Roc failed with message: \"Shadowing { original_region: @57-58, shadow: @90-91 Ident"
+    expected = "Roc failed with message: \"Shadowing { original_region: @55-56, shadow: @88-89 Ident"
 )]
 fn pattern_shadowing() {
     assert_evals_to!(
@@ -2070,14 +2070,14 @@ fn fingertree_basic() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            Some a : [ One a, Two a a, Three a a a ]
+            Some a : [One a, Two a a, Three a a a]
 
-            Tuple a : [ Pair a a, Triple a a a ]
+            Tuple a : [Pair a a, Triple a a a]
 
             # a FingerTree implementation
-            Seq a : [ Nil, Unit a, More (Some a) (Seq (Tuple a)) (Some a) ]
+            Seq a : [Nil, Unit a, More (Some a) (Seq (Tuple a)) (Some a)]
 
             # cons : a, Seq a -> Seq a
             cons = \x, s ->
@@ -2113,7 +2113,7 @@ fn case_or_pattern() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : [ Red, Green, Blue ]
+            x : [Red, Green, Blue]
             x = Red
 
             when x is
@@ -2133,9 +2133,9 @@ fn rosetree_basic() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            Tree a : [ Tree a (List (Tree a)) ]
+            Tree a : [Tree a (List (Tree a))]
 
             singleton : a -> Tree a
             singleton = \x -> Tree x []
@@ -2161,9 +2161,9 @@ fn case_jump() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             x : ConsList I64
             x = Nil
@@ -2187,9 +2187,9 @@ fn nullable_eval_cfold() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            Expr : [ Var, Val I64, Add Expr Expr, Mul Expr Expr ]
+            Expr : [Var, Val I64, Add Expr Expr, Mul Expr Expr]
 
             mkExpr : I64, I64 -> Expr
             mkExpr = \n , v ->
@@ -2224,9 +2224,9 @@ fn nested_switch() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            Expr : [ ZAdd Expr Expr, Val I64, Var I64 ]
+            Expr : [ZAdd Expr Expr, Val I64, Var I64]
 
             eval : Expr -> I64
             eval = \e ->
@@ -2267,9 +2267,9 @@ fn count_deriv_x() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            Expr : [ Ln Expr, Pow Expr Expr, Var Str ]
+            Expr : [Ln Expr, Pow Expr Expr, Var Str]
 
             count : Expr -> I64
             count = \expr ->
@@ -2294,9 +2294,9 @@ fn deriv_pow() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            Expr : [ Ln Expr, Pow Expr Expr, Var Str, Val I64 ]
+            Expr : [Ln Expr, Pow Expr Expr, Var Str, Val I64]
 
             count : Expr -> I64
             count = \expr ->
@@ -2331,12 +2331,12 @@ fn multiple_increment() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
 
-            Color : [ Red, Black ]
+            Color : [Red, Black]
 
-            Tree a b : [ Leaf, Node Color (Tree a b) a b (Tree a b) ]
+            Tree a b : [Leaf, Node Color (Tree a b) a b (Tree a b)]
 
             Map : Tree I64 Bool
 
@@ -2364,9 +2364,9 @@ fn switch_fuse_rc_non_exhaustive() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            Foo : [ A I64 Foo, B I64 Foo, C I64 Foo, Empty ]
+            Foo : [A I64 Foo, B I64 Foo, C I64 Foo, Empty]
 
             sum : Foo, I64 -> I64
             sum = \foo, accum ->
@@ -2394,9 +2394,9 @@ fn switch_fuse_rc_exhaustive() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            Foo : [ A I64 Foo, B I64 Foo, C I64 Foo, Empty ]
+            Foo : [A I64 Foo, B I64 Foo, C I64 Foo, Empty]
 
             sum : Foo, I64 -> I64
             sum = \foo, accum ->
@@ -2423,7 +2423,7 @@ fn build_then_apply_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main : Str
             main =
@@ -2443,7 +2443,7 @@ fn expanded_result() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             a : Result I64 Str
             a = Ok 4
@@ -2475,7 +2475,7 @@ fn backpassing_result() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             a : Result I64 Str
             a = Ok 1
@@ -2504,7 +2504,7 @@ fn backpassing_result() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = "Shadowing { original_region: @57-58, shadow: @74-75 Ident")]
+#[should_panic(expected = "Shadowing { original_region: @55-56, shadow: @72-73 Ident")]
 fn function_malformed_pattern() {
     assert_evals_to!(
         indoc!(
@@ -2562,7 +2562,7 @@ fn increment_or_double_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
 
                 apply : (a -> a), a -> a
@@ -2600,7 +2600,7 @@ fn module_thunk_is_function() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 main = helper "foo" "bar"
                 helper = Str.concat
@@ -2618,7 +2618,7 @@ fn hit_unresolved_type_variable() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 main : Str
                 main =
@@ -2641,7 +2641,7 @@ fn pattern_match_empty_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 main : I64
                 main =
@@ -2661,9 +2661,9 @@ fn pattern_match_unit_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                unit : [ Unit ]
+                unit : [Unit]
                 unit = Unit
 
                 main : I64
@@ -2687,13 +2687,13 @@ fn mirror_llvm_alignment_padding() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 main : Str
                 main =
                     p1 = {name : "test1", test: 1 == 1 }
 
-                    List.map [p1, p1 ] (\{ test } -> if test  then "pass" else "fail")
+                    List.map [p1, p1] (\{ test } -> if test  then "pass" else "fail")
                        |> Str.joinWith "\n"
 
             "#
@@ -2709,7 +2709,7 @@ fn lambda_set_bool() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 p1 = (\u -> u == 97)
                 p2 = (\u -> u == 98)
@@ -2734,7 +2734,7 @@ fn lambda_set_byte() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 p1 = (\u -> u == 97)
                 p2 = (\u -> u == 98)
@@ -2760,12 +2760,12 @@ fn lambda_set_struct_byte() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
 
                 main : I64
                 main =
-                    r : [ Red, Green, Blue ]
+                    r : [Red, Green, Blue]
                     r = Red
 
                     p1 = (\u -> r == u)
@@ -2788,15 +2788,15 @@ fn lambda_set_enum_byte_byte() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
 
                 main : I64
                 main =
-                    r : [ Red, Green, Blue ]
+                    r : [Red, Green, Blue]
                     r = Red
 
-                    g : [ Red, Green, Blue ]
+                    g : [Red, Green, Blue]
                     g = Green
 
                     p1 = (\u -> r == u)
@@ -2820,14 +2820,14 @@ fn list_walk_until() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
 
             satisfyA : {} -> List {}
             satisfyA = \_ -> []
 
             oneOfResult =
-                List.walkUntil [ satisfyA ] [] \_, _ -> Stop []
+                List.walkUntil [satisfyA] [] \_, _ -> Stop []
 
             main =
                 when oneOfResult is
@@ -2846,7 +2846,7 @@ fn int_literal_not_specialized_with_annotation() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main =
                 satisfy : (U8 -> Str) -> Str
@@ -2874,7 +2874,7 @@ fn int_literal_not_specialized_no_annotation() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main =
                 satisfy : (U8 -> Str) -> Str
@@ -2901,7 +2901,7 @@ fn unresolved_tvar_when_capture_is_unused() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 main : I64
                 main =
@@ -2928,7 +2928,7 @@ fn value_not_exposed_hits_panic() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 main : I64
                 main =
@@ -2947,7 +2947,7 @@ fn mix_function_and_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 # foo does not capture any variables
                 # but through unification will get a lambda set that does store information
@@ -2973,7 +2973,7 @@ fn mix_function_and_closure_level_of_indirection() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 foo = \x -> x
 
@@ -3001,7 +3001,7 @@ fn do_pass_bool_byte_closure_layout() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             ## PARSER
 
@@ -3016,7 +3016,7 @@ fn do_pass_bool_byte_closure_layout() {
             any = \inp ->
                when List.first inp is
                  Ok u -> [Pair u (List.drop inp 1)]
-                 _ -> [ ]
+                 _ -> []
 
 
 
@@ -3027,7 +3027,7 @@ fn do_pass_bool_byte_closure_layout() {
                 \input ->
                     walker = \accum, (Pair u rest) ->
                         if predicate u then
-                            Stop [ Pair u rest ]
+                            Stop [Pair u rest]
 
                         else
                             Stop accum
@@ -3074,7 +3074,7 @@ fn nested_rigid_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 foo : List a -> List a
                 foo = \list ->
@@ -3099,7 +3099,7 @@ fn nested_rigid_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 Identity a := a
 
@@ -3126,11 +3126,11 @@ fn nested_rigid_tag_union() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                foo : [ Identity a ] -> [ Identity a ]
+                foo : [Identity a] -> [Identity a]
                 foo = \list ->
-                    p2 : [ Identity a ]
+                    p2 : [Identity a]
                     p2 = list
 
                     p2
@@ -3153,15 +3153,15 @@ fn call_that_needs_closure_parameter() {
     assert_evals_to!(
         indoc!(
             r#"
-            Step state a : [ Loop state, Done a ]
+            Step state a : [Loop state, Done a]
 
-            manyAux : List a -> [ Pair (Step (List a) (List a))]
+            manyAux : List a -> [Pair (Step (List a) (List a))]
             manyAux = \list ->
                     p2 = \_ -> Pair (Done list)
 
                     p2 "foo"
 
-            manyAuxTest =  (manyAux [ ]) == Pair (Loop [97])
+            manyAuxTest =  (manyAux []) == Pair (Loop [97])
 
             runTest = \t -> if t then "PASS" else "FAIL"
 
@@ -3179,7 +3179,7 @@ fn alias_defined_out_of_order() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main : Foo
             main = "foo"
@@ -3200,7 +3200,7 @@ fn recursively_build_effect() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             greeting =
                 hi = "Hello"
@@ -3247,7 +3247,7 @@ fn polymophic_expression_captured_inside_closure() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             asU8 : U8 -> U8
             asU8 = \_ -> 30
@@ -3334,7 +3334,7 @@ fn box_and_unbox_tag_union() {
     assert_evals_to!(
         indoc!(
             r#"
-            v : [ A U8, B U8 ] # usually stack allocated
+            v : [A U8, B U8] # usually stack allocated
             v = B 27u8
 
             Box.unbox (Box.box v)
@@ -3351,7 +3351,7 @@ fn closure_called_in_its_defining_scope() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main : Str
             main =
@@ -3376,7 +3376,7 @@ fn issue_2894() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main : U32
             main =
@@ -3461,10 +3461,10 @@ fn list_map2_conslist() {
     assert_evals_to!(
         indoc!(
             r#"
-            ConsList a : [ Nil, Cons a (ConsList a) ]
+            ConsList a : [Nil, Cons a (ConsList a)]
 
             x : List (ConsList Str)
-            x = List.map2 [ ] [ Nil ] Cons
+            x = List.map2 [] [Nil] Cons
 
             when List.first x is
                 _ -> ""

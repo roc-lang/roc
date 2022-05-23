@@ -3126,7 +3126,7 @@ fn send_header<'a>(
 
         // For each of our imports, add an entry to deps_by_name
         //
-        // e.g. for `imports [ pf.Foo.{ bar } ]`, add `Foo` to deps_by_name
+        // e.g. for `imports [pf.Foo.{ bar }]`, add `Foo` to deps_by_name
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
@@ -3175,7 +3175,7 @@ fn send_header<'a>(
             // created an IdentId for this, when it was imported exposed
             // in a dependent module.
             //
-            // For example, if module A has [ B.{ foo } ], then
+            // For example, if module A has [B.{ foo }], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
             let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
@@ -3340,7 +3340,7 @@ fn send_header_two<'a>(
 
         // For each of our imports, add an entry to deps_by_name
         //
-        // e.g. for `imports [ pf.Foo.{ bar } ]`, add `Foo` to deps_by_name
+        // e.g. for `imports [pf.Foo.{ bar }]`, add `Foo` to deps_by_name
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
@@ -3420,7 +3420,7 @@ fn send_header_two<'a>(
             // created an IdentId for this, when it was imported exposed
             // in a dependent module.
             //
-            // For example, if module A has [ B.{ foo } ], then
+            // For example, if module A has [B.{ foo }], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
             let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
@@ -4720,8 +4720,8 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                                 alloc.concat([
                                     alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
                                     alloc.reflow(r"but won't output any executable."),
-                                ])
-                            ]);
+                               ])
+                           ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),
@@ -4736,8 +4736,8 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                                 alloc.concat([
                                     alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
                                     alloc.reflow(r"but won't output any executable."),
-                                ])
-                            ]);
+                               ])
+                           ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),
@@ -4752,8 +4752,8 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                                 alloc.concat([
                                     alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
                                     alloc.reflow(r"but won't output any executable."),
-                                ])
-                            ]);
+                               ])
+                           ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),

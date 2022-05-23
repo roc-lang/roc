@@ -783,9 +783,9 @@ fn unify_structure(
 //
 // When might this not be the case? For example, in the code
 //
-//   Indirect : [ Indirect ConsList ]
+//   Indirect : [Indirect ConsList]
 //
-//   ConsList : [ Nil, Cons Indirect ]
+//   ConsList : [Nil, Cons Indirect]
 //
 //   l : ConsList
 //   l = Cons (Indirect (Cons (Indirect Nil)))
@@ -793,10 +793,10 @@ fn unify_structure(
 //   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
 //   l
 //
-// Suppose `ConsList` has the expanded type `[ Nil, Cons [ Indirect <rec> ] ] as <rec>`.
+// Suppose `ConsList` has the expanded type `[Nil, Cons [Indirect <rec>]] as <rec>`.
 // After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
 // the tentative total-type of the application annotated "region-a" would be
-// `<v> = [ Nil, Cons [ Indirect <v> ] ] as <rec>`. That is, the type of the recursive tag union
+// `<v> = [Nil, Cons [Indirect <v>]] as <rec>`. That is, the type of the recursive tag union
 // would be inlined at the site "v", rather than passing through the correct recursion variable
 // "rec" first.
 //
@@ -1323,13 +1323,13 @@ fn unify_tag_union_new(
         // This is inspired by
         //
         //
-        //      f : [ Red, Green ] -> Bool
+        //      f : [Red, Green] -> Bool
         //      f = \_ -> True
         //
         //      f Blue
         //
-        //  In this case, we want the mismatch to be between `[ Blue ]a` and `[ Red, Green ]`, but
-        //  without rolling back, the mismatch is between `[ Blue, Red, Green ]a` and `[ Red, Green ]`.
+        //  In this case, we want the mismatch to be between `[Blue]a` and `[Red, Green]`, but
+        //  without rolling back, the mismatch is between `[Blue, Red, Green]a` and `[Red, Green]`.
         //  TODO is this also required for the other cases?
 
         let snapshot = subs.snapshot();
@@ -1417,7 +1417,7 @@ fn unify_shared_tags_new(
             let expected = subs[expected_index];
             // NOTE the arguments of a tag can be recursive. For instance in the expression
             //
-            //  ConsList a : [ Nil, Cons a (ConsList a) ]
+            //  ConsList a : [Nil, Cons a (ConsList a)]
             //
             //  Cons 1 (Cons "foo" Nil)
             //
@@ -1430,11 +1430,11 @@ fn unify_shared_tags_new(
             // The strategy is to expand the recursive tag union as deeply as the non-recursive one
             // is.
             //
-            // > RecursiveTagUnion(rvar, [ Cons a rvar, Nil ], ext)
+            // > RecursiveTagUnion(rvar, [Cons a rvar, Nil], ext)
             //
             // Conceptually becomes
             //
-            // > RecursiveTagUnion(rvar, [ Cons a [ Cons a rvar, Nil ], Nil ], ext)
+            // > RecursiveTagUnion(rvar, [Cons a [Cons a rvar, Nil], Nil], ext)
             //
             // and so on until the whole non-recursive tag union can be unified with it.
             //

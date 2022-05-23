@@ -1015,7 +1015,7 @@ mod test_can {
     fn unused_def_regression() {
         let src = indoc!(
             r#"
-                Booly : [ Yes, No, Maybe ]
+                Booly : [Yes, No, Maybe]
 
                 y : Booly
                 y = No
@@ -1025,7 +1025,7 @@ mod test_can {
                 #
                 # https://github.com/rtfeldman/roc/issues/298
                 x : List Booly
-                x = [ y ]
+                x = [y]
 
                 x
             "#
@@ -1120,7 +1120,7 @@ mod test_can {
     //        vec![
     //            Problem::UnusedAssignment(loc(("unused".to_string()))),
     //            Problem::UnusedAssignment(loc(("func".to_string()))),
-    //        ]
+    //       ]
     //    );
 
     //    assert_eq!(
@@ -1469,7 +1469,7 @@ mod test_can {
     //            loc(unqualified("d")),
     //            loc(unqualified("a")),
     //            loc(unqualified("b")),
-    //        ])]
+    //       ])]
     //    );
     //}
 

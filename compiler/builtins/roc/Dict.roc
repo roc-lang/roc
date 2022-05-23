@@ -54,7 +54,7 @@ interface Dict
 ##         |> Dict.remove "Philadelphia"
 ##         |> Dict.keys
 ##         ==
-##         [ "London", "Amsterdam", "Shanghai", "Delhi" ]
+##         ["London", "Amsterdam", "Shanghai", "Delhi"]
 ##
 ## Notice that the order changed! Philadelphia has been not only removed from the list, but Amsterdam - the last
 ## entry we inserted - has been moved into the spot where Philadelphia was previously. This is exactly what

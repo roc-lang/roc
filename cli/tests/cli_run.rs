@@ -958,8 +958,8 @@ mod cli_run {
 
                 Nothing from Symbol is used in this module.
 
-                3│      imports [ Symbol.{ Ident } ]
-                                  ^^^^^^^^^^^^^^^^
+                3│      imports [Symbol.{ Ident }]
+                                 ^^^^^^^^^^^^^^^^
 
                 Since Symbol isn't used, you don't need to import it.
 
@@ -981,8 +981,8 @@ mod cli_run {
 
                 I don't know how to generate the foobar function.
 
-                4│      generates Effect with [ after, map, always, foobar ]
-                                                                    ^^^^^^
+                4│      generates Effect with [after, map, always, foobar]
+                                                                   ^^^^^^
 
                 Only specific functions like `after` and `map` can be generated.Learn
                 more about hosted modules at TODO.

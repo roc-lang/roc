@@ -202,7 +202,7 @@ pub enum Expr {
         // definition, which we then use during constraint generation. For example
         // suppose we have
         //
-        //   Id n := [ Id U64 n ]
+        //   Id n := [Id U64 n]
         //   @Id "sasha"
         //
         // Then `opaque` is "Id", `argument` is "sasha", but this is not enough for us to
@@ -210,7 +210,7 @@ pub enum Expr {
         // the variable "n".
         // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
         // for the expression from the opaque definition. `type_arguments` is something like
-        // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
+        // [(n, fresh1)], and `specialized_def_type` becomes "[Id U64 fresh1]".
         specialized_def_type: Box<Type>,
         type_arguments: Vec<OptAbleVar>,
         lambda_set_variables: Vec<LambdaSet>,

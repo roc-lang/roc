@@ -22,7 +22,7 @@ Here's what the fields mean:
 
 ## Nonempty list
 
-Now let's say we define a `List Str` with two elements in it, like so: `[ "foo", "bar" ]`.
+Now let's say we define a `List Str` with two elements in it, like so: `["foo", "bar"]`.
 
 First we'd have the `struct` above, with both `length` and `capacity` set to 2. Then, we'd have some memory allocated on the heap, and `pointer` would store that memory's address.
 
@@ -49,7 +49,7 @@ This is memory-inefficient, but it's the price we pay for having all the 16B str
 
 Let's go back to the refcount - short for "reference count."
 
-The refcount is a `usize` integer which counts how many times this `List` has been shared. For example, if we named this list `myList` and then wrote `[ myList, myList, myList ]` then we'd increment that refcount 3 times because `myList` is now being shared three more times.
+The refcount is a `usize` integer which counts how many times this `List` has been shared. For example, if we named this list `myList` and then wrote `[myList, myList, myList]` then we'd increment that refcount 3 times because `myList` is now being shared three more times.
 
 If we were to later call `List.pop` on that list, and the result was an in-place mutation that removed one of the `myList` entries, we'd decrement the refcount. If we did that again and again until the refcount got all the way down to 0, meaning nothing is using it anymore, then we'd deallocate these 48B of heap memory because nobody is using them anymore.
 
@@ -94,7 +94,7 @@ When you have a way to anticipate that a list will want to grow incrementally to
 
 Some lists may end up beginning with excess capacity due to memory alignment requirements. Since the refcount is `usize`, all lists need a minimum of that alignment. For example, on a 64-bit system, a `List Bool` has an alignment of 8B even though bools can fit in 1B.
 
-This means the list `[ True, True, False ]` would have a memory layout like this):
+This means the list `[True, True, False]` would have a memory layout like this):
 
 ```
 |--------------8B--------------|--1B--|--1B--|--1B--|-----5B-----|
