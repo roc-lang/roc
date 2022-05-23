@@ -465,6 +465,196 @@ pub(crate) fn canonicalize_defs<'a>(
         scope.register_debug_idents();
     }
 
+    let (aliases, symbols_introduced) = canonicalize_type_defs(
+        env,
+        &mut output,
+        var_store,
+        scope,
+        pending_type_defs,
+        pattern_type,
+    );
+
+    // Now that we have the scope completely assembled, and shadowing resolved,
+    // we're ready to canonicalize any body exprs.
+    canonicalize_value_defs(
+        env,
+        output,
+        var_store,
+        scope,
+        &value_defs,
+        pattern_type,
+        aliases,
+        symbols_introduced,
+    )
+}
+
+#[inline(always)]
+pub(crate) fn canonicalize_toplevel_defs<'a>(
+    env: &mut Env<'a>,
+    mut output: Output,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    loc_defs: &'a mut roc_parse::ast::Defs<'a>,
+    pattern_type: PatternType,
+) -> (CanDefs, Output, MutMap<Symbol, Region>) {
+    // Canonicalizing defs while detecting shadowing involves a multi-step process:
+    //
+    // 1. Go through each of the patterns.
+    // 2. For each identifier pattern, get the scope.symbol() for the ident. (That symbol will use the home module for its module.)
+    // 3. If that symbol is already in scope, then we're about to shadow it. Error!
+    // 4. Otherwise, add it to the scope immediately, so we can detect shadowing within the same
+    //    pattern (e.g. (Foo a a) = ...)
+    // 5. Add this canonicalized pattern and its corresponding ast::Expr to pending_exprs.
+    // 5. Once every pattern has been processed and added to scope, go back and canonicalize the exprs from
+    //    pending_exprs, this time building up a canonical def for each one.
+    //
+    // This way, whenever any expr is doing lookups, it knows everything that's in scope -
+    // even defs that appear after it in the source.
+    //
+    // This naturally handles recursion too, because a given expr which refers
+    // to itself won't be processed until after its def has been added to scope.
+
+    let mut pending_type_defs = Vec::with_capacity(loc_defs.type_defs.len());
+    let mut value_defs = Vec::with_capacity(loc_defs.value_defs.len());
+
+    for (index, either_index) in loc_defs.tags.iter().enumerate() {
+        match either_index.split() {
+            Ok(type_index) => {
+                let type_def = &loc_defs.type_defs[type_index.index()];
+                pending_type_defs.push(to_pending_type_def(env, type_def, scope, pattern_type));
+            }
+            Err(value_index) => {
+                let value_def = &loc_defs.value_defs[value_index.index()];
+                let region = loc_defs.regions[index];
+                value_defs.push(Loc::at(region, value_def));
+            }
+        }
+    }
+
+    if cfg!(debug_assertions) {
+        scope.register_debug_idents();
+    }
+
+    let (aliases, symbols_introduced) = canonicalize_type_defs(
+        env,
+        &mut output,
+        var_store,
+        scope,
+        pending_type_defs,
+        pattern_type,
+    );
+
+    // Now that we have the scope completely assembled, and shadowing resolved,
+    // we're ready to canonicalize any body exprs.
+    canonicalize_value_defs(
+        env,
+        output,
+        var_store,
+        scope,
+        &value_defs,
+        pattern_type,
+        aliases,
+        symbols_introduced,
+    )
+}
+
+fn canonicalize_value_defs<'a>(
+    env: &mut Env<'a>,
+    mut output: Output,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    value_defs: &[Loc<&'a roc_parse::ast::ValueDef<'a>>],
+    pattern_type: PatternType,
+    mut aliases: VecMap<Symbol, Alias>,
+    mut symbols_introduced: MutMap<Symbol, Region>,
+) -> (CanDefs, Output, MutMap<Symbol, Region>) {
+    // Canonicalize all the patterns, record shadowing problems, and store
+    // the ast::Expr values in pending_exprs for further canonicalization
+    // once we've finished assembling the entire scope.
+    let mut pending_value_defs = Vec::with_capacity(value_defs.len());
+    for loc_def in value_defs.into_iter() {
+        let mut new_output = Output::default();
+        match to_pending_value_def(
+            env,
+            var_store,
+            loc_def.value,
+            scope,
+            &mut new_output,
+            pattern_type,
+        ) {
+            None => { /* skip */ }
+            Some(pending_def) => {
+                // Record the ast::Expr for later. We'll do another pass through these
+                // once we have the entire scope assembled. If we were to canonicalize
+                // the exprs right now, they wouldn't have symbols in scope from defs
+                // that get would have gotten added later in the defs list!
+                pending_value_defs.push(pending_def);
+                output.union(new_output);
+            }
+        }
+    }
+
+    let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
+
+    for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
+        for (s, r) in BindingsFromPattern::new(pending_def.loc_pattern()) {
+            // store the top-level defs, used to ensure that closures won't capture them
+            if let PatternType::TopLevelDef = pattern_type {
+                env.top_level_symbols.insert(s);
+            }
+
+            symbols_introduced.insert(s, r);
+
+            debug_assert_eq!(env.home, s.module_id());
+            debug_assert!(
+                !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
+                "{:?}",
+                s
+            );
+
+            symbol_to_index.push((s.ident_id(), def_index as u32));
+        }
+    }
+
+    let capacity = pending_value_defs.len();
+    let mut defs = Vec::with_capacity(capacity);
+    let mut def_ordering = DefOrdering::from_symbol_to_id(env.home, symbol_to_index, capacity);
+
+    for (def_id, pending_def) in pending_value_defs.into_iter().enumerate() {
+        let temp_output = canonicalize_pending_value_def(
+            env,
+            pending_def,
+            output,
+            scope,
+            var_store,
+            pattern_type,
+            &mut aliases,
+        );
+
+        output = temp_output.output;
+
+        defs.push(Some(temp_output.def));
+
+        def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
+    }
+
+    let can_defs = CanDefs {
+        defs,
+        def_ordering,
+        aliases,
+    };
+
+    (can_defs, output, symbols_introduced)
+}
+
+fn canonicalize_type_defs<'a>(
+    env: &mut Env<'a>,
+    output: &mut Output,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    pending_type_defs: Vec<PendingTypeDef<'a>>,
+    pattern_type: PatternType,
+) -> (VecMap<Symbol, Alias>, MutMap<Symbol, Region>) {
     enum TypeDef<'a> {
         Alias(
             Loc<Symbol>,
@@ -547,7 +737,7 @@ pub(crate) fn canonicalize_defs<'a>(
             TypeDef::Alias(name, vars, ann) => {
                 let alias = canonicalize_alias(
                     env,
-                    &mut output,
+                    output,
                     var_store,
                     scope,
                     &pending_abilities_in_scope,
@@ -565,7 +755,7 @@ pub(crate) fn canonicalize_defs<'a>(
             TypeDef::Opaque(name, vars, ann, derived) => {
                 let alias_and_derives = canonicalize_opaque(
                     env,
-                    &mut output,
+                    output,
                     var_store,
                     scope,
                     &pending_abilities_in_scope,
@@ -590,7 +780,7 @@ pub(crate) fn canonicalize_defs<'a>(
 
     // Now that we know the alias dependency graph, we can try to insert recursion variables
     // where aliases are recursive tag unions, or detect illegal recursions.
-    let mut aliases = correct_mutual_recursive_type_alias(env, aliases, var_store);
+    let aliases = correct_mutual_recursive_type_alias(env, aliases, var_store);
 
     for (symbol, alias) in aliases.iter() {
         scope.add_alias(
@@ -605,7 +795,7 @@ pub(crate) fn canonicalize_defs<'a>(
     // Resolve all pending abilities, to add them to scope.
     resolve_abilities(
         env,
-        &mut output,
+        output,
         var_store,
         scope,
         abilities,
@@ -613,89 +803,7 @@ pub(crate) fn canonicalize_defs<'a>(
         pattern_type,
     );
 
-    // Now that we have the scope completely assembled, and shadowing resolved,
-    // we're ready to canonicalize any body exprs.
-
-    // Canonicalize all the patterns, record shadowing problems, and store
-    // the ast::Expr values in pending_exprs for further canonicalization
-    // once we've finished assembling the entire scope.
-    let mut pending_value_defs = Vec::with_capacity(value_defs.len());
-    for loc_def in value_defs.into_iter() {
-        let mut new_output = Output::default();
-        match to_pending_value_def(
-            env,
-            var_store,
-            loc_def.value,
-            scope,
-            &mut new_output,
-            pattern_type,
-        ) {
-            None => { /* skip */ }
-            Some(pending_def) => {
-                // Record the ast::Expr for later. We'll do another pass through these
-                // once we have the entire scope assembled. If we were to canonicalize
-                // the exprs right now, they wouldn't have symbols in scope from defs
-                // that get would have gotten added later in the defs list!
-                pending_value_defs.push(pending_def);
-                output.union(new_output);
-            }
-        }
-    }
-
-    let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
-
-    for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        for (s, r) in BindingsFromPattern::new(pending_def.loc_pattern()) {
-            // store the top-level defs, used to ensure that closures won't capture them
-            if let PatternType::TopLevelDef = pattern_type {
-                env.top_level_symbols.insert(s);
-            }
-
-            symbols_introduced.insert(s, r);
-
-            debug_assert_eq!(env.home, s.module_id());
-            debug_assert!(
-                !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
-                "{:?}",
-                s
-            );
-
-            symbol_to_index.push((s.ident_id(), def_index as u32));
-        }
-    }
-
-    let capacity = pending_value_defs.len();
-    let mut defs = Vec::with_capacity(capacity);
-    let mut def_ordering = DefOrdering::from_symbol_to_id(env.home, symbol_to_index, capacity);
-
-    for (def_id, pending_def) in pending_value_defs.into_iter().enumerate() {
-        let temp_output = canonicalize_pending_value_def(
-            env,
-            pending_def,
-            output,
-            scope,
-            var_store,
-            pattern_type,
-            &mut aliases,
-        );
-
-        output = temp_output.output;
-
-        defs.push(Some(temp_output.def));
-
-        def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
-    }
-
-    (
-        CanDefs {
-            defs,
-            def_ordering,
-            // The result needs a thread-safe `SendMap`
-            aliases,
-        },
-        output,
-        symbols_introduced,
-    )
+    (aliases, symbols_introduced)
 }
 
 /// Resolve all pending abilities, to add them to scope.

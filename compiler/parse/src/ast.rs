@@ -4,6 +4,7 @@ use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PlatformHeader};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
+use roc_collections::soa::{EitherIndex, Slice};
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
@@ -331,6 +332,17 @@ pub enum ValueDef<'a> {
     },
 
     Expect(&'a Loc<Expr<'a>>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Defs<'a> {
+    pub tags: std::vec::Vec<EitherIndex<TypeDef<'a>, ValueDef<'a>>>,
+    pub regions: std::vec::Vec<Region>,
+    pub space_before: std::vec::Vec<Slice<CommentOrNewline<'a>>>,
+    pub space_after: std::vec::Vec<Slice<CommentOrNewline<'a>>>,
+    pub spaces: std::vec::Vec<CommentOrNewline<'a>>,
+    pub type_defs: std::vec::Vec<TypeDef<'a>>,
+    pub value_defs: std::vec::Vec<ValueDef<'a>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -8,6 +8,16 @@ use crate::lang::{core::expr::expr_to_expr2::loc_expr_to_expr2, env::Env, scope:
 
 use super::def2::Def2;
 
+pub fn toplevel_defs_to_defs2<'a>(
+    _arena: &'a Bump,
+    _env: &mut Env<'a>,
+    _scope: &mut Scope,
+    _parsed_defs: roc_parse::ast::Defs<'a>,
+    _region: Region,
+) -> Vec<Def2> {
+    todo!()
+}
+
 pub fn defs_to_defs2<'a>(
     arena: &'a Bump,
     env: &mut Env<'a>,

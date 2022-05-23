@@ -135,6 +135,12 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
     }
 }
 
+pub fn desugar_toplevel_defs<'a>(arena: &'a Bump, defs: &mut roc_parse::ast::Defs<'a>) {
+    for value_def in defs.value_defs.iter_mut() {
+        *value_def = desugar_value_def(arena, arena.alloc(*value_def));
+    }
+}
+
 /// Reorder the expression tree based on operator precedence and associativity rules,
 /// then replace the BinOp nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
 pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc<Expr<'a>> {
