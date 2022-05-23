@@ -3242,7 +3242,7 @@ mod report_text {
             };
 
             let starts =
-                std::iter::once(alloc.reflow("[ ")).chain(std::iter::repeat(alloc.reflow(", ")));
+                std::iter::once(alloc.reflow("[")).chain(std::iter::repeat(alloc.reflow(", ")));
 
             let entries_doc = alloc.concat(
                 entries
@@ -3251,7 +3251,7 @@ mod report_text {
                     .map(|(entry, start)| start.append(entry_to_doc(entry))),
             );
 
-            entries_doc.append(alloc.reflow(" ]")).append(ext_doc)
+            entries_doc.append(alloc.reflow("]")).append(ext_doc)
         }
     }
 
