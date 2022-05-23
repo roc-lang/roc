@@ -1,33 +1,96 @@
+use crate::types::{RocTagUnion, RocType, TypeId, Types};
 use roc_mono::layout::UnionLayout;
 use roc_target::{Architecture, TargetInfo};
-
-use crate::types::{RocTagUnion, RocType, TypeId, Types};
+use std::collections::hash_map::HashMap;
 use std::{
     convert::TryInto,
     fmt::{self, Write},
 };
+use strum::IntoEnumIterator;
 
 pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
 pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 const INDENT: &str = "    ";
 
-pub fn write_types(architecture: Architecture, types: &Types, buf: &mut String) -> fmt::Result {
-    for id in types.sorted_ids() {
-        write_type(architecture, id, types, buf)?;
-    }
+type Impls = HashMap<Impl, HashMap<String, Vec<Architecture>>>;
+type Impl = Option<String>;
 
-    Ok(())
+/// Add the given declaration body, along with the architecture, to the Impls.
+/// This can optionally be within an `impl`, or if no `impl` is specified,
+/// then it's added at the top level.
+fn add_decl(impls: &mut Impls, opt_impl: Impl, architecture: Architecture, body: String) {
+    let decls = impls.entry(opt_impl).or_default();
+    let architectures = decls.entry(body).or_default();
+
+    architectures.push(architecture);
 }
 
-fn write_type(
-    architecture: Architecture,
-    id: TypeId,
-    types: &Types,
-    buf: &mut String,
-) -> fmt::Result {
+pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
+    let mut buf = String::new();
+
+    emit_help(types_by_architecture, &mut buf);
+
+    buf
+}
+
+fn emit_help(types_by_architecture: &[(Architecture, Types)], buf: &mut String) {
+    let mut impls: Impls = HashMap::default();
+
+    for (architecture, types) in types_by_architecture.into_iter() {
+        for id in types.sorted_ids() {
+            add_type(*architecture, id, types, &mut impls);
+        }
+    }
+
+    for (opt_impl, decls) in impls {
+        let has_impl;
+
+        if let Some(impl_str) = opt_impl {
+            has_impl = true;
+
+            buf.push_str(&impl_str);
+            buf.push_str(" {{");
+        } else {
+            has_impl = false;
+        }
+
+        for (decl, architectures) in decls {
+            // If we're inside an `impl` block, indent the cfg annotation
+            if has_impl {
+                buf.push_str(INDENT);
+            }
+
+            match architectures.len() {
+                1 => {
+                    let arch = arch_to_str(architectures.get(0).unwrap());
+
+                    buf.push_str(&format!("\n#[cfg(target_arch = \"{arch}\")]\n{decl}"));
+                }
+                _ => {
+                    // We should never have a decl recorded with 0 architectures!
+                    debug_assert_ne!(architectures.len(), 0);
+
+                    let alternatives = architectures
+                        .iter()
+                        .map(|arch| format!("{INDENT}target_arch = \"{}\"", arch_to_str(arch)))
+                        .collect::<Vec<_>>()
+                        .join(",\n");
+
+                    buf.push_str(&format!("\n#[cfg(any(\n{alternatives}\n))]\n{decl}"));
+                }
+            }
+        }
+
+        if has_impl {
+            buf.push_str("}\n");
+        }
+    }
+}
+
+fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut Impls) {
     match types.get(id) {
         RocType::Struct { name, fields } => {
-            write_struct(name, architecture, fields, id, types, buf)
+            add_struct(name, architecture, fields, id, types, impls)
         }
         RocType::TagUnion(tag_union) => {
             match tag_union {
@@ -35,27 +98,31 @@ fn write_type(
                     if tags.len() == 1 {
                         // An enumeration with one tag is a zero-sized unit type, so
                         // represent it as a zero-sized struct (e.g. "struct Foo()").
-                        write_derive(types.get(id), types, buf)?;
-                        writeln!(buf, "\nstruct {}();", type_name(id, types))
+                        let derive = derive_str(types.get(id), types);
+                        let struct_name = type_name(id, types);
+                        let body = format!("{derive}\nstruct {struct_name}();");
+
+                        add_decl(impls, None, architecture, body);
                     } else {
-                        write_enumeration(
+                        add_enumeration(
                             name,
                             architecture,
                             types.get(id),
                             tags.iter(),
                             types,
-                            buf,
+                            impls,
                         )
                     }
                 }
                 RocTagUnion::NonRecursive { tags, name } => {
+                    let todo_reminder = todo!();
                     // Empty tag unions can never come up at runtime,
                     // and so don't need declared types.
-                    if !tags.is_empty() {
-                        write_tag_union(name, architecture, id, tags, types, buf)
-                    } else {
-                        Ok(())
-                    }
+                    // if !tags.is_empty() {
+                    //     write_tag_union(name, architecture, id, tags, types, buf)
+                    // } else {
+                    //     Ok(())
+                    // }
                 }
                 RocTagUnion::Recursive { .. } => {
                     todo!();
@@ -68,16 +135,19 @@ fn write_type(
                     null_tag,
                     non_null_tag,
                     non_null_payload,
-                } => write_nullable_unwrapped(
-                    name,
-                    architecture,
-                    id,
-                    null_tag,
-                    non_null_tag,
-                    *non_null_payload,
-                    types,
-                    buf,
-                ),
+                } => {
+                    let todo_reminder = todo!();
+                    // write_nullable_unwrapped(
+                    //     name,
+                    //     architecture,
+                    //     id,
+                    //     null_tag,
+                    //     non_null_tag,
+                    //     *non_null_payload,
+                    //     types,
+                    //     buf,
+                    // )
+                }
                 RocTagUnion::NonNullableUnwrapped { .. } => {
                     todo!();
                 }
@@ -103,18 +173,20 @@ fn write_type(
         | RocType::RocDict(_, _)
         | RocType::RocSet(_)
         | RocType::RocList(_)
-        | RocType::RocBox(_) => Ok(()),
+        | RocType::RocBox(_) => {}
         RocType::TransparentWrapper { name, content } => {
-            write_derive(types.get(id), types, buf)?;
-            writeln!(
-                buf,
-                "#[repr(transparent)]\npub struct {name}({});",
+            let derive = derive_str(types.get(id), types);
+            let body = format!(
+                "{derive}\n#[repr(transparent)]\npub struct {name}({});",
                 type_name(*content, types)
-            )
+            );
+
+            add_decl(impls, None, architecture, body);
         }
     }
 }
 
+#[cfg(debug_assertions = "false")] // TODO REMOVE
 fn write_discriminant(
     name: &str,
     architecture: Architecture,
@@ -129,13 +201,13 @@ fn write_discriminant(
     //     Bar,
     //     Foo,
     // }
-    let discriminant_name = format!("tag_{name}");
+    let discriminant_name = format!("variant_{name}");
     let discriminant_type = RocType::TagUnion(RocTagUnion::Enumeration {
         name: discriminant_name.clone(),
         tags: tag_names.clone(),
     });
 
-    write_enumeration(
+    add_enumeration(
         &discriminant_name,
         architecture,
         &discriminant_type,
@@ -147,13 +219,14 @@ fn write_discriminant(
     Ok(discriminant_name)
 }
 
+#[cfg(debug_assertions = "false")] // TODO REMOVE
 fn write_tag_union(
     name: &str,
     architecture: Architecture,
     type_id: TypeId,
     tags: &[(String, Option<TypeId>)],
     types: &Types,
-    buf: &mut String,
+    impls: &mut Impls,
 ) -> fmt::Result {
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
     let discriminant_name = write_discriminant(name, architecture, tag_names, types, buf)?;
@@ -165,14 +238,8 @@ fn write_tag_union(
     let size = typ.size(types, target_info);
 
     {
-        // No deriving for unions; we have to add the impls ourselves!
-
-        writeln!(
-            buf,
-            r#"
-#[repr(C)]
-pub union {name} {{"#
-        )?;
+        // No #[derive(...)] for unions; we have to generate each impl ourselves!
+        let mut buf = format!("#[repr(C)]\npub union {name} {{");
 
         for (tag_name, opt_payload_id) in tags {
             // If there's no payload, we don't need a variant for it.
@@ -204,13 +271,15 @@ pub union {name} {{"#
         // (Do this even if theoretically shouldn't be necessary, since
         // there's no runtime cost and it more explicitly syncs the
         // union's size with what we think it should be.)
-        writeln!(buf, "    _size_with_discriminant: [u8; {size}],")?;
+        writeln!(buf, "{INDENT}_sizer: [u8; {size}],\n}}")?;
 
-        buf.write_str("}\n")?;
+        add_decl(impls, None, architecture, buf);
     }
 
     // The impl for the tag union
     {
+        let opt_impl = Some(format!("impl {name}"));
+
         // An old design, which ended up not working out, was that the tag union
         // was a struct containing two fields: one for the `union`, and another
         // for the discriminant.
@@ -224,28 +293,38 @@ pub union {name} {{"#
         // be 32B, and the discriminant will appear at offset 24 - right after the end of
         // the RocStr. The current design recognizes this and works with it, by representing
         // the entire structure as a union and manually setting the tag at the appropriate offset.
-        write!(
-            buf,
-            r#"
-impl {name} {{
-    pub fn tag(&self) -> {discriminant_name} {{
+        add_decl(
+            impls,
+            opt_impl,
+            architecture,
+            format!(
+                r#"
+    /// Returns which variant this tag union holds. Note that this never includes a payload!
+    pub fn variant(&self) -> {discriminant_name} {{
         unsafe {{
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
             core::mem::transmute::<u8, {discriminant_name}>(*bytes.as_ptr().add({discriminant_offset}))
         }}
-    }}
+    }}"#
+            ),
+        );
 
-    /// Internal helper
-    fn set_discriminant(&mut self, tag: {discriminant_name}) {{
+        add_decl(
+            impls,
+            opt_impl,
+            architecture,
+            format!(
+                r#"/// Internal helper
+    fn set_discriminant(&mut self, discriminant: {discriminant_name}) {{
         let discriminant_ptr: *mut {discriminant_name} = (self as *mut {name}).cast();
 
         unsafe {{
-            *(discriminant_ptr.add({discriminant_offset})) = tag;
+            *(discriminant_ptr.add({discriminant_offset})) = discriminant;
         }}
-    }}
-"#
-        )?;
+    }}"#
+            ),
+        );
 
         for (tag_name, opt_payload_id) in tags {
             // Add a convenience constructor function to the impl, e.g.
@@ -365,24 +444,18 @@ impl {name} {{
                 )?;
             }
         }
-
-        buf.write_str("}\n")?;
     }
 
     // The Drop impl for the tag union
     {
-        writeln!(
-            buf,
-            r#"
-impl Drop for {name} {{
-    fn drop(&mut self) {{"#
-        )?;
+        let opt_impl = Some(format!("impl Drop for {name}"));
+        let mut buf = "fn drop(&mut self) {".to_string();
 
         write_impl_tags(
             2,
             tags.iter(),
             &discriminant_name,
-            buf,
+            &mut buf,
             |tag_name, opt_payload_id| {
                 match opt_payload_id {
                     Some(payload_id) if types.get(payload_id).has_pointer(types) => {
@@ -674,107 +747,100 @@ fn write_impl_tags<
     buf: &mut String,
     to_branch_str: F,
 ) -> fmt::Result {
-    for _ in 0..indentations {
-        buf.write_str(INDENT)?;
-    }
+    write_indents(indentations, buf);
 
-    buf.write_str("match self.tag() {\n")?;
+    buf.push_str("match self.tag() {\n");
 
     for (tag_name, opt_payload_id) in tags {
         let branch_str = to_branch_str(tag_name, *opt_payload_id);
 
-        for _ in 0..(indentations + 1) {
-            buf.write_str(INDENT)?;
-        }
+        write_indents(indentations + 1, buf);
 
         writeln!(buf, "{discriminant_name}::{tag_name} => {branch_str}")?;
     }
 
-    for _ in 0..indentations {
-        buf.write_str(INDENT)?;
-    }
+    write_indents(indentations, buf);
 
-    buf.write_str("}\n")?;
+    buf.push_str("}\n");
 
     Ok(())
 }
 
-fn write_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + fmt::Display>(
+fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + fmt::Display>(
     name: &str,
     architecture: Architecture,
     typ: &RocType,
     tags: I,
     types: &Types,
-    buf: &mut String,
-) -> fmt::Result {
+    impls: &mut Impls,
+) {
     let tag_bytes: usize = UnionLayout::discriminant_size(tags.len())
         .stack_size()
         .try_into()
         .unwrap();
 
-    write_arch_cfg(architecture, 0, buf)?;
-    write_derive(typ, types, buf)?;
+    let derive = derive_str(typ, types);
+    let repr_bytes = tag_bytes * 8;
 
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
-    writeln!(buf, "#[repr(u{})]\npub enum {name} {{", tag_bytes * 8)?;
+    let mut buf = format!("{derive}\n#[repr(u{repr_bytes})]\npub enum {name} {{\n");
 
-    let mut debug_buf = String::new();
+    // Debug impls should never vary by architecture.
+    let mut debug_buf = format!(
+        r#"impl core::fmt::Debug for {name} {{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+        match self {{
+"#
+    );
 
     for (index, tag_name) in tags.enumerate() {
-        writeln!(buf, "{INDENT}{tag_name} = {index},")?;
+        buf.push_str(&format!("{INDENT}{tag_name} = {index},\n"));
+
+        write_indents(3, &mut debug_buf);
 
         debug_buf.push_str(&format!(
-            r#"{INDENT}{INDENT}{INDENT}Self::{tag_name} => f.write_str("{name}::{tag_name}"),
-"#
+            "Self::{tag_name} => f.write_str(\"{name}::{tag_name}\"),\n"
         ));
     }
 
-    writeln!(
-        buf,
-        r#"}}
+    buf.push_str(&format!(
+        "}}\n\n{debug_buf}{INDENT}{INDENT}}}\n{INDENT}}}\n}}"
+    ));
 
-impl core::fmt::Debug for {name} {{
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
-        match self {{
-{debug_buf}        }}
-    }}
-}}"#
-    )
+    add_decl(impls, None, architecture, buf);
 }
 
-fn write_struct(
+fn add_struct(
     name: &str,
     architecture: Architecture,
     fields: &[(String, TypeId)],
     struct_id: TypeId,
     types: &Types,
-    buf: &mut String,
-) -> fmt::Result {
+    impls: &mut Impls,
+) {
     match fields.len() {
         0 => {
             // An empty record is zero-sized and won't end up being passed to/from the host.
-            Ok(())
         }
         1 => {
             // Unwrap single-field records
-            write_type(architecture, fields.first().unwrap().1, types, buf)
+            add_type(architecture, fields.first().unwrap().1, types, impls)
         }
         _ => {
-            write_arch_cfg(architecture, 0, buf)?;
-            write_derive(types.get(struct_id), types, buf)?;
-
-            writeln!(buf, "#[repr(C)]\npub struct {name} {{")?;
+            let derive = derive_str(types.get(struct_id), types);
+            let mut buf = format!("{derive}\n#[repr(C)]\npub struct {name} {{\n");
 
             for (label, field_id) in fields {
-                writeln!(
-                    buf,
+                buf.push_str(&format!(
                     "{INDENT}pub {}: {},",
                     label.as_str(),
                     type_name(*field_id, types)
-                )?;
+                ));
             }
 
-            buf.write_str("}\n")
+            buf.push_str("}");
+
+            add_decl(impls, None, architecture, buf);
         }
     }
 }
@@ -816,24 +882,27 @@ fn type_name(id: TypeId, types: &Types) -> String {
     }
 }
 
-fn write_derive(typ: &RocType, types: &Types, buf: &mut String) -> fmt::Result {
-    buf.write_str("\n#[derive(Clone, ")?;
+fn derive_str(typ: &RocType, types: &Types) -> String {
+    let mut buf = "#[derive(Clone, ".to_string();
 
     if !typ.has_pointer(types) {
-        buf.write_str("Copy, ")?;
+        buf.push_str("Copy, ");
     }
 
     if !typ.has_enumeration(types) {
-        buf.write_str("Debug, Default, ")?;
+        buf.push_str("Debug, Default, ");
     }
 
     if !typ.has_float(types) {
-        buf.write_str("Eq, Ord, Hash, ")?;
+        buf.push_str("Eq, Ord, Hash, ");
     }
 
-    buf.write_str("PartialEq, PartialOrd)]\n")
+    buf.push_str("PartialEq, PartialOrd)]");
+
+    buf
 }
 
+#[cfg(debug_assertions = "false")] // TODO REMOVE
 fn write_nullable_unwrapped(
     name: &str,
     architecture: Architecture,
@@ -1009,7 +1078,7 @@ impl {name} {{
         )?;
     }
 
-    buf.write_str("}\n")?;
+    buf.push_str("}\n");
 
     // The Drop impl for the tag union
     {
@@ -1060,22 +1129,18 @@ impl core::fmt::Debug for {name} {{
     Ok(())
 }
 
-fn write_arch_cfg(
-    architecture: Architecture,
-    indentations: usize,
-    buf: &mut String,
-) -> fmt::Result {
-    let arch_cfg_str = match architecture {
+fn arch_to_str(architecture: &Architecture) -> &'static str {
+    match architecture {
         Architecture::X86_64 => "x86_64",
         Architecture::X86_32 => "x86",
         Architecture::Aarch64 => "aarch64",
         Architecture::Arm => "arm",
         Architecture::Wasm32 => "wasm32",
-    };
-
-    for _ in 0..indentations {
-        buf.write_str(INDENT)?;
     }
+}
 
-    write!(buf, "\n#[cfg(target_arch = \"{arch_cfg_str}\")]")
+fn write_indents(indentations: usize, buf: &mut String) {
+    for _ in 0..indentations {
+        buf.push_str(INDENT);
+    }
 }

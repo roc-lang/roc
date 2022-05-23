@@ -63,18 +63,9 @@ pub fn main() {
             match output_type {
                 OutputType::Rust => {
                     buf = std::str::from_utf8(bindgen_rs::HEADER).unwrap().to_string();
+                    let body = bindgen_rs::emit(&types_by_architecture);
 
-                    for (architecture, types) in types_by_architecture {
-                        if let Err(err) = bindgen_rs::write_types(architecture, &types, &mut buf) {
-                            eprintln!(
-                                "Unable to generate binding string {} - {:?}",
-                                output_path.display(),
-                                err
-                            );
-
-                            process::exit(1);
-                        }
-                    }
+                    buf.push_str(&body);
                 }
                 OutputType::C => todo!("TODO: Generate bindings for C"),
                 OutputType::Zig => todo!("TODO: Generate bindings for Zig"),

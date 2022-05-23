@@ -48,14 +48,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
     .1
     .clone();
 
-    // Reuse the `src` allocation since we're done with it.
-    let mut buf = src;
-    buf.clear();
-
-    bindgen_rs::write_types(target_arch, &types, &mut buf)
-        .expect("I/O error when writing bindgen string");
-
-    buf
+    bindgen_rs::emit(&[(target_arch, types)])
 }
 
 #[allow(dead_code)]
