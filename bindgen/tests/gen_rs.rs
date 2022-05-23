@@ -47,7 +47,7 @@ mod test_gen_rs {
             Inner : { a : U16, b : F32 }
 
             main : Outer
-            main = { x: { a: 5, b: 24 }, y: "foo", z: [ 1, 2 ] }
+            main = { x: { a: 5, b: 24 }, y: "foo", z: [1, 2] }
         "#
         );
 
@@ -99,7 +99,7 @@ mod test_gen_rs {
 
     #[test]
     fn nested_record_anonymous() {
-        let module = r#"main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [ 1u8, 2 ] }"#;
+        let module = r#"main = { x: { a: 5u16, b: 24f32 }, y: "foo", z: [1u8, 2] }"#;
 
         assert_eq!(
             generate_bindings(module)
@@ -130,7 +130,7 @@ mod test_gen_rs {
     fn tag_union_aliased() {
         let module = indoc!(
             r#"
-            NonRecursive : [ Foo Str, Bar U128, Blah I32, Baz ]
+            NonRecursive : [Foo Str, Bar U128, Blah I32, Baz]
 
             main : NonRecursive
             main = Foo "blah"
@@ -429,7 +429,7 @@ mod test_gen_rs {
     fn tag_union_enumeration() {
         let module = indoc!(
             r#"
-            Enumeration : [ Blah, Foo, Bar, ]
+            Enumeration : [Blah, Foo, Bar,]
 
             main : Enumeration
             main = Foo
@@ -468,7 +468,7 @@ mod test_gen_rs {
     fn single_tag_union_with_payloads() {
         let module = indoc!(
             r#"
-            UserId : [ Id U32 Str ]
+            UserId : [Id U32 Str]
 
             main : UserId
             main = Id 42 "blah"
@@ -496,7 +496,7 @@ mod test_gen_rs {
     fn single_tag_union_with_one_payload_field() {
         let module = indoc!(
             r#"
-            UserId : [ Id Str ]
+            UserId : [Id Str]
 
             main : UserId
             main = Id "blah"
@@ -521,7 +521,7 @@ mod test_gen_rs {
     fn cons_list_of_strings() {
         let module = indoc!(
             r#"
-            StrConsList : [ Nil, Cons Str StrConsList ]
+            StrConsList : [Nil, Cons Str StrConsList]
 
             main : StrConsList
             main = Cons "Hello, " (Cons "World!" Nil)
@@ -657,7 +657,7 @@ mod test_gen_rs {
     fn cons_list_of_ints() {
         let module = indoc!(
             r#"
-            IntConsList : [ Empty, Prepend U16 IntConsList ]
+            IntConsList : [Empty, Prepend U16 IntConsList]
 
             main : IntConsList
             main = Prepend 42 (Prepend 26 Empty)

@@ -287,7 +287,7 @@ fn add_tag_union(
 
         return match payload_vars.len() {
             0 => {
-                // This is a single-tag union with no payload, e.g. `[ Foo ]`
+                // This is a single-tag union with no payload, e.g. `[Foo]`
                 // so just generate an empty record
                 types.add(RocType::Struct {
                     name,
@@ -295,7 +295,7 @@ fn add_tag_union(
                 })
             }
             1 => {
-                // This is a single-tag union with 1 payload field, e.g.`[ Foo Str ]`.
+                // This is a single-tag union with 1 payload field, e.g.`[Foo Str]`.
                 // We'll just wrap that.
                 let var = *payload_vars.get(0).unwrap();
                 let content = add_type(env, var, types);
@@ -303,7 +303,7 @@ fn add_tag_union(
                 types.add(RocType::TransparentWrapper { name, content })
             }
             _ => {
-                // This is a single-tag union with multiple payload field, e.g.`[ Foo Str U32 ]`.
+                // This is a single-tag union with multiple payload field, e.g.`[Foo Str U32]`.
                 // Generate a record.
                 let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
                     let field_name = format!("f{}", index).into();
@@ -335,7 +335,7 @@ fn add_tag_union(
                 }
                 1 => {
                     // there's 1 payload item, so it doesn't need its own
-                    // struct - e.g. for `[ Foo Str, Bar Str ]` both of them
+                    // struct - e.g. for `[Foo Str, Bar Str]` both of them
                     // can have payloads of plain old Str, no struct wrapper needed.
                     let payload_var = payload_vars.get(0).unwrap();
                     let payload_id = add_type(env, *payload_var, types);
@@ -376,30 +376,30 @@ fn add_tag_union(
 
             match union_layout {
                 // A non-recursive tag union
-                // e.g. `Result ok err : [ Ok ok, Err err ]`
+                // e.g. `Result ok err : [Ok ok, Err err]`
                 NonRecursive(_) => RocType::TagUnion(RocTagUnion::NonRecursive { name, tags }),
                 // A recursive tag union (general case)
-                // e.g. `Expr : [ Sym Str, Add Expr Expr ]`
+                // e.g. `Expr : [Sym Str, Add Expr Expr]`
                 Recursive(_) => {
                     todo!()
                 }
                 // A recursive tag union with just one constructor
                 // Optimization: No need to store a tag ID (the payload is "unwrapped")
-                // e.g. `RoseTree a : [ Tree a (List (RoseTree a)) ]`
+                // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
                 NonNullableUnwrapped(_) => {
                     todo!()
                 }
                 // A recursive tag union that has an empty variant
                 // Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
                 // It has more than one other variant, so they need tag IDs (payloads are "wrapped")
-                // e.g. `FingerTree a : [ Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a) ]`
+                // e.g. `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`
                 // see also: https://youtu.be/ip92VMpf_-A?t=164
                 NullableWrapped { .. } => {
                     todo!()
                 }
                 // A recursive tag union with only two variants, where one is empty.
                 // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
-                // e.g. `ConsList a : [ Nil, Cons a (ConsList a) ]`
+                // e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
                 NullableUnwrapped { nullable_id, .. } => {
                     // NullableUnwrapped tag unions should always have exactly 2 tags.
                     debug_assert_eq!(tags.len(), 2);
