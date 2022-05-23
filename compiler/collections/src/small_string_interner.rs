@@ -165,35 +165,35 @@ impl SmallStringInterner {
 
     #[inline(always)]
     pub fn find_indices<'a>(&'a self, string: &'a str) -> impl Iterator<Item = usize> + 'a {
+        use std::slice::from_raw_parts;
+
         let target_length = string.len();
 
-        // there can be gaps in the parts of the string that we use (because of updates)
-        // hence we can't just sum the lengths we've seen so far to get the next offset
-        self.lengths
-            .iter()
-            .enumerate()
-            .filter_map(move |(index, length)| match length.kind() {
-                Kind::Generated(_) => None,
-                Kind::Empty => {
-                    if target_length == 0 {
-                        Some(index)
-                    } else {
-                        None
-                    }
-                }
-                Kind::Interned(length) => {
-                    if target_length == length {
-                        let offset = self.offsets[index];
-                        let slice = &self.buffer[offset as usize..][..length];
+        let lengths: &[i16] =
+            unsafe { from_raw_parts(self.lengths.as_ptr().cast(), self.lengths.len()) };
 
-                        if string.as_bytes() == slice {
-                            return Some(index);
-                        }
-                    }
+        let mut index = 0;
 
-                    None
+        std::iter::from_fn(move || {
+            while let Some(length_match) = find_i16_slice(
+                unsafe { from_raw_parts(lengths.as_ptr().add(index), lengths.len() - index) },
+                target_length as i16,
+            ) {
+                index += length_match;
+
+                let offset = self.offsets[index];
+                let slice = &self.buffer[offset as usize..][..target_length];
+
+                let result = index;
+                index += 1;
+
+                if string.as_bytes() == slice {
+                    return Some(result);
                 }
-            })
+            }
+
+            None
+        })
     }
 
     fn get(&self, index: usize) -> &str {
@@ -249,6 +249,74 @@ impl SmallStringInterner {
     }
 }
 
+#[allow(dead_code)]
+fn find_i16_slice(slice: &[i16], key: i16) -> Option<usize> {
+    #[cfg(target_arch = "x86_64")]
+    return find_i16_slice_x86_64(slice, key);
+
+    #[cfg(not(target_arch = "x86_64"))]
+    return find_i16_slice_fallback(slice, key);
+}
+
+#[cfg(target_arch = "x86_64")]
+fn find_i16_slice_x86_64(slice: &[i16], key: i16) -> Option<usize> {
+    use std::arch::x86_64::*;
+
+    let mut index = 0;
+    let length = slice.len();
+
+    if length >= 16 {
+        let keys = unsafe { _mm256_set1_epi16(key) };
+
+        let ptr = slice.as_ptr();
+        while index + 15 < length {
+            unsafe {
+                let haystack = _mm256_loadu_si256(ptr.add(index).cast());
+                let compared = _mm256_cmpeq_epi16(haystack, keys);
+
+                // printer_u16(compared);
+                // println!("{:032b}", _mm256_movemask_epi8(compared));
+
+                let mask = _mm256_movemask_epi8(compared);
+                let first_one = mask.trailing_zeros() >> 1;
+
+                if first_one != 16 {
+                    index += first_one as usize;
+                    return Some(index);
+                }
+
+                index += 16;
+            }
+        }
+    }
+
+    while index < length {
+        if slice[index] == key {
+            return Some(index);
+        }
+
+        index += 1;
+    }
+
+    None
+}
+
+#[allow(unused)]
+fn find_i16_slice_fallback(slice: &[i16], key: i16) -> Option<usize> {
+    let mut index = 0;
+    let length = slice.len();
+
+    while index < length {
+        if slice[index] == key {
+            return Some(index);
+        }
+
+        index += 1;
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod test {
     use super::SmallStringInterner;
@@ -262,5 +330,26 @@ mod test {
         assert!(interner.find_and_update("a", "ab").is_some());
         interner.insert("c");
         assert!(interner.find_and_update("c", "cd").is_some());
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn find_test_1() {
+        use super::find_i16_slice;
+
+        assert_eq!(
+            find_i16_slice(
+                &[50, 39, 28, 17, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                17
+            ),
+            Some(3)
+        );
+        assert_eq!(
+            find_i16_slice(
+                &[50, 39, 28, 17, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                50
+            ),
+            Some(0)
+        );
     }
 }
