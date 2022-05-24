@@ -507,7 +507,7 @@ pub struct ModuleHeader<'a> {
     pub module_name: ModuleNameEnum<'a>,
     module_path: PathBuf,
     is_root_module: bool,
-    exposed_ident_ids: IdentIds,
+    pub exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
     pub packages: MutMap<&'a str, PackageName<'a>>,
     pub imported_modules: MutMap<ModuleId, Region>,
@@ -515,7 +515,7 @@ pub struct ModuleHeader<'a> {
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parse_state: roc_parse::state::State<'a>,
-    header_for: HeaderFor<'a>,
+    pub header_for: HeaderFor<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     module_timing: ModuleTiming,
 }

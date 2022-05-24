@@ -138,38 +138,37 @@ pub fn header_to_markup<'a>(
             // ex: provides [ mainForHost ]
             let provides_node_id = header_mn(
                 "    provides ".to_owned(),
-                ast_node_id,
                 mark_node_pool,
-                mark_id_ast_id_map,
             );
         
             let provides_left_square_node_id = add_node(
                 new_left_square_mn(),
-                ast_node_id,
                 mark_node_pool,
-                mark_id_ast_id_map,
             );
         
+            let provides_strs =
+                header.exposed_ident_ids.ident_strs.map(|(_, ident_str)| ident_str).collect::<Vec<_>>();
+
             let mut provides_val_node_ids: Vec<MarkNodeId> = add_header_mn_list(
-                &app_header.provides,
-                ast_node_id,
+                provides_strs,
                 HighlightStyle::Provides,
                 mark_node_pool,
-                mark_id_ast_id_map,
             );
         
             let provides_right_square_node_id = add_node(
                 new_right_square_mn(),
-                ast_node_id,
                 mark_node_pool,
-                mark_id_ast_id_map,
             );
+
+            let provides_to = 
+                match header.header_for {
+                    HeaderFor::App { to_platform } => {format!("{}", to_platform)},
+                    other => { panic!("ModuleHeader.module_name indicates an App but the corresponding header_for was is an App, instead it is {:?}", other)}
+                };
         
             let provides_end_node_id = header_mn(
-                " to base".to_owned(),
-                ast_node_id,
+                format!(" to {}", provides_to),
                 mark_node_pool,
-                mark_id_ast_id_map,
             );
         
             let mut full_provides_children = vec![provides_node_id, provides_left_square_node_id];
@@ -186,27 +185,19 @@ pub fn header_to_markup<'a>(
         
             let full_app_node_id = add_node(
                 full_app_node,
-                ast_node_id,
                 mark_node_pool,
-                mark_id_ast_id_map,
             );
             let full_packages_node = add_node(
                 full_packages_node,
-                ast_node_id,
                 mark_node_pool,
-                mark_id_ast_id_map,
             );
             let full_import_node_id = add_node(
                 full_import_node,
-                ast_node_id,
                 mark_node_pool,
-                mark_id_ast_id_map,
             );
             let full_provides_node_id = add_node(
                 full_provides_node,
-                ast_node_id,
                 mark_node_pool,
-                mark_id_ast_id_map,
             );
         
             MarkupNode::Nested {
@@ -221,13 +212,11 @@ pub fn header_to_markup<'a>(
             };
         }
         _ => {}
-    }
+    };
 
     let header_mn_id = add_node(
         header_mark_node,
-        ast_node_id,
         mark_node_pool,
-        mark_id_ast_id_map,
     );
 
     set_parent_for_all(header_mn_id, mark_node_pool);

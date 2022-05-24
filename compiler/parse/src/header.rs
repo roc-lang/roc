@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::ast::{Collection, CommentOrNewline, Spaced, StrLiteral, TypeAnnotation};
 use crate::blankspace::space0_e;
 use crate::ident::{lowercase_ident, UppercaseIdent};
@@ -142,6 +144,15 @@ pub struct HostedHeader<'a> {
 pub enum To<'a> {
     ExistingPackage(&'a str),
     NewPackage(PackageName<'a>),
+}
+
+impl<'a> fmt::Display for To<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            To::ExistingPackage(pkg_str) => write!(f, "{}", pkg_str),
+            To::NewPackage(PackageName(pkg_str)) => write!(f, "{}", pkg_str),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
