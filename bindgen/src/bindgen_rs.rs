@@ -26,7 +26,7 @@ pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
     let mut buf = String::new();
     let mut impls: Impls = IndexMap::default();
 
-    for (architecture, types) in types_by_architecture.into_iter() {
+    for (architecture, types) in types_by_architecture.iter() {
         for id in types.sorted_ids() {
             add_type(*architecture, id, types, &mut impls);
         }
@@ -492,15 +492,14 @@ fn add_tag_union(
             format!("impl Eq for {name} {{}}\n\n")
         };
         let opt_impl = Some(format!("{opt_impl_prefix}impl PartialEq for {name}"));
-        let mut buf = format!(
-            r#"fn eq(&self, other: &Self) -> bool {{
-            if self.variant() != other.variant() {{
+        let mut buf = r#"fn eq(&self, other: &Self) -> bool {
+            if self.variant() != other.variant() {
                 return false;
-            }}
+            }
 
-            unsafe {{
+            unsafe {
 "#
-        );
+        .to_string();
 
         write_impl_tags(
             3,
@@ -531,16 +530,15 @@ fn add_tag_union(
     // The PartialOrd impl for the tag union
     {
         let opt_impl = Some(format!("impl PartialOrd for {name}"));
-        let mut buf = format!(
-            r#"fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {{
-            match self.variant().partial_cmp(&other.variant()) {{
-                Some(core::cmp::Ordering::Equal) => {{}}
+        let mut buf = r#"fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+            match self.variant().partial_cmp(&other.variant()) {
+                Some(core::cmp::Ordering::Equal) => {}
                 not_eq => return not_eq,
-            }}
+            }
 
-            unsafe {{
+            unsafe {
 "#
-        );
+        .to_string();
 
         write_impl_tags(
             3,
@@ -571,16 +569,15 @@ fn add_tag_union(
     // The Ord impl for the tag union
     {
         let opt_impl = Some(format!("impl Ord for {name}"));
-        let mut buf = format!(
-            r#"fn cmp(&self, other: &Self) -> core::cmp::Ordering {{
-            match self.variant().cmp(&other.variant()) {{
-                core::cmp::Ordering::Equal => {{}}
+        let mut buf = r#"fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+            match self.variant().cmp(&other.variant()) {
+                core::cmp::Ordering::Equal => {}
                 not_eq => return not_eq,
-            }}
+            }
 
-            unsafe {{
+            unsafe {
 "#
-        );
+        .to_string();
 
         write_impl_tags(
             3,
@@ -616,11 +613,10 @@ fn add_tag_union(
             format!("impl Copy for {name} {{}}\n\n")
         };
         let opt_impl = Some(format!("{opt_impl_prefix}impl Clone for {name}"));
-        let mut buf = format!(
-            r#"fn clone(&self) -> Self {{
-        let mut answer = unsafe {{
+        let mut buf = r#"fn clone(&self) -> Self {
+        let mut answer = unsafe {
 "#
-        );
+        .to_string();
 
         write_impl_tags(
             3,
@@ -646,15 +642,15 @@ fn add_tag_union(
             },
         );
 
-        buf.push_str(&format!(
+        buf.push_str(
             r#"
-        }};
+        };
 
         answer.set_discriminant(self.variant());
 
         answer
-    }}"#
-        ));
+    }"#,
+        );
 
         add_decl(impls, opt_impl, architecture, buf);
     }
@@ -662,7 +658,7 @@ fn add_tag_union(
     // The Hash impl for the tag union
     {
         let opt_impl = Some(format!("impl core::hash::Hash for {name}"));
-        let mut buf = format!(r#"fn hash<H: core::hash::Hasher>(&self, state: &mut H) {{"#);
+        let mut buf = r#"fn hash<H: core::hash::Hasher>(&self, state: &mut H) {"#.to_string();
 
         write_impl_tags(
             2,
