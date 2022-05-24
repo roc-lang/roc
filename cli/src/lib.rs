@@ -17,6 +17,8 @@ use target_lexicon::BinaryFormat;
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
 };
+#[cfg(not(target_os = "linux"))]
+use tempfile::TempDir;
 
 pub mod build;
 mod format;
@@ -616,7 +618,7 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
                 }
             }
             #[cfg(not(target_os = "linux"))]
-            ExecutableFile::OnDisk(_) => {
+            ExecutableFile::OnDisk(_, _) => {
                 if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
                     internal_error!(
                         "libc::execve({:?}, ..., ...) failed: {:?}",
@@ -631,12 +633,12 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     Ok(1)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum ExecutableFile {
     #[cfg(target_os = "linux")]
     MemFd(libc::c_int, PathBuf),
     #[cfg(not(target_os = "linux"))]
-    OnDisk(PathBuf),
+    OnDisk(TempDir, PathBuf),
 }
 
 impl ExecutableFile {
@@ -645,7 +647,7 @@ impl ExecutableFile {
             #[cfg(target_os = "linux")]
             ExecutableFile::MemFd(_, path_buf) => path_buf.as_ref(),
             #[cfg(not(target_os = "linux"))]
-            ExecutableFile::OnDisk(path_buf) => path_buf.as_ref(),
+            ExecutableFile::OnDisk(_, path_buf) => path_buf.as_ref(),
         }
     }
 }
@@ -684,9 +686,11 @@ fn roc_run_executable_file_path(
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
+    let temp_dir = tempfile::tempdir()?;
+
     // We have not found a way to use a virtual file on non-Linux OSes.
     // Hence we fall back to just writing the file to the file system, and using that file.
-    let app_path_buf = cwd.join("roc_app_binary");
+    let app_path_buf = temp_dir.path().join("roc_app_binary");
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
@@ -695,7 +699,11 @@ fn roc_run_executable_file_path(
 
     file.write_all(binary_bytes)?;
 
-    Ok(ExecutableFile::OnDisk(app_path_buf))
+    // We store the TempDir in this variant alongside the path to the executable,
+    // so that the TempDir doesn't get dropped until after we're done with the path.
+    // If we didn't do that, then the tempdir would potentially get deleted by the
+    // TempDir's Drop impl before the file had been executed.
+    Ok(ExecutableFile::OnDisk(temp_dir, app_path_buf))
 }
 
 fn roc_run_non_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
