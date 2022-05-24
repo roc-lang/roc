@@ -541,17 +541,13 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => {
-            if cfg!(target_family = "unix") {
-                roc_run_unix(arena, args, binary_bytes)
-            } else {
-                roc_run_non_unix(arena, args, binary_bytes)
-            }
-        }
+        _ => roc_run_native(arena, args, binary_bytes),
     }
 }
 
-fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+/// Run on the native OS (not on wasm)
+#[cfg(target_family = "unix")]
+fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: Bump,
     args: I,
     binary_bytes: &mut [u8],
@@ -696,7 +692,9 @@ fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<Exec
     Ok(ExecutableFile::OnDisk(temp_dir, app_path_buf))
 }
 
-fn roc_run_non_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+/// Run on the native OS (not on wasm)
+#[cfg(not(target_family = "unix"))]
+fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     _args: I,
     _binary_bytes: &mut [u8],
