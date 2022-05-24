@@ -605,6 +605,7 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .collect_in(&arena);
 
         match executable {
+            #[cfg(target_os = "linux")]
             ExecutableFile::MemFd(fd, _) => {
                 if libc::fexecve(fd, argv.as_ptr(), envp.as_ptr()) != 0 {
                     internal_error!(
@@ -614,6 +615,7 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
                     );
                 }
             }
+            #[cfg(not(target_os = "linux"))]
             ExecutableFile::OnDisk(_) => {
                 if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
                     internal_error!(
@@ -631,51 +633,69 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 
 #[derive(Debug, Clone)]
 enum ExecutableFile {
+    #[cfg(target_os = "linux")]
     MemFd(libc::c_int, PathBuf),
+    #[cfg(not(target_os = "linux"))]
     OnDisk(PathBuf),
 }
 
 impl ExecutableFile {
     fn as_path(&self) -> &Path {
         match self {
+            #[cfg(target_os = "linux")]
             ExecutableFile::MemFd(_, path_buf) => path_buf.as_ref(),
+            #[cfg(not(target_os = "linux"))]
             ExecutableFile::OnDisk(path_buf) => path_buf.as_ref(),
         }
     }
 }
 
+#[cfg(target_os = "linux")]
 fn roc_run_executable_file_path(
     cwd: &Path,
     binary_bytes: &mut [u8],
 ) -> std::io::Result<ExecutableFile> {
-    if cfg!(target_os = "linux") {
-        // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
-        let flags = 0;
-        let anonymous_file_name = "roc_file_descriptor\0";
-        let fd = unsafe { libc::memfd_create(anonymous_file_name.as_ptr().cast(), flags) };
+    // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
+    let flags = 0;
+    let anonymous_file_name = "roc_file_descriptor\0";
+    let fd = unsafe { libc::memfd_create(anonymous_file_name.as_ptr().cast(), flags) };
 
-        if fd == 0 {
-            internal_error!(
-                "libc::memfd_create({:?}, {}) failed: file descriptor is 0",
-                anonymous_file_name,
-                flags
-            );
-        }
-
-        let path = PathBuf::from(format!("/proc/self/fd/{}", fd));
-
-        std::fs::write(&path, binary_bytes)?;
-
-        Ok(ExecutableFile::MemFd(fd, path))
-    } else {
-        // we have not found a way yet to use a virtual file on MacOs. Hence we fall back to just
-        // writing the file to the file system, and using that file.
-        let app_path_buf = cwd.join("roc_app_binary");
-
-        std::fs::write(&app_path_buf, binary_bytes)?;
-
-        Ok(ExecutableFile::OnDisk(app_path_buf))
+    if fd == 0 {
+        internal_error!(
+            "libc::memfd_create({:?}, {}) failed: file descriptor is 0",
+            anonymous_file_name,
+            flags
+        );
     }
+
+    let path = PathBuf::from(format!("/proc/self/fd/{}", fd));
+
+    std::fs::write(&path, binary_bytes)?;
+
+    Ok(ExecutableFile::MemFd(fd, path))
+}
+
+#[cfg(all(target_family = "unix", not(target_os = "linux")))]
+fn roc_run_executable_file_path(
+    cwd: &Path,
+    binary_bytes: &mut [u8],
+) -> std::io::Result<ExecutableFile> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // We have not found a way to use a virtual file on non-Linux OSes.
+    // Hence we fall back to just writing the file to the file system, and using that file.
+    let app_path_buf = cwd.join("roc_app_binary");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .mode(0o777) // create the file as executable
+        .open(&app_path_buf)?;
+
+    file.write_all(binary_bytes)?;
+
+    Ok(ExecutableFile::OnDisk(app_path_buf))
 }
 
 fn roc_run_non_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
