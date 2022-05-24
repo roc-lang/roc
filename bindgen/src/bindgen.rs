@@ -81,10 +81,22 @@ pub fn add_type_help<'a>(
 
             add_tag_union(env, opt_name, tag_vars, var, types)
         }
-        Content::Structure(FlatType::Apply(_symbol, _)) => match layout {
+        Content::Structure(FlatType::Apply(symbol, _)) => match layout {
             Layout::Builtin(builtin) => add_builtin_type(env, builtin, var, opt_name, types),
             _ => {
-                todo!("Handle non-builtin Apply")
+                if symbol.is_builtin() {
+                    todo!(
+                        "Handle Apply for builtin symbol {:?} and layout {:?}",
+                        symbol,
+                        layout
+                    )
+                } else {
+                    todo!(
+                        "Handle non-builtin Apply for symbol {:?} and layout {:?}",
+                        symbol,
+                        layout
+                    )
+                }
             }
         },
         Content::Structure(FlatType::Func(_, _, _)) => {
