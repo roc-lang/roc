@@ -953,6 +953,24 @@ pub struct {name} {{
             opt_impl.clone(),
             architecture,
             format!(
+                r#"#[inline(always)]
+    fn storage(&self) -> Option<&core::cell::Cell<roc_std::Storage>> {{
+        if self.pointer.is_null() {{
+            None
+        }} else {{
+            unsafe {{
+                Some(&*self.pointer.cast::<core::cell::Cell<roc_std::Storage>>().sub(1))
+            }}
+        }}
+    }}"#
+            ),
+        );
+
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            architecture,
+            format!(
                 r#"{VARIANT_DOC_COMMENT}
     pub fn variant(&self) -> {discriminant_name} {{
         if self.pointer.is_null() {{
@@ -992,13 +1010,20 @@ pub struct {name} {{
         let size = self_align + core::mem::size_of::<{payload_type_name}>();
 
         unsafe {{
-            // Reserve `self_align` bytes before the payload, to store the refcount.
-            let pointer = (crate::roc_alloc(size, payload_align as u32) as *mut u8).add(self_align);
-            let pointer = pointer as *mut {wrapped_payload_type_name};
+            // Store the payload at `self_align` bytes after the allocation,
+            // to leave room for the refcount.
+            let alloc_ptr = crate::roc_alloc(size, payload_align as u32);
+            let payload_ptr = alloc_ptr.cast::<u8>().add(self_align).cast::<{wrapped_payload_type_name}>();
 
-            *pointer = {init_payload};
+            *payload_ptr = {init_payload};
 
-            Self {{ pointer }}
+            // The reference count is stored immediately before the payload,
+            // which isn't necessarily the same as alloc_ptr - e.g. when alloc_ptr
+            // needs an alignment of 16.
+            let storage_ptr = payload_ptr.cast::<roc_std::Storage>().sub(1);
+            storage_ptr.write(roc_std::Storage::new_reference_counted());
+
+            Self {{ pointer: payload_ptr }}
         }}
     }}"#,
             ),
@@ -1025,11 +1050,7 @@ pub struct {name} {{
         let payload = {assign_payload};
         let align = core::mem::align_of::<{payload_type_name}>() as u32;
 
-        // The memory location is stored in a refcount format, so 1 alignment's
-        // worth of bytes before the payload.
-        let ptr = (self.pointer as *mut u8).sub(core::mem::align_of::<Self>());
-
-        crate::roc_dealloc(ptr.cast(), align);
+        core::mem::drop(self);
 
         payload
     }}"#,
@@ -1097,29 +1118,86 @@ pub struct {name} {{
         );
     }
 
-    // The Drop impl for the tag union
+    // The roc_std::ReferenceCount impl for the tag union
     {
-        let opt_impl = Some(format!("impl Drop for {name}"));
-        let body = format!(
-            r#"fn drop(&mut self) {{
-        if !self.pointer.is_null() {{
-            let align = core::mem::align_of::<{payload_type_name}>() as u32;
+        let opt_impl = Some(format!("unsafe impl roc_std::ReferenceCount for {name}"));
 
-            unsafe {{
-                // Drop the payload before dropping its wrapper.
-                drop(core::mem::ManuallyDrop::take(&mut *self.pointer));
-
-                // The wrapper's allocation includes a refcount, meaning it begins
-                // 1 alignment's worth of bytes before the payload.
-                let ptr = (self.pointer as *mut u8).sub(core::mem::align_of::<Self>());
-
-                crate::roc_dealloc(ptr.cast(), align);
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            architecture,
+            format!(
+                r#"fn increment(&self) {{
+        if let Some(storage) = self.storage() {{
+            let mut copy = storage.get();
+            if !copy.is_readonly() {{
+                copy.increment_reference_count();
+                storage.set(copy);
             }}
         }}
     }}"#
+            ),
         );
 
-        add_decl(impls, opt_impl, architecture, body);
+        add_decl(
+            impls,
+            opt_impl,
+            architecture,
+            format!(
+                r#"unsafe fn decrement(wrapper_ptr: *const Self) {{
+        let wrapper = &*wrapper_ptr;
+
+        if let Some(storage) = Self::storage(wrapper) {{
+            // Decrement the refcount and return early if no dealloc is needed
+            {{
+                let mut copy = storage.get();
+                let needs_dealloc = copy.decrease();
+
+                if !needs_dealloc {{
+                    if !copy.is_readonly() {{
+                        // Write the storage back.
+                        storage.set(copy);
+                    }}
+
+                    return;
+                }}
+            }}
+
+            // Dealloc the memory
+            let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
+            let alloc_ptr = wrapper.pointer.cast::<u8>().sub(alignment);
+
+            crate::roc_dealloc(
+                alloc_ptr as *mut core::ffi::c_void,
+                alignment as u32,
+            );
+        }}
+    }}"#
+            ),
+        );
+    }
+
+    // The Drop impl for the tag union
+    {
+        let opt_impl = Some(format!("impl Drop for {name}"));
+
+        add_decl(
+            impls,
+            opt_impl,
+            architecture,
+            format!(
+                r#"fn drop(&mut self) {{
+        if !self.pointer.is_null() {{
+            unsafe {{
+                // Drop the payload before dropping its wrapper.
+                core::mem::drop(core::mem::ManuallyDrop::take(&mut *self.pointer));
+
+                roc_std::ReferenceCount::decrement(self as *const Self);
+            }}
+        }}
+    }}"#
+            ),
+        );
     }
 
     // The Debug impl for the tag union
