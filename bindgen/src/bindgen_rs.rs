@@ -1,7 +1,7 @@
 use crate::types::{RocTagUnion, RocType, TypeId, Types};
+use indexmap::IndexMap;
 use roc_mono::layout::UnionLayout;
 use roc_target::{Architecture, TargetInfo};
-use std::collections::hash_map::HashMap;
 use std::convert::TryInto;
 use std::fmt::Display;
 
@@ -9,7 +9,7 @@ pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
 pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 const INDENT: &str = "    ";
 
-type Impls = HashMap<Impl, HashMap<String, Vec<Architecture>>>;
+type Impls = IndexMap<Impl, IndexMap<String, Vec<Architecture>>>;
 type Impl = Option<String>;
 
 /// Add the given declaration body, along with the architecture, to the Impls.
@@ -24,7 +24,7 @@ fn add_decl(impls: &mut Impls, opt_impl: Impl, architecture: Architecture, body:
 
 pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
     let mut buf = String::new();
-    let mut impls: Impls = HashMap::default();
+    let mut impls: Impls = IndexMap::default();
 
     for (architecture, types) in types_by_architecture.into_iter() {
         for id in types.sorted_ids() {

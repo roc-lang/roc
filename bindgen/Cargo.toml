@@ -30,6 +30,7 @@ target-lexicon = "0.12.3"
 clap = { version = "3.1.15", default-features = false, features = ["std", "color", "suggestions", "derive"] }
 strum = "0.24.0"
 strum_macros = "0.24"
+indexmap = "1.8.1"
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"

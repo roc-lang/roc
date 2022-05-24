@@ -3459,6 +3459,7 @@ dependencies = [
  "cli_utils",
  "ctor",
  "dircpy",
+ "indexmap",
  "indoc",
  "pretty_assertions",
  "roc_builtins",
