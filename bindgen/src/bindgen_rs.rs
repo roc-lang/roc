@@ -1022,7 +1022,11 @@ pub struct {name} {{
         let payload = {assign_payload};
         let align = core::mem::align_of::<{payload_type_name}>() as u32;
 
-        crate::roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
+        // The memory location is stored in a refcount format, so 1 alignment's
+        // worth of bytes before the payload.
+        let ptr = (self.pointer as *mut u8).sub(core::mem::align_of::<Self>());
+
+        crate::roc_dealloc(ptr.cast(), align);
 
         payload
     }}"#,
@@ -1100,7 +1104,11 @@ pub struct {name} {{
             let align = core::mem::align_of::<{payload_type_name}>() as u32;
 
             unsafe {{
-                crate::roc_dealloc(self.pointer as *mut core::ffi::c_void, align);
+                // The memory location is stored in a refcount format, so 1 alignment's
+                // worth of bytes before the payload.
+                let ptr = (self.pointer as *mut u8).sub(core::mem::align_of::<Self>());
+
+                crate::roc_dealloc(ptr.cast(), align);
             }}
 
             drop(payload);
