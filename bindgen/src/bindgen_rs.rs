@@ -8,6 +8,8 @@ use std::fmt::Display;
 pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
 pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 const INDENT: &str = "    ";
+const VARIANT_DOC_COMMENT: &str =
+    "/// Returns which variant this tag union holds. Note that this never includes a payload!";
 
 type Impls = IndexMap<Impl, IndexMap<String, Vec<Architecture>>>;
 type Impl = Option<String>;
@@ -132,19 +134,21 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
                 RocTagUnion::NullableWrapped { .. } => {
                     todo!();
                 }
-                RocTagUnion::NullableUnwrapped { .. } => {
-                    todo!();
-                    // write_nullable_unwrapped(
-                    //     name,
-                    //     architecture,
-                    //     id,
-                    //     null_tag,
-                    //     non_null_tag,
-                    //     *non_null_payload,
-                    //     types,
-                    //     buf,
-                    // )
-                }
+                RocTagUnion::NullableUnwrapped {
+                    name,
+                    null_tag,
+                    non_null_tag,
+                    non_null_payload,
+                } => write_nullable_unwrapped(
+                    name,
+                    architecture,
+                    id,
+                    null_tag,
+                    non_null_tag,
+                    *non_null_payload,
+                    types,
+                    impls,
+                ),
                 RocTagUnion::NonNullableUnwrapped { .. } => {
                     todo!();
                 }
@@ -293,7 +297,7 @@ fn add_tag_union(
             opt_impl.clone(),
             architecture,
             format!(
-                r#"/// Returns which variant this tag union holds. Note that this never includes a payload!
+                r#"{VARIANT_DOC_COMMENT}
     pub fn variant(&self) -> {discriminant_name} {{
         unsafe {{
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
@@ -898,7 +902,6 @@ fn derive_str(typ: &RocType, types: &Types) -> String {
     buf
 }
 
-#[cfg(debug_assertions = "false")] // TODO REMOVE
 fn write_nullable_unwrapped(
     name: &str,
     architecture: Architecture,
@@ -907,13 +910,13 @@ fn write_nullable_unwrapped(
     non_null_tag: &str,
     non_null_payload: TypeId,
     types: &Types,
-    buf: &mut String,
-) -> fmt::Result {
+    impls: &mut Impls,
+) {
     let mut tag_names = vec![null_tag.to_string(), non_null_tag.to_string()];
 
     tag_names.sort();
 
-    let discriminant_name = write_discriminant(name, architecture, tag_names, types, buf)?;
+    let discriminant_name = add_discriminant(name, architecture, tag_names, types, impls);
     let payload_type = types.get(non_null_payload);
     let payload_type_name = type_name(non_null_payload, types);
     let has_pointer = payload_type.has_pointer(types);
@@ -927,35 +930,40 @@ fn write_nullable_unwrapped(
         (payload_type_name.clone(), "payload", "")
     };
 
-    write_derive(types.get(id), types, buf)?;
-
-    write!(
-        buf,
-        r#"#[repr(C)]
+    // The opaque struct for the tag union
+    {
+        let derive = derive_str(types.get(id), types);
+        let body = format!(
+            r#"{derive}
+#[repr(C)]
 pub struct {name} {{
     pointer: *mut {wrapped_payload_type_name},
-}}
-"#
-    )?;
+}}"#
+        );
+
+        add_decl(impls, None, architecture, body);
+    }
 
     // The impl for the tag union
     {
-        write!(
-            buf,
-            r#"
-impl {name} {{
-    pub fn tag(&self) -> {discriminant_name} {{
+        let opt_impl = Some(format!("impl {name}"));
+
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            architecture,
+            format!(
+                r#"{VARIANT_DOC_COMMENT}
+    pub fn variant(&self) -> {discriminant_name} {{
         if self.pointer.is_null() {{
             {discriminant_name}::{null_tag}
         }} else {{
             {discriminant_name}::{non_null_tag}
         }}
-    }}
-"#
-        )?;
-    }
+    }}"#
+            ),
+        );
 
-    {
         // Add a convenience constructor function for the tag with the payload, e.g.
         //
         // /// Construct a tag named Cons, with the appropriate payload
@@ -972,11 +980,12 @@ impl {name} {{
         //         Self { pointer }
         //     }
         // }
-        writeln!(
-            buf,
-            // Don't use indoc because this must be indented once!
-            r#"
-    /// Construct a tag named {non_null_tag}, with the appropriate payload
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            architecture,
+            format!(
+                r#"/// Construct a tag named {non_null_tag}, with the appropriate payload
     pub fn {non_null_tag}(payload: {payload_type_name}) -> Self {{
         let size = core::mem::size_of::<{payload_type_name}>();
         let align = core::mem::align_of::<{payload_type_name}>();
@@ -989,19 +998,22 @@ impl {name} {{
             Self {{ pointer }}
         }}
     }}"#,
-        )?;
+            ),
+        );
 
-        let assign_payload = if has_pointer {
-            "core::mem::ManuallyDrop::take(&mut *self.pointer)"
-        } else {
-            "*self.pointer"
-        };
+        {
+            let assign_payload = if has_pointer {
+                "core::mem::ManuallyDrop::take(&mut *self.pointer)"
+            } else {
+                "*self.pointer"
+            };
 
-        writeln!(
-            buf,
-            // Don't use indoc because this must be indented once!
-            r#"
-    /// Unsafely assume the given {name} has a .variant() of {non_null_tag} and convert it to {non_null_tag}'s payload.
+            add_decl(
+                impls,
+                opt_impl.clone(),
+                architecture,
+                format!(
+                    r#"/// Unsafely assume the given {name} has a .variant() of {non_null_tag} and convert it to {non_null_tag}'s payload.
     /// (Always examine .variant() first to make sure this is the correct variant!)
     /// Panics in debug builds if the .variant() doesn't return {non_null_tag}.
     pub unsafe fn into_{non_null_tag}(self) -> {payload_type_name} {{
@@ -1014,75 +1026,75 @@ impl {name} {{
 
         payload
     }}"#,
-        )?;
+                ),
+            );
+        }
 
-        writeln!(
-            buf,
-            // Don't use indoc because this must be indented once!
-            r#"
-    /// Unsafely assume the given {name} has a .variant() of {non_null_tag} and return its payload.
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            architecture,
+            format!(
+                r#"/// Unsafely assume the given {name} has a .variant() of {non_null_tag} and return its payload.
     /// (Always examine .variant() first to make sure this is the correct variant!)
     /// Panics in debug builds if the .variant() doesn't return {non_null_tag}.
     pub unsafe fn as_{non_null_tag}(&self) -> {ref_if_needed}{payload_type_name} {{
         debug_assert_eq!(self.variant(), {discriminant_name}::{non_null_tag});
         {ref_if_needed}*self.pointer
     }}"#,
-        )?;
-    }
+            ),
+        );
 
-    {
         // Add a convenience constructor function for the nullable tag, e.g.
         //
-        // /// Construct a tag named Nil
-        // pub fn Nil() -> Self {
-        //     Self {
-        //         pointer: core::ptr::null_mut(),
-        //     }
-        // }
-        writeln!(
-            buf,
-            // Don't use indoc because this must be indented once!
-            r#"
-    /// Construct a tag named {null_tag}
-    pub fn {null_tag}() -> Self {{
-        Self {{
-            pointer: core::ptr::null_mut(),
-        }}
-    }}"#,
-        )?;
+        // /// A tag named Nil, which has no payload.
+        // pub const Nil: Self = Self {
+        //     pointer: core::ptr::null_mut(),
+        // };
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            architecture,
+            format!(
+                r#"/// A tag named {null_tag}, which has no payload.
+    pub const {null_tag}: Self = Self {{
+        pointer: core::ptr::null_mut(),
+    }};"#,
+            ),
+        );
 
-        writeln!(
-            buf,
-            // Don't use indoc because this must be indented once!
-            r#"
-    /// Other `into_` methods return a payload, but since the {null_tag} tag
+        add_decl(
+            impls,
+            opt_impl.clone(),
+            architecture,
+            format!(
+                r#"/// Other `into_` methods return a payload, but since the {null_tag} tag
     /// has no payload, this does nothing and is only here for completeness.
     pub fn into_{null_tag}(self) {{
         ()
     }}"#,
-        )?;
+            ),
+        );
 
-        writeln!(
-            buf,
-            // Don't use indoc because this must be indented once!
-            r#"
-    /// Other `as` methods return a payload, but since the {null_tag} tag
+        add_decl(
+            impls,
+            opt_impl,
+            architecture,
+            format!(
+                r#"/// Other `as` methods return a payload, but since the {null_tag} tag
     /// has no payload, this does nothing and is only here for completeness.
     pub unsafe fn as_{null_tag}(&self) {{
         ()
     }}"#,
-        )?;
+            ),
+        );
     }
-
-    buf.push_str("}\n");
 
     // The Drop impl for the tag union
     {
-        write!(
-            buf,
-            r#"
-impl Drop for {name} {{
-    fn drop(&mut self) {{
+        let opt_impl = Some(format!("impl Drop for {name}"));
+        let body = format!(
+            r#"fn drop(&mut self) {{
         if !self.pointer.is_null() {{
             let payload = unsafe {{ &*self.pointer }};
             let align = core::mem::align_of::<{payload_type_name}>() as u32;
@@ -1093,21 +1105,19 @@ impl Drop for {name} {{
 
             drop(payload);
         }}
-    }}
-}}
-"#
-        )?;
+    }}"#
+        );
+
+        add_decl(impls, opt_impl, architecture, body);
     }
 
     // The Debug impl for the tag union
     {
+        let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
         let extra_deref = if has_pointer { "*" } else { "" };
 
-        write!(
-            buf,
-            r#"
-impl core::fmt::Debug for {name} {{
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+        let body = format!(
+            r#"fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
         if self.pointer.is_null() {{
             f.write_str("{name}::{null_tag}")
         }} else {{
@@ -1115,14 +1125,11 @@ impl core::fmt::Debug for {name} {{
 
             unsafe {{ f.debug_tuple("{non_null_tag}").field(&*{extra_deref}self.pointer).finish() }}
         }}
-    }}
-}}
+    }}"#
+        );
 
-"#
-        )?;
+        add_decl(impls, opt_impl, architecture, body);
     }
-
-    Ok(())
 }
 
 fn arch_to_str(architecture: &Architecture) -> &'static str {
