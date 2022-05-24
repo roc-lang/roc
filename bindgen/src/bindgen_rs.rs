@@ -46,11 +46,11 @@ pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
         }
 
         for (decl, architectures) in decls {
-            buf.push('\n');
-
             // If we're inside an `impl` block, indent the cfg annotation
             let indent = if has_impl { INDENT } else { "" };
 
+            // Push a newline and potentially an indent before the #[cfg(...)] line
+            buf.push('\n');
             buf.push_str(indent);
 
             match architectures.len() {
@@ -75,12 +75,15 @@ pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
                 }
             }
 
-            buf.push('\n');
+            buf.push('\n'); // newline after the #[cfg(...)] line
+
+            // indent and print the decl (e.g. a `fn`), with a newline at the end
             buf.push_str(indent);
             buf.push_str(&decl);
             buf.push('\n');
         }
 
+        // If this was an impl, it needs a closing brace at the end.
         if has_impl {
             buf.push_str("}\n");
         }
@@ -835,7 +838,7 @@ fn add_struct(
                 ));
             }
 
-            buf.push_str("}\n");
+            buf.push('}');
 
             add_decl(impls, None, architecture, buf);
         }
