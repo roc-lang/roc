@@ -27,6 +27,13 @@ mod test_gen_rs {
                 .unwrap_or_default(),
             indoc!(
                 r#"
+                #[cfg(any(
+                    target_arch = "x86_64",
+                    target_arch = "x86",
+                    target_arch = "aarch64",
+                    target_arch = "arm",
+                    target_arch = "wasm32"
+                ))]
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct MyRcd {
@@ -57,6 +64,10 @@ mod test_gen_rs {
                 .unwrap_or_default(),
             indoc!(
                 r#"
+                #[cfg(any(
+                    target_arch = "x86_64",
+                    target_arch = "aarch64"
+                ))]
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Outer {
@@ -65,11 +76,31 @@ mod test_gen_rs {
                     pub x: Inner,
                 }
 
+                #[cfg(any(
+                    target_arch = "x86_64",
+                    target_arch = "x86",
+                    target_arch = "aarch64",
+                    target_arch = "arm",
+                    target_arch = "wasm32"
+                ))]
                 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Inner {
                     pub b: f32,
                     pub a: u16,
+                }
+
+                #[cfg(any(
+                    target_arch = "x86",
+                    target_arch = "arm",
+                    target_arch = "wasm32"
+                ))]
+                #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
+                #[repr(C)]
+                pub struct Outer {
+                    pub x: Inner,
+                    pub y: roc_std::RocStr,
+                    pub z: roc_std::RocList<u8>,
                 }
             "#
             )
@@ -86,6 +117,13 @@ mod test_gen_rs {
                 .unwrap_or_default(),
             indoc!(
                 r#"
+                #[cfg(any(
+                    target_arch = "x86_64",
+                    target_arch = "x86",
+                    target_arch = "aarch64",
+                    target_arch = "arm",
+                    target_arch = "wasm32"
+                ))]
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
@@ -109,8 +147,7 @@ mod test_gen_rs {
                 r#"
                 #[cfg(any(
                     target_arch = "x86_64",
-                    target_arch = "aarch64",
-                    target_arch = "arm"
+                    target_arch = "aarch64"
                 ))]
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
@@ -120,11 +157,31 @@ mod test_gen_rs {
                     pub x: R2,
                 }
 
+                #[cfg(any(
+                    target_arch = "x86_64",
+                    target_arch = "x86",
+                    target_arch = "aarch64",
+                    target_arch = "arm",
+                    target_arch = "wasm32"
+                ))]
                 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R2 {
                     pub b: f32,
                     pub a: u16,
+                }
+
+                #[cfg(any(
+                    target_arch = "x86",
+                    target_arch = "arm",
+                    target_arch = "wasm32"
+                ))]
+                #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
+                #[repr(C)]
+                pub struct R1 {
+                    pub x: R2,
+                    pub y: roc_std::RocStr,
+                    pub z: roc_std::RocList<u8>,
                 }
             "#
             )
@@ -447,6 +504,13 @@ mod test_gen_rs {
                 .unwrap_or_default(),
             indoc!(
                 r#"
+                #[cfg(any(
+                    target_arch = "x86_64",
+                    target_arch = "x86",
+                    target_arch = "aarch64",
+                    target_arch = "arm",
+                    target_arch = "wasm32"
+                ))]
                 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
                 pub enum Enumeration {
@@ -486,11 +550,27 @@ mod test_gen_rs {
                 .unwrap_or_default(),
             indoc!(
                 r#"
+                #[cfg(any(
+                    target_arch = "x86_64",
+                    target_arch = "aarch64"
+                ))]
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct UserId {
                     pub f1: roc_std::RocStr,
                     pub f0: u32,
+                }
+
+                #[cfg(any(
+                    target_arch = "x86",
+                    target_arch = "arm",
+                    target_arch = "wasm32"
+                ))]
+                #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+                #[repr(C)]
+                pub struct UserId {
+                    pub f0: u32,
+                    pub f1: roc_std::RocStr,
                 }
             "#
             )
@@ -514,6 +594,13 @@ mod test_gen_rs {
                 .unwrap_or_default(),
             indoc!(
                 r#"
+                #[cfg(any(
+                    target_arch = "x86_64",
+                    target_arch = "x86",
+                    target_arch = "aarch64",
+                    target_arch = "arm",
+                    target_arch = "wasm32"
+                ))]
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(transparent)]
                 pub struct UserId(roc_std::RocStr);
