@@ -20,15 +20,6 @@ fn zig_executable() -> String {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
-    // When we build on Netlify, zig is not installed (but also not used,
-    // since all we're doing is generating docs), so we can skip the steps
-    // that require having zig installed.
-    if env::var_os("NO_ZIG_INSTALLED").is_some() {
-        // We still need to do the other things before this point, because
-        // setting the env vars is needed for other parts of the build.
-        return;
-    }
-
     // "." is relative to where "build.rs" is
     // dunce can be removed once ziglang/zig#5109 is fixed
     let build_script_dir_path = dunce::canonicalize(Path::new(".")).unwrap();

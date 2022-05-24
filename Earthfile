@@ -105,7 +105,8 @@ test-rust:
     # RUN echo "4" | cargo run --locked --release --features="target-x86" -- --target=x86_32 examples/benchmarks/NQueens.roc
     # RUN --mount=type=cache,target=$SCCACHE_DIR \
     #    cargo test --locked --release --features with_sound --test cli_run i386 --features="i386-cli-run" && sccache --show-stats
-    # make sure doc generation works (that is, make sure build.sh returns status code 0)
+    # make sure website deployment works (that is, make sure build.sh returns status code 0)
+    ENV REPL_DEBUG=1
     RUN bash www/build.sh
 
 
