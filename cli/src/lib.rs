@@ -17,6 +17,8 @@ use target_lexicon::BinaryFormat;
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
 };
+#[cfg(not(target_os = "linux"))]
+use tempfile::TempDir;
 
 pub mod build;
 mod format;
@@ -262,8 +264,6 @@ pub fn build(
 
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
-
-    let original_cwd = std::env::current_dir()?;
     let opt_level = match (
         matches.is_present(FLAG_OPTIMIZE),
         matches.is_present(FLAG_OPT_SIZE),
@@ -430,7 +430,7 @@ pub fn build(
 
                     let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                    let x = roc_run(arena, &original_cwd, triple, args, &mut bytes);
+                    let x = roc_run(arena, triple, args, &mut bytes);
                     std::mem::forget(bytes);
                     x
                 }
@@ -454,7 +454,7 @@ pub fn build(
 
                         let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                        let x = roc_run(arena, &original_cwd, triple, args, &mut bytes);
+                        let x = roc_run(arena, triple, args, &mut bytes);
                         std::mem::forget(bytes);
                         x
                     } else {
@@ -504,14 +504,13 @@ pub fn build(
 
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
-    cwd: &Path,
     triple: Triple,
     args: I,
     binary_bytes: &mut [u8],
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
-            let executable = roc_run_executable_file_path(cwd, binary_bytes)?;
+            let executable = roc_run_executable_file_path(binary_bytes)?;
             let path = executable.as_path();
             // If possible, report the generated executable name relative to the current dir.
             let generated_filename = path
@@ -542,19 +541,14 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => {
-            if cfg!(target_family = "unix") {
-                roc_run_unix(arena, cwd, args, binary_bytes)
-            } else {
-                roc_run_non_unix(arena, cwd, args, binary_bytes)
-            }
-        }
+        _ => roc_run_native(arena, args, binary_bytes),
     }
 }
 
-fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+/// Run on the native OS (not on wasm)
+#[cfg(target_family = "unix")]
+fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: Bump,
-    cwd: &Path,
     args: I,
     binary_bytes: &mut [u8],
 ) -> std::io::Result<i32> {
@@ -562,7 +556,7 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     use std::os::unix::ffi::OsStrExt;
 
     unsafe {
-        let executable = roc_run_executable_file_path(cwd, binary_bytes)?;
+        let executable = roc_run_executable_file_path(binary_bytes)?;
         let path = executable.as_path();
         let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
 
@@ -605,6 +599,7 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .collect_in(&arena);
 
         match executable {
+            #[cfg(target_os = "linux")]
             ExecutableFile::MemFd(fd, _) => {
                 if libc::fexecve(fd, argv.as_ptr(), envp.as_ptr()) != 0 {
                     internal_error!(
@@ -614,7 +609,8 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
                     );
                 }
             }
-            ExecutableFile::OnDisk(_) => {
+            #[cfg(not(target_os = "linux"))]
+            ExecutableFile::OnDisk(_, _) => {
                 if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
                     internal_error!(
                         "libc::execve({:?}, ..., ...) failed: {:?}",
@@ -629,58 +625,77 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     Ok(1)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum ExecutableFile {
+    #[cfg(target_os = "linux")]
     MemFd(libc::c_int, PathBuf),
-    OnDisk(PathBuf),
+    #[cfg(not(target_os = "linux"))]
+    OnDisk(TempDir, PathBuf),
 }
 
 impl ExecutableFile {
     fn as_path(&self) -> &Path {
         match self {
+            #[cfg(target_os = "linux")]
             ExecutableFile::MemFd(_, path_buf) => path_buf.as_ref(),
-            ExecutableFile::OnDisk(path_buf) => path_buf.as_ref(),
+            #[cfg(not(target_os = "linux"))]
+            ExecutableFile::OnDisk(_, path_buf) => path_buf.as_ref(),
         }
     }
 }
 
-fn roc_run_executable_file_path(
-    cwd: &Path,
-    binary_bytes: &mut [u8],
-) -> std::io::Result<ExecutableFile> {
-    if cfg!(target_os = "linux") {
-        // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
-        let flags = 0;
-        let anonymous_file_name = "roc_file_descriptor\0";
-        let fd = unsafe { libc::memfd_create(anonymous_file_name.as_ptr().cast(), flags) };
+#[cfg(target_os = "linux")]
+fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+    // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
+    let flags = 0;
+    let anonymous_file_name = "roc_file_descriptor\0";
+    let fd = unsafe { libc::memfd_create(anonymous_file_name.as_ptr().cast(), flags) };
 
-        if fd == 0 {
-            internal_error!(
-                "libc::memfd_create({:?}, {}) failed: file descriptor is 0",
-                anonymous_file_name,
-                flags
-            );
-        }
-
-        let path = PathBuf::from(format!("/proc/self/fd/{}", fd));
-
-        std::fs::write(&path, binary_bytes)?;
-
-        Ok(ExecutableFile::MemFd(fd, path))
-    } else {
-        // we have not found a way yet to use a virtual file on MacOs. Hence we fall back to just
-        // writing the file to the file system, and using that file.
-        let app_path_buf = cwd.join("roc_app_binary");
-
-        std::fs::write(&app_path_buf, binary_bytes)?;
-
-        Ok(ExecutableFile::OnDisk(app_path_buf))
+    if fd == 0 {
+        internal_error!(
+            "libc::memfd_create({:?}, {}) failed: file descriptor is 0",
+            anonymous_file_name,
+            flags
+        );
     }
+
+    let path = PathBuf::from(format!("/proc/self/fd/{}", fd));
+
+    std::fs::write(&path, binary_bytes)?;
+
+    Ok(ExecutableFile::MemFd(fd, path))
 }
 
-fn roc_run_non_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+#[cfg(all(target_family = "unix", not(target_os = "linux")))]
+fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let temp_dir = tempfile::tempdir()?;
+
+    // We have not found a way to use a virtual file on non-Linux OSes.
+    // Hence we fall back to just writing the file to the file system, and using that file.
+    let app_path_buf = temp_dir.path().join("roc_app_binary");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .mode(0o777) // create the file as executable
+        .open(&app_path_buf)?;
+
+    file.write_all(binary_bytes)?;
+
+    // We store the TempDir in this variant alongside the path to the executable,
+    // so that the TempDir doesn't get dropped until after we're done with the path.
+    // If we didn't do that, then the tempdir would potentially get deleted by the
+    // TempDir's Drop impl before the file had been executed.
+    Ok(ExecutableFile::OnDisk(temp_dir, app_path_buf))
+}
+
+/// Run on the native OS (not on wasm)
+#[cfg(not(target_family = "unix"))]
+fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
-    _cwd: &Path,
     _args: I,
     _binary_bytes: &mut [u8],
 ) -> io::Result<i32> {
