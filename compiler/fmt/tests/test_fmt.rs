@@ -4166,6 +4166,61 @@ mod test_fmt {
     }
 
     #[test]
+    fn pipeline_apply_lambda_multiline() {
+        expr_formats_same(indoc!(
+            r#"
+                example = \model ->
+                    model
+                        |> withModel
+                            (\result ->
+                                when result is
+                                    Err _ ->
+                                        Err {}
+                                    Ok val ->
+                                        Ok {}
+                            )
+
+                example
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    example = \model ->
+                        model
+                            |> withModel
+                                (\result ->
+                                        when result is
+                                            Err _ ->
+                                                Err {}
+                                            Ok val ->
+                                                Ok {}
+                                )
+
+                    example
+                "#
+            ),
+            indoc!(
+                r#"
+                    example = \model ->
+                        model
+                            |> withModel
+                                (\result ->
+                                    when result is
+                                        Err _ ->
+                                            Err {}
+                                        Ok val ->
+                                            Ok {}
+                                )
+
+                    example
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn func_call_trailing_multiline_lambda() {
         expr_formats_same(indoc!(
             r#"
