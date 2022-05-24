@@ -264,8 +264,6 @@ pub fn build(
 
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
-
-    let original_cwd = std::env::current_dir()?;
     let opt_level = match (
         matches.is_present(FLAG_OPTIMIZE),
         matches.is_present(FLAG_OPT_SIZE),
@@ -432,7 +430,7 @@ pub fn build(
 
                     let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                    let x = roc_run(arena, &original_cwd, triple, args, &mut bytes);
+                    let x = roc_run(arena, triple, args, &mut bytes);
                     std::mem::forget(bytes);
                     x
                 }
@@ -456,7 +454,7 @@ pub fn build(
 
                         let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                        let x = roc_run(arena, &original_cwd, triple, args, &mut bytes);
+                        let x = roc_run(arena, triple, args, &mut bytes);
                         std::mem::forget(bytes);
                         x
                     } else {
@@ -506,14 +504,13 @@ pub fn build(
 
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
-    cwd: &Path,
     triple: Triple,
     args: I,
     binary_bytes: &mut [u8],
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
-            let executable = roc_run_executable_file_path(cwd, binary_bytes)?;
+            let executable = roc_run_executable_file_path(binary_bytes)?;
             let path = executable.as_path();
             // If possible, report the generated executable name relative to the current dir.
             let generated_filename = path
@@ -546,9 +543,9 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
         }
         _ => {
             if cfg!(target_family = "unix") {
-                roc_run_unix(arena, cwd, args, binary_bytes)
+                roc_run_unix(arena, args, binary_bytes)
             } else {
-                roc_run_non_unix(arena, cwd, args, binary_bytes)
+                roc_run_non_unix(arena, args, binary_bytes)
             }
         }
     }
@@ -556,7 +553,6 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
 fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: Bump,
-    cwd: &Path,
     args: I,
     binary_bytes: &mut [u8],
 ) -> std::io::Result<i32> {
@@ -564,7 +560,7 @@ fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     use std::os::unix::ffi::OsStrExt;
 
     unsafe {
-        let executable = roc_run_executable_file_path(cwd, binary_bytes)?;
+        let executable = roc_run_executable_file_path(binary_bytes)?;
         let path = executable.as_path();
         let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
 
@@ -653,10 +649,7 @@ impl ExecutableFile {
 }
 
 #[cfg(target_os = "linux")]
-fn roc_run_executable_file_path(
-    cwd: &Path,
-    binary_bytes: &mut [u8],
-) -> std::io::Result<ExecutableFile> {
+fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
     // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
     let flags = 0;
     let anonymous_file_name = "roc_file_descriptor\0";
@@ -678,10 +671,7 @@ fn roc_run_executable_file_path(
 }
 
 #[cfg(all(target_family = "unix", not(target_os = "linux")))]
-fn roc_run_executable_file_path(
-    cwd: &Path,
-    binary_bytes: &mut [u8],
-) -> std::io::Result<ExecutableFile> {
+fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -708,7 +698,6 @@ fn roc_run_executable_file_path(
 
 fn roc_run_non_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
-    _cwd: &Path,
     _args: I,
     _binary_bytes: &mut [u8],
 ) -> io::Result<i32> {
