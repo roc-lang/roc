@@ -9,7 +9,7 @@ use std::convert::TryInto;
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Types {
     by_id: Vec<RocType>,
 

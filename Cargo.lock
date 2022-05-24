@@ -3459,6 +3459,7 @@ dependencies = [
  "cli_utils",
  "ctor",
  "dircpy",
+ "indexmap",
  "indoc",
  "pretty_assertions",
  "roc_builtins",
@@ -3473,6 +3474,8 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "roc_types",
+ "strum",
+ "strum_macros",
  "target-lexicon",
  "tempfile",
 ]
@@ -4113,6 +4116,8 @@ dependencies = [
 name = "roc_target"
 version = "0.1.0"
 dependencies = [
+ "strum",
+ "strum_macros",
  "target-lexicon",
 ]
 
