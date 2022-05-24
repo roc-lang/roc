@@ -4648,6 +4648,57 @@ mod test_fmt {
                 )
             "#
         ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0
+                            )
+                "#
+            ),
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (
+                            a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0
+                        )
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0)
+                "#
+            ),
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (
+                            a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0
+                        )
+                "#
+            ),
+        );
     }
 
     #[test]

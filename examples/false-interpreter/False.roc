@@ -386,7 +386,8 @@ stepExecCtx = \ctx, char ->
         0x3D ->
             # `=` equals
             Task.fromResult
-                (a, b <- binaryOp ctx
+                (
+                    a, b <- binaryOp ctx
                     if a == b then
                         -1
                     else
@@ -395,7 +396,8 @@ stepExecCtx = \ctx, char ->
         0x3E ->
             # `>` greater than
             Task.fromResult
-                (a, b <- binaryOp ctx
+                (
+                    a, b <- binaryOp ctx
                     if a > b then
                         -1
                     else
