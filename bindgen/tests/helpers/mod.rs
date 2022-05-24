@@ -1,7 +1,6 @@
 use roc_bindgen::bindgen_rs;
 use roc_bindgen::load::load_types;
 use roc_load::Threading;
-use roc_target::Architecture;
 use std::env;
 use std::fs::File;
 use std::io::Write;
@@ -26,9 +25,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
 
     src.push_str(decl_src);
 
-    // Only use the X86_64 types for these tests
-    let target_arch = Architecture::X86_64;
-    let types = {
+    let pairs = {
         let dir = tempdir().expect("Unable to create tempdir");
         let filename = PathBuf::from("Package-Config.roc");
         let file_path = dir.path().join(filename);
@@ -41,14 +38,9 @@ pub fn generate_bindings(decl_src: &str) -> String {
         dir.close().expect("Unable to close tempdir");
 
         result.expect("had problems loading")
-    }
-    .iter()
-    .find(|(architecture, _)| *architecture == target_arch)
-    .unwrap()
-    .1
-    .clone();
+    };
 
-    bindgen_rs::emit(&[(target_arch, types)])
+    bindgen_rs::emit(&pairs)
 }
 
 #[allow(dead_code)]

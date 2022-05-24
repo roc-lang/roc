@@ -107,6 +107,11 @@ mod test_gen_rs {
                 .unwrap_or_default(),
             indoc!(
                 r#"
+                #[cfg(any(
+                    target_arch = "x86_64",
+                    target_arch = "aarch64",
+                    target_arch = "arm"
+                ))]
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
