@@ -117,6 +117,12 @@ mod bindgen_cli_run {
             `Baz` is: NonRecursive::Baz
             `Blah 456` is: NonRecursive::Blah(456)
         "#),
+        nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
+            tag_union was: StrConsList::Nil
+            `Cons "small str" Nil` is: StrConsList::Nil
+            `Cons "A long enough string to not be small" Nil` is: StrConsList::Nil
+            `Nil` is: StrConsList::Nil
+        "#),
     }
 
     fn check_for_tests(all_fixtures: &mut roc_collections::VecSet<String>) {
