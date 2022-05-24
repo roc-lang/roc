@@ -89,7 +89,7 @@ fn insert_wrapper_metadata<'a>(
     module: &mut WasmModule<'a>,
     wrapper_name: &'static str,
 ) {
-    let index = module.import.function_count
+    let index = (module.import.fn_signatures.len() as u32)
         + module.code.preloaded_count
         + module.code.code_builders.len() as u32;
 

@@ -70,42 +70,6 @@ impl<'a> WasmModule<'a> {
         self.names.serialize(buffer);
     }
 
-    /// Serialize the module to bytes
-    /// (Mutates some data related to linking)
-    pub fn serialize_with_linker_data_mut<T: SerialBuffer>(&mut self, buffer: &mut T) {
-        buffer.append_u8(0);
-        buffer.append_slice("asm".as_bytes());
-        buffer.write_unencoded_u32(Self::WASM_VERSION);
-
-        // Keep track of (non-empty) section indices for linking
-        let mut counter = SectionCounter {
-            buffer_size: buffer.size(),
-            section_index: 0,
-        };
-
-        counter.serialize_and_count(buffer, &self.types);
-        counter.serialize_and_count(buffer, &self.import);
-        counter.serialize_and_count(buffer, &self.function);
-        counter.serialize_and_count(buffer, &self.table);
-        counter.serialize_and_count(buffer, &self.memory);
-        counter.serialize_and_count(buffer, &self.global);
-        counter.serialize_and_count(buffer, &self.export);
-        counter.serialize_and_count(buffer, &self.start);
-        counter.serialize_and_count(buffer, &self.element);
-
-        // Code section is the only one with relocations so we can stop counting
-        let code_section_index = counter.section_index;
-        self.code
-            .serialize_with_relocs(buffer, &mut self.relocations.entries);
-
-        self.data.serialize(buffer);
-
-        self.linking.serialize(buffer);
-
-        self.relocations.target_section_index = Some(code_section_index);
-        self.relocations.serialize(buffer);
-    }
-
     /// Module size in bytes (assuming no linker data)
     /// May be slightly overestimated. Intended for allocating buffer capacity.
     pub fn size(&self) -> usize {
@@ -138,8 +102,8 @@ impl<'a> WasmModule<'a> {
 
         let types = TypeSection::parse(arena, bytes, &mut cursor)?;
 
-        let mut import = ImportSection::preload(arena, bytes, &mut cursor);
-        let imported_fn_signatures = import.parse(arena)?;
+        let import = ImportSection::parse(arena, bytes, &mut cursor)?;
+        // let imported_fn_signatures = import.parse(arena)?;
 
         let function = FunctionSection::preload(arena, bytes, &mut cursor);
         let defined_fn_signatures = function.parse(arena);
@@ -161,7 +125,7 @@ impl<'a> WasmModule<'a> {
             arena,
             bytes,
             &mut cursor,
-            &imported_fn_signatures,
+            &import.fn_signatures,
             &defined_fn_signatures,
             &indirect_callees,
         );
@@ -215,7 +179,7 @@ impl<'a> WasmModule<'a> {
 
         self.code.remove_dead_preloads(
             arena,
-            self.import.function_count,
+            self.import.fn_signatures.len(),
             &function_indices,
             called_preload_fns,
         )
@@ -227,34 +191,5 @@ impl<'a> WasmModule<'a> {
             .iter()
             .find(|ex| ex.name == name)
             .and_then(|ex| self.global.parse_u32_at_index(ex.index).ok())
-    }
-}
-
-/// Helper struct to count non-empty sections.
-/// Needed to generate linking data, which refers to target sections by index.
-struct SectionCounter {
-    buffer_size: usize,
-    section_index: u32,
-}
-
-impl SectionCounter {
-    /// Update the section counter if buffer size increased since last call
-    #[inline]
-    fn update<SB: SerialBuffer>(&mut self, buffer: &mut SB) {
-        let new_size = buffer.size();
-        if new_size > self.buffer_size {
-            self.section_index += 1;
-            self.buffer_size = new_size;
-        }
-    }
-
-    #[inline]
-    fn serialize_and_count<SB: SerialBuffer, S: Serialize>(
-        &mut self,
-        buffer: &mut SB,
-        section: &S,
-    ) {
-        section.serialize(buffer);
-        self.update(buffer);
     }
 }

@@ -422,61 +422,74 @@ impl Serialize for Import {
 #[derive(Debug)]
 pub struct ImportSection<'a> {
     pub count: u32,
-    pub function_count: u32,
+    pub fn_signatures: Vec<'a, u32>,
     pub bytes: Vec<'a, u8>,
 }
 
 impl<'a> ImportSection<'a> {
+    const ID: SectionId = SectionId::Import;
+
     pub fn append(&mut self, import: Import) {
         import.serialize(&mut self.bytes);
         self.count += 1;
     }
 
-    pub fn parse(&mut self, arena: &'a Bump) -> Result<Vec<'a, u32>, ParseError> {
-        let mut fn_signatures = bumpalo::vec![in arena];
-        let mut cursor = 0;
-        while cursor < self.bytes.len() {
-            String::skip_bytes(&self.bytes, &mut cursor)?; // import namespace
-            String::skip_bytes(&self.bytes, &mut cursor)?; // import name
+    pub fn size(&self) -> usize {
+        self.bytes.len()
+    }
+}
 
-            let type_id = ImportTypeId::from(self.bytes[cursor]);
-            cursor += 1;
+impl<'a> Parse<&'a Bump> for ImportSection<'a> {
+    fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
+        let mut bytes = Vec::with_capacity_in(range.len() * 2, arena);
+        let mut fn_signatures = Vec::with_capacity_in(range.len() / 8, arena);
+
+        let end = range.end;
+        bytes.extend_from_slice(&module_bytes[range]);
+
+        while *cursor < end {
+            String::skip_bytes(module_bytes, cursor)?; // import namespace
+            String::skip_bytes(module_bytes, cursor)?; // import name
+
+            let type_id = ImportTypeId::from(module_bytes[*cursor]);
+            *cursor += 1;
 
             match type_id {
                 ImportTypeId::Func => {
-                    let sig = u32::parse((), &self.bytes, &mut cursor)?;
+                    let sig = u32::parse((), module_bytes, cursor)?;
                     fn_signatures.push(sig);
                 }
                 ImportTypeId::Table => {
-                    TableType::skip_bytes(&self.bytes, &mut cursor)?;
+                    TableType::skip_bytes(module_bytes, cursor)?;
                 }
                 ImportTypeId::Mem => {
-                    Limits::skip_bytes(&self.bytes, &mut cursor)?;
+                    Limits::skip_bytes(module_bytes, cursor)?;
                 }
                 ImportTypeId::Global => {
-                    GlobalType::skip_bytes(&self.bytes, &mut cursor)?;
+                    GlobalType::skip_bytes(module_bytes, cursor)?;
                 }
             }
         }
 
-        self.function_count = fn_signatures.len() as u32;
-        Ok(fn_signatures)
-    }
-
-    pub fn from_count_and_bytes(count: u32, bytes: Vec<'a, u8>) -> Self {
-        ImportSection {
-            bytes,
+        Ok(ImportSection {
             count,
-            function_count: 0,
-        }
+            fn_signatures,
+            bytes,
+        })
     }
 }
 
-section_impl!(
-    ImportSection,
-    SectionId::Import,
-    ImportSection::from_count_and_bytes
-);
+impl<'a> Serialize for ImportSection<'a> {
+    fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
+        if !self.bytes.is_empty() {
+            let header_indices = write_section_header(buffer, Self::ID);
+            buffer.encode_u32(self.count);
+            buffer.append_slice(&self.bytes);
+            update_section_size(buffer, header_indices);
+        }
+    }
+}
 
 /*******************************************************************
  *
@@ -1199,7 +1212,7 @@ impl<'a> CodeSection<'a> {
     pub(super) fn remove_dead_preloads<T: IntoIterator<Item = u32>>(
         &mut self,
         arena: &'a Bump,
-        import_fn_count: u32,
+        import_fn_count: usize,
         exported_fns: &[u32],
         called_preload_fns: T,
     ) {

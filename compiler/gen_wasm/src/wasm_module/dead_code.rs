@@ -207,10 +207,10 @@ pub fn copy_preloads_shrinking_dead_fns<'a, T: SerialBuffer>(
     buffer: &mut T,
     call_graph: &PreloadsCallGraph<'a>,
     external_code: &[u8],
-    import_fn_count: u32,
+    import_fn_count: usize,
     mut live_preload_indices: Vec<'a, u32>,
 ) {
-    let preload_idx_start = import_fn_count as usize;
+    let preload_idx_start = import_fn_count;
 
     // Create a dummy function with just a single `unreachable` instruction
     let mut dummy_builder = CodeBuilder::new(arena);
