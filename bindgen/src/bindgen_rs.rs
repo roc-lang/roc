@@ -987,11 +987,14 @@ pub struct {name} {{
             format!(
                 r#"/// Construct a tag named {non_null_tag}, with the appropriate payload
     pub fn {non_null_tag}(payload: {payload_type_name}) -> Self {{
-        let size = core::mem::size_of::<{payload_type_name}>();
-        let align = core::mem::align_of::<{payload_type_name}>();
+        let payload_align = core::mem::align_of::<{payload_type_name}>();
+        let self_align = core::mem::align_of::<Self>();
+        let size = self_align + core::mem::size_of::<{payload_type_name}>();
 
         unsafe {{
-            let pointer = crate::roc_alloc(size, align as u32) as *mut {wrapped_payload_type_name};
+            // Reserve `self_align` bytes before the payload, to store the refcount.
+            let pointer = (crate::roc_alloc(size, payload_align as u32) as *mut u8).add(self_align);
+            let pointer = pointer as *mut {wrapped_payload_type_name};
 
             *pointer = {init_payload};
 
