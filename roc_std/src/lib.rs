@@ -16,6 +16,7 @@ mod storage;
 pub use rc::ReferenceCount;
 pub use roc_list::RocList;
 pub use roc_str::RocStr;
+pub use storage::Storage;
 
 // A list of C functions that are being imported
 #[cfg(feature = "platform")]
