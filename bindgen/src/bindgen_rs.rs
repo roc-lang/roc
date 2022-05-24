@@ -1134,7 +1134,7 @@ fn arch_to_str(architecture: &Architecture) -> &'static str {
         Architecture::X86_64 => "x86_64",
         Architecture::X86_32 => "x86",
         Architecture::Aarch64 => "aarch64",
-        Architecture::Arm => "arm",
+        Architecture::Aarch32 => "arm",
         Architecture::Wasm32 => "wasm32",
     }
 }
