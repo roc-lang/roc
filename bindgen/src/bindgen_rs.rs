@@ -129,13 +129,8 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
                 RocTagUnion::NullableWrapped { .. } => {
                     todo!();
                 }
-                RocTagUnion::NullableUnwrapped {
-                    name,
-                    null_tag,
-                    non_null_tag,
-                    non_null_payload,
-                } => {
-                    let todo_reminder = todo!();
+                RocTagUnion::NullableUnwrapped { .. } => {
+                    todo!();
                     // write_nullable_unwrapped(
                     //     name,
                     //     architecture,
