@@ -1103,18 +1103,18 @@ pub struct {name} {{
         let body = format!(
             r#"fn drop(&mut self) {{
         if !self.pointer.is_null() {{
-            let payload = unsafe {{ &*self.pointer }};
             let align = core::mem::align_of::<{payload_type_name}>() as u32;
 
             unsafe {{
-                // The memory location is stored in a refcount format, so 1 alignment's
-                // worth of bytes before the payload.
+                // Drop the payload before dropping its wrapper.
+                drop(core::mem::ManuallyDrop::take(&mut *self.pointer));
+
+                // The wrapper's allocation includes a refcount, meaning it begins
+                // 1 alignment's worth of bytes before the payload.
                 let ptr = (self.pointer as *mut u8).sub(core::mem::align_of::<Self>());
 
                 crate::roc_dealloc(ptr.cast(), align);
             }}
-
-            drop(payload);
         }}
     }}"#
         );
