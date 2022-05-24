@@ -2,11 +2,8 @@ use crate::types::{RocTagUnion, RocType, TypeId, Types};
 use roc_mono::layout::UnionLayout;
 use roc_target::{Architecture, TargetInfo};
 use std::collections::hash_map::HashMap;
-use std::{
-    convert::TryInto,
-    fmt::{self, Write},
-};
-use strum::IntoEnumIterator;
+use std::convert::TryInto;
+use std::fmt::Display;
 
 pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
 pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
@@ -27,13 +24,6 @@ fn add_decl(impls: &mut Impls, opt_impl: Impl, architecture: Architecture, body:
 
 pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
     let mut buf = String::new();
-
-    emit_help(types_by_architecture, &mut buf);
-
-    buf
-}
-
-fn emit_help(types_by_architecture: &[(Architecture, Types)], buf: &mut String) {
     let mut impls: Impls = HashMap::default();
 
     for (architecture, types) in types_by_architecture.into_iter() {
@@ -48,23 +38,26 @@ fn emit_help(types_by_architecture: &[(Architecture, Types)], buf: &mut String) 
         if let Some(impl_str) = opt_impl {
             has_impl = true;
 
+            buf.push('\n');
             buf.push_str(&impl_str);
-            buf.push_str(" {{");
+            buf.push_str(" {");
         } else {
             has_impl = false;
         }
 
         for (decl, architectures) in decls {
+            buf.push('\n');
+
             // If we're inside an `impl` block, indent the cfg annotation
-            if has_impl {
-                buf.push_str(INDENT);
-            }
+            let indent = if has_impl { INDENT } else { "" };
+
+            buf.push_str(indent);
 
             match architectures.len() {
                 1 => {
                     let arch = arch_to_str(architectures.get(0).unwrap());
 
-                    buf.push_str(&format!("\n#[cfg(target_arch = \"{arch}\")]\n{decl}"));
+                    buf.push_str(&format!("r#[cfg(target_arch = \"{arch}\")]"));
                 }
                 _ => {
                     // We should never have a decl recorded with 0 architectures!
@@ -72,19 +65,28 @@ fn emit_help(types_by_architecture: &[(Architecture, Types)], buf: &mut String) 
 
                     let alternatives = architectures
                         .iter()
-                        .map(|arch| format!("{INDENT}target_arch = \"{}\"", arch_to_str(arch)))
+                        .map(|arch| {
+                            format!("{indent}{INDENT}target_arch = \"{}\"", arch_to_str(arch))
+                        })
                         .collect::<Vec<_>>()
                         .join(",\n");
 
-                    buf.push_str(&format!("\n#[cfg(any(\n{alternatives}\n))]\n{decl}"));
+                    buf.push_str(&format!("#[cfg(any(\n{alternatives}\n{indent}))]"));
                 }
             }
+
+            buf.push('\n');
+            buf.push_str(indent);
+            buf.push_str(&decl);
+            buf.push('\n');
         }
 
         if has_impl {
             buf.push_str("}\n");
         }
     }
+
+    buf
 }
 
 fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut Impls) {
@@ -115,14 +117,11 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
                     }
                 }
                 RocTagUnion::NonRecursive { tags, name } => {
-                    let todo_reminder = todo!();
                     // Empty tag unions can never come up at runtime,
                     // and so don't need declared types.
-                    // if !tags.is_empty() {
-                    //     write_tag_union(name, architecture, id, tags, types, buf)
-                    // } else {
-                    //     Ok(())
-                    // }
+                    if !tags.is_empty() {
+                        add_tag_union(name, architecture, id, tags, types, impls);
+                    }
                 }
                 RocTagUnion::Recursive { .. } => {
                     todo!();
@@ -186,14 +185,13 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
     }
 }
 
-#[cfg(debug_assertions = "false")] // TODO REMOVE
-fn write_discriminant(
+fn add_discriminant(
     name: &str,
     architecture: Architecture,
     tag_names: Vec<String>,
     types: &Types,
-    buf: &mut String,
-) -> Result<String, fmt::Error> {
+    impls: &mut Impls,
+) -> String {
     // The tag union's discriminant, e.g.
     //
     // #[repr(u8)]
@@ -213,23 +211,22 @@ fn write_discriminant(
         &discriminant_type,
         tag_names.into_iter(),
         types,
-        buf,
-    )?;
+        impls,
+    );
 
-    Ok(discriminant_name)
+    discriminant_name
 }
 
-#[cfg(debug_assertions = "false")] // TODO REMOVE
-fn write_tag_union(
+fn add_tag_union(
     name: &str,
     architecture: Architecture,
     type_id: TypeId,
     tags: &[(String, Option<TypeId>)],
     types: &Types,
     impls: &mut Impls,
-) -> fmt::Result {
+) {
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
-    let discriminant_name = write_discriminant(name, architecture, tag_names, types, buf)?;
+    let discriminant_name = add_discriminant(name, architecture, tag_names, types, impls);
     let typ = types.get(type_id);
     // TODO also do this for other targets. Remember, these can change based on more
     // than just pointer width; e.g. on wasm, the alignments of U16 and U8 are both 4!
@@ -239,26 +236,26 @@ fn write_tag_union(
 
     {
         // No #[derive(...)] for unions; we have to generate each impl ourselves!
-        let mut buf = format!("#[repr(C)]\npub union {name} {{");
+        let mut buf = format!("#[repr(C)]\npub union {name} {{\n");
 
         for (tag_name, opt_payload_id) in tags {
             // If there's no payload, we don't need a variant for it.
             if let Some(payload_id) = opt_payload_id {
                 let payload_type = types.get(*payload_id);
 
-                write!(buf, "{INDENT}{tag_name}: ")?;
+                buf.push_str(&format!("{INDENT}{tag_name}: "));
 
                 if payload_type.has_pointer(types) {
                     // types with pointers need ManuallyDrop
                     // because rust unions don't (and can't)
                     // know how to drop them automatically!
-                    writeln!(
-                        buf,
-                        "core::mem::ManuallyDrop<{}>,",
+                    buf.push_str(&format!(
+                        "core::mem::ManuallyDrop<{}>,\n",
                         type_name(*payload_id, types)
-                    )?;
+                    ));
                 } else {
-                    writeln!(buf, "{},", type_name(*payload_id, types))?;
+                    buf.push_str(&type_name(*payload_id, types));
+                    buf.push_str(",\n");
                 }
             }
         }
@@ -271,7 +268,7 @@ fn write_tag_union(
         // (Do this even if theoretically shouldn't be necessary, since
         // there's no runtime cost and it more explicitly syncs the
         // union's size with what we think it should be.)
-        writeln!(buf, "{INDENT}_sizer: [u8; {size}],\n}}")?;
+        buf.push_str(&format!("{INDENT}_sizer: [u8; {size}],\n}}"));
 
         add_decl(impls, None, architecture, buf);
     }
@@ -295,11 +292,10 @@ fn write_tag_union(
         // the entire structure as a union and manually setting the tag at the appropriate offset.
         add_decl(
             impls,
-            opt_impl,
+            opt_impl.clone(),
             architecture,
             format!(
-                r#"
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
+                r#"/// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn variant(&self) -> {discriminant_name} {{
         unsafe {{
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
@@ -312,7 +308,7 @@ fn write_tag_union(
 
         add_decl(
             impls,
-            opt_impl,
+            opt_impl.clone(),
             architecture,
             format!(
                 r#"/// Internal helper
@@ -365,11 +361,12 @@ fn write_tag_union(
                         )
                     };
 
-                writeln!(
-                    buf,
-                    // Don't use indoc because this must be indented once!
-                    r#"
-    /// Construct a tag named {tag_name}, with the appropriate payload
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    architecture,
+                    format!(
+                        r#"/// Construct a tag named {tag_name}, with the appropriate payload
     pub fn {tag_name}(payload: {payload_type_name}) -> Self {{
         let mut answer = Self {{
             {tag_name}: {init_payload}
@@ -378,40 +375,46 @@ fn write_tag_union(
         answer.set_discriminant({discriminant_name}::{tag_name});
 
         answer
-    }}"#,
-                )?;
+    }}"#
+                    ),
+                );
 
-                writeln!(
-                    buf,
-                    // Don't use indoc because this must be indented once!
-                    r#"
-    /// Unsafely assume the given {name} has a .tag() of {tag_name} and convert it to {tag_name}'s payload.
-    /// (Always examine .tag() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .tag() doesn't return {tag_name}.
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    architecture,
+                    format!(
+                        r#"/// Unsafely assume the given {name} has a .variant() of {tag_name} and convert it to {tag_name}'s payload.
+    /// (Always examine .variant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .variant() doesn't return {tag_name}.
     pub unsafe fn into_{tag_name}({self_for_into}) -> {payload_type_name} {{
-        debug_assert_eq!(self.tag(), {discriminant_name}::{tag_name});
+        debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
         {get_payload}
     }}"#,
-                )?;
+                    ),
+                );
 
-                writeln!(
-                    buf,
-                    // Don't use indoc because this must be indented once!
-                    r#"
-    /// Unsafely assume the given {name} has a .tag() of {tag_name} and return its payload.
-    /// (Always examine .tag() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .tag() doesn't return {tag_name}.
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    architecture,
+                    format!(
+                        r#"/// Unsafely assume the given {name} has a .variant() of {tag_name} and return its payload.
+    /// (Always examine .variant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .variant() doesn't return {tag_name}.
     pub unsafe fn as_{tag_name}(&self) -> {ref_if_needed}{payload_type_name} {{
-        debug_assert_eq!(self.tag(), {discriminant_name}::{tag_name});
+        debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
         {ref_if_needed}self.{tag_name}
     }}"#,
-                )?;
+                    ),
+                );
             } else {
-                writeln!(
-                    buf,
-                    // Don't use indoc because this must be indented once!
-                    r#"
-    /// A tag named {tag_name}, which has no payload.
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    architecture,
+                    format!(
+                        r#"/// A tag named {tag_name}, which has no payload.
     pub const {tag_name}: Self = unsafe {{
         let mut bytes = [0; core::mem::size_of::<{name}>()];
 
@@ -419,29 +422,34 @@ fn write_tag_union(
 
         core::mem::transmute::<[u8; core::mem::size_of::<{name}>()], {name}>(bytes)
     }};"#,
-                )?;
+                    ),
+                );
 
-                writeln!(
-                    buf,
-                    // Don't use indoc because this must be indented once!
-                    r#"
-    /// Other `into_` methods return a payload, but since the {tag_name} tag
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    architecture,
+                    format!(
+                        r#"/// Other `into_` methods return a payload, but since the {tag_name} tag
     /// has no payload, this does nothing and is only here for completeness.
     pub fn into_{tag_name}(self) {{
         ()
     }}"#,
-                )?;
+                    ),
+                );
 
-                writeln!(
-                    buf,
-                    // Don't use indoc because this must be indented once!
-                    r#"
-    /// Other `as` methods return a payload, but since the {tag_name} tag
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    architecture,
+                    format!(
+                        r#"/// Other `as` methods return a payload, but since the {tag_name} tag
     /// has no payload, this does nothing and is only here for completeness.
     pub unsafe fn as_{tag_name}(&self) {{
         ()
     }}"#,
-                )?;
+                    ),
+                );
             }
         }
     }
@@ -449,7 +457,7 @@ fn write_tag_union(
     // The Drop impl for the tag union
     {
         let opt_impl = Some(format!("impl Drop for {name}"));
-        let mut buf = "fn drop(&mut self) {".to_string();
+        let mut buf = String::new();
 
         write_impl_tags(
             2,
@@ -468,34 +476,39 @@ fn write_tag_union(
                     }
                 }
             },
-        )?;
+        );
 
-        writeln!(
-            buf,
-            r#"    }}
-}}"#
-        )?;
+        add_decl(
+            impls,
+            opt_impl,
+            architecture,
+            format!("fn drop(&mut self) {{\n{buf}{INDENT}}}"),
+        );
     }
 
     // The PartialEq impl for the tag union
     {
-        writeln!(
-            buf,
-            r#"
-impl PartialEq for {name} {{
-    fn eq(&self, other: &Self) -> bool {{
-        if self.tag() != other.tag() {{
-            return false;
-        }}
+        let opt_impl_prefix = if typ.has_float(types) {
+            String::new()
+        } else {
+            format!("impl Eq for {name} {{}}\n\n")
+        };
+        let opt_impl = Some(format!("{opt_impl_prefix}impl PartialEq for {name}"));
+        let mut buf = format!(
+            r#"fn eq(&self, other: &Self) -> bool {{
+            if self.variant() != other.variant() {{
+                return false;
+            }}
 
-        unsafe {{"#
-        )?;
+            unsafe {{
+"#
+        );
 
         write_impl_tags(
             3,
             tags.iter(),
             &discriminant_name,
-            buf,
+            &mut buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
                     format!("self.{tag_name} == other.{tag_name},")
@@ -506,40 +519,36 @@ impl PartialEq for {name} {{
                     "true,".to_string()
                 }
             },
-        )?;
+        );
 
-        writeln!(
-            buf,
-            r#"        }}
-    }}
-}}"#
-        )?;
-    }
+        buf.push_str(INDENT);
+        buf.push_str(INDENT);
+        buf.push_str("}\n");
+        buf.push_str(INDENT);
+        buf.push('}');
 
-    if !typ.has_float(types) {
-        writeln!(buf, "\nimpl Eq for {name} {{}}")?;
+        add_decl(impls, opt_impl, architecture, buf);
     }
 
     // The PartialOrd impl for the tag union
     {
-        writeln!(
-            buf,
-            r#"
-impl PartialOrd for {name} {{
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {{
-        match self.tag().partial_cmp(&other.tag()) {{
-            Some(core::cmp::Ordering::Equal) => {{}}
-            not_eq => return not_eq,
-        }}
+        let opt_impl = Some(format!("impl PartialOrd for {name}"));
+        let mut buf = format!(
+            r#"fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {{
+            match self.variant().partial_cmp(&other.variant()) {{
+                Some(core::cmp::Ordering::Equal) => {{}}
+                not_eq => return not_eq,
+            }}
 
-        unsafe {{"#
-        )?;
+            unsafe {{
+"#
+        );
 
         write_impl_tags(
             3,
             tags.iter(),
             &discriminant_name,
-            buf,
+            &mut buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
                     format!("self.{tag_name}.partial_cmp(&other.{tag_name}),",)
@@ -550,36 +559,36 @@ impl PartialOrd for {name} {{
                     "Some(core::cmp::Ordering::Equal),".to_string()
                 }
             },
-        )?;
+        );
 
-        writeln!(
-            buf,
-            r#"        }}
-    }}
-}}"#
-        )?;
+        buf.push_str(INDENT);
+        buf.push_str(INDENT);
+        buf.push_str("}\n");
+        buf.push_str(INDENT);
+        buf.push('}');
+
+        add_decl(impls, opt_impl, architecture, buf);
     }
 
     // The Ord impl for the tag union
     {
-        writeln!(
-            buf,
-            r#"
-impl Ord for {name} {{
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {{
-        match self.tag().cmp(&other.tag()) {{
-            core::cmp::Ordering::Equal => {{}}
-            not_eq => return not_eq,
-        }}
+        let opt_impl = Some(format!("impl Ord for {name}"));
+        let mut buf = format!(
+            r#"fn cmp(&self, other: &Self) -> core::cmp::Ordering {{
+            match self.variant().cmp(&other.variant()) {{
+                core::cmp::Ordering::Equal => {{}}
+                not_eq => return not_eq,
+            }}
 
-        unsafe {{"#
-        )?;
+            unsafe {{
+"#
+        );
 
         write_impl_tags(
             3,
             tags.iter(),
             &discriminant_name,
-            buf,
+            &mut buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
                     format!("self.{tag_name}.cmp(&other.{tag_name}),",)
@@ -590,121 +599,116 @@ impl Ord for {name} {{
                     "core::cmp::Ordering::Equal,".to_string()
                 }
             },
-        )?;
+        );
 
-        writeln!(
-            buf,
-            r#"        }}
-    }}
-}}"#
-        )?;
+        buf.push_str(INDENT);
+        buf.push_str(INDENT);
+        buf.push_str("}\n");
+        buf.push_str(INDENT);
+        buf.push('}');
+
+        add_decl(impls, opt_impl, architecture, buf);
     }
 
     // The Clone impl for the tag union
     {
-        writeln!(
-            buf,
-            r#"
-impl Clone for {name} {{
-    fn clone(&self) -> Self {{
-        let mut answer = unsafe {{"#
-        )?;
+        let opt_impl_prefix = if typ.has_pointer(types) {
+            String::new()
+        } else {
+            format!("impl Copy for {name} {{}}\n\n")
+        };
+        let opt_impl = Some(format!("{opt_impl_prefix}impl Clone for {name}"));
+        let mut buf = format!(
+            r#"fn clone(&self) -> Self {{
+        let mut answer = unsafe {{
+"#
+        );
 
         write_impl_tags(
             3,
             tags.iter(),
             &discriminant_name,
-            buf,
+            &mut buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
                     format!(
                         r#"Self {{
-                        {tag_name}: self.{tag_name}.clone(),
-                    }},"#,
+                    {tag_name}: self.{tag_name}.clone(),
+                }},"#,
                     )
                 } else {
                     // when there's no payload, initialize to garbage memory.
                     format!(
                         r#"core::mem::transmute::<
-                        core::mem::MaybeUninit<{name}>,
-                        {name},
-                    >(core::mem::MaybeUninit::uninit()),"#,
+                    core::mem::MaybeUninit<{name}>,
+                    {name},
+                >(core::mem::MaybeUninit::uninit()),"#,
                     )
                 }
             },
-        )?;
+        );
 
-        writeln!(
-            buf,
+        buf.push_str(&format!(
             r#"
         }};
 
-        answer.set_discriminant(self.tag());
+        answer.set_discriminant(self.variant());
 
         answer
-    }}
-}}"#
-        )?;
-    }
+    }}"#
+        ));
 
-    if !typ.has_pointer(types) {
-        writeln!(buf, "impl Copy for {name} {{}}\n")?;
+        add_decl(impls, opt_impl, architecture, buf);
     }
 
     // The Hash impl for the tag union
     {
-        writeln!(
-            buf,
-            r#"
-impl core::hash::Hash for {name} {{
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {{"#
-        )?;
+        let opt_impl = Some(format!("impl core::hash::Hash for {name}"));
+        let mut buf = format!(r#"fn hash<H: core::hash::Hasher>(&self, state: &mut H) {{"#);
 
         write_impl_tags(
             2,
             tags.iter(),
             &discriminant_name,
-            buf,
+            &mut buf,
             |tag_name, opt_payload_id| {
                 let hash_tag = format!("{discriminant_name}::{tag_name}.hash(state)");
 
                 if opt_payload_id.is_some() {
                     format!(
                         r#"unsafe {{
-                {hash_tag};
-                self.{tag_name}.hash(state);
-            }},"#
+                    {hash_tag};
+                    self.{tag_name}.hash(state);
+                }},"#
                     )
                 } else {
                     format!("{},", hash_tag)
                 }
             },
-        )?;
+        );
 
-        writeln!(
-            buf,
-            r#"    }}
-}}"#
-        )?;
+        buf.push_str(INDENT);
+        buf.push('}');
+
+        add_decl(impls, opt_impl, architecture, buf);
     }
 
     // The Debug impl for the tag union
     {
-        writeln!(
-            buf,
-            r#"
-impl core::fmt::Debug for {name} {{
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
-        f.write_str("{name}::")?;
+        let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
+        let mut buf = format!(
+            r#"fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+            f.write_str("{name}::")?;
 
-        unsafe {{"#
-        )?;
+            unsafe {{
+"#
+        );
 
         write_impl_tags(
             3,
             tags.iter(),
             &discriminant_name,
-            buf,
+            &mut buf,
             |tag_name, opt_payload_id| match opt_payload_id {
                 Some(payload_id) => {
                     // If it's a ManuallyDrop, we need a `*` prefix to dereference it
@@ -722,18 +726,16 @@ impl core::fmt::Debug for {name} {{
                 }
                 None => format!(r#"f.write_str("{tag_name}"),"#),
             },
-        )?;
+        );
 
-        writeln!(
-            buf,
-            r#"        }}
-    }}
-}}
-"#
-        )?;
+        buf.push_str(INDENT);
+        buf.push_str(INDENT);
+        buf.push_str("}\n");
+        buf.push_str(INDENT);
+        buf.push('}');
+
+        add_decl(impls, opt_impl, architecture, buf);
     }
-
-    Ok(())
 }
 
 fn write_impl_tags<
@@ -746,27 +748,27 @@ fn write_impl_tags<
     discriminant_name: &str,
     buf: &mut String,
     to_branch_str: F,
-) -> fmt::Result {
+) {
     write_indents(indentations, buf);
 
-    buf.push_str("match self.tag() {\n");
+    buf.push_str("match self.variant() {\n");
 
     for (tag_name, opt_payload_id) in tags {
         let branch_str = to_branch_str(tag_name, *opt_payload_id);
 
         write_indents(indentations + 1, buf);
 
-        writeln!(buf, "{discriminant_name}::{tag_name} => {branch_str}")?;
+        buf.push_str(&format!(
+            "{discriminant_name}::{tag_name} => {branch_str}\n"
+        ));
     }
 
     write_indents(indentations, buf);
 
     buf.push_str("}\n");
-
-    Ok(())
 }
 
-fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + fmt::Display>(
+fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
     name: &str,
     architecture: Architecture,
     typ: &RocType,
@@ -832,13 +834,13 @@ fn add_struct(
 
             for (label, field_id) in fields {
                 buf.push_str(&format!(
-                    "{INDENT}pub {}: {},",
+                    "{INDENT}pub {}: {},\n",
                     label.as_str(),
                     type_name(*field_id, types)
                 ));
             }
 
-            buf.push_str("}");
+            buf.push_str("}\n");
 
             add_decl(impls, None, architecture, buf);
         }
@@ -1005,11 +1007,11 @@ impl {name} {{
             buf,
             // Don't use indoc because this must be indented once!
             r#"
-    /// Unsafely assume the given {name} has a .tag() of {non_null_tag} and convert it to {non_null_tag}'s payload.
-    /// (Always examine .tag() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .tag() doesn't return {non_null_tag}.
+    /// Unsafely assume the given {name} has a .variant() of {non_null_tag} and convert it to {non_null_tag}'s payload.
+    /// (Always examine .variant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .variant() doesn't return {non_null_tag}.
     pub unsafe fn into_{non_null_tag}(self) -> {payload_type_name} {{
-        debug_assert_eq!(self.tag(), {discriminant_name}::{non_null_tag});
+        debug_assert_eq!(self.variant(), {discriminant_name}::{non_null_tag});
 
         let payload = {assign_payload};
         let align = core::mem::align_of::<{payload_type_name}>() as u32;
@@ -1024,11 +1026,11 @@ impl {name} {{
             buf,
             // Don't use indoc because this must be indented once!
             r#"
-    /// Unsafely assume the given {name} has a .tag() of {non_null_tag} and return its payload.
-    /// (Always examine .tag() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .tag() doesn't return {non_null_tag}.
+    /// Unsafely assume the given {name} has a .variant() of {non_null_tag} and return its payload.
+    /// (Always examine .variant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .variant() doesn't return {non_null_tag}.
     pub unsafe fn as_{non_null_tag}(&self) -> {ref_if_needed}{payload_type_name} {{
-        debug_assert_eq!(self.tag(), {discriminant_name}::{non_null_tag});
+        debug_assert_eq!(self.variant(), {discriminant_name}::{non_null_tag});
         {ref_if_needed}*self.pointer
     }}"#,
         )?;

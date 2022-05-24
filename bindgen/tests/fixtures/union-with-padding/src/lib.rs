@@ -1,6 +1,6 @@
 mod bindings;
 
-use bindings::non_recursive::{NonRecursive, Tag};
+use bindings::NonRecursive;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
