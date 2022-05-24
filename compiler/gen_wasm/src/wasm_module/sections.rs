@@ -297,24 +297,6 @@ impl<'a> TypeSection<'a> {
 
         sig_id as u32
     }
-
-    pub fn parse_offsets(&mut self) {
-        self.offsets.clear();
-
-        let mut i = 0;
-        while i < self.bytes.len() {
-            self.offsets.push(i);
-
-            debug_assert!(self.bytes[i] == Signature::SEPARATOR);
-            i += 1;
-
-            let n_params = u32::parse((), &self.bytes, &mut i).unwrap();
-            i += n_params as usize; // skip over one byte per param type
-
-            let n_return_values = self.bytes[i];
-            i += 1 + n_return_values as usize;
-        }
-    }
 }
 
 impl<'a> Section<'a> for TypeSection<'a> {
@@ -338,10 +320,31 @@ impl<'a> Parse<&'a Bump> for TypeSection<'a> {
         let mut bytes = Vec::<u8>::with_capacity_in(range.len() * 2, arena);
         *cursor = range.end;
         bytes.extend_from_slice(&module_bytes[range]);
+
+        let mut offsets = Vec::with_capacity_in(2 * count as usize, arena);
+        let mut i = 0;
+        while i < bytes.len() {
+            offsets.push(i);
+
+            if bytes[i] != Signature::SEPARATOR {
+                return Err(ParseError {
+                    message: "Invalid signature separator in TypeSection".into(),
+                    offset: *cursor,
+                });
+            }
+            i += 1;
+
+            let n_params = u32::parse((), &bytes, &mut i).unwrap();
+            i += n_params as usize; // skip over one byte per param type
+
+            let n_return_values = bytes[i];
+            i += 1 + n_return_values as usize;
+        }
+
         Ok(TypeSection {
             arena,
             bytes,
-            offsets: Vec::with_capacity_in(2 * count as usize, arena),
+            offsets,
         })
     }
 }
@@ -1544,8 +1547,7 @@ mod tests {
 
         // Reconstruct a new TypeSection by "pre-loading" the bytes of the original
         let mut cursor = 0;
-        let mut preloaded = TypeSection::preload(arena, &original_serialized, &mut cursor);
-        preloaded.parse_offsets();
+        let preloaded = TypeSection::parse(arena, &original_serialized, &mut cursor).unwrap();
 
         debug_assert_eq!(original.offsets, preloaded.offsets);
         debug_assert_eq!(original.bytes, preloaded.bytes);

@@ -136,8 +136,7 @@ impl<'a> WasmModule<'a> {
 
         let mut cursor: usize = 8;
 
-        let mut types = TypeSection::preload(arena, bytes, &mut cursor);
-        types.parse_offsets();
+        let types = TypeSection::parse(arena, bytes, &mut cursor)?;
 
         let mut import = ImportSection::preload(arena, bytes, &mut cursor);
         let imported_fn_signatures = import.parse(arena)?;
