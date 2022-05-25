@@ -1,4 +1,4 @@
-use crate::bindgen::{self, Env};
+use crate::bindgen::Env;
 use crate::types::Types;
 use bumpalo::Bump;
 use roc_can::{
