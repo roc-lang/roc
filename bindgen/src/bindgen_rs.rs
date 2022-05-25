@@ -1048,7 +1048,6 @@ pub struct {name} {{
         debug_assert_eq!(self.variant(), {discriminant_name}::{non_null_tag});
 
         let payload = {assign_payload};
-        let align = core::mem::align_of::<{payload_type_name}>() as u32;
 
         core::mem::drop(self);
 
