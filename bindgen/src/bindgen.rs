@@ -1,5 +1,5 @@
 use crate::structs::Structs;
-use crate::types::{RocTagUnion, TypeId, Types};
+use crate::types::{Field, RocTagUnion, TypeId, Types};
 use crate::{enums::Enums, types::RocType};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth::*, IntWidth::*};
@@ -21,21 +21,24 @@ pub struct Env<'a> {
     pub enum_names: Enums,
 }
 
-pub fn add_type<'a>(env: &mut Env<'a>, var: Variable, types: &mut Types) -> TypeId {
-    let layout = env
-        .layout_cache
-        .from_var(env.arena, var, env.subs)
-        .expect("Something weird ended up in the content");
+impl<'a> Env<'a> {
+    pub fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
+        let layout = self
+            .layout_cache
+            .from_var(self.arena, var, self.subs)
+            .expect("Something weird ended up in the content");
 
-    add_type_help(env, layout, var, None, types)
+        add_type_help(self, layout, var, None, types, None)
+    }
 }
 
-pub fn add_type_help<'a>(
+fn add_type_help<'a>(
     env: &mut Env<'a>,
     layout: Layout<'a>,
     var: Variable,
     opt_name: Option<Symbol>,
     types: &mut Types,
+    opt_recursion_id: Option<TypeId>,
 ) -> TypeId {
     let subs = env.subs;
 
@@ -67,7 +70,7 @@ pub fn add_type_help<'a>(
                 None => env.struct_names.get_name(var),
             };
 
-            add_struct(env, name, it, types)
+            add_struct(env, name, it, types, opt_recursion_id)
         }
         Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
@@ -122,7 +125,7 @@ pub fn add_type_help<'a>(
             } else {
                 // If this was a non-builtin type alias, we can use that alias name
                 // in the generated bindings.
-                add_type_help(env, layout, *real_var, Some(*name), types)
+                add_type_help(env, layout, *real_var, Some(*name), types, opt_recursion_id)
             }
         }
         Content::RangedNumber(_, _) => todo!(),
@@ -134,7 +137,7 @@ pub fn add_type_help<'a>(
     }
 }
 
-pub fn add_builtin_type<'a>(
+fn add_builtin_type<'a>(
     env: &mut Env<'a>,
     builtin: Builtin<'a>,
     var: Variable,
@@ -164,8 +167,8 @@ pub fn add_builtin_type<'a>(
         Builtin::Str => types.add(RocType::RocStr),
         Builtin::Dict(key_layout, val_layout) => {
             // TODO FIXME this `var` is wrong - should have a different `var` for key and for val
-            let key_id = add_type_help(env, *key_layout, var, opt_name, types);
-            let val_id = add_type_help(env, *val_layout, var, opt_name, types);
+            let key_id = add_type_help(env, *key_layout, var, opt_name, types, None);
+            let val_id = add_type_help(env, *val_layout, var, opt_name, types, None);
             let dict_id = types.add(RocType::RocDict(key_id, val_id));
 
             types.depends(dict_id, key_id);
@@ -174,7 +177,7 @@ pub fn add_builtin_type<'a>(
             dict_id
         }
         Builtin::Set(elem_layout) => {
-            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
+            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types, None);
             let set_id = types.add(RocType::RocSet(elem_id));
 
             types.depends(set_id, elem_id);
@@ -182,7 +185,7 @@ pub fn add_builtin_type<'a>(
             set_id
         }
         Builtin::List(elem_layout) => {
-            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
+            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types, None);
             let list_id = types.add(RocType::RocList(elem_id));
 
             types.depends(list_id, elem_id);
@@ -197,6 +200,7 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
     name: String,
     fields: I,
     types: &mut Types,
+    opt_recursion_id: Option<TypeId>,
 ) -> TypeId {
     let subs = env.subs;
     let fields_iter = &mut fields.into_iter();
@@ -214,7 +218,7 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
         Some(field) => field,
         None => {
             // This is a single-field record; put it in a transparent wrapper.
-            let content = add_type(env, first_field.1, types);
+            let content = env.add_type(first_field.1, types);
 
             return types.add(RocType::TransparentWrapper { name, content });
         }
@@ -247,18 +251,16 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
 
     let fields = sortables
         .into_iter()
-        .filter_map(|(label, field_var, field_layout)| {
+        .map(|(label, field_var, field_layout)| {
             let content = subs.get_content_without_compacting(field_var);
 
-            // Discard RecursionVar nodes. If we try to follow them,
-            // we'll end up right back here and recurse forever!
-            let type_id = if matches!(content, Content::RecursionVar { .. }) {
-                types.add(RocType::Recurse)
+            if matches!(content, Content::RecursionVar { .. }) {
+                Field::Recursive(label.to_string(), opt_recursion_id.unwrap())
             } else {
-                add_type_help(env, field_layout, field_var, None, types)
-            };
+                let type_id = add_type_help(env, field_layout, field_var, None, types, None);
 
-            Some((label.to_string(), type_id))
+                Field::NonRecursive(label.to_string(), type_id)
+            }
         })
         .collect();
 
@@ -272,6 +274,12 @@ fn add_tag_union(
     var: Variable,
     types: &mut Types,
 ) -> TypeId {
+    // This is a placeholder so that we can get a TypeId for future recursion IDs.
+    // At the end, we will replace this with the real tag union type.
+    let type_id = types.add(RocType::Struct {
+        name: String::new(),
+        fields: Vec::new(),
+    });
     let subs = env.subs;
     let mut tags: Vec<(String, Vec<Variable>)> = union_tags
         .iter_from_subs(subs)
@@ -307,7 +315,7 @@ fn add_tag_union(
                 // This is a single-tag union with 1 payload field, e.g.`[Foo Str]`.
                 // We'll just wrap that.
                 let var = *payload_vars.get(0).unwrap();
-                let content = add_type(env, var, types);
+                let content = env.add_type(var, types);
 
                 types.add(RocType::TransparentWrapper { name, content })
             }
@@ -320,7 +328,7 @@ fn add_tag_union(
                     (field_name, *payload_var)
                 });
 
-                add_struct(env, name, fields, types)
+                add_struct(env, name, fields, types, Some(type_id))
             }
         };
     }
@@ -347,7 +355,12 @@ fn add_tag_union(
                         // struct - e.g. for `[Foo Str, Bar Str]` both of them
                         // can have payloads of plain old Str, no struct wrapper needed.
                         let payload_var = payload_vars.get(0).unwrap();
-                        let payload_id = add_type(env, *payload_var, types);
+                        let layout = env
+                            .layout_cache
+                            .from_var(env.arena, var, env.subs)
+                            .expect("Something weird ended up in the content");
+                        let payload_id =
+                            add_type_help(env, layout, *payload_var, None, types, Some(type_id));
 
                         (tag_name, Some(payload_id))
                     }
@@ -357,7 +370,7 @@ fn add_tag_union(
                         let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
                             (format!("f{}", index).into(), *payload_var)
                         });
-                        let struct_id = add_struct(env, struct_name, fields, types);
+                        let struct_id = add_struct(env, struct_name, fields, types, Some(type_id));
 
                         (tag_name, Some(struct_id))
                     }
@@ -449,7 +462,9 @@ fn add_tag_union(
         }
     };
 
-    types.add(typ)
+    types.replace(type_id, typ);
+
+    type_id
 }
 
 fn struct_fields_needed<I: IntoIterator<Item = Variable>>(env: &mut Env<'_>, vars: I) -> usize {

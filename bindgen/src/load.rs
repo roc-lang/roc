@@ -101,7 +101,7 @@ pub fn load_types(
                         .get(&sym)
                         .expect("Indetifier known but it has no var?");
 
-                    bindgen::add_type(&mut env, *var, &mut types);
+                    env.add_type(*var, &mut types);
                 } else {
                     // figure out if we need to export non-identifier defs - when would that
                     // happen?
