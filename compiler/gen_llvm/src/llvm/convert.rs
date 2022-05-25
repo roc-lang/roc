@@ -116,8 +116,8 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
 /// Current differences
 ///
 /// - tag unions are passed by-reference. That means that
-///     * `f : [ Some I64, None ] -> I64` is typed `{ { i64, i8 }, i64 }* -> i64`
-///     * `f : { x : [ Some I64, None ] } -> I64 is typed `{ { { i64, i8 }, i64 } } -> i64`
+///     * `f : [Some I64, None] -> I64` is typed `{ { i64, i8 }, i64 }* -> i64`
+///     * `f : { x : [Some I64, None] } -> I64 is typed `{ { { i64, i8 }, i64 } } -> i64`
 ///
 /// Ideas exist to have (bigger than 2 register) records also be passed by-reference, but this
 /// is not currently implemented

@@ -1,6 +1,6 @@
 interface Elem
-    exposes [ Elem, PressEvent, row, col, text, button, none, translate, list ]
-    imports [ Action.{ Action } ]
+    exposes [Elem, PressEvent, row, col, text, button, none, translate, list]
+    imports [Action.{ Action }]
 
 Elem state :
     # PERFORMANCE NOTE:
@@ -12,9 +12,9 @@ Elem state :
         Text Str,
         Col (List (Elem state)),
         Row (List (Elem state)),
-        Lazy (Result { state, elem : Elem state } [ NotCached ] -> { state, elem : Elem state }),
+        Lazy (Result { state, elem : Elem state } [NotCached] -> { state, elem : Elem state }),
         # TODO FIXME: using this definition of Lazy causes a stack overflow in the compiler!
-        # Lazy (Result (Cached state) [ NotCached ] -> Cached state),
+        # Lazy (Result (Cached state) [NotCached] -> Cached state),
         None,
     ]
 
@@ -23,7 +23,7 @@ Cached state : { state, elem : Elem state }
 
 ButtonConfig state : { onPress : state, PressEvent -> Action state }
 
-PressEvent : { button : [ Touch, Mouse [ Left, Right, Middle ] ] }
+PressEvent : { button : [Touch, Mouse [Left, Right, Middle]] }
 
 text : Str -> Elem *
 text = \str ->
@@ -54,7 +54,6 @@ lazy = \state, render ->
                     # same as the cached one, then we can return exactly
                     # what we had cached.
                     cached
-
                 _ ->
                     # Either the state changed or else we didn't have a
                     # cached value to use. Either way, we need to render
@@ -75,19 +74,16 @@ none = None# I've often wanted this in elm/html. Usually end up resorting to (Ht
 ## Photo.render state.photo
 ## |> Elem.translate .photo &photo
 ##
-## col {} [ child, otherElems ]
+## col {} [child, otherElems]
 ##
 translate = \child, toChild, toParent ->
     when child is
         Text str ->
             Text str
-
         Col elems ->
             Col (List.map elems \elem -> translate elem toChild toParent)
-
         Row elems ->
             Row (List.map elems \elem -> translate elem toChild toParent)
-
         Button config label ->
             onPress = \parentState, event ->
                 toChild parentState
@@ -95,7 +91,6 @@ translate = \child, toChild, toParent ->
                     |> Action.map \c -> toParent parentState c
 
             Button { onPress } (translate label toChild toParent)
-
         Lazy renderChild ->
             Lazy
                 \parentState ->
@@ -105,7 +100,6 @@ translate = \child, toChild, toParent ->
                         elem: translate toChild toParent newChild,
                         state: toParent parentState state,
                     }
-
         None ->
             None
 
@@ -154,13 +148,10 @@ translateOrDrop = \child, toChild, toParent ->
     when child is
         Text str ->
             Text str
-
         Col elems ->
             Col (List.map elems \elem -> translateOrDrop elem toChild toParent)
-
         Row elems ->
             Row (List.map elems \elem -> translateOrDrop elem toChild toParent)
-
         Button config label ->
             onPress = \parentState, event ->
                 when toChild parentState is
@@ -168,14 +159,12 @@ translateOrDrop = \child, toChild, toParent ->
                         newChild
                             |> config.onPress event
                             |> Action.map \c -> toParent parentState c
-
                     Err _ ->
                         # The child was removed from the list before this onPress handler resolved.
                         # (For example, by a previous event handler that fired simultaneously.)
                         Action.none
 
             Button { onPress } (translateOrDrop label toChild toParent)
-
         Lazy childState renderChild ->
             Lazy
                 (toParent childState)
@@ -184,10 +173,8 @@ translateOrDrop = \child, toChild, toParent ->
                         Ok newChild ->
                             renderChild newChild
                                 |> translateOrDrop toChild toParent
-
                         Err _ ->
                             None
-
         # I don't think this should ever happen in practice.
         None ->
             None

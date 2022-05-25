@@ -13,7 +13,6 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
 
     match pattern {
         IntLiteral(v, _) => Literal(Literal::Int(*v)),
-        U128Literal(v) => Literal(Literal::U128(*v)),
         FloatLiteral(v, _) => Literal(Literal::Float(*v)),
         DecimalLiteral(v) => Literal(Literal::Decimal(*v)),
         StrLiteral(v) => Literal(Literal::Str(v.clone())),

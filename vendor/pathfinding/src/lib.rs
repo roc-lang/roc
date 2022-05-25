@@ -102,7 +102,7 @@ where
     FN: FnMut(&N) -> IN,
     IN: IntoIterator<Item = N>,
 {
-    let size_hint = nodes.size_hint().1.unwrap_or_default();
+    let size_hint = nodes.size_hint().0;
     let mut unmarked: MutSet<N> = nodes.collect::<MutSet<_>>();
     let mut marked = HashSet::with_capacity_and_hasher(size_hint, default_hasher());
     let mut temp = MutSet::default();

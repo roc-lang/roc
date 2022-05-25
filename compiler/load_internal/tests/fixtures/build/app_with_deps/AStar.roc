@@ -1,5 +1,5 @@
 interface AStar
-    exposes [ initialModel, reconstructPath, updateCost, cheapestOpen, astar, findPath ]
+    exposes [initialModel, reconstructPath, updateCost, cheapestOpen, astar, findPath]
     imports []
 
 
@@ -22,7 +22,7 @@ initialModel = \start ->
     }
 
 
-cheapestOpen : (position -> F64), Model position -> Result position [ KeyNotFound ]*
+cheapestOpen : (position -> F64), Model position -> Result position [KeyNotFound]*
 cheapestOpen = \costFunction, model ->
 
     folder = \resSmallestSoFar, position ->
@@ -80,12 +80,12 @@ updateCost = \current, neighbour, model ->
                 model
 
 
-findPath : { costFunction: (position, position -> F64), moveFunction: (position -> Set position), start : position, end : position } -> Result (List position) [ KeyNotFound ]*
+findPath : { costFunction: (position, position -> F64), moveFunction: (position -> Set position), start : position, end : position } -> Result (List position) [KeyNotFound]*
 findPath = \{ costFunction, moveFunction, start, end } ->
     astar costFunction moveFunction end (initialModel start)
 
 
-astar : (position, position -> F64), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*
+astar : (position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound]*, Ok (List position)]*
 astar = \costFn, moveFn, goal, model ->
     when cheapestOpen (\position -> costFn goal position) model is
         Err _ ->

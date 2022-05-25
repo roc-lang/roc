@@ -289,12 +289,11 @@ mod test_fmt {
     fn type_annotation_allow_blank_line_before_and_after_comment() {
         expr_formats_same(indoc!(
             r#"
-                person :
-                    {
-                        firstName : Str,
-                        # comment
-                        lastName : Str,
-                    }
+                person : {
+                    firstName : Str,
+                    # comment
+                    lastName : Str,
+                }
 
                 person
                 "#
@@ -302,27 +301,12 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-                person :
-                    {
-                        firstName : Str,
+                person : {
+                    firstName : Str,
 
-                        # comment
-                        lastName : Str,
-                    }
-
-                person
-                "#
-        ));
-
-        expr_formats_same(indoc!(
-            r#"
-                person :
-                    {
-                        firstName : Str,
-                        # comment
-
-                        lastName : Str,
-                    }
+                    # comment
+                    lastName : Str,
+                }
 
                 person
                 "#
@@ -330,14 +314,12 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-                person :
-                    {
-                        firstName : Str,
+                person : {
+                    firstName : Str,
+                    # comment
 
-                        # comment
-
-                        lastName : Str,
-                    }
+                    lastName : Str,
+                }
 
                 person
                 "#
@@ -345,17 +327,13 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-                person :
-                    {
-                        firstName : Str,
+                person : {
+                    firstName : Str,
 
-                        # comment 1
+                    # comment
 
-                        lastName : Str,
-
-                        # comment 2
-                        # comment 3
-                    }
+                    lastName : Str,
+                }
 
                 person
                 "#
@@ -363,16 +341,32 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-                person :
-                    {
-                        firstName : Str,
+                person : {
+                    firstName : Str,
 
-                        # comment 1
+                    # comment 1
 
-                        lastName : Str,
-                        # comment 2
-                        # comment 3
-                    }
+                    lastName : Str,
+
+                    # comment 2
+                    # comment 3
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person : {
+                    firstName : Str,
+
+                    # comment 1
+
+                    lastName : Str,
+                    # comment 2
+                    # comment 3
+                }
 
                 person
                 "#
@@ -381,27 +375,25 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                person :
-                    {
+                person : {
 
-                        # comment
+                    # comment
 
-                        firstName : Str,
-                        lastName : Str,
-                    }
+                    firstName : Str,
+                    lastName : Str,
+                }
 
                 person
                 "#
             ),
             indoc!(
                 r#"
-                person :
-                    {
-                        # comment
+                person : {
+                    # comment
 
-                        firstName : Str,
-                        lastName : Str,
-                    }
+                    firstName : Str,
+                    lastName : Str,
+                }
 
                 person
                 "#
@@ -411,57 +403,25 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                person :
-                    {
-                        firstName : Str,
-                        lastName : Str,
+                person : {
+                    firstName : Str,
+                    lastName : Str,
 
-                        # comment
+                    # comment
 
-                    }
-
-                person
-                "#
-            ),
-            indoc!(
-                r#"
-                person :
-                    {
-                        firstName : Str,
-                        lastName : Str,
-
-                        # comment
-                    }
-
-                person
-                "#
-            ),
-        );
-
-        expr_formats_to(
-            indoc!(
-                r#"
-                person :
-                    {
-                        firstName : Str,
-
-
-                        # comment
-                        lastName : Str,
-                    }
+                }
 
                 person
                 "#
             ),
             indoc!(
                 r#"
-                person :
-                    {
-                        firstName : Str,
+                person : {
+                    firstName : Str,
+                    lastName : Str,
 
-                        # comment
-                        lastName : Str,
-                    }
+                    # comment
+                }
 
                 person
                 "#
@@ -471,27 +431,25 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                person :
-                    {
-                        firstName : Str,
-                        # comment
+                person : {
+                    firstName : Str,
 
 
-                        lastName : Str,
-                    }
+                    # comment
+                    lastName : Str,
+                }
 
                 person
                 "#
             ),
             indoc!(
                 r#"
-                person :
-                    {
-                        firstName : Str,
-                        # comment
+                person : {
+                    firstName : Str,
 
-                        lastName : Str,
-                    }
+                    # comment
+                    lastName : Str,
+                }
 
                 person
                 "#
@@ -501,30 +459,56 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                person :
-                    {
-                        firstName : Str,
+                person : {
+                    firstName : Str,
+                    # comment
 
 
-                        # comment
-
-
-                        lastName : Str,
-                    }
+                    lastName : Str,
+                }
 
                 person
                 "#
             ),
             indoc!(
                 r#"
-                person :
-                    {
-                        firstName : Str,
+                person : {
+                    firstName : Str,
+                    # comment
 
-                        # comment
+                    lastName : Str,
+                }
 
-                        lastName : Str,
-                    }
+                person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                person : {
+                    firstName : Str,
+
+
+                    # comment
+
+
+                    lastName : Str,
+                }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person : {
+                    firstName : Str,
+
+                    # comment
+
+                    lastName : Str,
+                }
 
                 person
                 "#
@@ -1544,7 +1528,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
                     func = \_ ->
-                        [ 1, 2, 3 ]
+                        [1, 2, 3]
 
                     func
                 "#
@@ -1619,7 +1603,7 @@ mod test_fmt {
                 r#"
                     result = func
                         arg
-                        [ 1, 2, 3 ]
+                        [1, 2, 3]
 
                     result
                 "#
@@ -1724,14 +1708,14 @@ mod test_fmt {
     fn multiline_record_func_arg() {
         expr_formats_same(indoc!(
             r#"
-                    result = func arg {
-                        x: 1,
-                        y: 2,
-                        z: 3,
-                    }
+                result = func arg {
+                    x: 1,
+                    y: 2,
+                    z: 3,
+                }
 
-                    result
-                "#
+                result
+            "#
         ));
 
         expr_formats_to(
@@ -2046,11 +2030,10 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                f :
-                    {
-                        y : Int *,
-                        x : Int *,
-                    }
+                f : {
+                    y : Int *,
+                    x : Int *,
+                }
 
                 f"#
             ),
@@ -2061,14 +2044,38 @@ mod test_fmt {
     fn trailing_comma_in_record_annotation_same() {
         expr_formats_same(indoc!(
             r#"
-                f :
-                    {
+                f : {
+                    y : Int *,
+                    x : Int *,
+                }
+
+                f
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    f :
+                        {
+                            y : Int *,
+                            x : Int *,
+                        }
+
+                    f
+                "#
+            ),
+            indoc!(
+                r#"
+                    f : {
                         y : Int *,
                         x : Int *,
                     }
 
-                f"#
-        ));
+                    f
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -2089,7 +2096,18 @@ mod test_fmt {
                 f :
                     {}
 
-                f"#
+                f
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                f :
+                    {
+                    }
+
+                f
+            "#
         ));
     }
 
@@ -2128,10 +2146,9 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                f :
-                    {
-                        # comment
-                    }
+                f : {
+                    # comment
+                }
 
                 f"#
             ),
@@ -2139,15 +2156,46 @@ mod test_fmt {
     }
 
     #[test]
-    #[ignore]
-    fn multiline_inside_empty_record_annotation() {
+    fn multiline_curly_brace_type() {
         expr_formats_same(indoc!(
             r#"
-                f :
-                    {
-                    }
+                x : {
+                    a : Int,
+                }
 
-                f"#
+                x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                x :
+                    { a : Int }
+
+                x
+            "#
+        ));
+    }
+
+    #[test]
+    fn multiline_brace_type() {
+        expr_formats_same(indoc!(
+            r#"
+                x : [
+                    Int,
+                ]
+
+                x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                x :
+                    [Int]
+
+                x
+            "#
         ));
     }
 
@@ -2272,12 +2320,11 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                f :
-                    {
-                        x : Int *,
-                        # comment 1
-                        # comment 2
-                    }
+                f : {
+                    x : Int *,
+                    # comment 1
+                    # comment 2
+                }
 
                 f"#
             ),
@@ -2408,13 +2455,14 @@ mod test_fmt {
 
     #[test]
     fn one_item_list() {
-        expr_formats_same(indoc!("[ 4 ] "));
+        expr_formats_same(indoc!("[4]"));
+        expr_formats_to(indoc!("[ 4 ]"), indoc!("[4]"));
     }
 
     #[test]
     fn two_item_list() {
-        expr_formats_same(indoc!("[ 7, 8 ] "));
-        expr_formats_to(indoc!("[   7  ,   8  ] "), indoc!("[ 7, 8 ] "));
+        expr_formats_same(indoc!("[7, 8]"));
+        expr_formats_to(indoc!("[   7  ,   8  ]"), indoc!("[7, 8]"));
     }
 
     #[test]
@@ -2641,7 +2689,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
                 l =
-                    [ 1, 2 ]
+                    [1, 2]
 
                 l
             "#
@@ -3268,7 +3316,6 @@ mod test_fmt {
             when b is
                 1 ->
                     1
-
                 _ ->
                     2
             "#
@@ -3298,7 +3345,6 @@ mod test_fmt {
                 when year is
                     1999 ->
                         1
-
                     _ ->
                         0
                 "#
@@ -3315,7 +3361,6 @@ mod test_fmt {
                 1 ->
                     # when 1
                     1
-
                 # important
                 # fall through
                 _ ->
@@ -3349,7 +3394,6 @@ mod test_fmt {
                     when c is
                         6 | 7 ->
                             8
-
                 3 | 4 ->
                     5
         "#
@@ -3423,25 +3467,16 @@ mod test_fmt {
                  | 2
                  | 3 ->
                     4
-
                 5 | 6 | 7 ->
                     8
-
                 9
-                 | 10 ->
-                    11
-
+                 | 10 -> 11
                 12 | 13 ->
                     when c is
-                        14 | 15 ->
-                            16
-
+                        14 | 15 -> 16
                         17
-                         | 18 ->
-                            19
-
-                20 ->
-                    21
+                         | 18 -> 19
+                20 -> 21
                 "#
             ),
         );
@@ -3460,12 +3495,9 @@ mod test_fmt {
             indoc!(
                 r#"
             when b is
-                3 ->
-                    4
-
+                3 -> 4
                 9
-                 | 8 ->
-                    9
+                 | 8 -> 9
             "#
             ),
         );
@@ -3490,7 +3522,6 @@ mod test_fmt {
                 when b is
                     1 ->
                         1
-
                     # when 1
                     # fall through
                     _ ->
@@ -3509,7 +3540,6 @@ mod test_fmt {
             is
                 1 ->
                     Nothing
-
                 _ ->
                     Just True
             "#
@@ -3527,7 +3557,6 @@ mod test_fmt {
             is
                 Complex x y ->
                     simplify x y
-
                 Simple z ->
                     z
             "#
@@ -3562,7 +3591,6 @@ mod test_fmt {
             is
                 2 ->
                     x
-
                 _ ->
                     y
             "#
@@ -3599,10 +3627,67 @@ mod test_fmt {
             is
                 4 ->
                     x
-
                 _ ->
                     y
             "#
+            ),
+        );
+    }
+
+    #[test]
+    fn single_line_when_patterns() {
+        expr_formats_same(indoc!(
+            r#"
+            when x is
+                Foo -> 1
+                Bar -> 2
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            when x is
+                Foo -> 1
+                Bar ->
+                    2
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+
+                    Bar ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+                    Bar ->
+                        2
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+
+                    Bar -> 2
+                "#
+            ),
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+                    Bar -> 2
+                "#
             ),
         );
     }
@@ -3689,7 +3774,6 @@ mod test_fmt {
             when maybeScore is
                 Just score if score > 21 ->
                     win
-
                 _ ->
                     nextRound
             "#
@@ -3703,10 +3787,8 @@ mod test_fmt {
             when authenticationResponse is
                 Ok user if hasPermission user ->
                     loadPage route user
-
                 Ok user ->
                     PageNotFound
-
                 Err _ ->
                     ErrorPage
             "#
@@ -3812,7 +3894,6 @@ mod test_fmt {
             when f x == g y == h z is
                 True ->
                     Ok 1
-
                 False ->
                     Err 2
             "#
@@ -4087,7 +4168,7 @@ mod test_fmt {
     fn func_call_trailing_multiline_lambda() {
         expr_formats_same(indoc!(
             r#"
-                list = List.map [ 1, 2, 3 ] \x ->
+                list = List.map [1, 2, 3] \x ->
                     x + 1
 
                 list
@@ -4138,7 +4219,7 @@ mod test_fmt {
         module_formats_same(indoc!(
             r#"
                 interface Foo
-                    exposes [ Bar, Baz, a, b ]
+                    exposes [Bar, Baz, a, b]
                     imports []"#
         ));
     }
@@ -4148,8 +4229,8 @@ mod test_fmt {
         module_formats_same(indoc!(
             r#"
                 interface Foo
-                    exposes [ Bar, Baz, a, b ]
-                    imports [ Blah, Thing.{ foo, bar }, Stuff ]"#
+                    exposes [Bar, Baz, a, b]
+                    imports [Blah, Thing.{ foo, bar }, Stuff]"#
         ));
     }
 
@@ -4176,7 +4257,7 @@ mod test_fmt {
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
-                app "Foo" packages { pf: "platform" } imports [] provides [ main ] to pf"#
+                app "Foo" packages { pf: "platform" } imports [] provides [main] to pf"#
         ));
     }
 
@@ -4187,8 +4268,8 @@ mod test_fmt {
             requires { Model, Msg } { main : Effect {} } \
             exposes [] \
             packages {} \
-            imports [ Task.{ Task } ] \
-            provides [ mainForHost ]",
+            imports [Task.{ Task }] \
+            provides [mainForHost]",
         );
     }
 
@@ -4216,7 +4297,7 @@ mod test_fmt {
                         exposes []
                         packages {}
                         imports []
-                        provides [ mainForHost ]
+                        provides [mainForHost]
 
                     mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
                     mainForHost = main
@@ -4264,7 +4345,7 @@ mod test_fmt {
     fn list_alias() {
         expr_formats_same(indoc!(
             r#"
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             f : ConsList a -> ConsList a
             f = \_ -> Nil
@@ -4302,15 +4383,70 @@ mod test_fmt {
     fn multiline_tag_union_annotation() {
         expr_formats_same(indoc!(
             r#"
-            b :
-                [
-                    True,
-                    False,
-                ]
+            b : [
+                True,
+                False,
+            ]
 
             b
             "#
         ));
+
+        expr_formats_same(indoc!(
+            r#"
+            b :
+                [True, False]
+
+            b
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                b :
+                    [
+                        True,
+                        False,
+                    ]
+
+                b
+                "#
+            ),
+            indoc!(
+                r#"
+                b : [
+                    True,
+                    False,
+                ]
+
+                b
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                b : [
+                        True,
+                        False,
+                    ]
+
+                b
+                "#
+            ),
+            indoc!(
+                r#"
+                b : [
+                    True,
+                    False,
+                ]
+
+                b
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -4347,14 +4483,13 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                b :
-                    [
-                        True,
-                        # comment 1
-                        False,
-                        # comment 2
-                        # comment 3
-                    ]
+                b : [
+                    True,
+                    # comment 1
+                    False,
+                    # comment 2
+                    # comment 3
+                ]
 
                 b
                 "#
@@ -4366,7 +4501,7 @@ mod test_fmt {
     fn tag_union() {
         expr_formats_same(indoc!(
             r#"
-            f : [ True, False ] -> [ True, False ]
+            f : [True, False] -> [True, False]
             f = \x -> x
 
             a
@@ -4400,12 +4535,11 @@ mod test_fmt {
     fn recursive_tag_union() {
         expr_formats_same(indoc!(
             r#"
-            f : [ Cons a (ConsList a), Nil ] as ConsList a -> [ Just a, Nothing ]
+            f : [Cons a (ConsList a), Nil] as ConsList a -> [Just a, Nothing]
             f = \list ->
                 when list is
                     Nil ->
                         Nothing
-
                     Cons first _ ->
                         Just first
 
@@ -4514,6 +4648,57 @@ mod test_fmt {
                 )
             "#
         ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0
+                            )
+                "#
+            ),
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (
+                            a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0
+                        )
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0)
+                "#
+            ),
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (
+                            a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0
+                        )
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -4621,6 +4806,46 @@ mod test_fmt {
                     42
 
                 42
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn opaque_has_clause() {
+        expr_formats_same(indoc!(
+            r#"
+            A := U8 has [Eq, Hash]
+
+            0
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            A :=
+                U8
+                has [Eq, Hash]
+
+            0
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                A := a | a has Hash has [ Eq, Hash ]
+
+                0
+                "#
+            ),
+            indoc!(
+                r#"
+                A :=
+                    a | a has Hash
+                    has [Eq, Hash]
+
+                0
                 "#
             ),
         );

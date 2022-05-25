@@ -1,7 +1,7 @@
 hosted Effect
-    exposes [ Effect, after, map, always, forever, putLine, getLine ]
+    exposes [Effect, after, map, always, forever, putLine, getLine]
     imports []
-    generates Effect with [ after, map, always, forever ]
+    generates Effect with [after, map, always, forever]
 
 putLine : Str -> Effect {}
 

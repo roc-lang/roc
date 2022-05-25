@@ -1,7 +1,7 @@
 app "fibonacci"
     packages { pf: "fibonacci-platform" }
     imports []
-    provides [ main ] to pf
+    provides [main] to pf
 
 main = \n -> fib n 0 1
 

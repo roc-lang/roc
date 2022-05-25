@@ -5,18 +5,20 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command};
 use roc_build::link::{LinkType, LinkingStrategy};
-use roc_error_macros::user_error;
+use roc_error_macros::{internal_error, user_error};
 use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
 };
+#[cfg(not(target_os = "linux"))]
+use tempfile::TempDir;
 
 pub mod build;
 mod format;
@@ -262,8 +264,6 @@ pub fn build(
 
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
-
-    let original_cwd = std::env::current_dir()?;
     let opt_level = match (
         matches.is_present(FLAG_OPTIMIZE),
         matches.is_present(FLAG_OPT_SIZE),
@@ -430,7 +430,7 @@ pub fn build(
 
                     let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                    let x = roc_run(arena, &original_cwd, triple, args, &mut bytes);
+                    let x = roc_run(arena, triple, opt_level, args, &mut bytes);
                     std::mem::forget(bytes);
                     x
                 }
@@ -454,7 +454,7 @@ pub fn build(
 
                         let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                        let x = roc_run(arena, &original_cwd, triple, args, &mut bytes);
+                        let x = roc_run(arena, triple, opt_level, args, &mut bytes);
                         std::mem::forget(bytes);
                         x
                     } else {
@@ -504,268 +504,209 @@ pub fn build(
 
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
-    cwd: &Path,
     triple: Triple,
+    _opt_level: OptLevel,
     args: I,
     binary_bytes: &mut [u8],
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
-            todo!("figure out what to do with wasm");
-            //            // If possible, report the generated executable name relative to the current dir.
-            //            let generated_filename = binary_bytes
-            //                .strip_prefix(env::current_dir().unwrap())
-            //                .unwrap_or(binary_bytes);
-            //
-            //            // No need to waste time freeing this memory,
-            //            // since the process is about to exit anyway.
-            //            std::mem::forget(arena);
-            //
-            //            if cfg!(target_family = "unix") {
-            //                use std::os::unix::ffi::OsStrExt;
-            //
-            //                run_with_wasmer(
-            //                    generated_filename,
-            //                    args.into_iter().map(|os_str| os_str.as_bytes()),
-            //                );
-            //            } else {
-            //                run_with_wasmer(
-            //                    generated_filename,
-            //                    args.into_iter().map(|os_str| {
-            //                        os_str.to_str().expect(
-            //                            "Roc does not currently support passing non-UTF8 arguments to Wasmer.",
-            //                        )
-            //                    }),
-            //                );
-            //            }
-            //
-            //            Ok(0)
-        }
-        _ => {
+            let executable = roc_run_executable_file_path(binary_bytes)?;
+            let path = executable.as_path();
+            // If possible, report the generated executable name relative to the current dir.
+            let generated_filename = path
+                .strip_prefix(env::current_dir().unwrap())
+                .unwrap_or(path);
+
+            // No need to waste time freeing this memory,
+            // since the process is about to exit anyway.
+            std::mem::forget(arena);
+
             if cfg!(target_family = "unix") {
-                roc_run_unix(cwd, args, binary_bytes)
+                use std::os::unix::ffi::OsStrExt;
+
+                run_with_wasmer(
+                    generated_filename,
+                    args.into_iter().map(|os_str| os_str.as_bytes()),
+                );
             } else {
-                roc_run_non_unix(arena, cwd, args, binary_bytes)
+                run_with_wasmer(
+                    generated_filename,
+                    args.into_iter().map(|os_str| {
+                        os_str.to_str().expect(
+                            "Roc does not currently support passing non-UTF8 arguments to Wasmer.",
+                        )
+                    }),
+                );
             }
+
+            Ok(0)
         }
+        _ => roc_run_native(arena, args, binary_bytes),
     }
 }
 
-fn roc_run_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
-    cwd: &Path,
+/// Run on the native OS (not on wasm)
+#[cfg(target_family = "unix")]
+fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+    arena: Bump,
     args: I,
     binary_bytes: &mut [u8],
-) -> ! {
+) -> std::io::Result<i32> {
+    use bumpalo::collections::CollectIn;
+    use std::os::unix::ffi::OsStrExt;
+
     unsafe {
-        use std::os::unix::ffi::OsStrExt;
+        let executable = roc_run_executable_file_path(binary_bytes)?;
+        let path = executable.as_path();
+        let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
 
-        let app_path_buf = std::env::current_dir().unwrap().join("roc_app_binary");
-        let app_path = CString::new(app_path_buf.as_os_str().as_bytes()).unwrap();
+        // argv is an array of pointers to strings passed to the new program
+        // as its command-line arguments.  By convention, the first of these
+        // strings (i.e., argv[0]) should contain the filename associated
+        // with the file being executed.  The argv array must be terminated
+        // by a NULL pointer. (Thus, in the new program, argv[argc] will be NULL.)
+        let c_strings: bumpalo::collections::Vec<CString> = args
+            .into_iter()
+            .map(|x| CString::new(x.as_ref().as_bytes()).unwrap())
+            .collect_in(&arena);
 
-        // write the app bytes to the file
-        {
-            dbg!(&app_path_buf);
-            let fd = libc::open(
-                app_path.as_ptr().cast(),
-                libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC,
-                0o777,
-            );
+        let c_string_pointers = c_strings
+            .iter()
+            .map(|x| x.as_bytes_with_nul().as_ptr().cast());
 
-            dbg!(fd);
+        let argv: bumpalo::collections::Vec<*const libc::c_char> =
+            std::iter::once(path_cstring.as_ptr())
+                .chain(c_string_pointers)
+                .chain([std::ptr::null()])
+                .collect_in(&arena);
 
-            dbg!(libc::write(
-                fd,
-                binary_bytes.as_ptr().cast(),
-                binary_bytes.len()
-            ));
+        // envp is an array of pointers to strings, conventionally of the
+        // form key=value, which are passed as the environment of the new
+        // program.  The envp array must be terminated by a NULL pointer.
+        let envp_cstrings: bumpalo::collections::Vec<CString> = std::env::vars_os()
+            .flat_map(|(k, v)| {
+                [
+                    CString::new(k.as_bytes()).unwrap(),
+                    CString::new(v.as_bytes()).unwrap(),
+                ]
+            })
+            .collect_in(&arena);
 
-            dbg!(libc::close(fd));
+        let envp: bumpalo::collections::Vec<*const libc::c_char> = envp_cstrings
+            .iter()
+            .map(|s| s.as_ptr())
+            .chain([std::ptr::null()])
+            .collect_in(&arena);
+
+        roc_run_native_fast(executable, &argv, &envp);
+    }
+
+    Ok(1)
+}
+
+unsafe fn roc_run_native_fast(
+    executable: ExecutableFile,
+    argv: &[*const libc::c_char],
+    envp: &[*const libc::c_char],
+) {
+    match executable {
+        #[cfg(target_os = "linux")]
+        ExecutableFile::MemFd(fd, path) => {
+            if libc::fexecve(fd, argv.as_ptr(), envp.as_ptr()) != 0 {
+                internal_error!(
+                    "libc::fexecve({:?}, ..., ...) failed: {:?}",
+                    path,
+                    errno::errno()
+                );
+            }
         }
 
-        // let shared_fd = libc::shm_open(cstring.as_ptr().cast(), libc::O_CREAT, 0o666);
-        let parent_pid = std::process::id();
-
-        use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
-
-        let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
-
-        // TODO
-        // 1. add some enum/thing to either 1) generate expects and put the current PID into the
-        //      generated binary or 2) don't emit expect's at all
-        //
-        // 2. get zig to write data upone failed expect into the shared memory
-        // 3. get zig to send SIGUSR1 to the parent
-        //
-        // think about: what if libc is not linked
-
-        match libc::fork() {
-            0 => {
-                // we are the child
-                println!("we are the child {}", std::process::id());
-
-                let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-                let cstring = CString::new(name).unwrap();
-                let shared_fd =
-                    libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o666);
-                let bytes_to_write = b"42";
-
-                dbg!(shared_fd);
-
-                // by default, shared memory has length 0; expand it before writing to it.
-                dbg!(libc::ftruncate(shared_fd, 4096));
-
-                let shared_ptr = libc::mmap(
-                    std::ptr::null_mut(),
-                    4096,
-                    libc::PROT_WRITE,
-                    libc::MAP_SHARED,
-                    shared_fd,
-                    0,
+        #[cfg(not(target_os = "linux"))]
+        ExecutableFile::OnDisk(_, path) => {
+            let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
+            if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
+                internal_error!(
+                    "libc::execve({:?}, ..., ...) failed: {:?}",
+                    path,
+                    errno::errno()
                 );
-
-                libc::memcpy(
-                    shared_ptr,
-                    bytes_to_write.as_ptr().cast(),
-                    bytes_to_write.len(),
-                );
-
-                dbg!(libc::munmap(shared_ptr, 4096,));
-
-                // let bytes_written = libc::write(
-                //     shared_fd,
-                //     bytes_to_write.as_ptr().cast(),
-                //     bytes_to_write.len(),
-                // );
-
-                // dbg!(bytes_written);
-
-                // if bytes_written < 0 {
-                //     // Get the current value of errno
-                //     let e = errno::errno();
-
-                //     // Extract the error code as an i32
-                //     let code = e.0;
-
-                //     // Display a human-friendly error message
-                //     println!("Error writing bytes to shared memory {}: {}", code, e);
-                // }
-
-                dbg!(libc::close(shared_fd));
-
-                dbg!(libc::kill(parent_pid as _, SIGUSR1));
-
-                let array_with_null_pointer = &[0usize];
-                let app_path_buf = std::env::current_dir().unwrap().join("roc_app_binary");
-                let app_path = CString::new(app_path_buf.as_os_str().as_bytes()).unwrap();
-
-                println!("child is running execve({:?})", app_path);
-
-                let c = libc::execve(
-                    app_path.as_ptr().cast(),
-                    array_with_null_pointer.as_ptr().cast(),
-                    array_with_null_pointer.as_ptr().cast(),
-                );
-
-                if dbg!(c) < 0 {
-                    // Get the current value of errno
-                    let e = errno::errno();
-
-                    // Extract the error code as an i32
-                    let code = e.0;
-
-                    // Display a human-friendly error message
-                    println!("💥 Error {}: {}", code, e);
-                    println!("after {:?}", c);
-                }
             }
-            -1 => {
-                // something failed
-
-                // Get the current value of errno
-                let e = errno::errno();
-
-                // Extract the error code as an i32
-                let code = e.0;
-
-                // Display a human-friendly error message
-                println!("Error {}: {}", code, e);
-
-                process::exit(1)
-            }
-            1.. => {
-                // parent
-                println!("we are the parent {}", std::process::id());
-
-                let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-                let cstring = CString::new(name).unwrap();
-
-                for sig in &mut signals {
-                    match sig {
-                        SIGCHLD => {
-                            // clean up
-                            dbg!(libc::shm_unlink(cstring.as_ptr().cast()));
-
-                            dbg!(libc::unlink(app_path.as_ptr().cast()));
-
-                            // done!
-                            process::exit(0);
-                        }
-                        SIGUSR1 => {
-                            let shared_fd =
-                                libc::shm_open(cstring.as_ptr().cast(), libc::O_RDONLY, 0o666);
-                            // let mut buf: Vec<u8> = Vec::new();
-
-                            // // Grow the length so we can shrink down to it later
-                            // buf.resize(4096, 0);
-
-                            // let bytes_read = libc::read(shared_fd, buf.as_mut_ptr().cast(), 4096);
-
-                            // dbg!(bytes_read);
-
-                            let shared_ptr = libc::mmap(
-                                std::ptr::null_mut(),
-                                4096,
-                                libc::PROT_READ,
-                                libc::MAP_SHARED,
-                                shared_fd,
-                                0,
-                            );
-
-                            // if bytes_read > 0 {
-                            //     // Shrink down to the number of bytes that were actually read
-                            //     buf.resize(bytes_read.try_into().unwrap(), 0);
-
-                            //     dbg!(&buf);
-                            // } else {
-                            //     // Get the current value of errno
-                            //     let e = errno::errno();
-
-                            //     // Extract the error code as an i32
-                            //     let code = e.0;
-
-                            //     // Display a human-friendly error message
-                            //     println!("Error reading shared  memory {}: {}", code, e);
-                            // }
-
-                            let slice: &[u8] = std::slice::from_raw_parts(shared_ptr.cast(), 3);
-                            let cstr = std::ffi::CStr::from_bytes_with_nul_unchecked(slice);
-
-                            println!("The child process said: {:?}", cstr);
-                        }
-                        _ => println!("received signal {}", sig),
-                    }
-                }
-            }
-            _ => unreachable!(),
         }
-
-        unreachable!();
     }
 }
 
-fn roc_run_non_unix<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+#[derive(Debug)]
+enum ExecutableFile {
+    #[cfg(target_os = "linux")]
+    MemFd(libc::c_int, PathBuf),
+    #[cfg(not(target_os = "linux"))]
+    OnDisk(TempDir, PathBuf),
+}
+
+impl ExecutableFile {
+    fn as_path(&self) -> &Path {
+        match self {
+            #[cfg(target_os = "linux")]
+            ExecutableFile::MemFd(_, path_buf) => path_buf.as_ref(),
+            #[cfg(not(target_os = "linux"))]
+            ExecutableFile::OnDisk(_, path_buf) => path_buf.as_ref(),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+    // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
+    let flags = 0;
+    let anonymous_file_name = "roc_file_descriptor\0";
+    let fd = unsafe { libc::memfd_create(anonymous_file_name.as_ptr().cast(), flags) };
+
+    if fd == 0 {
+        internal_error!(
+            "libc::memfd_create({:?}, {}) failed: file descriptor is 0",
+            anonymous_file_name,
+            flags
+        );
+    }
+
+    let path = PathBuf::from(format!("/proc/self/fd/{}", fd));
+
+    std::fs::write(&path, binary_bytes)?;
+
+    Ok(ExecutableFile::MemFd(fd, path))
+}
+
+#[cfg(all(target_family = "unix", not(target_os = "linux")))]
+fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let temp_dir = tempfile::tempdir()?;
+
+    // We have not found a way to use a virtual file on non-Linux OSes.
+    // Hence we fall back to just writing the file to the file system, and using that file.
+    let app_path_buf = temp_dir.path().join("roc_app_binary");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .mode(0o777) // create the file as executable
+        .open(&app_path_buf)?;
+
+    file.write_all(binary_bytes)?;
+
+    // We store the TempDir in this variant alongside the path to the executable,
+    // so that the TempDir doesn't get dropped until after we're done with the path.
+    // If we didn't do that, then the tempdir would potentially get deleted by the
+    // TempDir's Drop impl before the file had been executed.
+    Ok(ExecutableFile::OnDisk(temp_dir, app_path_buf))
+}
+
+/// Run on the native OS (not on wasm)
+#[cfg(not(target_family = "unix"))]
+fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
-    _cwd: &Path,
     _args: I,
     _binary_bytes: &mut [u8],
 ) -> io::Result<i32> {

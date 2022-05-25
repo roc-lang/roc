@@ -85,8 +85,6 @@ const Unit = extern struct {};
 pub fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
-    stdout.print("xkxkxkxkyay", .{}) catch unreachable;
-    // std.process.exit(0);
 
     // start time
     var ts1: std.os.timespec = undefined;

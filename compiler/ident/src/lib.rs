@@ -222,7 +222,7 @@ impl From<String> for IdentStr {
 
 impl fmt::Debug for IdentStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // IdentStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
+        // IdentStr { is_small_str: false, storage: Refcounted(3), elements: [1,2,3,4] }
         f.debug_struct("IdentStr")
             //.field("is_small_str", &self.is_small_str())
             .field("string", &self.as_str())
@@ -233,7 +233,7 @@ impl fmt::Debug for IdentStr {
 
 impl fmt::Display for IdentStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // IdentStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
+        // IdentStr { is_small_str: false, storage: Refcounted(3), elements: [1,2,3,4] }
         f.write_str(self.as_str())
     }
 }

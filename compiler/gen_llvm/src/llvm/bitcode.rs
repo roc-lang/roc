@@ -380,7 +380,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         env,
         fn_name,
         env.context.void_type().into(),
-        &(bumpalo::vec![ in env.arena; BasicTypeEnum::PointerType(arg_type); argument_layouts.len() + 2 ]),
+        &(bumpalo::vec![in env.arena; BasicTypeEnum::PointerType(arg_type); argument_layouts.len() + 2]),
     );
 
     // called from zig, must use C calling convention

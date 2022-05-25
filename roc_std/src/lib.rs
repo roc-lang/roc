@@ -5,6 +5,7 @@ use core::fmt;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 
 mod rc;
@@ -210,24 +211,25 @@ impl<T, E> Drop for RocResult<T, E> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct RocDec(i128);
+#[repr(C)]
+pub struct RocDec([u8; 16]);
 
 impl RocDec {
-    pub const MIN: Self = Self(i128::MIN);
-    pub const MAX: Self = Self(i128::MAX);
+    pub const MIN: Self = Self(i128::MIN.to_ne_bytes());
+    pub const MAX: Self = Self(i128::MAX.to_ne_bytes());
 
     const DECIMAL_PLACES: usize = 18;
     const ONE_POINT_ZERO: i128 = 10i128.pow(Self::DECIMAL_PLACES as u32);
     const MAX_DIGITS: usize = 39;
     const MAX_STR_LENGTH: usize = Self::MAX_DIGITS + 2; // + 2 here to account for the sign & decimal dot
 
-    pub fn new(bits: i128) -> Self {
-        Self(bits)
+    pub fn new(num: i128) -> Self {
+        Self(num.to_ne_bytes())
     }
 
     pub fn as_bits(&self) -> (i64, u64) {
-        let lower_bits = self.0 as u64;
-        let upper_bits = (self.0 >> 64) as i64;
+        let lower_bits = self.as_i128() as u64;
+        let upper_bits = (self.as_i128() >> 64) as i64;
         (upper_bits, lower_bits)
     }
 
@@ -280,7 +282,7 @@ impl RocDec {
         // Calculate the high digits - the ones before the decimal point.
         match before_point.parse::<i128>() {
             Ok(answer) => match answer.checked_mul(Self::ONE_POINT_ZERO) {
-                Some(hi) => hi.checked_add(lo).map(Self),
+                Some(hi) => hi.checked_add(lo).map(|num| Self(num.to_ne_bytes())),
                 None => None,
             },
             Err(_) => None,
@@ -288,16 +290,30 @@ impl RocDec {
     }
 
     pub fn from_str_to_i128_unsafe(val: &str) -> i128 {
-        Self::from_str(val).unwrap().0
+        Self::from_str(val).unwrap().as_i128()
+    }
+
+    /// This is private because RocDec being an i128 is an implementation detail
+    #[inline(always)]
+    fn as_i128(&self) -> i128 {
+        i128::from_ne_bytes(self.0)
+    }
+
+    pub fn from_ne_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    pub fn to_ne_bytes(&self) -> [u8; 16] {
+        self.0
     }
 
     fn to_str_helper(&self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> usize {
-        if self.0 == 0 {
+        if self.as_i128() == 0 {
             write!(&mut bytes[..], "{}", "0").unwrap();
             return 1;
         }
 
-        let is_negative = (self.0 < 0) as usize;
+        let is_negative = (self.as_i128() < 0) as usize;
 
         static_assertions::const_assert!(Self::DECIMAL_PLACES + 1 == 19);
         // The :019 in the following write! is computed as Self::DECIMAL_PLACES + 1. If you change
@@ -306,7 +322,7 @@ impl RocDec {
         //
         // By using the :019 format, we're guaranteeing that numbers less than 1, say 0.01234
         // get their leading zeros placed in bytes for us. i.e. bytes = b"0012340000000000000"
-        write!(&mut bytes[..], "{:019}", self.0).unwrap();
+        write!(&mut bytes[..], "{:019}", self.as_i128()).unwrap();
 
         // If self represents 1234.5678, then bytes is b"1234567800000000000000".
         let mut i = Self::MAX_STR_LENGTH - 1;
@@ -358,5 +374,139 @@ impl fmt::Display for RocDec {
         let last_idx = self.to_str_helper(&mut bytes);
         let result = unsafe { str::from_utf8_unchecked(&bytes[0..last_idx]) };
         write!(fmtr, "{}", result)
+    }
+}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Eq, Default)]
+pub struct I128([u8; 16]);
+
+impl From<i128> for I128 {
+    fn from(other: i128) -> Self {
+        Self(other.to_ne_bytes())
+    }
+}
+
+impl From<I128> for i128 {
+    fn from(other: I128) -> Self {
+        unsafe { core::mem::transmute::<I128, i128>(other) }
+    }
+}
+
+impl fmt::Debug for I128 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let i128: i128 = (*self).into();
+
+        i128.fmt(f)
+    }
+}
+
+impl fmt::Display for I128 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let i128: i128 = (*self).into();
+
+        i128.fmt(f)
+    }
+}
+
+impl PartialEq for I128 {
+    fn eq(&self, other: &Self) -> bool {
+        let i128_self: i128 = (*self).into();
+        let i128_other: i128 = (*other).into();
+
+        i128_self.eq(&i128_other)
+    }
+}
+
+impl PartialOrd for I128 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let i128_self: i128 = (*self).into();
+        let i128_other: i128 = (*other).into();
+
+        i128_self.partial_cmp(&i128_other)
+    }
+}
+
+impl Ord for I128 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let i128_self: i128 = (*self).into();
+        let i128_other: i128 = (*other).into();
+
+        i128_self.cmp(&i128_other)
+    }
+}
+
+impl Hash for I128 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let i128: i128 = (*self).into();
+
+        i128.hash(state);
+    }
+}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Eq, Default)]
+pub struct U128([u8; 16]);
+
+impl From<u128> for U128 {
+    fn from(other: u128) -> Self {
+        Self(other.to_ne_bytes())
+    }
+}
+
+impl From<U128> for u128 {
+    fn from(other: U128) -> Self {
+        unsafe { core::mem::transmute::<U128, u128>(other) }
+    }
+}
+
+impl fmt::Debug for U128 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let u128: u128 = (*self).into();
+
+        u128.fmt(f)
+    }
+}
+
+impl fmt::Display for U128 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let u128: u128 = (*self).into();
+
+        u128.fmt(f)
+    }
+}
+
+impl PartialEq for U128 {
+    fn eq(&self, other: &Self) -> bool {
+        let u128_self: u128 = (*self).into();
+        let u128_other: u128 = (*other).into();
+
+        u128_self.eq(&u128_other)
+    }
+}
+
+impl PartialOrd for U128 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let u128_self: u128 = (*self).into();
+        let u128_other: u128 = (*other).into();
+
+        u128_self.partial_cmp(&u128_other)
+    }
+}
+
+impl Ord for U128 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let u128_self: u128 = (*self).into();
+        let u128_other: u128 = (*other).into();
+
+        u128_self.cmp(&u128_other)
+    }
+}
+
+impl Hash for U128 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let u128: u128 = (*self).into();
+
+        u128.hash(state);
     }
 }

@@ -5,7 +5,7 @@ use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
-    int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumericBound,
+    int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
@@ -24,6 +24,9 @@ use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
 use std::{char, u32};
 
+/// Derives that an opaque type has claimed, to checked and recorded after solving.
+pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
+
 #[derive(Clone, Default, Debug)]
 pub struct Output {
     pub references: References,
@@ -31,7 +34,7 @@ pub struct Output {
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
-    pub abilities_in_scope: Vec<Symbol>,
+    pub pending_derives: PendingDerives,
 }
 
 impl Output {
@@ -46,20 +49,29 @@ impl Output {
             .union_owned(other.introduced_variables);
         self.aliases.extend(other.aliases);
         self.non_closures.extend(other.non_closures);
+
+        {
+            let expected_derives_size = self.pending_derives.len() + other.pending_derives.len();
+            self.pending_derives.extend(other.pending_derives);
+            debug_assert!(
+                expected_derives_size == self.pending_derives.len(),
+                "Derives overwritten from nested scope - something is very wrong"
+            );
+        }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum IntValue {
-    I128(i128),
-    U128(u128),
+    I128([u8; 16]),
+    U128([u8; 16]),
 }
 
 impl Display for IntValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IntValue::I128(n) => Display::fmt(&n, f),
-            IntValue::U128(n) => Display::fmt(&n, f),
+            IntValue::I128(n) => Display::fmt(&i128::from_ne_bytes(*n), f),
+            IntValue::U128(n) => Display::fmt(&u128::from_ne_bytes(*n), f),
         }
     }
 }
@@ -70,7 +82,7 @@ pub enum Expr {
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, Box<str>, IntValue, NumericBound),
+    Num(Variable, Box<str>, IntValue, NumBound),
 
     // Int and Float store a variable to generate better error messages
     Int(Variable, Variable, Box<str>, IntValue, IntBound),
@@ -190,7 +202,7 @@ pub enum Expr {
         // definition, which we then use during constraint generation. For example
         // suppose we have
         //
-        //   Id n := [ Id U64 n ]
+        //   Id n := [Id U64 n]
         //   @Id "sasha"
         //
         // Then `opaque` is "Id", `argument` is "sasha", but this is not enough for us to
@@ -198,7 +210,7 @@ pub enum Expr {
         // the variable "n".
         // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
         // for the expression from the opaque definition. `type_arguments` is something like
-        // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
+        // [(n, fresh1)], and `specialized_def_type` becomes "[Id U64 fresh1]".
         specialized_def_type: Box<Type>,
         type_arguments: Vec<OptAbleVar>,
         lambda_set_variables: Vec<LambdaSet>,

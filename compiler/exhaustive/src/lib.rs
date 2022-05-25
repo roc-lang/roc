@@ -7,7 +7,6 @@ use roc_module::{
     symbol::Symbol,
 };
 use roc_region::all::Region;
-use roc_std::RocDec;
 
 use self::Pattern::*;
 
@@ -74,13 +73,13 @@ pub enum Pattern {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Literal {
-    Int(i128),
-    U128(u128),
+    Int([u8; 16]),
+    U128([u8; 16]),
     Bit(bool),
     Byte(u8),
     /// Stores the float bits
     Float(u64),
-    Decimal(RocDec),
+    Decimal([u8; 16]),
     Str(Box<str>),
 }
 

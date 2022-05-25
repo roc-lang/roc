@@ -276,7 +276,7 @@ fn eq_expr() {
     assert_evals_to!(
         indoc!(
             r#"
-                Expr : [ Add Expr Expr, Mul Expr Expr, Val I64, Var I64 ]
+                Expr : [Add Expr Expr, Mul Expr Expr, Val I64, Var I64]
 
                 x : Expr
                 x = Val 0
@@ -298,7 +298,7 @@ fn eq_linked_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 x : LinkedList I64
                 x = Nil
@@ -316,7 +316,7 @@ fn eq_linked_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 x : LinkedList I64
                 x = Cons 1 Nil
@@ -334,7 +334,7 @@ fn eq_linked_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 x : LinkedList I64
                 x = Cons 1 (Cons 2 Nil)
@@ -356,7 +356,7 @@ fn eq_linked_list_false() {
     assert_evals_to!(
         indoc!(
             r#"
-                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 x : LinkedList I64
                 x = Cons 1 Nil
@@ -378,9 +378,9 @@ fn eq_linked_list_long() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 prependOnes = \n, tail ->
                     if n == 0 then
@@ -411,7 +411,7 @@ fn eq_nullable_expr() {
     assert_evals_to!(
         indoc!(
             r#"
-                Expr : [ Add Expr Expr, Mul Expr Expr, Val I64, Empty ]
+                Expr : [Add Expr Expr, Mul Expr Expr, Val I64, Empty]
 
                 x : Expr
                 x = Val 0
@@ -434,7 +434,7 @@ fn eq_rosetree() {
     assert_evals_to!(
         indoc!(
             r#"
-                Rose a : [ Rose a (List (Rose a)) ]
+                Rose a : [Rose a (List (Rose a))]
 
                 x : Rose I64
                 x = Rose 0 []
@@ -452,7 +452,7 @@ fn eq_rosetree() {
     assert_evals_to!(
         indoc!(
             r#"
-                Rose a : [ Rose a (List (Rose a)) ]
+                Rose a : [Rose a (List (Rose a))]
 
                 x : Rose I64
                 x = Rose 0 []
@@ -470,7 +470,7 @@ fn eq_rosetree() {
     assert_evals_to!(
         indoc!(
             r#"
-                Rose a : [ Rose a (List (Rose a)) ]
+                Rose a : [Rose a (List (Rose a))]
 
                 a1 : Rose I64
                 a1 = Rose 999 []
@@ -506,7 +506,7 @@ fn eq_different_rosetrees() {
     assert_evals_to!(
         indoc!(
             r#"
-                Rose a : [ Rose a (List (Rose a)) ]
+                Rose a : [Rose a (List (Rose a))]
 
                 a1 : Rose I64
                 a1 = Rose 999 []
@@ -549,7 +549,7 @@ fn rosetree_with_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-                Rose a : [ Rose (Result (List (Rose a)) I64) ]
+                Rose a : [Rose (Result (List (Rose a)) I64)]
 
                 x : Rose I64
                 x = (Rose (Ok []))
@@ -613,7 +613,7 @@ fn compare_union_same_content() {
     assert_evals_to!(
         indoc!(
             r#"
-            Foo : [ A I64, B I64 ]
+            Foo : [A I64, B I64]
 
             a : Foo
             a = A 42
@@ -635,7 +635,7 @@ fn compare_recursive_union_same_content() {
     assert_evals_to!(
         indoc!(
             r#"
-                Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64 ]
+                Expr : [Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64]
 
                 v1 : Expr
                 v1 = Val1 42
@@ -657,7 +657,7 @@ fn compare_nullable_recursive_union_same_content() {
     assert_evals_to!(
         indoc!(
             r#"
-                Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64, Empty ]
+                Expr : [Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64, Empty]
 
                 v1 : Expr
                 v1 = Val1 42

@@ -59,7 +59,7 @@ where
 }
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
+    let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!
@@ -213,7 +213,7 @@ fn ir_int_literal() {
 #[mono_test]
 fn ir_int_add() {
     r#"
-    x = [ 1,2 ]
+    x = [1,2]
     5 + 4 + 3 + List.len x
     "#
 }
@@ -290,7 +290,7 @@ fn ir_two_defs() {
 #[mono_test]
 fn ir_when_just() {
     r#"
-    x : [ Nothing, Just I64 ]
+    x : [Nothing, Just I64]
     x = Just 41
 
     when x is
@@ -302,7 +302,7 @@ fn ir_when_just() {
 #[mono_test]
 fn one_element_tag() {
     r#"
-    x : [ Pair I64 ]
+    x : [Pair I64]
     x = Pair 2
 
     x
@@ -332,7 +332,7 @@ fn when_on_record() {
 #[mono_test]
 fn when_nested_maybe() {
     r#"
-    Maybe a : [ Nothing, Just a ]
+    Maybe a : [Nothing, Just a]
 
     x : Maybe (Maybe I64)
     x = Just (Just 41)
@@ -364,7 +364,7 @@ fn list_append_closure() {
     r#"
     myFunction = \l -> List.append l 42
 
-    myFunction [ 1, 2 ]
+    myFunction [1, 2]
     "#
 }
 
@@ -381,7 +381,7 @@ fn list_append() {
 fn list_len() {
     r#"
     x = [1,2,3]
-    y = [ 1.0 ]
+    y = [1.0]
 
     List.len x + List.len y
     "#
@@ -391,7 +391,7 @@ fn list_len() {
 fn when_joinpoint() {
     r#"
     wrapper = \{} ->
-        x : [ Red, White, Blue ]
+        x : [Red, White, Blue]
         x = Blue
 
         y =
@@ -458,7 +458,7 @@ fn let_with_record_pattern() {
 #[mono_test]
 fn let_with_record_pattern_list() {
     r#"
-    { x } = { x: [ 1, 3, 4 ], y: 3.14 }
+    { x } = { x: [1, 3, 4], y: 3.14 }
 
     x
     "#
@@ -585,7 +585,7 @@ fn quicksort_help() {
 fn quicksort_swap() {
     indoc!(
         r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
         swap = \list ->
             when Pair (List.get list 0) (List.get list 0) is
@@ -598,7 +598,7 @@ fn quicksort_swap() {
                     []
 
         main =
-            swap [ 1, 2 ]
+            swap [1, 2]
         "#
     )
 }
@@ -608,9 +608,9 @@ fn quicksort_swap() {
 // fn quicksort_partition_help() {
 //     indoc!(
 //         r#"
-//         app "test" provides [ main ] to "./platform"
+//         app "test" provides [main] to "./platform"
 
-//         partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
+//         partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [Pair I64 (List (Num a))]
 //         partitionHelp = \i, j, list, high, pivot ->
 //             if j < high then
 //                 when List.get list j is
@@ -636,7 +636,7 @@ fn quicksort_swap() {
 // fn quicksort_full() {
 //     indoc!(
 //         r#"
-//         app "test" provides [ main ] to "./platform"
+//         app "test" provides [main] to "./platform"
 
 //         quicksortHelp : List (Num a), I64, I64 -> List (Num a)
 //         quicksortHelp = \list, low, high ->
@@ -660,7 +660,7 @@ fn quicksort_swap() {
 //                 _ ->
 //                     []
 
-//         partition : I64, I64, List (Num a) -> [ Pair I64 (List (Num a)) ]
+//         partition : I64, I64, List (Num a) -> [Pair I64 (List (Num a))]
 //         partition = \low, high, initialList ->
 //             when List.get initialList high is
 //                 Ok pivot ->
@@ -671,7 +671,7 @@ fn quicksort_swap() {
 //                 Err _ ->
 //                     Pair (low - 1) initialList
 
-//         partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [ Pair I64 (List (Num a)) ]
+//         partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [Pair I64 (List (Num a))]
 //         partitionHelp = \i, j, list, high, pivot ->
 //             if j < high then
 //                 when List.get list j is
@@ -714,7 +714,7 @@ fn factorial() {
 #[mono_test]
 fn is_nil() {
     r#"
-    ConsList a : [ Cons a (ConsList a), Nil ]
+    ConsList a : [Cons a (ConsList a), Nil]
 
     isNil : ConsList a -> Bool
     isNil = \list ->
@@ -730,8 +730,8 @@ fn is_nil() {
 #[ignore]
 fn has_none() {
     r#"
-    Maybe a : [ Just a, Nothing ]
-    ConsList a : [ Cons a (ConsList a), Nil ]
+    Maybe a : [Just a, Nothing]
+    ConsList a : [Cons a (ConsList a), Nil]
 
     hasNone : ConsList (Maybe a) -> Bool
     hasNone = \list ->
@@ -748,7 +748,7 @@ fn has_none() {
 fn mk_pair_of() {
     indoc!(
         r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
         mkPairOf = \x -> Pair x x
 
@@ -762,7 +762,7 @@ fn mk_pair_of() {
 fn fst() {
     indoc!(
         r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
         fst = \x, _ -> x
 
@@ -776,7 +776,7 @@ fn fst() {
 fn list_cannot_update_inplace() {
     indoc!(
         r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
         x : List I64
         x = [1,2,3]
@@ -803,7 +803,7 @@ fn list_get() {
 #[mono_test]
 fn peano() {
     r#"
-    Peano : [ S Peano, Z ]
+    Peano : [S Peano, Z]
 
     three : Peano
     three = S (S (S Z))
@@ -815,7 +815,7 @@ fn peano() {
 #[mono_test]
 fn peano1() {
     r#"
-    Peano : [ S Peano, Z ]
+    Peano : [S Peano, Z]
 
     three : Peano
     three = S (S (S Z))
@@ -829,7 +829,7 @@ fn peano1() {
 #[mono_test]
 fn peano2() {
     r#"
-    Peano : [ S Peano, Z ]
+    Peano : [S Peano, Z]
 
     three : Peano
     three = S (S (S Z))
@@ -861,7 +861,7 @@ fn optional_when() {
 #[mono_test]
 fn nested_pattern_match() {
     r#"
-    Maybe a : [ Nothing, Just a ]
+    Maybe a : [Nothing, Just a]
 
     x : Maybe (Maybe I64)
     x = Just (Just 41)
@@ -876,7 +876,7 @@ fn nested_pattern_match() {
 #[ignore]
 fn linked_list_length_twice() {
     r#"
-    LinkedList a : [ Nil, Cons a (LinkedList a) ]
+    LinkedList a : [Nil, Cons a (LinkedList a)]
 
     nil : LinkedList I64
     nil = Nil
@@ -895,7 +895,7 @@ fn linked_list_length_twice() {
 fn rigids() {
     indoc!(
         r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
         swap : Nat, Nat, List a -> List a
         swap = \i, j, list ->
@@ -955,7 +955,7 @@ fn let_x_in_x_indirect() {
 fn nested_closure() {
     indoc!(
         r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
         foo = \{} ->
             x = 42
@@ -973,14 +973,14 @@ fn nested_closure() {
 fn closure_in_list() {
     indoc!(
         r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
         foo = \{} ->
             x = 41
 
             f = \{} -> x
 
-            [ f ]
+            [f]
 
         main =
             items = foo {}
@@ -995,7 +995,7 @@ fn closure_in_list() {
 fn somehow_drops_definitions() {
     indoc!(
         r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
         one : I64
         one = 1
@@ -1022,7 +1022,7 @@ fn somehow_drops_definitions() {
 fn specialize_closures() {
     indoc!(
         r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
 
         apply : (a -> a), a -> a
@@ -1053,7 +1053,7 @@ fn specialize_closures() {
 fn specialize_lowlevel() {
     indoc!(
         r#"
-         app "test" provides [ main ] to "./platform"
+         app "test" provides [main] to "./platform"
 
          apply : (a -> a), a -> a
          apply = \f, x -> f x
@@ -1081,7 +1081,7 @@ fn empty_list_of_function_type() {
     // see https://github.com/rtfeldman/roc/issues/1732
     indoc!(
         r#"
-         app "test" provides [ main ] to "./platform"
+         app "test" provides [main] to "./platform"
 
          main =
             myList : List (Str -> Str)
@@ -1094,7 +1094,7 @@ fn empty_list_of_function_type() {
                 if False then
                     myList
                 else
-                    [ myClosure ]
+                    [myClosure]
 
             when List.get choose 0 is
                 Ok f -> f "foo"
@@ -1215,7 +1215,7 @@ fn monomorphized_list() {
 fn monomorphized_applied_tag() {
     indoc!(
         r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
         main =
             a = A "A"
@@ -1246,7 +1246,7 @@ fn aliased_polymorphic_closure() {
 fn issue_2535_polymorphic_fields_referenced_in_list() {
     indoc!(
         r#"
-        app "test" provides [ nums ] to "./platform"
+        app "test" provides [nums] to "./platform"
 
         alpha = { a: 1, b: 2 }
 
@@ -1255,7 +1255,7 @@ fn issue_2535_polymorphic_fields_referenced_in_list() {
             [
                 alpha.a,
                 alpha.b,
-            ]
+           ]
         "#
     )
 }
@@ -1284,11 +1284,11 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
 fn issue_2810() {
     indoc!(
         r#"
-        Command : [ Command Tool ]
+        Command : [Command Tool]
 
-        Job : [ Job Command ]
+        Job : [Job Command]
 
-        Tool : [ SystemTool, FromJob Job ]
+        Tool : [SystemTool, FromJob Job]
 
         a : Job
         a = Job (Command (FromJob (Job (Command SystemTool))))
@@ -1312,7 +1312,7 @@ fn issue_2811() {
 fn specialize_ability_call() {
     indoc!(
         r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
         Hash has
             hash : a -> U64 | a has Hash
@@ -1331,11 +1331,11 @@ fn specialize_ability_call() {
 fn opaque_assign_to_symbol() {
     indoc!(
         r#"
-        app "test" provides [ out ] to "./platform"
+        app "test" provides [out] to "./platform"
 
         Variable := U8
 
-        fromUtf8 : U8 -> Result Variable [ InvalidVariableUtf8 ]
+        fromUtf8 : U8 -> Result Variable [InvalidVariableUtf8]
         fromUtf8 = \char ->
             Ok (@Variable char)
 
@@ -1348,7 +1348,7 @@ fn opaque_assign_to_symbol() {
 fn encode() {
     indoc!(
         r#"
-        app "test" provides [ myU8Bytes ] to "./platform"
+        app "test" provides [myU8Bytes] to "./platform"
 
         Encoder fmt := List U8, fmt -> List U8 | fmt has Format
 
@@ -1381,7 +1381,7 @@ fn encode() {
 // fn static_str_closure() {
 //     indoc!(
 //         r#"
-//         app "test" provides [ main ] to "./platform"
+//         app "test" provides [main] to "./platform"
 
 //         main : Str
 //         main =
@@ -1399,9 +1399,9 @@ fn encode() {
 fn list_map_closure_borrows() {
     indoc!(
         r#"
-        app "test" provides [ out ] to "./platform"
+        app "test" provides [out] to "./platform"
 
-        list = [ Str.concat "lllllllllllllllllllllooooooooooong" "g" ]
+        list = [Str.concat "lllllllllllllllllllllooooooooooong" "g"]
 
         example1 = List.map list \string -> Str.repeat string 2
 
@@ -1417,9 +1417,9 @@ fn list_map_closure_borrows() {
 fn list_map_closure_owns() {
     indoc!(
         r#"
-        app "test" provides [ out ] to "./platform"
+        app "test" provides [out] to "./platform"
 
-        list = [ Str.concat "lllllllllllllllllllllooooooooooong" "g" ]
+        list = [Str.concat "lllllllllllllllllllllooooooooooong" "g"]
 
         example2 = List.map list \string -> Str.concat string "!"
 
@@ -1435,9 +1435,9 @@ fn list_map_closure_owns() {
 fn list_sort_asc() {
     indoc!(
         r#"
-        app "test" provides [ out ] to "./platform"
+        app "test" provides [out] to "./platform"
 
-        out = List.sortAsc [ 4,3,2,1 ]
+        out = List.sortAsc [4, 3, 2, 1]
         "#
     )
 }

@@ -166,7 +166,7 @@ fn union_nonrecursive_inc() {
     assert_refcounts!(
         indoc!(
             r#"
-                TwoOrNone a: [ Two a a, None ]
+                TwoOrNone a: [Two a a, None]
 
                 s = Str.concat "A long enough string " "to be heap-allocated"
 
@@ -190,7 +190,7 @@ fn union_nonrecursive_dec() {
     assert_refcounts!(
         indoc!(
             r#"
-                TwoOrNone a: [ Two a a, None ]
+                TwoOrNone a: [Two a a, None]
 
                 s = Str.concat "A long enough string " "to be heap-allocated"
 
@@ -213,7 +213,7 @@ fn union_recursive_inc() {
     assert_refcounts!(
         indoc!(
             r#"
-                Expr : [ Sym Str, Add Expr Expr ]
+                Expr : [Sym Str, Add Expr Expr]
 
                 s = Str.concat "heap_allocated" "_symbol_name"
 
@@ -241,7 +241,7 @@ fn union_recursive_dec() {
     assert_refcounts!(
         indoc!(
             r#"
-                Expr : [ Sym Str, Add Expr Expr ]
+                Expr : [Sym Str, Add Expr Expr]
 
                 s = Str.concat "heap_allocated" "_symbol_name"
 
@@ -273,7 +273,7 @@ fn refcount_different_rosetrees_inc() {
     assert_refcounts!(
         indoc!(
             r#"
-                Rose a : [ Rose a (List (Rose a)) ]
+                Rose a : [Rose a (List (Rose a))]
 
                 s = Str.concat "A long enough string " "to be heap-allocated"
 
@@ -313,7 +313,7 @@ fn refcount_different_rosetrees_dec() {
     assert_refcounts!(
         indoc!(
             r#"
-                Rose a : [ Rose a (List (Rose a)) ]
+                Rose a : [Rose a (List (Rose a))]
 
                 s = Str.concat "A long enough string " "to be heap-allocated"
 
@@ -352,7 +352,7 @@ fn union_linked_list_inc() {
     assert_refcounts!(
         indoc!(
             r#"
-                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 s = Str.concat "A long enough string " "to be heap-allocated"
 
@@ -378,7 +378,7 @@ fn union_linked_list_dec() {
     assert_refcounts!(
         indoc!(
             r#"
-                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 s = Str.concat "A long enough string " "to be heap-allocated"
 
@@ -406,9 +406,9 @@ fn union_linked_list_long_dec() {
     assert_refcounts!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 prependOnes = \n, tail ->
                     if n == 0 then

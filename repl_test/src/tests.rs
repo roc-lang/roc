@@ -70,7 +70,7 @@ fn num_floor_division() {
 fn num_floor_checked_division_success() {
     expect_success(
         "Num.divTruncChecked 4 3",
-        "Ok 1 : Result (Int *) [ DivByZero ]*",
+        "Ok 1 : Result (Int *) [DivByZero]*",
     );
 }
 
@@ -79,7 +79,7 @@ fn num_floor_checked_division_success() {
 fn num_floor_checked_division_divby_zero() {
     expect_success(
         "Num.divTruncChecked 4 0",
-        "Err DivByZero : Result (Int *) [ DivByZero ]*",
+        "Err DivByZero : Result (Int *) [DivByZero]*",
     );
 }
 
@@ -94,7 +94,7 @@ fn num_ceil_division() {
 fn num_ceil_checked_division_success() {
     expect_success(
         "Num.divCeilChecked 4 3",
-        "Ok 2 : Result (Int *) [ DivByZero ]*",
+        "Ok 2 : Result (Int *) [DivByZero]*",
     )
 }
 
@@ -120,26 +120,26 @@ fn bool_basic_equality() {
 
 #[test]
 fn arbitrary_tag_unions() {
-    expect_success("if 1 == 1 then Red else Green", "Red : [ Green, Red ]*");
-    expect_success("if 1 != 1 then Red else Green", "Green : [ Green, Red ]*");
+    expect_success("if 1 == 1 then Red else Green", "Red : [Green, Red]*");
+    expect_success("if 1 != 1 then Red else Green", "Green : [Green, Red]*");
 }
 
 #[test]
 fn tag_without_arguments() {
-    expect_success("True", "True : [ True ]*");
-    expect_success("False", "False : [ False ]*");
+    expect_success("True", "True : [True]*");
+    expect_success("False", "False : [False]*");
 }
 
 #[test]
 fn byte_tag_union() {
     expect_success(
         "if 1 == 1 then Red else if 1 == 1 then Green else Blue",
-        "Red : [ Blue, Green, Red ]*",
+        "Red : [Blue, Green, Red]*",
     );
 
     expect_success(
         "{ y: { x: if 1 == 1 then Red else if 1 == 1 then Green else Blue } }",
-        "{ y: { x: Red } } : { y : { x : [ Blue, Green, Red ]* } }",
+        "{ y: { x: Red } } : { y : { x : [Blue, Green, Red]* } }",
     );
 }
 
@@ -147,24 +147,24 @@ fn byte_tag_union() {
 fn tag_in_record() {
     expect_success(
         "{ x: Foo 1 2 3, y : 4 }",
-        "{ x: Foo 1 2 3, y: 4 } : { x : [ Foo (Num *) (Num *) (Num *) ]*, y : Num * }",
+        "{ x: Foo 1 2 3, y: 4 } : { x : [Foo (Num *) (Num *) (Num *)]*, y : Num * }",
     );
     expect_success(
         "{ x: Foo 1 2 3 }",
-        "{ x: Foo 1 2 3 } : { x : [ Foo (Num *) (Num *) (Num *) ]* }",
+        "{ x: Foo 1 2 3 } : { x : [Foo (Num *) (Num *) (Num *)]* }",
     );
-    expect_success("{ x: Unit }", "{ x: Unit } : { x : [ Unit ]* }");
+    expect_success("{ x: Unit }", "{ x: Unit } : { x : [Unit]* }");
 }
 
 #[test]
 fn single_element_tag_union() {
-    expect_success("True 1", "True 1 : [ True (Num *) ]*");
-    expect_success("Foo 1 3.14", "Foo 1 3.14 : [ Foo (Num *) (Float *) ]*");
+    expect_success("True 1", "True 1 : [True (Num *)]*");
+    expect_success("Foo 1 3.14", "Foo 1 3.14 : [Foo (Num *) (Float *)]*");
 }
 
 #[test]
 fn newtype_of_unit() {
-    expect_success("Foo Bar", "Foo Bar : [ Foo [ Bar ]* ]*");
+    expect_success("Foo Bar", "Foo Bar : [Foo [Bar]*]*");
 }
 
 #[test]
@@ -172,13 +172,13 @@ fn newtype_of_big_data() {
     expect_success(
         indoc!(
             r#"
-                Either a b : [ Left a, Right b ]
+                Either a b : [Left a, Right b]
                 lefty : Either Str Str
                 lefty = Left "loosey"
                 A lefty
                 "#
         ),
-        r#"A (Left "loosey") : [ A (Either Str Str) ]*"#,
+        r#"A (Left "loosey") : [A (Either Str Str)]*"#,
     )
 }
 
@@ -187,13 +187,13 @@ fn newtype_nested() {
     expect_success(
         indoc!(
             r#"
-                Either a b : [ Left a, Right b ]
+                Either a b : [Left a, Right b]
                 lefty : Either Str Str
                 lefty = Left "loosey"
                 A (B (C lefty))
                 "#
         ),
-        r#"A (B (C (Left "loosey"))) : [ A [ B [ C (Either Str Str) ]* ]* ]*"#,
+        r#"A (B (C (Left "loosey"))) : [A [B [C (Either Str Str)]*]*]*"#,
     )
 }
 
@@ -202,23 +202,23 @@ fn newtype_of_big_of_newtype() {
     expect_success(
         indoc!(
             r#"
-                Big a : [ Big a [ Wrapper [ Newtype a ] ] ]
+                Big a : [Big a [Wrapper [Newtype a]]]
                 big : Big Str
                 big = Big "s" (Wrapper (Newtype "t"))
                 A big
                 "#
         ),
-        r#"A (Big "s" (Wrapper (Newtype "t"))) : [ A (Big Str) ]*"#,
+        r#"A (Big "s" (Wrapper (Newtype "t"))) : [A (Big Str)]*"#,
     )
 }
 
 #[test]
 fn tag_with_arguments() {
-    expect_success("True 1", "True 1 : [ True (Num *) ]*");
+    expect_success("True 1", "True 1 : [True (Num *)]*");
 
     expect_success(
         "if 1 == 1 then True 3 else False 3.14",
-        "True 3 : [ False (Float *), True (Num *) ]*",
+        "True 3 : [False (Float *), True (Num *)]*",
     )
 }
 
@@ -258,58 +258,58 @@ fn literal_empty_list() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn literal_empty_list_empty_record() {
-    expect_success("[ {} ]", "[ {} ] : List {}");
+    expect_success("[{}]", "[{}] : List {}");
 }
 
 #[test]
 fn literal_num_list() {
-    expect_success("[ 1, 2, 3 ]", "[ 1, 2, 3 ] : List (Num *)");
+    expect_success("[1, 2, 3]", "[1, 2, 3] : List (Num *)");
 }
 
 #[test]
 fn literal_int_list() {
-    expect_success("[ 0x1, 0x2, 0x3 ]", "[ 1, 2, 3 ] : List (Int *)");
+    expect_success("[0x1, 0x2, 0x3]", "[1, 2, 3] : List (Int *)");
 }
 
 #[test]
 fn literal_float_list() {
-    expect_success("[ 1.1, 2.2, 3.3 ]", "[ 1.1, 2.2, 3.3 ] : List (Float *)");
+    expect_success("[1.1, 2.2, 3.3]", "[1.1, 2.2, 3.3] : List (Float *)");
 }
 
 #[test]
 fn literal_string_list() {
-    expect_success(r#"[ "a", "b", "cd" ]"#, r#"[ "a", "b", "cd" ] : List Str"#);
+    expect_success(r#"["a", "b", "cd"]"#, r#"["a", "b", "cd"] : List Str"#);
 }
 
 #[test]
 fn nested_string_list() {
     expect_success(
-        r#"[ [ [ "a", "b", "cd" ], [ "y", "z" ] ], [ [] ], [] ]"#,
-        r#"[ [ [ "a", "b", "cd" ], [ "y", "z" ] ], [ [] ], [] ] : List (List (List Str))"#,
+        r#"[[["a", "b", "cd"], ["y", "z"]], [[]], []]"#,
+        r#"[[["a", "b", "cd"], ["y", "z"]], [[]], []] : List (List (List Str))"#,
     );
 }
 
 #[test]
 fn nested_num_list() {
     expect_success(
-        r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ]"#,
-        r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List (Num *)))"#,
+        r#"[[[4, 3, 2], [1, 0]], [[]], []]"#,
+        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Num *)))"#,
     );
 }
 
 #[test]
 fn nested_int_list() {
     expect_success(
-        r#"[ [ [ 4, 3, 2 ], [ 1, 0x0 ] ], [ [] ], [] ]"#,
-        r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List Int *))"#,
+        r#"[[[4, 3, 2], [1, 0x0]], [[]], []]"#,
+        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List Int *))"#,
     );
 }
 
 #[test]
 fn nested_float_list() {
     expect_success(
-        r#"[ [ [ 4, 3, 2 ], [ 1, 0.0 ] ], [ [] ], [] ]"#,
-        r#"[ [ [ 4, 3, 2 ], [ 1, 0 ] ], [ [] ], [] ] : List (List (List (Float *)))"#,
+        r#"[[[4, 3, 2], [1, 0.0]], [[]], []]"#,
+        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Float *)))"#,
     );
 }
 
@@ -351,33 +351,30 @@ fn num_mul_wrap() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_add_checked() {
-    expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [ Overflow ]*");
+    expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [Overflow]*");
     expect_success(
         "Num.addChecked Num.maxI64 1",
-        "Err Overflow : Result I64 [ Overflow ]*",
+        "Err Overflow : Result I64 [Overflow]*",
     );
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_sub_checked() {
-    expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [ Overflow ]*");
+    expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [Overflow]*");
     expect_success(
         "Num.subChecked Num.minI64 1",
-        "Err Overflow : Result I64 [ Overflow ]*",
+        "Err Overflow : Result I64 [Overflow]*",
     );
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_mul_checked() {
-    expect_success(
-        "Num.mulChecked 20 2",
-        "Ok 40 : Result (Num *) [ Overflow ]*",
-    );
+    expect_success("Num.mulChecked 20 2", "Ok 40 : Result (Num *) [Overflow]*");
     expect_success(
         "Num.mulChecked Num.maxI64 2",
-        "Err Overflow : Result I64 [ Overflow ]*",
+        "Err Overflow : Result I64 [Overflow]*",
     );
 }
 
@@ -385,8 +382,8 @@ fn num_mul_checked() {
 #[test]
 fn list_concat() {
     expect_success(
-        "List.concat [ 1.1, 2.2 ] [ 3.3, 4.4, 5.5 ]",
-        "[ 1.1, 2.2, 3.3, 4.4, 5.5 ] : List (Float *)",
+        "List.concat [1.1, 2.2] [3.3, 4.4, 5.5]",
+        "[1.1, 2.2, 3.3, 4.4, 5.5] : List (Float *)",
     );
 }
 
@@ -394,28 +391,28 @@ fn list_concat() {
 #[test]
 fn list_contains() {
     expect_success("List.contains [] 0", "False : Bool");
-    expect_success("List.contains [ 1, 2, 3 ] 2", "True : Bool");
-    expect_success("List.contains [ 1, 2, 3 ] 4", "False : Bool");
+    expect_success("List.contains [1, 2, 3] 2", "True : Bool");
+    expect_success("List.contains [1, 2, 3] 4", "False : Bool");
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn list_sum() {
     expect_success("List.sum []", "0 : Num *");
-    expect_success("List.sum [ 1, 2, 3 ]", "6 : Num *");
-    expect_success("List.sum [ 1.1, 2.2, 3.3 ]", "6.6 : Float *");
+    expect_success("List.sum [1, 2, 3]", "6 : Num *");
+    expect_success("List.sum [1.1, 2.2, 3.3]", "6.6 : Float *");
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn list_first() {
     expect_success(
-        "List.first [ 12, 9, 6, 3 ]",
-        "Ok 12 : Result (Num *) [ ListWasEmpty ]*",
+        "List.first [12, 9, 6, 3]",
+        "Ok 12 : Result (Num *) [ListWasEmpty]*",
     );
     expect_success(
         "List.first []",
-        "Err ListWasEmpty : Result * [ ListWasEmpty ]*",
+        "Err ListWasEmpty : Result * [ListWasEmpty]*",
     );
 }
 
@@ -423,13 +420,13 @@ fn list_first() {
 #[test]
 fn list_last() {
     expect_success(
-        "List.last [ 12, 9, 6, 3 ]",
-        "Ok 3 : Result (Num *) [ ListWasEmpty ]*",
+        "List.last [12, 9, 6, 3]",
+        "Ok 3 : Result (Num *) [ListWasEmpty]*",
     );
 
     expect_success(
         "List.last []",
-        "Err ListWasEmpty : Result * [ ListWasEmpty ]*",
+        "Err ListWasEmpty : Result * [ListWasEmpty]*",
     );
 }
 
@@ -508,14 +505,14 @@ fn basic_3_field_record() {
 fn list_of_1_field_records() {
     // Even though these get unwrapped at runtime, the repl should still
     // report them as records
-    expect_success("[ { foo: 42 } ]", "[ { foo: 42 } ] : List { foo : Num * }");
+    expect_success("[{ foo: 42 }]", "[{ foo: 42 }] : List { foo : Num * }");
 }
 
 #[test]
 fn list_of_2_field_records() {
     expect_success(
-        "[ { foo: 4.1, bar: 2 } ]",
-        "[ { bar: 2, foo: 4.1 } ] : List { bar : Num *, foo : Float * }",
+        "[{ foo: 4.1, bar: 2 }]",
+        "[{ bar: 2, foo: 4.1 }] : List { bar : Num *, foo : Float * }",
     );
 }
 
@@ -546,8 +543,8 @@ fn multiline_string() {
 #[test]
 fn list_of_3_field_records() {
     expect_success(
-        "[ { foo: 4.1, bar: 2, baz: 0x3 } ]",
-        "[ { bar: 2, baz: 3, foo: 4.1 } ] : List { bar : Num *, baz : Int *, foo : Float * }",
+        "[{ foo: 4.1, bar: 2, baz: 0x3 }]",
+        "[{ bar: 2, baz: 3, foo: 4.1 }] : List { bar : Num *, baz : Int *, foo : Float * }",
     );
 }
 
@@ -617,18 +614,18 @@ fn type_problem() {
 
 #[test]
 fn issue_2149() {
-    expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [ InvalidNumStr ]*");
+    expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]*");
     expect_success(
         r#"Str.toI8 "128""#,
-        "Err InvalidNumStr : Result I8 [ InvalidNumStr ]*",
+        "Err InvalidNumStr : Result I8 [InvalidNumStr]*",
     );
     expect_success(
         r#"Str.toI16 "32767""#,
-        "Ok 32767 : Result I16 [ InvalidNumStr ]*",
+        "Ok 32767 : Result I16 [InvalidNumStr]*",
     );
     expect_success(
         r#"Str.toI16 "32768""#,
-        "Err InvalidNumStr : Result I16 [ InvalidNumStr ]*",
+        "Err InvalidNumStr : Result I16 [InvalidNumStr]*",
     );
 }
 
@@ -651,7 +648,7 @@ fn recursive_tag_union_flat_variant() {
     expect_success(
         indoc!(
             r#"
-                Expr : [ Sym Str, Add Expr Expr ]
+                Expr : [Sym Str, Add Expr Expr]
                 s : Expr
                 s = Sym "levitating"
                 s
@@ -667,7 +664,7 @@ fn large_recursive_tag_union_flat_variant() {
         // > 7 variants so that to force tag storage alongside the data
         indoc!(
             r#"
-                Item : [ A Str, B Str, C Str, D Str, E Str, F Str, G Str, H Str, I Str, J Str, K Item ]
+                Item : [A Str, B Str, C Str, D Str, E Str, F Str, G Str, H Str, I Str, J Str, K Item]
                 s : Item
                 s = H "woo"
                 s
@@ -682,7 +679,7 @@ fn recursive_tag_union_recursive_variant() {
     expect_success(
         indoc!(
             r#"
-                Expr : [ Sym Str, Add Expr Expr ]
+                Expr : [Sym Str, Add Expr Expr]
                 s : Expr
                 s = Add (Add (Sym "one") (Sym "two")) (Sym "four")
                 s
@@ -698,7 +695,7 @@ fn large_recursive_tag_union_recursive_variant() {
         // > 7 variants so that to force tag storage alongside the data
         indoc!(
             r#"
-                Item : [ A Str, B Str, C Str, D Str, E Str, F Str, G Str, H Str, I Str, J Str, K Item, L Item ]
+                Item : [A Str, B Str, C Str, D Str, E Str, F Str, G Str, H Str, I Str, J Str, K Item, L Item]
                 s : Item
                 s = K (L (E "woo"))
                 s
@@ -713,7 +710,7 @@ fn recursive_tag_union_into_flat_tag_union() {
     expect_success(
         indoc!(
             r#"
-                Item : [ One [ A Str, B Str ], Deep Item ]
+                Item : [One [A Str, B Str], Deep Item]
                 i : Item
                 i = Deep (One (A "woo"))
                 i
@@ -728,7 +725,7 @@ fn non_nullable_unwrapped_tag_union() {
     expect_success(
         indoc!(
             r#"
-                RoseTree a : [ Tree a (List (RoseTree a)) ]
+                RoseTree a : [Tree a (List (RoseTree a))]
                 e1 : RoseTree Str
                 e1 = Tree "e1" []
                 e2 : RoseTree Str
@@ -738,7 +735,7 @@ fn non_nullable_unwrapped_tag_union() {
                 combo
                 "#
         ),
-        r#"Tree "combo" [ Tree "e1" [], Tree "e2" [] ] : RoseTree Str"#,
+        r#"Tree "combo" [Tree "e1" [], Tree "e2" []] : RoseTree Str"#,
     )
 }
 
@@ -747,7 +744,7 @@ fn nullable_unwrapped_tag_union() {
     expect_success(
         indoc!(
             r#"
-                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                LinkedList a : [Nil, Cons a (LinkedList a)]
                 c1 : LinkedList Str
                 c1 = Cons "Red" Nil
                 c2 : LinkedList Str
@@ -766,7 +763,7 @@ fn nullable_wrapped_tag_union() {
     expect_success(
         indoc!(
             r#"
-                Container a : [ Empty, Whole a, Halved (Container a) (Container a) ]
+                Container a : [Empty, Whole a, Halved (Container a) (Container a)]
 
                 meats : Container Str
                 meats = Halved (Whole "Brisket") (Whole "Ribs")
@@ -790,7 +787,7 @@ fn large_nullable_wrapped_tag_union() {
     expect_success(
         indoc!(
             r#"
-                Cont a : [ Empty, S1 a, S2 a, S3 a, S4 a, S5 a, S6 a, S7 a, Tup (Cont a) (Cont a) ]
+                Cont a : [Empty, S1 a, S2 a, S3 a, S4 a, S5 a, S6 a, S7 a, Tup (Cont a) (Cont a)]
 
                 fst : Cont Str
                 fst = Tup (S1 "S1") (S2 "S2")
@@ -813,7 +810,7 @@ fn large_nullable_wrapped_tag_union() {
 fn issue_2300() {
     expect_success(
         r#"\Email str -> str == """#,
-        r#"<function> : [ Email Str ] -> Bool"#,
+        r#"<function> : [Email Str] -> Bool"#,
     )
 }
 
@@ -822,7 +819,7 @@ fn issue_2300() {
 fn function_in_list() {
     expect_success(
         r#"[\x -> x + 1, \s -> s * 2]"#,
-        r#"[ <function>, <function> ] : List (Num a -> Num a)"#,
+        r#"[<function>, <function>] : List (Num a -> Num a)"#,
     )
 }
 
@@ -849,7 +846,7 @@ fn function_in_unwrapped_record() {
 fn function_in_tag() {
     expect_success(
         r#"Adder (\x -> x + 1)"#,
-        r#"Adder <function> : [ Adder (Num a -> Num a) ]*"#,
+        r#"Adder <function> : [Adder (Num a -> Num a)]*"#,
     )
 }
 
@@ -857,7 +854,7 @@ fn function_in_tag() {
 fn newtype_of_record_of_tag_of_record_of_tag() {
     expect_success(
         r#"A {b: C {d: 1}}"#,
-        r#"A { b: C { d: 1 } } : [ A { b : [ C { d : Num * } ]* } ]*"#,
+        r#"A { b: C { d: 1 } } : [A { b : [C { d : Num * }]* }]*"#,
     )
 }
 
@@ -886,7 +883,7 @@ fn parse_problem() {
 
                 I am partway through parsing a definition, but I got stuck here:
 
-                1│  app "app" provides [ replOutput ] to "./platform"
+                1│  app "app" provides [replOutput] to "./platform"
                 2│
                 3│  replOutput =
                 4│      add m n = m + n
@@ -917,15 +914,15 @@ fn exhaustiveness_problem() {
             ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
             This when does not cover all the possibilities:
-            
+
             7│>      when t is
             8│>          A -> "a"
-            
+
             Other possibilities include:
-            
+
                 B
                 C
-            
+
             I would have to crash if I saw one of those! Add branches for them!
             "#
         ),
@@ -987,7 +984,7 @@ fn tag_with_type_behind_alias() {
     expect_success(
         indoc!(
             r#"
-            T : [ A Str ]
+            T : [A Str]
             v : T
             v = A "value"
             v
@@ -1031,7 +1028,7 @@ fn opaque_apply_polymorphic() {
     expect_success(
         indoc!(
             r#"
-            F t u := [ Package t u ]
+            F t u := [Package t u]
 
             @F (Package "" { a: "" })
             "#
@@ -1045,14 +1042,14 @@ fn opaque_pattern_and_call() {
     expect_success(
         indoc!(
             r#"
-            F t u := [ Package t u ]
+            F t u := [Package t u]
 
             f = \@F (Package A {}) -> @F (Package {} A)
 
             f (@F (Package A {}))
             "#
         ),
-        r#"Package {} A : F {} [ A ]*"#,
+        r#"Package {} A : F {} [A]*"#,
     )
 }
 
@@ -1118,7 +1115,7 @@ fn box_box_type_alias() {
 fn issue_2582_specialize_result_value() {
     expect_success(
         r#"\x, list -> if x > 0 then List.first list else Ok """#,
-        r"<function> : Num *, List Str -> Result Str [ ListWasEmpty ]*",
+        r"<function> : Num *, List Str -> Result Str [ListWasEmpty]*",
     )
 }
 
@@ -1144,11 +1141,11 @@ fn issue_2810_recursive_layout_inside_nonrecursive() {
     expect_success(
         indoc!(
             r#"
-            Command : [ Command Tool ]
+            Command : [Command Tool]
 
-            Job : [ Job Command ]
+            Job : [Job Command]
 
-            Tool : [ SystemTool, FromJob Job ]
+            Tool : [SystemTool, FromJob Job]
 
             a : Job
             a = Job (Command (FromJob (Job (Command SystemTool))))
@@ -1164,13 +1161,13 @@ fn render_nullable_unwrapped_passing_through_alias() {
     expect_success(
         indoc!(
             r#"
-            Deep : [ L DeepList ]
-            
-            DeepList : [ Nil, Cons Deep ]
-            
-            v : DeepList 
+            Deep : [L DeepList]
+
+            DeepList : [Nil, Cons Deep]
+
+            v : DeepList
             v = (Cons (L (Cons (L (Cons (L Nil))))))
-            
+
             v
             "#
         ),

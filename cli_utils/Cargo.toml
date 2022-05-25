@@ -12,6 +12,7 @@ description = "Shared code for cli tests and benchmarks"
 [dependencies]
 roc_cli = { path = "../cli" }
 roc_collections = { path = "../compiler/collections" }
+roc_reporting = { path = "../reporting" }
 roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
 bumpalo = { version = "3.8.0", features = ["collections"] }

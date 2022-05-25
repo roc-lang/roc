@@ -154,7 +154,8 @@ mod solve_expr {
                 mut type_problems,
                 interns,
                 mut solved,
-                exposed_to_host,
+                mut exposed_to_host,
+                abilities_store,
                 ..
             },
             src,
@@ -172,6 +173,8 @@ mod solve_expr {
 
         let subs = solved.inner_mut();
 
+        exposed_to_host.retain(|s, _| !abilities_store.is_specialization_name(*s));
+
         debug_assert!(exposed_to_host.len() == 1);
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
         let actual_str = name_and_print_var(variable, subs, home, &interns);
@@ -184,7 +187,7 @@ mod solve_expr {
             r#"
             app "test"
                 imports []
-                provides [ main ] to "./platform"
+                provides [main] to "./platform"
 
             main =
             "#
@@ -434,7 +437,7 @@ mod solve_expr {
                 Str.fromUtf8
                 "#
             ),
-            "List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*",
+            "List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*",
         );
     }
 
@@ -494,7 +497,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ [], [ [] ] ]
+                    [[], [[]]]
                 "#
             ),
             "List (List (List *))",
@@ -507,8 +510,8 @@ mod solve_expr {
             indoc!(
                 r#"
                 empty = []
-                one = List.concat [ 1 ] empty
-                str = List.concat [ "blah" ] empty
+                one = List.concat [1] empty
+                str = List.concat ["blah"] empty
 
                 empty
             "#
@@ -534,7 +537,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [[[ 5 ]]]
+                    [[[5]]]
                 "#
             ),
             "List (List (List (Num *)))",
@@ -546,7 +549,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ 1, 2, 3 ]
+                    [1, 2, 3]
                 "#
             ),
             "List (Num *)",
@@ -558,7 +561,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ [ 1 ], [ 2, 3 ] ]
+                    [[1], [2, 3]]
                 "#
             ),
             "List (List (Num *))",
@@ -570,7 +573,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ "cowabunga" ]
+                    ["cowabunga"]
                 "#
             ),
             "List Str",
@@ -582,7 +585,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [[[ "foo" ]]]
+                    [[["foo"]]]
                 "#
             ),
             "List (List (List Str))",
@@ -594,7 +597,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ "foo", "bar" ]
+                    ["foo", "bar"]
                 "#
             ),
             "List Str",
@@ -656,7 +659,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ "foo", 5 ]
+                    ["foo", 5]
                 "#
             ),
             "List <type mismatch>",
@@ -668,7 +671,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ [ "foo", 5 ] ]
+                    [["foo", 5]]
                 "#
             ),
             "List (List <type mismatch>)",
@@ -680,7 +683,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                [ [ 1 ], [ [] ] ]
+                [[1], [[]]]
             "#
             ),
             "List <type mismatch>",
@@ -774,10 +777,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List.map [ "a", "b" ] \elem -> Foo elem
+                List.map ["a", "b"] \elem -> Foo elem
                 "#
             ),
-            "List [ Foo Str ]*",
+            "List [Foo Str]*",
         )
     }
 
@@ -792,7 +795,7 @@ mod solve_expr {
                 foo "hi"
                 "#
             ),
-            "[ Foo Str ]*",
+            "[Foo Str]*",
         )
     }
 
@@ -802,10 +805,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List.map [ "a", "b" ] Foo
+                List.map ["a", "b"] Foo
                 "#
             ),
-            "List [ Foo Str ]*",
+            "List [Foo Str]*",
         )
     }
 
@@ -815,10 +818,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                [ \x -> Bar x, Foo ]
+                [\x -> Bar x, Foo]
                 "#
             ),
-            "List (a -> [ Bar a, Foo a ]*)",
+            "List (a -> [Bar a, Foo a]*)",
         )
     }
 
@@ -828,10 +831,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                [ Foo, \x -> Bar x ]
+                [Foo, \x -> Bar x]
                 "#
             ),
-            "List (a -> [ Bar a, Foo a ]*)",
+            "List (a -> [Bar a, Foo a]*)",
         )
     }
 
@@ -844,13 +847,13 @@ mod solve_expr {
                 foo = Foo
 
                 {
-                    x: [ foo, Foo ],
-                    y: [ foo, \x -> Foo x ],
-                    z: [ foo, \x,y  -> Foo x y ]
+                    x: [foo, Foo],
+                    y: [foo, \x -> Foo x],
+                    z: [foo, \x,y  -> Foo x y]
                 }
                 "#
             ),
-            "{ x : List [ Foo ]*, y : List (a -> [ Foo a ]*), z : List (b, c -> [ Foo b c ]*) }",
+            "{ x : List [Foo]*, y : List (a -> [Foo a]*), z : List (b, c -> [Foo b c]*) }",
         )
     }
 
@@ -860,13 +863,13 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                x : List [ Foo I64 ]
-                x = List.map [ 1, 2 ] Foo
+                x : List [Foo I64]
+                x = List.map [1, 2] Foo
 
                 x
                 "#
             ),
-            "List [ Foo I64 ]",
+            "List [Foo I64]",
         )
     }
 
@@ -1035,7 +1038,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    enlist = \val -> [ val ]
+                    enlist = \val -> [val]
 
                     enlist 5
                 "#
@@ -1293,7 +1296,7 @@ mod solve_expr {
     //     infer_eq(
     //         indoc!(
     //             r#"
-    //             \always -> [ always [], always "" ]
+    //             \always -> [always [], always ""]
     //        "#
     //         ),
     //         "<type mismatch>",
@@ -1307,7 +1310,7 @@ mod solve_expr {
                 r#"
                     alwaysFive = \_ -> 5
 
-                    [ alwaysFive "foo", alwaysFive [] ]
+                    [alwaysFive "foo", alwaysFive []]
                 "#
             ),
             "List (Num *)",
@@ -1506,7 +1509,7 @@ mod solve_expr {
                     Foo
                 "#
             ),
-            "[ Foo ]*",
+            "[Foo]*",
         );
     }
 
@@ -1518,7 +1521,7 @@ mod solve_expr {
                     \Foo -> 42
                 "#
             ),
-            "[ Foo ] -> Num *",
+            "[Foo] -> Num *",
         );
     }
 
@@ -1533,7 +1536,7 @@ mod solve_expr {
                             False -> 0
                 "#
             ),
-            "[ False, True ] -> Num *",
+            "[False, True] -> Num *",
         );
     }
 
@@ -1545,7 +1548,7 @@ mod solve_expr {
                     Foo "happy" 2020
                 "#
             ),
-            "[ Foo Str (Num *) ]*",
+            "[Foo Str (Num *)]*",
         );
     }
 
@@ -1586,7 +1589,7 @@ mod solve_expr {
                     \Foo x -> Foo x
                 "#
             ),
-            "[ Foo a ] -> [ Foo a ]*",
+            "[Foo a] -> [Foo a]*",
         );
     }
 
@@ -1598,7 +1601,7 @@ mod solve_expr {
                     \Foo x _ -> Foo x "y"
                 "#
             ),
-            "[ Foo a * ] -> [ Foo a Str ]*",
+            "[Foo a *] -> [Foo a Str]*",
         );
     }
 
@@ -2390,7 +2393,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Res a e : [ Okay a, Error e ]
+                    Res a e : [Okay a, Error e]
 
                     ok : Res I64 *
                     ok = Okay 5
@@ -2407,7 +2410,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Res a e : [ Okay a, Error e ]
+                    Res a e : [Okay a, Error e]
 
                     err : Res * Str
                     err = Error "blah"
@@ -2546,14 +2549,14 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    map : (a -> b), [ Identity a ] -> [ Identity b ]
+                    map : (a -> b), [Identity a] -> [Identity b]
                     map = \f, identity ->
                         when identity is
                             Identity v -> Identity (f v)
                     map
                 "#
             ),
-            "(a -> b), [ Identity a ] -> [ Identity b ]",
+            "(a -> b), [Identity a] -> [Identity b]",
         );
     }
 
@@ -2570,7 +2573,7 @@ mod solve_expr {
                    toBit
                 "#
             ),
-            "[ False, True ] -> Num *",
+            "[False, True] -> Num *",
         );
     }
 
@@ -2606,7 +2609,7 @@ mod solve_expr {
                    fromBit
                 "#
             ),
-            "Num * -> [ False, True ]*",
+            "Num * -> [False, True]*",
         );
     }
 
@@ -2615,7 +2618,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    map : (a -> b), [ Err e, Ok a ] -> [ Err e, Ok b ]
+                    map : (a -> b), [Err e, Ok a] -> [Err e, Ok b]
                     map = \f, result ->
                         when result is
                             Ok v -> Ok (f v)
@@ -2624,7 +2627,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "(a -> b), [ Err e, Ok a ] -> [ Err e, Ok b ]",
+            "(a -> b), [Err e, Ok a] -> [Err e, Ok b]",
         );
     }
 
@@ -2633,7 +2636,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    Res e a : [ Ok a, Err e ]
+                    Res e a : [Ok a, Err e]
 
                     map : (a -> b), Res e a -> Res e b
                     map = \f, result ->
@@ -2753,7 +2756,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    empty : [ Cons a (ConsList a), Nil ] as ConsList a
+                    empty : [Cons a (ConsList a), Nil] as ConsList a
                     empty = Nil
 
                     empty
@@ -2768,7 +2771,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    singleton : a -> [ Cons a (ConsList a), Nil ] as ConsList a
+                    singleton : a -> [Cons a (ConsList a), Nil] as ConsList a
                     singleton = \x -> Cons x Nil
 
                     singleton
@@ -2783,7 +2786,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    Peano : [ S Peano, Z ]
+                    Peano : [S Peano, Z]
 
                     length : Peano -> Num.Num (Num.Integer Num.Signed64)
                     length = \peano ->
@@ -2803,7 +2806,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    map : [ S Peano, Z ] as Peano -> Peano
+                    map : [S Peano, Z] as Peano -> Peano
                     map = \peano ->
                         when peano is
                             Z -> Z
@@ -2833,7 +2836,7 @@ mod solve_expr {
                     map
                        "#
             ),
-            "(a -> b), [ Cons a c, Nil ] as c -> [ Cons b d, Nil ]* as d",
+            "(a -> b), [Cons a c, Nil] as c -> [Cons b d, Nil]* as d",
         );
     }
 
@@ -2842,7 +2845,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ConsList a : [ Cons a (ConsList a), Nil ]
+                    ConsList a : [Cons a (ConsList a), Nil]
 
                     map : (a -> b), ConsList a -> ConsList b
                     map = \f, list ->
@@ -2905,10 +2908,10 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                r : [ Ok Str.Str ]
+                r : [Ok Str.Str]
                 r = Ok 1
 
-                s : { left: [ Ok {} ] }
+                s : { left: [Ok {}] }
                 s = { left: Ok 3.14  }
 
                 when 0 is
@@ -2942,9 +2945,9 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                Peano : [ S Peano, Z ]
+                Peano : [S Peano, Z]
 
                 map : Peano -> Peano
                 map = \peano ->
@@ -2965,7 +2968,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Unit : [ Unit ]
+                    Unit : [Unit]
 
                     unit : Unit
                     unit = Unit
@@ -2982,7 +2985,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ConsList a : [ Cons a (ConsList a), Nil ]
+                    ConsList a : [Cons a (ConsList a), Nil]
 
                     toEmpty : ConsList a -> ConsList a
                     toEmpty = \_ ->
@@ -3004,7 +3007,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ConsList a : [ Cons a (ConsList a), Nil ]
+                    ConsList a : [Cons a (ConsList a), Nil]
 
                     toEmpty : ConsList a -> ConsList a
                     toEmpty = \_ ->
@@ -3025,9 +3028,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                ConsList a : [ Cons a (ConsList a), Nil ]
+                ConsList a : [Cons a (ConsList a), Nil]
 
                 toEmpty : ConsList a -> ConsList a
                 toEmpty = \_ ->
@@ -3081,7 +3084,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 map =
                     \peano ->
@@ -3094,7 +3097,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ] as a -> [ S b, Z ]* as b",
+            "[S a, Z] as a -> [S b, Z]* as b",
         );
     }
 
@@ -3113,7 +3116,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ] as a -> [ S b, Z ]* as b",
+            "[S a, Z] as a -> [S b, Z]* as b",
         );
     }
 
@@ -3139,7 +3142,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                     UserId x : [ UserId I64 ]
+                     UserId x : [UserId I64]
                      UserId x = UserId 42
 
                      x
@@ -3154,7 +3157,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ConsList q : [ Cons { x: q, xs: ConsList q }, Nil ]
+                    ConsList q : [Cons { x: q, xs: ConsList q }, Nil]
 
                     map : (a -> b), ConsList a -> ConsList b
                     map = \f, list ->
@@ -3184,7 +3187,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "(a -> b), [ Cons { x : a, xs : c }*, Nil ] as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
+            "(a -> b), [Cons { x : a, xs : c }*, Nil] as c -> [Cons { x : b, xs : d }, Nil]* as d",
         );
     }
 
@@ -3193,10 +3196,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ListA a b : [ Cons a (ListB b a), Nil ]
-                    ListB a b : [ Cons a (ListA b a), Nil ]
+                    ListA a b : [Cons a (ListB b a), Nil]
+                    ListB a b : [Cons a (ListA b a), Nil]
 
-                    ConsList q : [ Cons q (ConsList q), Nil ]
+                    ConsList q : [Cons q (ConsList q), Nil]
 
                     toAs : (b -> a), ListA a b -> ConsList a
                     toAs = \f, lista ->
@@ -3220,9 +3223,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ListA a : [ Cons a (ListB a) ]
-                    ListB a : [ Cons a (ListC a) ]
-                    ListC a : [ Cons a (ListA a), Nil ]
+                    ListA a : [Cons a (ListB a)]
+                    ListB a : [Cons a (ListC a)]
+                    ListC a : [Cons a (ListA a), Nil]
 
                     val : ListC Num.I64
                     val = Cons 1 (Cons 2 (Cons 3 Nil))
@@ -3251,7 +3254,7 @@ mod solve_expr {
                    toAs
                 "#
             ),
-            "(a -> b), [ Cons c [ Cons a d, Nil ], Nil ] as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
+            "(a -> b), [Cons c [Cons a d, Nil], Nil] as d -> [Cons c [Cons b e]*, Nil]* as e",
         );
     }
 
@@ -3260,10 +3263,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List.get [ "a" ] 0
+                    List.get ["a"] 0
                 "#
             ),
-            "Result Str [ OutOfBounds ]*",
+            "Result Str [OutOfBounds]*",
         );
     }
 
@@ -3272,7 +3275,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                partition : Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]
+                partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok _ ->
@@ -3284,7 +3287,7 @@ mod solve_expr {
                 partition
                             "#
             ),
-            "Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]",
+            "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
         );
     }
 
@@ -3305,7 +3308,7 @@ mod solve_expr {
                         _ ->
                             list
 
-                partition : Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]
+                partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
@@ -3333,7 +3336,7 @@ mod solve_expr {
                 partition
             "#
                 ),
-                "Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]",
+                "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
             );
         });
     }
@@ -3362,10 +3365,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List.get [ 10, 9, 8, 7 ] 1
+                    List.get [10, 9, 8, 7] 1
                 "#
             ),
-            "Result (Num *) [ OutOfBounds ]*",
+            "Result (Num *) [OutOfBounds]*",
         );
 
         infer_eq_without_problem(
@@ -3374,7 +3377,7 @@ mod solve_expr {
                     List.get
                 "#
             ),
-            "List a, Nat -> Result a [ OutOfBounds ]*",
+            "List a, Nat -> Result a [OutOfBounds]*",
         );
     }
 
@@ -3476,7 +3479,7 @@ mod solve_expr {
                 Num.divChecked
                 "#
             ),
-            "Float a, Float a -> Result (Float a) [ DivByZero ]*",
+            "Float a, Float a -> Result (Float a) [DivByZero]*",
         )
     }
 
@@ -3500,7 +3503,7 @@ mod solve_expr {
                 Num.divCeilChecked
                 "#
             ),
-            "Int a, Int a -> Result (Int a) [ DivByZero ]*",
+            "Int a, Int a -> Result (Int a) [DivByZero]*",
         );
     }
 
@@ -3524,7 +3527,7 @@ mod solve_expr {
                 Num.divTruncChecked
                 "#
             ),
-            "Int a, Int a -> Result (Int a) [ DivByZero ]*",
+            "Int a, Int a -> Result (Int a) [DivByZero]*",
         );
     }
 
@@ -3706,13 +3709,13 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" imports [ Result.{ Result } ] provides [ main ] to "./platform"
+                app "test" imports [Result.{ Result }] provides [main] to "./platform"
 
                 boom = \_ -> boom {}
 
                 Model position : { openSet : Set position }
 
-                cheapestOpen : Model position -> Result position [ KeyNotFound ]*
+                cheapestOpen : Model position -> Result position [KeyNotFound]*
                 cheapestOpen = \model ->
 
                     folder = \resSmallestSoFar, position ->
@@ -3727,14 +3730,14 @@ mod solve_expr {
                     Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
                         |> Result.map (\x -> x.position)
 
-                astar : Model position -> Result position [ KeyNotFound ]*
+                astar : Model position -> Result position [KeyNotFound]*
                 astar = \model -> cheapestOpen model
 
                 main =
                     astar
                 "#
             ),
-            "Model position -> Result position [ KeyNotFound ]*",
+            "Model position -> Result position [KeyNotFound]*",
         );
     }
 
@@ -3792,8 +3795,8 @@ mod solve_expr {
 
                         always Nil (f list)
 
-                Order : [ LT, GT, EQ ]
-                ConsList a : [ Nil, Cons a (ConsList a) ]
+                Order : [LT, GT, EQ]
+                ConsList a : [Nil, Cons a (ConsList a)]
 
                 { x: sortWith, y: sort, z: sortBy }
                 "#
@@ -3815,11 +3818,11 @@ mod solve_expr {
     //        infer_eq_without_problem(
     //            indoc!(
     //                r#"
-    //                Type a : [ TypeCtor (Type (Wrapper a)) ]
+    //                Type a : [TypeCtor (Type (Wrapper a))]
     //
-    //                Wrapper a : [ Wrapper a ]
+    //                Wrapper a : [Wrapper a]
     //
-    //                Opaque : [ Opaque ]
+    //                Opaque : [Opaque]
     //
     //                encodeType1 : Type a -> Opaque
     //                encodeType1 = \thing ->
@@ -4152,7 +4155,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
 
                 main : List x
@@ -4172,7 +4175,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
 
                 main =
@@ -4182,10 +4185,10 @@ mod solve_expr {
                         Foo Bar 1
                 "#
             ),
-            "[ Foo [ Bar ]* (Num *) ]*",
+            "[Foo [Bar]* (Num *)]*",
         );
 
-        infer_eq_without_problem("Foo Bar 1", "[ Foo [ Bar ]* (Num *) ]*");
+        infer_eq_without_problem("Foo Bar 1", "[Foo [Bar]* (Num *)]*");
     }
 
     #[test]
@@ -4193,10 +4196,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                Bar : [ Bar ]
-                Foo : [ Foo Bar I64, Empty ]
+                Bar : [Bar]
+                Foo : [Foo Bar I64, Empty]
 
                 foo : Foo
                 foo = Foo Bar 1
@@ -4210,7 +4213,7 @@ mod solve_expr {
                             x
                 "#
             ),
-            "[ Empty, Foo Bar I64 ]",
+            "[Empty, Foo Bar I64]",
         );
     }
 
@@ -4219,7 +4222,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 State a : { count : I64, x : a }
 
@@ -4244,12 +4247,12 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 # The color of a node. Leaves are considered Black.
-                NodeColor : [ Red, Black ]
+                NodeColor : [Red, Black]
 
-                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
+                RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
                 # Create an empty dictionary.
                 empty : RBTree k v
@@ -4277,9 +4280,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                RBTree k : [ Node k (RBTree k), Empty ]
+                RBTree k : [Node k (RBTree k), Empty]
 
                 balance : RBTree  k -> RBTree k
                 balance = \left ->
@@ -4302,11 +4305,11 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                NodeColor : [ Red, Black ]
+                NodeColor : [Red, Black]
 
-                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
+                RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
                 moveRedLeft : RBTree k v -> RBTree k v
                 moveRedLeft = \dict ->
@@ -4532,9 +4535,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+                RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
                 removeHelp : Num k, RBTree (Num k) -> RBTree (Num k)
                 removeHelp = \targetKey, dict ->
@@ -4572,11 +4575,11 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                NodeColor : [ Red, Black ]
+                NodeColor : [Red, Black]
 
-                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
+                RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
                 removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v
                 removeHelp = \targetKey, dict ->
@@ -4648,7 +4651,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ partitionHelp ] to "./platform"
+                app "test" provides [partitionHelp] to "./platform"
 
                 swap : Nat, Nat, List a -> List a
                 swap = \i, j, list ->
@@ -4661,7 +4664,7 @@ mod solve_expr {
                         _ ->
                             []
 
-                partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [ Pair Nat (List (Num a)) ]
+                partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [Pair Nat (List (Num a))]
                 partitionHelp = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
@@ -4677,7 +4680,7 @@ mod solve_expr {
                         Pair i list
                 "#
             ),
-            "Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]",
+            "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
         );
     }
 
@@ -4686,9 +4689,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+                RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
                 balance : k, RBTree k -> RBTree k
                 balance = \key, left ->
@@ -4708,9 +4711,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+                RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
                 node = \x,y,z -> Node x y z
 
@@ -4732,11 +4735,11 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                NodeColor : [ Red, Black ]
+                NodeColor : [Red, Black]
 
-                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
+                RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
                 balance : NodeColor, k, v, RBTree k v, RBTree k v -> RBTree k v
                 balance = \color, key, value, left, right ->
@@ -4781,9 +4784,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+                RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
                 balance : k, RBTree k -> RBTree k
                 balance = \key, left ->
@@ -4809,9 +4812,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                Expr : [ Add Expr Expr, Val I64, Var I64 ]
+                Expr : [Add Expr Expr, Val I64, Var I64]
 
                 printExpr : Expr -> Str
                 printExpr = \e ->
@@ -4838,7 +4841,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 x = 4
 
@@ -4861,9 +4864,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
-        RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+        RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
         balance : a, RBTree a -> RBTree a
         balance = \key, left ->
@@ -4913,7 +4916,7 @@ mod solve_expr {
                 canIGo
                 "#
             ),
-            "Str -> Result Str [ SlowIt Str, StopIt Str, UnknownColor Str ]*",
+            "Str -> Result Str [SlowIt Str, StopIt Str, UnknownColor Str]*",
         )
     }
 
@@ -4950,7 +4953,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                badComics: Bool -> [ CowTools _, Thagomizer _ ]
+                badComics: Bool -> [CowTools _, Thagomizer _]
                 badComics = \c ->
                     when c is
                         True -> CowTools "The Far Side"
@@ -4958,18 +4961,18 @@ mod solve_expr {
                 badComics
                 "#
             ),
-            "Bool -> [ CowTools Str, Thagomizer Str ]",
+            "Bool -> [CowTools Str, Thagomizer Str]",
         )
     }
 
     #[test]
     fn inference_var_tag_union_ext() {
-        // TODO: we should really be inferring [ Blue, Orange ]a -> [ Lavender, Peach ]a here.
+        // TODO: we should really be inferring [Blue, Orange]a -> [Lavender, Peach]a here.
         // See https://github.com/rtfeldman/roc/issues/2053
         infer_eq_without_problem(
             indoc!(
                 r#"
-                pastelize: _ -> [ Lavender, Peach ]_
+                pastelize: _ -> [Lavender, Peach]_
                 pastelize = \color ->
                     when color is
                         Blue -> Lavender
@@ -4978,7 +4981,7 @@ mod solve_expr {
                 pastelize
                 "#
             ),
-            "[ Blue, Lavender, Orange, Peach ]a -> [ Blue, Lavender, Orange, Peach ]a",
+            "[Blue, Lavender, Orange, Peach]a -> [Blue, Lavender, Orange, Peach]a",
         )
     }
 
@@ -5019,7 +5022,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                fromList : List elem -> [ Empty, Prepend (LinkedList elem) elem ] as LinkedList elem
+                fromList : List elem -> [Empty, Prepend (LinkedList elem) elem] as LinkedList elem
                 fromList = \elems -> List.walk elems Empty Prepend
 
                 fromList
@@ -5040,7 +5043,7 @@ mod solve_expr {
                        B -> Y
                  "#
             ),
-            "[ A, B ] -> [ X, Y ]*",
+            "[A, B] -> [X, Y]*",
         )
     }
 
@@ -5056,7 +5059,7 @@ mod solve_expr {
                        _ -> Z
                  "#
             ),
-            "[ A, B ]* -> [ X, Y, Z ]*",
+            "[A, B]* -> [X, Y, Z]*",
         )
     }
 
@@ -5071,7 +5074,7 @@ mod solve_expr {
                        A N -> Y
                  "#
             ),
-            "[ A [ M, N ] ] -> [ X, Y ]*",
+            "[A [M, N]] -> [X, Y]*",
         )
     }
 
@@ -5087,7 +5090,7 @@ mod solve_expr {
                        A _ -> Z
                  "#
             ),
-            "[ A [ M, N ]* ] -> [ X, Y, Z ]*",
+            "[A [M, N]*] -> [X, Y, Z]*",
         )
     }
 
@@ -5102,7 +5105,7 @@ mod solve_expr {
                        A (N K) -> X
                  "#
             ),
-            "[ A [ M [ J ], N [ K ] ] ] -> [ X ]*",
+            "[A [M [J], N [K]]] -> [X]*",
         )
     }
 
@@ -5118,7 +5121,7 @@ mod solve_expr {
                        A N -> X
                  "#
             ),
-            "[ A [ M, N ], B ] -> [ X ]*",
+            "[A [M, N], B] -> [X]*",
         )
     }
 
@@ -5135,8 +5138,8 @@ mod solve_expr {
             ),
             // TODO: we could be a bit smarter by subtracting "A" as a possible
             // tag in the union known by t, which would yield the principal type
-            // [ A, ]a -> [ X ]a
-            "[ A, X ]a -> [ A, X ]a",
+            // [A,]a -> [X]a
+            "[A, X]a -> [A, X]a",
         )
     }
 
@@ -5152,7 +5155,7 @@ mod solve_expr {
                          None -> 0
                  "#
             ),
-            "[ None, Some { tag : [ A, B ] }* ] -> Num *",
+            "[None, Some { tag : [A, B] }*] -> Num *",
         )
     }
 
@@ -5161,7 +5164,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                 opt : [ Some Str, None ]
+                 opt : [Some Str, None]
                  opt = Some ""
                  rcd = { opt }
 
@@ -5185,7 +5188,7 @@ mod solve_expr {
                          { x: Red, y ? 5 } -> y
                  "#
             ),
-            "{ x : [ Blue, Red ], y ? Num a }* -> Num a",
+            "{ x : [Blue, Red], y ? Num a }* -> Num a",
         )
     }
 
@@ -5198,7 +5201,7 @@ mod solve_expr {
                  \UserId id -> id + 1
                  "#
             ),
-            "[ UserId (Num a) ] -> Num a",
+            "[UserId (Num a)] -> Num a",
         )
     }
 
@@ -5212,7 +5215,7 @@ mod solve_expr {
                     Str.isEmpty str
                  "#
             ),
-            "[ Email Str ] -> Bool",
+            "[Email Str] -> Bool",
         )
     }
 
@@ -5401,7 +5404,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Foo a : [ Blah (Result (Bar a) { val: a }) ]
+                Foo a : [Blah (Result (Bar a) { val: a })]
                 Bar a : Foo a
 
                 v : Bar U8
@@ -5420,7 +5423,7 @@ mod solve_expr {
             indoc!(
                 r#"
                 Bar a : Foo a
-                Foo a : [ Blah (Result (Bar a) { val: a }) ]
+                Foo a : [Blah (Result (Bar a) { val: a })]
 
                 v : Bar U8
                 v = Blah (Ok (Blah (Err { val: 1 })))
@@ -5438,7 +5441,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Job : [ Job [ Command ] (List Job) ]
+                Job : [Job [Command] (List Job)]
 
                 job : Job
 
@@ -5454,7 +5457,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Job a : [ Job (List (Job a)) a ]
+                Job a : [Job (List (Job a)) a]
 
                 job : Job Str
 
@@ -5462,7 +5465,7 @@ mod solve_expr {
                     Job lst s -> P lst s
                 "#
             ),
-            "[ P (List [ Job (List a) Str ] as a) Str ]*",
+            "[P (List [Job (List a) Str] as a) Str]*",
         )
     }
 
@@ -5541,7 +5544,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 @Id (Id 21 "sasha")
                 "#
@@ -5555,7 +5558,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 a : Id Str
                 a = @Id (Id 21 "sasha")
@@ -5572,7 +5575,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
                 condition : Bool
 
                 if condition
@@ -5580,7 +5583,7 @@ mod solve_expr {
                 else @Id (Id 21 (Z "felix"))
                 "#
             ),
-            r#"Id [ Y Str, Z Str ]*"#,
+            r#"Id [Y Str, Z Str]*"#,
         )
     }
 
@@ -5589,10 +5592,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
                 condition : Bool
 
-                v : Id [ Y Str, Z Str ]
+                v : Id [Y Str, Z Str]
                 v =
                     if condition
                     then @Id (Id 21 (Y "sasha"))
@@ -5601,7 +5604,7 @@ mod solve_expr {
                 v
                 "#
             ),
-            r#"Id [ Y Str, Z Str ]"#,
+            r#"Id [Y Str, Z Str]"#,
         )
     }
 
@@ -5640,7 +5643,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 \@Id (Id _ n) -> n
                 "#
@@ -5654,7 +5657,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 v : Id a -> a
                 v = \@Id (Id _ n) -> n
@@ -5671,7 +5674,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 strToBool : Str -> Bool
 
@@ -5687,7 +5690,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 strToBool : Str -> Bool
 
@@ -5706,7 +5709,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 \id ->
                     when id is
@@ -5716,7 +5719,7 @@ mod solve_expr {
                         @Id (Id _ (C { a: _ })) -> "" # any other string, for exhautiveness
                 "#
             ),
-            r#"Id [ A, B, C { a : Str }* ] -> Str"#,
+            r#"Id [A, B, C { a : Str }*] -> Str"#,
         )
     }
 
@@ -5725,9 +5728,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
-                f : Id [ A, B, C { a : Str }e ] -> Str
+                f : Id [A, B, C { a : Str }e] -> Str
                 f = \id ->
                     when id is
                         @Id (Id _ A) -> ""
@@ -5738,7 +5741,7 @@ mod solve_expr {
                 f
                 "#
             ),
-            r#"Id [ A, B, C { a : Str }e ] -> Str"#,
+            r#"Id [A, B, C { a : Str }e] -> Str"#,
         )
     }
 
@@ -5747,7 +5750,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ effectAlways ] to "./platform"
+                app "test" provides [effectAlways] to "./platform"
 
                 Effect a := {} -> a
 
@@ -5796,13 +5799,13 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Other : [ B, C ]
+                Other : [B, C]
 
-                f : [ A ]Other
+                f : [A]Other
                 f
                 "#
             ),
-            r#"[ A, B, C ]"#,
+            r#"[A, B, C]"#,
         )
     }
 
@@ -5812,7 +5815,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Outer k := [ Empty, Wrapped k ]
+                Outer k := [Empty, Wrapped k]
 
                 insert : Outer k, k -> Outer k
                 insert = \m, var ->
@@ -5832,7 +5835,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Outer k := [ Empty, Wrapped k ]
+                Outer k := [Empty, Wrapped k]
 
                 when (@Outer Empty) is
                     @Outer Empty -> @Outer (Wrapped "")
@@ -5848,7 +5851,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Outer := [ A, B ]
+                Outer := [A, B]
 
                 when (@Outer A) is
                     @Outer A -> @Outer A
@@ -5867,7 +5870,7 @@ mod solve_expr {
                 if True then List.first [] else Str.toI64 ""
                 "#
             ),
-            "Result I64 [ InvalidNumStr, ListWasEmpty ]*",
+            "Result I64 [InvalidNumStr, ListWasEmpty]*",
         )
     }
 
@@ -5889,7 +5892,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ hash ] to "./platform"
+                app "test" provides [hash] to "./platform"
 
                 Hash has hash : a -> U64 | a has Hash
                 "#
@@ -5903,7 +5906,7 @@ mod solve_expr {
         check_inferred_abilities(
             indoc!(
                 r#"
-                app "test" provides [ hash ] to "./platform"
+                app "test" provides [hash] to "./platform"
 
                 Hash has hash : a -> U64 | a has Hash
 
@@ -5921,7 +5924,7 @@ mod solve_expr {
         check_inferred_abilities(
             indoc!(
                 r#"
-                app "test" provides [ hash, hash32 ] to "./platform"
+                app "test" provides [hash, hash32] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -5942,7 +5945,7 @@ mod solve_expr {
         check_inferred_abilities(
             indoc!(
                 r#"
-                app "test" provides [ hash, hash32, eq, le ] to "./platform"
+                app "test" provides [hash, hash32, eq, le] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -5975,7 +5978,7 @@ mod solve_expr {
         check_inferred_abilities(
             indoc!(
                 r#"
-                app "test" provides [ hash ] to "./platform"
+                app "test" provides [hash] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -5995,7 +5998,7 @@ mod solve_expr {
         check_inferred_abilities(
             indoc!(
                 r#"
-                app "test" provides [ hash ] to "./platform"
+                app "test" provides [hash] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -6014,7 +6017,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ zero ] to "./platform"
+                app "test" provides [zero] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -6035,7 +6038,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ thething ] to "./platform"
+                app "test" provides [thething] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -6062,7 +6065,7 @@ mod solve_expr {
                 func
                 "#
             ),
-            "{ tag : [ A, B ] }a -> { tag : [ A, B ] }a",
+            "{ tag : [A, B] }a -> { tag : [A, B] }a",
         )
     }
 
@@ -6071,7 +6074,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ hashEq ] to "./platform"
+                app "test" provides [hashEq] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -6089,7 +6092,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ hashEq ] to "./platform"
+                app "test" provides [hashEq] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -6106,7 +6109,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ result ] to "./platform"
+                app "test" provides [result] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -6128,7 +6131,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ result ] to "./platform"
+                app "test" provides [result] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -6153,7 +6156,7 @@ mod solve_expr {
         infer_queries(
             indoc!(
                 r#"
-                app "test" provides [ foo ] to "./platform"
+                app "test" provides [foo] to "./platform"
 
                 foo : Bool -> Str
                 foo = \ob ->
@@ -6169,8 +6172,8 @@ mod solve_expr {
             &[
                 "ob : Bool",
                 "ob : Bool",
-                "True : [ False, True ]",
-                "False : [ False, True ]",
+                "True : [False, True]",
+                "False : [False, True]",
             ],
         )
     }
@@ -6180,7 +6183,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ go ] to "./platform"
+                app "test" provides [go] to "./platform"
 
                 Expr : [
                     Wrap Expr,
@@ -6207,7 +6210,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ always ] to "./platform"
+                app "test" provides [always] to "./platform"
 
                 Effect a := {} -> a
 
@@ -6226,7 +6229,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ foo ] to "./platform"
+                app "test" provides [foo] to "./platform"
 
                 F a : { foo : a }
 
@@ -6245,9 +6248,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ foo ] to "./platform"
+                app "test" provides [foo] to "./platform"
 
-                MyError : [ Error ]
+                MyError : [Error]
 
                 MyResult := Result U8 MyError
 
@@ -6263,7 +6266,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ zeroEncoder ] to "./platform"
+                app "test" provides [zeroEncoder] to "./platform"
 
                 Encoder fmt := List U8, fmt -> List U8 | fmt has Format
 
@@ -6281,7 +6284,7 @@ mod solve_expr {
         infer_queries(
             indoc!(
                 r#"
-                app "test" provides [ myU8Bytes ] to "./platform"
+                app "test" provides [myU8Bytes] to "./platform"
 
                 Encoder fmt := List U8, fmt -> List U8 | fmt has Format
 
@@ -6327,9 +6330,9 @@ mod solve_expr {
         infer_queries(
             indoc!(
                 r#"
-                app "test" provides [ myU8 ] to "./platform"
+                app "test" provides [myU8] to "./platform"
 
-                DecodeError : [ TooShort, Leftover (List U8) ]
+                DecodeError : [TooShort, Leftover (List U8)]
 
                 Decoder val fmt := List U8, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
 
@@ -6371,7 +6374,7 @@ mod solve_expr {
                             { result: Result.map result (\n -> @MyU8 n), rest }
 
                 myU8 : Result MyU8 _
-                myU8 = fromBytes [ 15 ] (@Linear {})
+                myU8 = fromBytes [15] (@Linear {})
                 #^^^^{-1}
                 "#
             ),
@@ -6388,7 +6391,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ tforever ] to "./platform"
+                app "test" provides [tforever] to "./platform"
 
                 Effect a := {} -> a
 
@@ -6409,7 +6412,7 @@ mod solve_expr {
         infer_queries(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 Default has default : {} -> a | a has Default
 
@@ -6424,6 +6427,69 @@ mod solve_expr {
                 "#
             ),
             &["A#default : {} -> A"],
+        )
+    }
+
+    #[test]
+    fn stdlib_encode_json() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test"
+                    imports [Encode.{ toEncoder }, Json]
+                    provides [main] to "./platform"
+
+                HelloWorld := {}
+
+                toEncoder = \@HelloWorld {} ->
+                    Encode.custom \bytes, fmt ->
+                        bytes
+                        |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format) is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            "Str",
+        )
+    }
+
+    #[test]
+    fn encode_record() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test"
+                    imports [Encode.{ toEncoder }]
+                    provides [main] to "./platform"
+
+                main = toEncoder { a: "" }
+                     # ^^^^^^^^^
+                "#
+            ),
+            &["Encoding#toEncoder : { a : Str } -> Encoder fmt | fmt has EncoderFormatting"],
+        )
+    }
+
+    #[test]
+    fn encode_record_with_nested_custom_impl() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test"
+                    imports [Encode.{ toEncoder, Encoding, custom }]
+                    provides [main] to "./platform"
+
+                A := {}
+                toEncoder = \@A _ -> custom \b, _ -> b
+
+                main = toEncoder { a: @A {} }
+                     # ^^^^^^^^^
+                "#
+            ),
+            &["Encoding#toEncoder : { a : A } -> Encoder fmt | fmt has EncoderFormatting"],
         )
     }
 }

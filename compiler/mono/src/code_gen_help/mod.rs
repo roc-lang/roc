@@ -401,7 +401,7 @@ impl<'a> CodeGenHelp<'a> {
 
     // When creating or looking up Specializations, we need to replace RecursivePointer
     // with the particular Union layout it represents at this point in the tree.
-    // For example if a program uses `RoseTree a : [ Tree a (List (RoseTree a)) ]`
+    // For example if a program uses `RoseTree a : [Tree a (List (RoseTree a))]`
     // then it could have both `RoseTree I64` and `RoseTree Str`. In this case it
     // needs *two* specializations for `List(RecursivePointer)`, not just one.
     fn replace_rec_ptr(&self, ctx: &Context<'a>, layout: Layout<'a>) -> Layout<'a> {

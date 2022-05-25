@@ -68,7 +68,7 @@ mod test_can {
 
         match actual_out.loc_expr.value {
             Expr::Int(_, _, _, actual, _) => {
-                assert_eq!(IntValue::I128(expected), actual);
+                assert_eq!(IntValue::I128(expected.to_ne_bytes()), actual);
             }
             actual => {
                 panic!("Expected an Num.Int *, but got: {:?}", actual);
@@ -82,7 +82,7 @@ mod test_can {
 
         match actual_out.loc_expr.value {
             Expr::Num(_, _, actual, _) => {
-                assert_eq!(IntValue::I128(expected), actual);
+                assert_eq!(IntValue::I128(expected.to_ne_bytes()), actual);
             }
             actual => {
                 panic!("Expected a Num, but got: {:?}", actual);
@@ -1015,7 +1015,7 @@ mod test_can {
     fn unused_def_regression() {
         let src = indoc!(
             r#"
-                Booly : [ Yes, No, Maybe ]
+                Booly : [Yes, No, Maybe]
 
                 y : Booly
                 y = No
@@ -1025,7 +1025,7 @@ mod test_can {
                 #
                 # https://github.com/rtfeldman/roc/issues/298
                 x : List Booly
-                x = [ y ]
+                x = [y]
 
                 x
             "#
@@ -1120,7 +1120,7 @@ mod test_can {
     //        vec![
     //            Problem::UnusedAssignment(loc(("unused".to_string()))),
     //            Problem::UnusedAssignment(loc(("func".to_string()))),
-    //        ]
+    //       ]
     //    );
 
     //    assert_eq!(
@@ -1469,7 +1469,7 @@ mod test_can {
     //            loc(unqualified("d")),
     //            loc(unqualified("a")),
     //            loc(unqualified("b")),
-    //        ])]
+    //       ])]
     //    );
     //}
 

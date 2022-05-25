@@ -1,8 +1,8 @@
 interface Action
-    exposes [ Action, none, update, map ]
+    exposes [Action, none, update, map]
     imports []
 
-Action state : [ None, Update state ]
+Action state : [None, Update state]
 
 none : Action *
 none = None
@@ -15,6 +15,5 @@ map = \action, transform ->
     when action is
         None ->
             None
-
         Update state ->
             Update (transform state)

@@ -1,6 +1,6 @@
 use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 use roc_builtins::std::StdLib;
-use roc_can::abilities::AbilitiesStore;
+use roc_can::abilities::{AbilitiesStore, MemberTypeInfo, SolvedSpecializations};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
 use roc_can::expected::Expected;
@@ -53,6 +53,10 @@ impl ExposedByModule {
 
         output
     }
+
+    pub fn iter_all(&self) -> impl Iterator<Item = (&ModuleId, &ExposedModuleTypes)> {
+        self.exposed.iter()
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -89,6 +93,7 @@ impl ExposedForModule {
 pub struct ExposedModuleTypes {
     pub stored_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub storage_subs: roc_types::subs::StorageSubs,
+    pub solved_specializations: SolvedSpecializations,
 }
 
 pub fn constrain_module(
@@ -176,46 +181,53 @@ pub fn frontload_ability_constraints(
     mut constraint: Constraint,
 ) -> Constraint {
     for (member_name, member_data) in abilities_store.root_ability_members().iter() {
-        let rigids = Default::default();
-        let mut env = Env {
-            home,
-            rigids,
-            resolutions_to_make: vec![],
-        };
-        let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(*member_name));
+        if let MemberTypeInfo::Local {
+            signature_var,
+            variables: vars,
+            signature,
+        } = &member_data.typ
+        {
+            let signature_var = *signature_var;
+            let rigids = Default::default();
+            let mut env = Env {
+                home,
+                rigids,
+                resolutions_to_make: vec![],
+            };
+            let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(*member_name));
 
-        let mut def_pattern_state = constrain_def_pattern(
-            constraints,
-            &mut env,
-            &pattern,
-            Type::Variable(member_data.signature_var),
-        );
+            let mut def_pattern_state = constrain_def_pattern(
+                constraints,
+                &mut env,
+                &pattern,
+                Type::Variable(signature_var),
+            );
 
-        debug_assert!(env.resolutions_to_make.is_empty());
+            debug_assert!(env.resolutions_to_make.is_empty());
 
-        def_pattern_state.vars.push(member_data.signature_var);
+            def_pattern_state.vars.push(signature_var);
 
-        let vars = &member_data.variables;
-        let rigid_variables = vars.rigid_vars.iter().chain(vars.able_vars.iter()).copied();
-        let infer_variables = vars.flex_vars.iter().copied();
+            let rigid_variables = vars.rigid_vars.iter().chain(vars.able_vars.iter()).copied();
+            let infer_variables = vars.flex_vars.iter().copied();
 
-        def_pattern_state
-            .constraints
-            .push(constraints.equal_types_var(
-                member_data.signature_var,
-                Expected::NoExpectation(member_data.signature.clone()),
-                Category::Storage(file!(), line!()),
-                Region::zero(),
-            ));
+            def_pattern_state
+                .constraints
+                .push(constraints.equal_types_var(
+                    signature_var,
+                    Expected::NoExpectation(signature.clone()),
+                    Category::Storage(file!(), line!()),
+                    Region::zero(),
+                ));
 
-        constraint = constrain_def_make_constraint(
-            constraints,
-            rigid_variables,
-            infer_variables,
-            Constraint::True,
-            constraint,
-            def_pattern_state,
-        );
+            constraint = constrain_def_make_constraint(
+                constraints,
+                rigid_variables,
+                infer_variables,
+                Constraint::True,
+                constraint,
+                def_pattern_state,
+            );
+        }
     }
     constraint
 }

@@ -2138,10 +2138,10 @@ pub fn rec_defs_help(
     //    the let-generalization.
     // 2. Introduce all symbols of the untyped defs, but don't generalize them yet. Now, solve
     //    the untyped defs' bodies. This way, when checking something like
-    //      f = \x -> f [ x ]
-    //    we introduce `f: b -> c`, then constrain the call `f [ x ]`,
+    //      f = \x -> f [x]
+    //    we introduce `f: b -> c`, then constrain the call `f [x]`,
     //    forcing `b -> c ~ List b -> c` and correctly picking up a recursion error.
-    //    Had we generalized `b -> c`, the call `f [ x ]` would have been generalized, and this
+    //    Had we generalized `b -> c`, the call `f [x]` would have been generalized, and this
     //    error would not be found.
     // 3. Now properly let-generalize the untyped body defs, since we now know their types and
     //    that they don't have circular type errors.

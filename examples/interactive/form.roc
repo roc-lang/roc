@@ -1,7 +1,7 @@
 app "form"
     packages { pf: "cli-platform" }
-    imports [ pf.Stdin, pf.Stdout, pf.Task.{ await, Task } ]
-    provides [ main ] to pf
+    imports [pf.Stdin, pf.Stdout, pf.Task.{ await, Task }]
+    provides [main] to pf
 
 main : Task {} *
 main =

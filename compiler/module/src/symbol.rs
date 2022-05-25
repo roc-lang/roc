@@ -48,6 +48,8 @@ const SYMBOL_HAS_NICHE: () =
 #[cfg(debug_assertions)]
 const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
 
+pub const BUILTIN_ABILITIES: &[Symbol] = &[Symbol::ENCODE_ENCODING];
+
 /// In Debug builds only, Symbol has a name() method that lets
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
@@ -83,6 +85,10 @@ impl Symbol {
 
     pub const fn is_builtin(self) -> bool {
         self.module_id().is_builtin()
+    }
+
+    pub fn is_builtin_ability(self) -> bool {
+        BUILTIN_ABILITIES.contains(&self)
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
@@ -1148,9 +1154,9 @@ define_builtins! {
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
-        1 BOOL_FALSE: "False" imported // Bool.Bool = [ False, True ]
+        1 BOOL_FALSE: "False" imported // Bool.Bool = [False, True]
                                        // NB: not strictly needed; used for finding tag names in error suggestions
-        2 BOOL_TRUE: "True" imported // Bool.Bool = [ False, True ]
+        2 BOOL_TRUE: "True" imported // Bool.Bool = [False, True]
                                      // NB: not strictly needed; used for finding tag names in error suggestions
         3 BOOL_AND: "and"
         4 BOOL_OR: "or"
@@ -1258,9 +1264,9 @@ define_builtins! {
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
-        1 RESULT_OK: "Ok" imported // Result.Result a e = [ Ok a, Err e ]
+        1 RESULT_OK: "Ok" imported // Result.Result a e = [Ok a, Err e]
                                    // NB: not strictly needed; used for finding tag names in error suggestions
-        2 RESULT_ERR: "Err" imported // Result.Result a e = [ Ok a, Err e ]
+        2 RESULT_ERR: "Err" imported // Result.Result a e = [Ok a, Err e]
                                      // NB: not strictly needed; used for finding tag names in error suggestions
         3 RESULT_MAP: "map"
         4 RESULT_MAP_ERR: "mapErr"
@@ -1309,8 +1315,36 @@ define_builtins! {
         0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
         1 BOX_BOX_FUNCTION: "box" // Box.box
         2 BOX_UNBOX: "unbox"
-
+    }
+    9 ENCODE: "Encode" => {
+        0 ENCODE_ENCODER: "Encoder"
+        1 ENCODE_ENCODING: "Encoding"
+        2 ENCODE_TO_ENCODER: "toEncoder"
+        3 ENCODE_ENCODERFORMATTING: "EncoderFormatting"
+        4 ENCODE_U8: "u8"
+        5 ENCODE_U16: "u16"
+        6 ENCODE_U32: "u32"
+        7 ENCODE_U64: "u64"
+        8 ENCODE_U128: "u128"
+        9 ENCODE_I8: "i8"
+        10 ENCODE_I16: "i16"
+        11 ENCODE_I32: "i32"
+        12 ENCODE_I64: "i64"
+        13 ENCODE_I128: "i128"
+        14 ENCODE_F32: "f32"
+        15 ENCODE_F64: "f64"
+        16 ENCODE_DEC: "dec"
+        17 ENCODE_BOOL: "bool"
+        18 ENCODE_STRING: "string"
+        19 ENCODE_LIST: "list"
+        20 ENCODE_CUSTOM: "custom"
+        21 ENCODE_APPEND_WITH: "appendWith"
+        22 ENCODE_APPEND: "append"
+        23 ENCODE_TO_BYTES: "toBytes"
+    }
+    10 JSON: "Json" => {
+        0 JSON_JSON: "Json"
     }
 
-    num_modules: 9 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 11 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

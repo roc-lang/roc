@@ -52,7 +52,7 @@ fn i64_signed_int_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 main =
                     i : I64
@@ -2381,7 +2381,7 @@ fn min_f32() {
 }
 
 macro_rules! num_conversion_tests {
-    ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr $(, [ $($support_gen:literal),* ])? )*))*) => {$($(
+    ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr $(, [$($support_gen:literal),*])? )*))*) => {$($(
         #[test]
         #[cfg(any(feature = "gen-llvm", $($(feature = $support_gen)*)?))]
         fn $test_name() {
@@ -2816,7 +2816,7 @@ fn when_on_i32() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 x : I32
                 x = 0
@@ -2839,7 +2839,7 @@ fn when_on_i16() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 x : I16
                 x = 0
