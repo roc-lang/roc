@@ -67,13 +67,56 @@ pub fn expectFailed(
     failure_length += 1;
 }
 
+extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
+extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
+extern fn kill(pid: c_int, sig: c_int) c_int;
+extern fn getppid() c_int;
+
+const SIGUSR1: c_int = 10;
+
+const O_RDWR: c_int = 2;
+const O_CREAT: c_int = 64;
+
+pub const PROT_WRITE: c_int = 2;
+pub const MAP_SHARED: c_int = 0x0001;
+
 pub fn expectFailedC(
     start_line: u32,
     end_line: u32,
     start_col: u16,
     end_col: u16,
 ) callconv(.C) void {
-    return @call(.{ .modifier = always_inline }, expectFailed, .{ start_line, end_line, start_col, end_col });
+    _ = start_line;
+    _ = end_line;
+    _ = start_col;
+    _ = end_col;
+
+    const name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+
+    const shared_fd = shm_open(@ptrCast(*const i8, name), O_RDWR | O_CREAT, 0o666);
+
+    // TODO ftruncate?
+
+    const shared_ptr = mmap(
+        null,
+        4096,
+        PROT_WRITE,
+        MAP_SHARED,
+        shared_fd,
+        0,
+    );
+
+    const bytes_to_write = "42";
+    const ptr = @ptrCast([*]u8, shared_ptr);
+
+    @memcpy(ptr, &bytes_to_write.*, 2);
+
+    // region
+    // [ symbol, length, ptr ]
+
+    const parent_pid = getppid();
+
+    _ = kill(parent_pid, SIGUSR1);
 }
 
 pub fn getExpectFailures() []Failure {

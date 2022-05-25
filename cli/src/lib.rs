@@ -330,6 +330,24 @@ pub fn build(
         }
     });
 
+    unsafe {
+        let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+        let cstring = CString::new(name).unwrap();
+        let shared_fd =
+            libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o666);
+
+        let _shared_ptr = libc::mmap(
+            std::ptr::null_mut(),
+            4096,
+            libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            shared_fd,
+            0,
+        );
+    }
+
+    let x = libc::SIGUSR1;
+
     let src_dir = path.parent().unwrap().canonicalize().unwrap();
     let target_valgrind = matches.is_present(FLAG_VALGRIND);
     let res_binary_path = build_file(
@@ -600,12 +618,14 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .chain([std::ptr::null()])
             .collect_in(&arena);
 
-        match opt_level {
-            OptLevel::Development => roc_run_native_debug(executable, &argv, &envp),
-            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
-                roc_run_native_fast(executable, &argv, &envp);
-            }
-        }
+        //        match opt_level {
+        //            OptLevel::Development => roc_run_native_debug(executable, &argv, &envp),
+        //            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
+        //                roc_run_native_fast(executable, &argv, &envp);
+        //            }
+        //        }
+
+        roc_run_native_debug(executable, &argv, &envp)
     }
 
     Ok(1)
@@ -648,29 +668,113 @@ unsafe fn roc_run_native_debug(
     argv: &[*const libc::c_char],
     envp: &[*const libc::c_char],
 ) {
-    match executable {
-        #[cfg(target_os = "linux")]
-        ExecutableFile::MemFd(fd, path) => {
-            if libc::fexecve(fd, argv.as_ptr(), envp.as_ptr()) != 0 {
-                internal_error!(
-                    "libc::fexecve({:?}, ..., ...) failed: {:?}",
-                    path,
-                    errno::errno()
-                );
-            }
-        }
+    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
+    use std::os::unix::ffi::OsStrExt;
 
-        #[cfg(not(target_os = "linux"))]
-        ExecutableFile::OnDisk(_, path) => {
-            let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
-            if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
-                internal_error!(
-                    "libc::execve({:?}, ..., ...) failed: {:?}",
-                    path,
-                    errno::errno()
-                );
+    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+
+    let parent_pid = std::process::id();
+
+    match libc::fork() {
+        0 => {
+            // we are the child
+            println!("we are the child {}", std::process::id());
+
+            let ExecutableFile::MemFd(fd, path) = executable;
+
+            let c = libc::fexecve(fd, argv.as_ptr(), envp.as_ptr());
+
+            if dbg!(c) < 0 {
+                // Get the current value of errno
+                let e = errno::errno();
+
+                // Extract the error code as an i32
+                let code = e.0;
+
+                // Display a human-friendly error message
+                println!("💥 Error {}: {}", code, e);
+                println!("after {:?}", c);
             }
         }
+        -1 => {
+            // something failed
+
+            // Get the current value of errno
+            let e = errno::errno();
+
+            // Extract the error code as an i32
+            let code = e.0;
+
+            // Display a human-friendly error message
+            println!("Error {}: {}", code, e);
+
+            process::exit(1)
+        }
+        1.. => {
+            // parent
+            println!("we are the parent {}", std::process::id());
+
+            let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+            let cstring = CString::new(name).unwrap();
+
+            for sig in &mut signals {
+                match sig {
+                    SIGCHLD => {
+                        // clean up
+                        // dbg!(libc::shm_unlink(cstring.as_ptr().cast()));
+
+                        // dbg!(libc::unlink(app_path.as_ptr().cast()));
+
+                        // done!
+                        process::exit(0);
+                    }
+                    SIGUSR1 => {
+                        let shared_fd =
+                            libc::shm_open(cstring.as_ptr().cast(), libc::O_RDONLY, 0o666);
+                        // let mut buf: Vec<u8> = Vec::new();
+
+                        // // Grow the length so we can shrink down to it later
+                        // buf.resize(4096, 0);
+
+                        // let bytes_read = libc::read(shared_fd, buf.as_mut_ptr().cast(), 4096);
+
+                        // dbg!(bytes_read);
+
+                        let shared_ptr = libc::mmap(
+                            std::ptr::null_mut(),
+                            4096,
+                            libc::PROT_READ,
+                            libc::MAP_SHARED,
+                            shared_fd,
+                            0,
+                        );
+
+                        // if bytes_read > 0 {
+                        //     // Shrink down to the number of bytes that were actually read
+                        //     buf.resize(bytes_read.try_into().unwrap(), 0);
+
+                        //     dbg!(&buf);
+                        // } else {
+                        //     // Get the current value of errno
+                        //     let e = errno::errno();
+
+                        //     // Extract the error code as an i32
+                        //     let code = e.0;
+
+                        //     // Display a human-friendly error message
+                        //     println!("Error reading shared  memory {}: {}", code, e);
+                        // }
+
+                        let slice: &[u8] = std::slice::from_raw_parts(shared_ptr.cast(), 3);
+                        let cstr = std::ffi::CStr::from_bytes_with_nul_unchecked(slice);
+
+                        println!("The child process said: {:?}", cstr);
+                    }
+                    _ => println!("received signal {}", sig),
+                }
+            }
+        }
+        _ => unreachable!(),
     }
 }
 

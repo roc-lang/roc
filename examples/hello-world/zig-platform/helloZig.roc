@@ -3,4 +3,6 @@ app "helloZig"
     imports []
     provides [main] to pf
 
-main = "Hello, World!\n"
+main = 
+    expect 1 != 1 
+    "Hello, World!\n"
