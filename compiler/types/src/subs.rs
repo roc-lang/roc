@@ -3328,8 +3328,6 @@ fn content_to_err_type(
         RangedNumber(typ, range) => {
             let err_type = var_to_err_type(subs, state, typ);
 
-            dbg!(range);
-
             if state.context == ErrorTypeContext::ExpandRanges {
                 let mut types = Vec::new();
                 for var in range.variable_slice() {

@@ -76,8 +76,6 @@ pub fn module_defs<'a>() -> impl Parser<'a, Defs<'a>, SyntaxError<'a>> {
                         }
 
                         let def_index = Index::push_new(&mut defs.value_defs, *value_def);
-                        defs.value_defs.push(*value_def);
-
                         defs.tags.push(EitherIndex::from_right(def_index));
 
                         break;
@@ -91,7 +89,6 @@ pub fn module_defs<'a>() -> impl Parser<'a, Defs<'a>, SyntaxError<'a>> {
                     }
                     Def::SpaceAfter(inner, spaces) => {
                         let slice = Slice::extend_new(&mut defs.spaces, spaces.iter().copied());
-                        defs.spaces.extend(*spaces);
                         defs.space_after.push(slice);
                         debug_assert_eq!(defs.regions.len(), defs.space_after.len());
 

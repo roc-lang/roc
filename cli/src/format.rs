@@ -166,19 +166,7 @@ fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'
 fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a Ast) {
     fmt_module(buf, &ast.module);
 
-    let defs = &ast.defs;
-    for tag in &defs.tags {
-        match tag.split() {
-            Ok(type_index) => {
-                let type_def = &defs.type_defs[type_index.index()];
-                fmt_type_def(buf, type_def, 0);
-            }
-            Err(value_index) => {
-                let value_def = &defs.value_defs[value_index.index()];
-                fmt_value_def(buf, value_def, 0);
-            }
-        }
-    }
+    fmt_toplevel_defs(buf, defs, 0);
 
     buf.fmt_end_of_file();
 }

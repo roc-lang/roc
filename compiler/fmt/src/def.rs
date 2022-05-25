@@ -3,11 +3,46 @@ use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{
-    AbilityMember, Def, Expr, ExtractSpaces, Pattern, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AbilityMember, Def, Defs, Expr, ExtractSpaces, Pattern, TypeAnnotation, TypeDef, TypeHeader,
+    ValueDef,
 };
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
+
+impl<'a> Formattable for Defs<'a> {
+    fn is_multiline(&self) -> bool {
+        use roc_parse::ast::TypeDef::*;
+
+        match self {
+            Alias { ann, .. } => ann.is_multiline(),
+            Opaque { typ, .. } => typ.is_multiline(),
+            Ability { members, .. } => members.iter().any(|d| d.is_multiline()),
+        }
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        for (index, def) in self.defs().enumerate() {
+            let spaces_before = &self.spaces[self.space_before[index].indices()];
+            let spaces_after = &self.spaces[self.space_after[index].indices()];
+
+            fmt_spaces(buf, spaces_before.iter(), indent);
+
+            match def {
+                Ok(type_def) => type_def.format(buf, indent),
+                Err(value_def) => value_def.format(buf, indent),
+            }
+
+            fmt_spaces(buf, spaces_after.iter(), indent);
+        }
+    }
+}
 
 impl<'a> Formattable for TypeDef<'a> {
     fn is_multiline(&self) -> bool {
@@ -333,6 +368,10 @@ pub fn fmt_value_def<'a, 'buf>(
 
 pub fn fmt_type_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &roc_parse::ast::TypeDef<'a>, indent: u16) {
     def.format(buf, indent);
+}
+
+pub fn fmt_toplevel_def<'a, 'buf>(buf: &mut Buf<'buf>, defs: &Defs<'a>, indent: u16) {
+    defs.format(buf, indent);
 }
 
 pub fn fmt_body<'a, 'buf>(
