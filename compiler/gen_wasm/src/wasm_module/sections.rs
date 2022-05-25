@@ -431,11 +431,6 @@ pub struct ImportSection<'a> {
 impl<'a> ImportSection<'a> {
     const ID: SectionId = SectionId::Import;
 
-    pub fn append(&mut self, import: Import) {
-        import.serialize(&mut self.bytes);
-        self.count += 1;
-    }
-
     pub fn size(&self) -> usize {
         self.bytes.len()
     }
