@@ -103,12 +103,12 @@ impl<'a> WasmModule<'a> {
         let types = TypeSection::parse(arena, bytes, &mut cursor)?;
         let import = ImportSection::parse(arena, bytes, &mut cursor)?;
         let function = FunctionSection::parse(arena, bytes, &mut cursor)?;
-        let table = TableSection::preload(bytes, &mut cursor);
-        let memory = MemorySection::preload(arena, bytes, &mut cursor);
-        let global = GlobalSection::preload(arena, bytes, &mut cursor);
-        let export = ExportSection::preload(arena, bytes, &mut cursor);
-        let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
-        let element = ElementSection::preload(arena, bytes, &mut cursor);
+        let table = TableSection::parse((), bytes, &mut cursor)?;
+        let memory = MemorySection::parse(arena, bytes, &mut cursor)?;
+        let global = GlobalSection::parse(arena, bytes, &mut cursor)?;
+        let export = ExportSection::parse(arena, bytes, &mut cursor)?;
+        let start = OpaqueSection::parse((arena, SectionId::Start), bytes, &mut cursor)?;
+        let element = ElementSection::parse(arena, bytes, &mut cursor)?;
         let indirect_callees = element.indirect_callees(arena);
 
         let code = CodeSection::preload(
@@ -120,7 +120,7 @@ impl<'a> WasmModule<'a> {
             &indirect_callees,
         );
 
-        let data = DataSection::preload(arena, bytes, &mut cursor);
+        let data = DataSection::parse(arena, bytes, &mut cursor)?;
 
         // Metadata sections
         let names = NameSection::parse(arena, bytes, &mut cursor)?;

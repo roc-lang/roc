@@ -78,6 +78,7 @@ pub trait Section<'a>: Sized {
     fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self;
 }
 
+// Boilerplate for simple sections that we just store as bytes
 macro_rules! section_impl {
     ($structname: ident, $id: expr, $from_count_and_bytes: expr) => {
         impl<'a> Section<'a> for $structname<'a> {
@@ -100,6 +101,20 @@ macro_rules! section_impl {
 
             fn size(&self) -> usize {
                 section_size(self.get_bytes())
+            }
+        }
+
+        impl<'a> Parse<&'a Bump> for $structname<'a> {
+            fn parse(
+                arena: &'a Bump,
+                module_bytes: &[u8],
+                cursor: &mut usize,
+            ) -> Result<Self, ParseError> {
+                let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
+                let mut bytes = Vec::<u8>::with_capacity_in(range.len() * 2, arena);
+                *cursor = range.end;
+                bytes.extend_from_slice(&module_bytes[range]);
+                Ok($from_count_and_bytes(count, bytes))
             }
         }
     };
