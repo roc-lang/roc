@@ -139,6 +139,7 @@ pub enum RocType {
         name: String,
         content: TypeId,
     },
+    Recurse,
 }
 
 impl RocType {
@@ -528,6 +529,9 @@ pub enum RocTagUnion {
         /// There must be a payload associated with the non-null tag.
         /// Otherwise, this would have been an Enumeration!
         non_null_payload: TypeId,
+        /// True iff the first tag (alphabetically) is represented by null.
+        /// If this is false, it means the second tag is represented by null instead.
+        null_represents_first_tag: bool,
     },
 }
 

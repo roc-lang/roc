@@ -5,9 +5,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth::*, IntWidth::*};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::layout::{
-    cmp_fields, ext_var_is_empty_tag_union, Builtin, Layout, LayoutCache, UnionLayout,
-};
+use roc_mono::layout::{cmp_fields, ext_var_is_empty_tag_union, Builtin, Layout, LayoutCache};
 use roc_types::subs::UnionTags;
 use roc_types::{
     subs::{Content, FlatType, Subs, Variable},
@@ -254,14 +252,13 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
 
             // Discard RecursionVar nodes. If we try to follow them,
             // we'll end up right back here and recurse forever!
-            if matches!(content, Content::RecursionVar { .. }) {
-                None
+            let type_id = if matches!(content, Content::RecursionVar { .. }) {
+                types.add(RocType::Recurse)
             } else {
-                Some((
-                    label.to_string(),
-                    add_type_help(env, field_layout, field_var, None, types),
-                ))
-            }
+                add_type_help(env, field_layout, field_var, None, types)
+            };
+
+            Some((label.to_string(), type_id))
         })
         .collect();
 
@@ -337,37 +334,24 @@ fn add_tag_union(
     // Sort tags alphabetically by tag name
     tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
-    let mut tags: Vec<_> = tags
-        .into_iter()
-        .map(|(tag_name, payload_vars)| {
-            match struct_fields_needed(env, payload_vars.iter().copied()) {
-                0 => {
-                    // no payload
-                    (tag_name, None)
-                }
-                1 => {
-                    // there's 1 payload item, so it doesn't need its own
-                    // struct - e.g. for `[Foo Str, Bar Str]` both of them
-                    // can have payloads of plain old Str, no struct wrapper needed.
-                    let payload_var = payload_vars.get(0).unwrap();
-                    let payload_id = add_type(env, *payload_var, types);
-
-                    (tag_name, Some(payload_id))
-                }
-                _ => {
-                    if matches!(layout, Layout::Union(UnionLayout::NullableUnwrapped { .. })) {
-                        // In the specific case of a NullableUnwrapped layout, we always
-                        // know the payload has 1 element, and we always want to
-                        // unwrap it even though there's technically 2 vars in there (the
-                        // other being the recursion pointer, which we store implicitly
-                        // in the nullable pointer instead of explicitly in the struct)
-                        debug_assert_eq!(payload_vars.len(), 2);
-
+    let mut tags: Vec<_> =
+        tags.into_iter()
+            .map(|(tag_name, payload_vars)| {
+                match struct_fields_needed(env, payload_vars.iter().copied()) {
+                    0 => {
+                        // no payload
+                        (tag_name, None)
+                    }
+                    1 => {
+                        // there's 1 payload item, so it doesn't need its own
+                        // struct - e.g. for `[Foo Str, Bar Str]` both of them
+                        // can have payloads of plain old Str, no struct wrapper needed.
                         let payload_var = payload_vars.get(0).unwrap();
                         let payload_id = add_type(env, *payload_var, types);
 
                         (tag_name, Some(payload_id))
-                    } else {
+                    }
+                    _ => {
                         // create a struct type for the payload and save it
                         let struct_name = format!("{}_{}", name, tag_name); // e.g. "MyUnion_MyVariant"
                         let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
@@ -378,9 +362,8 @@ fn add_tag_union(
                         (tag_name, Some(struct_id))
                     }
                 }
-            }
-        })
-        .collect();
+            })
+            .collect();
 
     let typ = match layout {
         Layout::Union(union_layout) => {
@@ -412,14 +395,17 @@ fn add_tag_union(
                 // A recursive tag union with only two variants, where one is empty.
                 // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
                 // e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
-                NullableUnwrapped { nullable_id, .. } => {
+                NullableUnwrapped {
+                    nullable_id: null_represents_first_tag,
+                    other_fields,
+                } => {
                     // NullableUnwrapped tag unions should always have exactly 2 tags.
                     debug_assert_eq!(tags.len(), 2);
 
                     let null_tag;
                     let non_null;
 
-                    if nullable_id {
+                    if null_represents_first_tag {
                         // If nullable_id is true, then the null tag is second, which means
                         // pop() will return it because it's at the end of the vec.
                         null_tag = tags.pop().unwrap().0;
@@ -437,6 +423,7 @@ fn add_tag_union(
                         null_tag,
                         non_null_tag,
                         non_null_payload: non_null_payload.unwrap(),
+                        null_represents_first_tag,
                     })
                 }
             }
