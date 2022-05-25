@@ -518,7 +518,7 @@ impl<'a> Parse<&'a Bump> for FunctionSection<'a> {
 
         let mut signatures = Vec::with_capacity_in(count as usize, arena);
         for _ in 0..count {
-            signatures.push(u32::parse((), module_bytes, cursor).unwrap());
+            signatures.push(u32::parse((), module_bytes, cursor)?);
         }
 
         *cursor = end;
@@ -1199,33 +1199,33 @@ impl<'a> CodeSection<'a> {
         MAX_SIZE_SECTION_HEADER + self.preloaded_bytes.len() + builders_size
     }
 
-    pub fn preload(
+    pub fn parse(
         arena: &'a Bump,
         module_bytes: &[u8],
         cursor: &mut usize,
         import_signatures: &[u32],
         function_signatures: &[u32],
         indirect_callees: &[u32],
-    ) -> Self {
-        let (preloaded_count, initial_bytes) =
-            preload_section(SectionId::Code, module_bytes, cursor);
-        let preloaded_bytes = arena.alloc_slice_copy(initial_bytes);
+    ) -> Result<Self, ParseError> {
+        let (preloaded_count, range) =
+            parse_section(SectionId::Code, module_bytes, cursor)?;
+        *cursor = range.end;
+        let preloaded_bytes = arena.alloc_slice_copy(&module_bytes[range]);
 
-        // TODO: Try to move this call_graph preparation to platform build time
         let dead_code_metadata = parse_preloads_call_graph(
             arena,
-            initial_bytes,
+            &preloaded_bytes,
             import_signatures,
             function_signatures,
             indirect_callees,
         );
 
-        CodeSection {
+        Ok(CodeSection {
             preloaded_count,
             preloaded_bytes,
             code_builders: Vec::with_capacity_in(0, arena),
             dead_code_metadata,
-        }
+        })
     }
 
     pub(super) fn remove_dead_preloads<T: IntoIterator<Item = u32>>(

@@ -111,14 +111,14 @@ impl<'a> WasmModule<'a> {
         let element = ElementSection::parse(arena, bytes, &mut cursor)?;
         let indirect_callees = element.indirect_callees(arena);
 
-        let code = CodeSection::preload(
+        let code = CodeSection::parse(
             arena,
             bytes,
             &mut cursor,
             &import.fn_signatures,
             &function.signatures,
             &indirect_callees,
-        );
+        )?;
 
         let data = DataSection::parse(arena, bytes, &mut cursor)?;
 

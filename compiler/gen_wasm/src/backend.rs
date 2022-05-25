@@ -87,6 +87,7 @@ impl<'a> WasmBackend<'a> {
         }
 
         module.export.exports = app_exports;
+        module.code.code_builders.reserve(proc_lookup.len());
 
         WasmBackend {
             env,
