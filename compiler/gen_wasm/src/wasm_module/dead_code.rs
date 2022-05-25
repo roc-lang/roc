@@ -2,7 +2,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
 use super::opcodes::OpCode;
-use super::parse::{Parse, SkipBytes, ParseError};
+use super::parse::{Parse, ParseError, SkipBytes};
 use super::serialize::{SerialBuffer, Serialize};
 use super::CodeBuilder;
 

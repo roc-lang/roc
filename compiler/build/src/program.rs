@@ -472,10 +472,12 @@ fn gen_from_mono_module_dev_wasm32(
         exposed_to_host,
     };
 
-    let host_bytes = std::fs::read(preprocessed_host_path).expect(&format!(
-        "Failed to read host object file {}! Try setting --precompiled-host=false",
-        preprocessed_host_path.display()
-    ));
+    let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {
+        panic!(
+            "Failed to read host object file {}! Try setting --precompiled-host=false",
+            preprocessed_host_path.display()
+        )
+    });
 
     let host_module = roc_gen_wasm::parse_host(arena, &host_bytes).unwrap_or_else(|e| {
         panic!(
