@@ -101,23 +101,13 @@ impl<'a> WasmModule<'a> {
         let mut cursor: usize = 8;
 
         let types = TypeSection::parse(arena, bytes, &mut cursor)?;
-
         let import = ImportSection::parse(arena, bytes, &mut cursor)?;
-        // let imported_fn_signatures = import.parse(arena)?;
-
-        let function = FunctionSection::preload(arena, bytes, &mut cursor);
-        let defined_fn_signatures = function.parse(arena);
-
+        let function = FunctionSection::parse(arena, bytes, &mut cursor)?;
         let table = TableSection::preload(bytes, &mut cursor);
-
         let memory = MemorySection::preload(arena, bytes, &mut cursor);
-
         let global = GlobalSection::preload(arena, bytes, &mut cursor);
-
         let export = ExportSection::preload(arena, bytes, &mut cursor);
-
         let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
-
         let element = ElementSection::preload(arena, bytes, &mut cursor);
         let indirect_callees = element.indirect_callees(arena);
 
@@ -126,7 +116,7 @@ impl<'a> WasmModule<'a> {
             bytes,
             &mut cursor,
             &import.fn_signatures,
-            &defined_fn_signatures,
+            &function.signatures,
             &indirect_callees,
         );
 

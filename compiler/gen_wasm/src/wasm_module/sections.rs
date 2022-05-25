@@ -102,19 +102,6 @@ macro_rules! section_impl {
                 section_size(self.get_bytes())
             }
         }
-
-        impl<'a> Parse<&'a Bump> for $structname<'a> {
-            fn parse(
-                arena: &'a Bump,
-                module_bytes: &[u8],
-                cursor: &mut usize,
-            ) -> Result<Self, ParseError> {
-                let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
-                let mut bytes = Vec::<u8>::with_capacity_in(range.len() * 2, arena);
-                bytes.extend_from_slice(&module_bytes[range]);
-                Ok($from_count_and_bytes(count, bytes))
-            }
-        }
     };
 
     ($structname: ident, $id: expr) => {
@@ -500,28 +487,50 @@ impl<'a> Serialize for ImportSection<'a> {
 
 #[derive(Debug)]
 pub struct FunctionSection<'a> {
-    pub count: u32,
+    pub signatures: Vec<'a, u32>,
     pub bytes: Vec<'a, u8>,
 }
 
 impl<'a> FunctionSection<'a> {
     pub fn add_sig(&mut self, sig_id: u32) {
         self.bytes.encode_u32(sig_id);
-        self.count += 1;
-    }
-
-    pub fn parse(&self, arena: &'a Bump) -> Vec<'a, u32> {
-        let count = self.count as usize;
-        let mut signatures = Vec::with_capacity_in(count, arena);
-        let mut cursor = 0;
-        for _ in 0..count {
-            signatures.push(u32::parse((), &self.bytes, &mut cursor).unwrap());
-        }
-        signatures
+        self.signatures.push(sig_id);
     }
 }
 
-section_impl!(FunctionSection, SectionId::Function);
+impl<'a> Parse<&'a Bump> for FunctionSection<'a> {
+    fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (count, range) = parse_section(SectionId::Function, module_bytes, cursor)?;
+        let end = range.end;
+
+        let mut bytes = Vec::<u8>::with_capacity_in(range.len() * 2, arena);
+        bytes.extend_from_slice(&module_bytes[range]);
+
+        let mut signatures = Vec::with_capacity_in(count as usize, arena);
+        for _ in 0..count {
+            signatures.push(u32::parse((), module_bytes, cursor).unwrap());
+        }
+
+        *cursor = end;
+        Ok(FunctionSection { signatures, bytes })
+    }
+}
+
+impl<'a> Section<'a> for FunctionSection<'a> {
+    const ID: SectionId = SectionId::Function;
+
+    fn get_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    fn get_count(&self) -> u32 {
+        self.signatures.len() as u32
+    }
+
+    fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+        Self::parse(arena, module_bytes, cursor).unwrap()
+    }
+}
 
 /*******************************************************************
  *
