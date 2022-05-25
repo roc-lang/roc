@@ -11,6 +11,9 @@ pub unsafe trait ReferenceCount {
     fn increment(&self);
     /// Decrement the reference count.
     ///
+    /// This takes a pointer rather than a reference because it can receive a null pointer
+    /// (e.g. in the case of a cons list), and null references in Rust are undefined behavior.
+    ///
     /// # Safety
     ///
     /// The caller must ensure that `ptr` points to a value with a non-zero
