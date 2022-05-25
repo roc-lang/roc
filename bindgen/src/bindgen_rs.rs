@@ -384,6 +384,36 @@ fn add_tag_union(
                     ),
                 );
 
+                let (ret_type_str, ret) = match payload_type {
+                    RocType::RocStr
+                    | RocType::Bool
+                    | RocType::I8
+                    | RocType::U8
+                    | RocType::I16
+                    | RocType::U16
+                    | RocType::I32
+                    | RocType::U32
+                    | RocType::I64
+                    | RocType::U64
+                    | RocType::I128
+                    | RocType::U128
+                    | RocType::F32
+                    | RocType::F64
+                    | RocType::F128
+                    | RocType::RocDec
+                    | RocType::RocList(_)
+                    | RocType::RocDict(_, _)
+                    | RocType::RocSet(_)
+                    | RocType::RocBox(_)
+                    | RocType::TagUnion(_)
+                    | RocType::TransparentWrapper { .. } => {
+                        (payload_type_name.clone(), get_payload)
+                    }
+                    RocType::Struct { name, fields } => {
+                        todo!();
+                    }
+                };
+
                 add_decl(
                     impls,
                     opt_impl.clone(),
@@ -392,9 +422,9 @@ fn add_tag_union(
                         r#"/// Unsafely assume the given {name} has a .variant() of {tag_name} and convert it to {tag_name}'s payload.
     /// (Always examine .variant() first to make sure this is the correct variant!)
     /// Panics in debug builds if the .variant() doesn't return {tag_name}.
-    pub unsafe fn into_{tag_name}({self_for_into}) -> {payload_type_name} {{
+    pub unsafe fn into_{tag_name}({self_for_into}) -> {ret_type_str} {{
         debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
-        {get_payload}
+        {ret}
     }}"#,
                     ),
                 );
