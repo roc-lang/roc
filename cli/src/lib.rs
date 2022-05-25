@@ -505,7 +505,7 @@ pub fn build(
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     triple: Triple,
-    _opt_level: OptLevel,
+    opt_level: OptLevel,
     args: I,
     binary_bytes: &mut [u8],
 ) -> io::Result<i32> {
@@ -542,7 +542,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => roc_run_native(arena, args, binary_bytes),
+        _ => roc_run_native(arena, opt_level, args, binary_bytes),
     }
 }
 
@@ -550,6 +550,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 #[cfg(target_family = "unix")]
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: Bump,
+    opt_level: OptLevel,
     args: I,
     binary_bytes: &mut [u8],
 ) -> std::io::Result<i32> {
@@ -599,13 +600,50 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .chain([std::ptr::null()])
             .collect_in(&arena);
 
-        roc_run_native_fast(executable, &argv, &envp);
+        match opt_level {
+            OptLevel::Development => roc_run_native_debug(executable, &argv, &envp),
+            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
+                roc_run_native_fast(executable, &argv, &envp);
+            }
+        }
     }
 
     Ok(1)
 }
 
 unsafe fn roc_run_native_fast(
+    executable: ExecutableFile,
+    argv: &[*const libc::c_char],
+    envp: &[*const libc::c_char],
+) {
+    match executable {
+        #[cfg(target_os = "linux")]
+        ExecutableFile::MemFd(fd, path) => {
+            if libc::fexecve(fd, argv.as_ptr(), envp.as_ptr()) != 0 {
+                internal_error!(
+                    "libc::fexecve({:?}, ..., ...) failed: {:?}",
+                    path,
+                    errno::errno()
+                );
+            }
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        ExecutableFile::OnDisk(_, path) => {
+            let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
+            if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
+                internal_error!(
+                    "libc::execve({:?}, ..., ...) failed: {:?}",
+                    path,
+                    errno::errno()
+                );
+            }
+        }
+    }
+}
+
+// with Expect
+unsafe fn roc_run_native_debug(
     executable: ExecutableFile,
     argv: &[*const libc::c_char],
     envp: &[*const libc::c_char],
@@ -707,6 +745,7 @@ fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<Exec
 #[cfg(not(target_family = "unix"))]
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    _opt_level: OptLevel,
     _args: I,
     _binary_bytes: &mut [u8],
 ) -> io::Result<i32> {
