@@ -13,12 +13,6 @@ pub struct ParseError {
     pub message: String,
 }
 
-/// Skip over serialized bytes for a type
-/// This may, or may not, require looking at the byte values
-pub trait SkipBytes: Sized {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), ParseError>;
-}
-
 /// Decode an unsigned 32-bit integer from the provided buffer in LEB-128 format
 /// Return the integer itself and the offset after it ends
 fn decode_u32(bytes: &[u8]) -> Result<(u32, usize), ()> {
@@ -62,6 +56,12 @@ impl<'a> Parse<&'a Bump> for &'a str {
         *cursor = end;
         Ok(s)
     }
+}
+
+/// Skip over serialized bytes for a type
+/// This may, or may not, require looking at the byte values
+pub trait SkipBytes: Sized {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), ParseError>;
 }
 
 impl SkipBytes for u32 {

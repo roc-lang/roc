@@ -2,7 +2,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
 use super::opcodes::OpCode;
-use super::parse::{Parse, SkipBytes};
+use super::parse::{Parse, SkipBytes, ParseError};
 use super::serialize::{SerialBuffer, Serialize};
 use super::CodeBuilder;
 
@@ -70,7 +70,7 @@ pub fn parse_preloads_call_graph<'a>(
     imported_fn_signatures: &[u32],
     defined_fn_signatures: &[u32],
     indirect_callees: &[u32],
-) -> PreloadsCallGraph<'a> {
+) -> Result<PreloadsCallGraph<'a>, ParseError> {
     let mut call_graph = PreloadsCallGraph::new(
         arena,
         imported_fn_signatures.len(),
@@ -92,13 +92,13 @@ pub fn parse_preloads_call_graph<'a>(
         call_graph.code_offsets.push(cursor as u32);
         call_graph.calls_offsets.push(call_graph.calls.len() as u32);
 
-        let func_size = u32::parse((), code_section_body, &mut cursor).unwrap();
+        let func_size = u32::parse((), code_section_body, &mut cursor)?;
         let func_end = cursor + func_size as usize;
 
         // Skip over local variable declarations
-        let local_groups_count = u32::parse((), code_section_body, &mut cursor).unwrap();
+        let local_groups_count = u32::parse((), code_section_body, &mut cursor)?;
         for _ in 0..local_groups_count {
-            u32::parse((), code_section_body, &mut cursor).unwrap();
+            u32::parse((), code_section_body, &mut cursor)?;
             cursor += 1; // ValueType
         }
 
@@ -107,25 +107,20 @@ pub fn parse_preloads_call_graph<'a>(
             let opcode_byte: u8 = code_section_body[cursor];
             if opcode_byte == OpCode::CALL as u8 {
                 cursor += 1;
-                let call_index = u32::parse((), code_section_body, &mut cursor).unwrap();
+                let call_index = u32::parse((), code_section_body, &mut cursor)?;
                 call_graph.calls.push(call_index as u32);
             } else if opcode_byte == OpCode::CALLINDIRECT as u8 {
                 cursor += 1;
                 // Insert all indirect callees with a matching type signature
-                let sig = u32::parse((), code_section_body, &mut cursor).unwrap();
+                let sig = u32::parse((), code_section_body, &mut cursor)?;
                 call_graph.calls.extend(
                     indirect_callees
                         .iter()
                         .filter(|f| signatures[**f as usize] == sig),
                 );
-                u32::skip_bytes(code_section_body, &mut cursor).unwrap(); // table_idx
+                u32::skip_bytes(code_section_body, &mut cursor)?; // table_idx
             } else {
-                OpCode::skip_bytes(code_section_body, &mut cursor).unwrap_or_else(|e| {
-                    panic!(
-                        "Error parsing host object file, at offset 0x{:x} within Code section: {}",
-                        cursor, e.message
-                    )
-                });
+                OpCode::skip_bytes(code_section_body, &mut cursor)?;
             }
         }
     }
@@ -134,7 +129,7 @@ pub fn parse_preloads_call_graph<'a>(
     call_graph.code_offsets.push(cursor as u32);
     call_graph.calls_offsets.push(call_graph.calls.len() as u32);
 
-    call_graph
+    Ok(call_graph)
 }
 
 /// Trace the dependencies of a list of functions

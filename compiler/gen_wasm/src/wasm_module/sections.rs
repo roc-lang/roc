@@ -1154,7 +1154,7 @@ impl<'a> CodeSection<'a> {
             import_signatures,
             function_signatures,
             indirect_callees,
-        );
+        )?;
 
         Ok(CodeSection {
             preloaded_count,
