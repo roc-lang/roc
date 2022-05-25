@@ -96,10 +96,10 @@ pub struct Tag {
     pub values: Vec<TypeAnnotation>,
 }
 
-pub fn generate_module_docs<'a>(
+pub fn generate_module_docs(
     scope: Scope,
     module_name: ModuleName,
-    parsed_defs: &roc_parse::ast::Defs<'a>,
+    parsed_defs: &roc_parse::ast::Defs,
 ) -> ModuleDocumentation {
     let entries = generate_entry_docs(&scope.locals.ident_ids, parsed_defs);
 
@@ -155,8 +155,8 @@ fn generate_entry_docs<'a>(
 
         match either_index.split() {
             Err(value_index) => match &defs.value_defs[value_index.index()] {
-                ValueDef::Annotation(loc_pattern, loc_ann) => match loc_pattern.value {
-                    Pattern::Identifier(identifier) => {
+                ValueDef::Annotation(loc_pattern, loc_ann) => {
+                    if let Pattern::Identifier(identifier) = loc_pattern.value {
                         // Check if the definition is exposed
                         if ident_ids.get_id(&identifier.into()).is_some() {
                             let name = identifier.to_string();
@@ -170,16 +170,14 @@ fn generate_entry_docs<'a>(
                             acc.push(DocEntry::DocDef(doc_def));
                         }
                     }
-
-                    _ => (),
-                },
+                }
 
                 ValueDef::AnnotatedBody {
                     ann_pattern,
                     ann_type,
                     ..
-                } => match ann_pattern.value {
-                    Pattern::Identifier(identifier) => {
+                } => {
+                    if let Pattern::Identifier(identifier) = ann_pattern.value {
                         // Check if the definition is exposed
                         if ident_ids.get_id(&identifier.into()).is_some() {
                             let doc_def = DocDef {
@@ -192,9 +190,7 @@ fn generate_entry_docs<'a>(
                             acc.push(DocEntry::DocDef(doc_def));
                         }
                     }
-
-                    _ => (),
-                },
+                }
 
                 ValueDef::Body(_, _) => (),
 

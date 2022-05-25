@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::FormatMode;
 use bumpalo::Bump;
 use roc_error_macros::{internal_error, user_error};
-use roc_fmt::def::{fmt_type_def, fmt_value_def};
+use roc_fmt::def::fmt_toplevel_defs;
 use roc_fmt::module::fmt_module;
 use roc_fmt::spaces::RemoveSpaces;
 use roc_fmt::{Ast, Buf};
@@ -166,7 +166,7 @@ fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'
 fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a Ast) {
     fmt_module(buf, &ast.module);
 
-    fmt_toplevel_defs(buf, defs, 0);
+    fmt_toplevel_defs(buf, &ast.defs, 0);
 
     buf.fmt_end_of_file();
 }

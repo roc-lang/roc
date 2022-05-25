@@ -12,13 +12,7 @@ use roc_region::all::Loc;
 
 impl<'a> Formattable for Defs<'a> {
     fn is_multiline(&self) -> bool {
-        use roc_parse::ast::TypeDef::*;
-
-        match self {
-            Alias { ann, .. } => ann.is_multiline(),
-            Opaque { typ, .. } => typ.is_multiline(),
-            Ability { members, .. } => members.iter().any(|d| d.is_multiline()),
-        }
+        !self.tags.is_empty()
     }
 
     fn format_with_options<'buf>(
@@ -370,7 +364,7 @@ pub fn fmt_type_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &roc_parse::ast::TypeDef
     def.format(buf, indent);
 }
 
-pub fn fmt_toplevel_def<'a, 'buf>(buf: &mut Buf<'buf>, defs: &Defs<'a>, indent: u16) {
+pub fn fmt_toplevel_defs<'a, 'buf>(buf: &mut Buf<'buf>, defs: &Defs<'a>, indent: u16) {
     defs.format(buf, indent);
 }
 

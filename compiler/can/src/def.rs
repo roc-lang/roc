@@ -558,6 +558,7 @@ pub(crate) fn canonicalize_toplevel_defs<'a>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn canonicalize_value_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
@@ -572,7 +573,7 @@ fn canonicalize_value_defs<'a>(
     // the ast::Expr values in pending_exprs for further canonicalization
     // once we've finished assembling the entire scope.
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
-    for loc_def in value_defs.into_iter() {
+    for loc_def in value_defs {
         let mut new_output = Output::default();
         match to_pending_value_def(
             env,
