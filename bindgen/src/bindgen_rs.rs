@@ -105,7 +105,7 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
                     if tags.len() == 1 {
                         // An enumeration with one tag is a zero-sized unit type, so
                         // represent it as a zero-sized struct (e.g. "struct Foo()").
-                        let derive = derive_str(types.get(id), types);
+                        let derive = derive_str(types.get(id), types, true);
                         let struct_name = type_name(id, types);
                         let body = format!("{derive}\nstruct {struct_name}();");
 
@@ -176,7 +176,8 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
         | RocType::RocList(_)
         | RocType::RocBox(_) => {}
         RocType::TransparentWrapper { name, content } => {
-            let derive = derive_str(types.get(id), types);
+            let typ = types.get(id);
+            let derive = derive_str(typ, types, typ.has_enumeration(types));
             let body = format!(
                 "{derive}\n#[repr(transparent)]\npub struct {name}({});",
                 type_name(*content, types)
@@ -780,7 +781,7 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
         .try_into()
         .unwrap();
 
-    let derive = derive_str(typ, types);
+    let derive = derive_str(typ, types, false);
     let repr_bytes = tag_bytes * 8;
 
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
@@ -833,7 +834,7 @@ fn add_struct(
             )
         }
         _ => {
-            let derive = derive_str(types.get(struct_id), types);
+            let derive = derive_str(types.get(struct_id), types, true);
             let mut buf = format!("{derive}\n#[repr(C)]\npub struct {name} {{\n");
 
             for field in fields {
@@ -888,15 +889,22 @@ fn type_name(id: TypeId, types: &Types) -> String {
     }
 }
 
-fn derive_str(typ: &RocType, types: &Types) -> String {
+/// This explicitly asks for whether to include Debug because in the very specific
+/// case of a struct that's a payload for a recursive tag union, typ.has_enumeration()
+/// will return true, but actually we want to derive Debug here anyway.
+fn derive_str(typ: &RocType, types: &Types, include_debug: bool) -> String {
     let mut buf = "#[derive(Clone, ".to_string();
 
     if !typ.has_pointer(types) {
         buf.push_str("Copy, ");
     }
 
+    if include_debug {
+        buf.push_str("Debug, ");
+    }
+
     if !typ.has_enumeration(types) {
-        buf.push_str("Debug, Default, ");
+        buf.push_str("Default, ");
     }
 
     if !typ.has_float(types) {
