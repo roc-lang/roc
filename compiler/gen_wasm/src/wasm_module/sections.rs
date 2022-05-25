@@ -141,9 +141,9 @@ fn section_size(bytes: &[u8]) -> usize {
     id + encoded_length + encoded_count + bytes.len()
 }
 
-fn parse_section<'a>(
+fn parse_section(
     expected_id: SectionId,
-    module_bytes: &'a [u8],
+    module_bytes: &[u8],
     cursor: &mut usize,
 ) -> Result<(u32, std::ops::Range<usize>), ParseError> {
     if *cursor >= module_bytes.len() {
@@ -1162,7 +1162,7 @@ impl<'a> CodeSection<'a> {
 
         let dead_code_metadata = parse_preloads_call_graph(
             arena,
-            &preloaded_bytes,
+            preloaded_bytes,
             import_signatures,
             function_signatures,
             indirect_callees,
