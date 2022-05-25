@@ -28,10 +28,9 @@ pub extern "C" fn rust_main() -> i32 {
     assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
 
     println!(
-        "tag_union was: {:?}\n`Foo \"small str\"` is: {:?}\n`Foo \"A long enough string to not be small\"` is: {:?}\n`Bar 123` is: {:?}\n`Baz` is: {:?}\n`Blah 456` is: {:?}",
+        "tag_union was: {:?}\n`Foo \"small str\"` is: {:?}\n`Bar 123` is: {:?}\n`Baz` is: {:?}\n`Blah 456` is: {:?}",
         tag_union,
         bindings::NonRecursive::Foo("small str".into()),
-        bindings::NonRecursive::Foo("A long enough string to not be small".into()),
         bindings::NonRecursive::Bar(123),
         bindings::NonRecursive::Baz,
         bindings::NonRecursive::Blah(456),

@@ -112,7 +112,6 @@ mod bindgen_cli_run {
         union_without_padding:"union-without-padding" => indoc!(r#"
             tag_union was: NonRecursive::Foo("This is a test")
             `Foo "small str"` is: NonRecursive::Foo("small str")
-            `Foo "A long enough string to not be small"` is: NonRecursive::Foo("A long enough string to not be small")
             `Bar 123` is: NonRecursive::Bar(123)
             `Baz` is: NonRecursive::Baz
             `Blah 456` is: NonRecursive::Blah(456)
