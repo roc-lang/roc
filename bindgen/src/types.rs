@@ -49,7 +49,7 @@ impl Types {
     pub fn replace(&mut self, id: TypeId, typ: RocType) {
         debug_assert!(self.by_id.get(id.0).is_some());
 
-        self.by_id.insert(id.0, typ);
+        self.by_id[id.0] = typ;
     }
 
     pub fn ids(&self) -> impl ExactSizeIterator<Item = TypeId> {

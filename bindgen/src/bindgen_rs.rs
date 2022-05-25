@@ -1,4 +1,4 @@
-use crate::types::{RocTagUnion, RocType, TypeId, Types};
+use crate::types::{Field, RocTagUnion, RocType, TypeId, Types};
 use indexmap::IndexMap;
 use roc_mono::layout::UnionLayout;
 use roc_target::{Architecture, TargetInfo};
@@ -814,7 +814,7 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
 fn add_struct(
     name: &str,
     architecture: Architecture,
-    fields: &[(String, TypeId)],
+    fields: &[Field],
     struct_id: TypeId,
     types: &Types,
     impls: &mut Impls,
@@ -825,17 +825,22 @@ fn add_struct(
         }
         1 => {
             // Unwrap single-field records
-            add_type(architecture, fields.first().unwrap().1, types, impls)
+            add_type(
+                architecture,
+                fields.first().unwrap().type_id(),
+                types,
+                impls,
+            )
         }
         _ => {
             let derive = derive_str(types.get(struct_id), types);
             let mut buf = format!("{derive}\n#[repr(C)]\npub struct {name} {{\n");
 
-            for (label, field_id) in fields {
+            for field in fields {
                 buf.push_str(&format!(
                     "{INDENT}pub {}: {},\n",
-                    label.as_str(),
-                    type_name(*field_id, types)
+                    field.label(),
+                    type_name(field.type_id(), types)
                 ));
             }
 
