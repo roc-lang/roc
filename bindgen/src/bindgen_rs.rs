@@ -139,13 +139,15 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
                     null_tag,
                     non_null_tag,
                     non_null_payload,
-                } => write_nullable_unwrapped(
+                    null_represents_first_tag,
+                } => add_nullable_unwrapped(
                     name,
                     architecture,
                     id,
                     null_tag,
                     non_null_tag,
                     *non_null_payload,
+                    *null_represents_first_tag,
                     types,
                     impls,
                 ),
@@ -916,13 +918,15 @@ fn derive_str(typ: &RocType, types: &Types, include_debug: bool) -> String {
     buf
 }
 
-fn write_nullable_unwrapped(
+#[allow(clippy::too_many_arguments)]
+fn add_nullable_unwrapped(
     name: &str,
     architecture: Architecture,
     id: TypeId,
     null_tag: &str,
     non_null_tag: &str,
     non_null_payload: TypeId,
+    null_represents_first_tag: bool,
     types: &Types,
     impls: &mut Impls,
 ) {
