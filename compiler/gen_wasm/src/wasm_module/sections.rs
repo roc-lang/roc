@@ -68,13 +68,7 @@ const MAX_SIZE_SECTION_HEADER: usize = std::mem::size_of::<SectionId>() + 2 * MA
 // Trait to help serialize simple sections that we just store as bytes
 pub trait Section<'a>: Sized {
     const ID: SectionId;
-
-    fn get_bytes(&self) -> &[u8];
-    fn get_count(&self) -> u32;
-
-    fn size(&self) -> usize {
-        MAX_SIZE_SECTION_HEADER + self.get_bytes().len()
-    }
+    fn size(&self) -> usize;
 }
 
 // Boilerplate for simple sections that we just store as bytes
@@ -83,16 +77,8 @@ macro_rules! section_impl {
         impl<'a> Section<'a> for $structname<'a> {
             const ID: SectionId = $id;
 
-            fn get_bytes(&self) -> &[u8] {
-                &self.bytes
-            }
-
-            fn get_count(&self) -> u32 {
-                self.count
-            }
-
             fn size(&self) -> usize {
-                section_size(self.get_bytes())
+                MAX_SIZE_SECTION_HEADER + self.bytes.len()
             }
         }
 
@@ -109,6 +95,12 @@ macro_rules! section_impl {
                 Ok($from_count_and_bytes(count, bytes))
             }
         }
+
+        impl<'a> Serialize for $structname<'a> {
+            fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
+                serialize_bytes_section(Self::ID, self.count, &self.bytes, buffer);
+            }
+        }
     };
 
     ($structname: ident, $id: expr) => {
@@ -119,26 +111,18 @@ macro_rules! section_impl {
     };
 }
 
-impl<'a, Sec> Serialize for Sec
-where
-    Sec: Section<'a>,
-{
-    fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
-        if !self.get_bytes().is_empty() {
-            let header_indices = write_section_header(buffer, Self::ID);
-            buffer.encode_u32(self.get_count());
-            buffer.append_slice(self.get_bytes());
-            update_section_size(buffer, header_indices);
-        }
+fn serialize_bytes_section<B: SerialBuffer>(
+    id: SectionId,
+    count: u32,
+    bytes: &[u8],
+    buffer: &mut B,
+) {
+    if !bytes.is_empty() {
+        let header_indices = write_section_header(buffer, id);
+        buffer.encode_u32(count);
+        buffer.append_slice(bytes);
+        update_section_size(buffer, header_indices);
     }
-}
-
-fn section_size(bytes: &[u8]) -> usize {
-    let id = 1;
-    let encoded_length = MAX_SIZE_ENCODED_U32;
-    let encoded_count = MAX_SIZE_ENCODED_U32;
-
-    id + encoded_length + encoded_count + bytes.len()
 }
 
 fn parse_section(
@@ -273,11 +257,8 @@ impl<'a> TypeSection<'a> {
 impl<'a> Section<'a> for TypeSection<'a> {
     const ID: SectionId = SectionId::Type;
 
-    fn get_bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-    fn get_count(&self) -> u32 {
-        self.offsets.len() as u32
+    fn size(&self) -> usize {
+        MAX_SIZE_SECTION_HEADER + self.bytes.len()
     }
 }
 
@@ -313,6 +294,12 @@ impl<'a> Parse<&'a Bump> for TypeSection<'a> {
             bytes,
             offsets,
         })
+    }
+}
+
+impl<'a> Serialize for TypeSection<'a> {
+    fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
+        serialize_bytes_section(Self::ID, self.offsets.len() as u32, &self.bytes, buffer);
     }
 }
 
@@ -493,13 +480,14 @@ impl<'a> Parse<&'a Bump> for FunctionSection<'a> {
 
 impl<'a> Section<'a> for FunctionSection<'a> {
     const ID: SectionId = SectionId::Function;
-
-    fn get_bytes(&self) -> &[u8] {
-        &self.bytes
+    fn size(&self) -> usize {
+        MAX_SIZE_SECTION_HEADER + self.bytes.len()
     }
+}
 
-    fn get_count(&self) -> u32 {
-        self.signatures.len() as u32
+impl<'a> Serialize for FunctionSection<'a> {
+    fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
+        serialize_bytes_section(Self::ID, self.signatures.len() as u32, &self.bytes, buffer);
     }
 }
 
