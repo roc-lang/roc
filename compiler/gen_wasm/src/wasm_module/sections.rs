@@ -65,6 +65,7 @@ impl Debug for SectionId {
 
 const MAX_SIZE_SECTION_HEADER: usize = std::mem::size_of::<SectionId>() + 2 * MAX_SIZE_ENCODED_U32;
 
+// Trait to help serialize simple sections that we just store as bytes
 pub trait Section<'a>: Sized {
     const ID: SectionId;
 
@@ -74,8 +75,6 @@ pub trait Section<'a>: Sized {
     fn size(&self) -> usize {
         MAX_SIZE_SECTION_HEADER + self.get_bytes().len()
     }
-
-    fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self;
 }
 
 // Boilerplate for simple sections that we just store as bytes
@@ -90,13 +89,6 @@ macro_rules! section_impl {
 
             fn get_count(&self) -> u32 {
                 self.count
-            }
-
-            fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
-                let (count, initial_bytes) = preload_section(Self::ID, module_bytes, cursor);
-                let mut bytes = Vec::with_capacity_in(initial_bytes.len() * 2, arena);
-                bytes.extend_from_slice(initial_bytes);
-                $from_count_and_bytes(count, bytes)
             }
 
             fn size(&self) -> usize {
@@ -179,29 +171,6 @@ fn parse_section<'a>(
     let next_section_start = count_start + section_size as usize;
 
     Ok((count, body_start..next_section_start))
-}
-
-fn preload_section<'a>(
-    id: SectionId,
-    module_bytes: &'a [u8],
-    cursor: &mut usize,
-) -> (u32, &'a [u8]) {
-    if (*cursor >= module_bytes.len()) || (module_bytes[*cursor] != id as u8) {
-        return (0, &[]);
-    }
-    *cursor += 1;
-
-    let section_size = u32::parse((), module_bytes, cursor).unwrap();
-    let count_start = *cursor;
-    let count = u32::parse((), module_bytes, cursor).unwrap();
-    let body_start = *cursor;
-
-    let next_section_start = count_start + section_size as usize;
-    let body = &module_bytes[body_start..next_section_start];
-
-    *cursor = next_section_start;
-
-    (count, body)
 }
 
 pub struct SectionHeaderIndices {
@@ -309,10 +278,6 @@ impl<'a> Section<'a> for TypeSection<'a> {
     }
     fn get_count(&self) -> u32 {
         self.offsets.len() as u32
-    }
-
-    fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
-        Self::parse(arena, module_bytes, cursor).unwrap()
     }
 }
 
@@ -536,10 +501,6 @@ impl<'a> Section<'a> for FunctionSection<'a> {
     fn get_count(&self) -> u32 {
         self.signatures.len() as u32
     }
-
-    fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
-        Self::parse(arena, module_bytes, cursor).unwrap()
-    }
 }
 
 /*******************************************************************
@@ -586,10 +547,6 @@ pub struct TableSection {
 
 impl TableSection {
     const ID: SectionId = SectionId::Table;
-
-    pub fn preload(module_bytes: &[u8], cursor: &mut usize) -> Self {
-        Self::parse((), module_bytes, cursor).unwrap()
-    }
 
     pub fn size(&self) -> usize {
         let section_id_bytes = 1;
@@ -959,10 +916,6 @@ impl<'a> ExportSection<'a> {
             .map(|ex| ex.name.len() + 1 + MAX_SIZE_ENCODED_U32)
             .sum()
     }
-
-    pub fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
-        Self::parse(arena, module_bytes, cursor).unwrap()
-    }
 }
 
 impl<'a> Parse<&'a Bump> for ExportSection<'a> {
@@ -1077,10 +1030,6 @@ pub struct ElementSection<'a> {
 
 impl<'a> ElementSection<'a> {
     const ID: SectionId = SectionId::Element;
-
-    pub fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
-        Self::parse(arena, module_bytes, cursor).unwrap()
-    }
 
     /// Get a table index for a function (equivalent to a function pointer)
     /// The function will be inserted into the table if it's not already there.
@@ -1207,8 +1156,7 @@ impl<'a> CodeSection<'a> {
         function_signatures: &[u32],
         indirect_callees: &[u32],
     ) -> Result<Self, ParseError> {
-        let (preloaded_count, range) =
-            parse_section(SectionId::Code, module_bytes, cursor)?;
+        let (preloaded_count, range) = parse_section(SectionId::Code, module_bytes, cursor)?;
         *cursor = range.end;
         let preloaded_bytes = arena.alloc_slice_copy(&module_bytes[range]);
 
@@ -1349,15 +1297,6 @@ pub struct OpaqueSection<'a> {
 impl<'a> OpaqueSection<'a> {
     pub fn size(&self) -> usize {
         self.bytes.len()
-    }
-
-    pub fn preload(
-        id: SectionId,
-        arena: &'a Bump,
-        module_bytes: &[u8],
-        cursor: &mut usize,
-    ) -> Self {
-        Self::parse((arena, id), module_bytes, cursor).unwrap()
     }
 }
 
