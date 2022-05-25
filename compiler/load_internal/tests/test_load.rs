@@ -57,7 +57,7 @@ mod test_load {
             Threading::Single,
         )? {
             Monomorphized(_) => unreachable!(""),
-            TypeChecked(module, _) => Ok(module),
+            TypeChecked{loaded_module, headers:_, module_names:_} => Ok(loaded_module),
         }
     }
 

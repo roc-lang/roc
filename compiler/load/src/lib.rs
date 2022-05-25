@@ -91,7 +91,7 @@ pub fn load_and_monomorphize_from_str<'a>(
         threading,
     )? {
         Monomorphized(module) => Ok(module),
-        TypeChecked(_, _) => unreachable!(""),
+        TypeChecked{loaded_module:_, headers:_, module_names:_} => unreachable!(""),
     }
 }
 
@@ -119,7 +119,7 @@ pub fn load_and_monomorphize<'a>(
         threading,
     )? {
         Monomorphized(module) => Ok(module),
-        TypeChecked(_, _) => unreachable!(""),
+        TypeChecked{loaded_module:_, headers:_, module_names:_} => unreachable!(""),
     }
 }
 
@@ -147,7 +147,7 @@ pub fn load_and_typecheck<'a>(
         threading,
     )? {
         Monomorphized(_) => unreachable!(""),
-        TypeChecked(module, _) => Ok(module),
+        TypeChecked{loaded_module, headers:_, module_names:_} => Ok(loaded_module),
     }
 }
 
@@ -175,10 +175,10 @@ pub fn load_and_typecheck_editor<'a>(
         threading,
     )? {
         Monomorphized(_) => unreachable!(""),
-        TypeChecked(module, headers) => {
+        TypeChecked{loaded_module, headers, module_names:_} => {
 
             let mut headers: Vec<ModuleHeader> = headers.into_values().collect();
-            Ok((module, headers.pop().unwrap()))
+            Ok((loaded_module, headers.pop().unwrap()))
         },
     }
 }
@@ -209,7 +209,7 @@ pub fn load_and_typecheck_str<'a>(
         render,
     )? {
         Monomorphized(_) => unreachable!(""),
-        TypeChecked(module, _) => Ok(module),
+        TypeChecked{loaded_module, headers:_, module_names:_} => Ok(loaded_module),
     }
 }
 

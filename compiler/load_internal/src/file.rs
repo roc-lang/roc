@@ -507,7 +507,7 @@ pub struct ModuleHeader<'a> {
     pub module_name: ModuleNameEnum<'a>,
     module_path: PathBuf,
     is_root_module: bool,
-    pub exposed_ident_ids: IdentIds,
+    pub exposed_ident_ids: IdentIds, // contains provides list when module is App
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
     pub packages: MutMap<&'a str, PackageName<'a>>,
     pub imported_modules: MutMap<ModuleId, Region>,
