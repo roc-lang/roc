@@ -1,22 +1,30 @@
-[
-    @0-7 SpaceAfter(
-        SpaceBefore(
-            Value(
-                Body(
-                    @0-3 Identifier(
-                        "foo",
-                    ),
-                    @6-7 Num(
-                        "1",
-                    ),
-                ),
-            ),
-            [],
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-7,
+    ],
+    space_before: [
+        Slice(start = 1, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 1),
+    ],
+    spaces: [
+        LineComment(
+            " comment after",
         ),
-        [
-            LineComment(
-                " comment after",
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-3 Identifier(
+                "foo",
             ),
-        ],
-    ),
-]
+            @6-7 Num(
+                "1",
+            ),
+        ),
+    ],
+}

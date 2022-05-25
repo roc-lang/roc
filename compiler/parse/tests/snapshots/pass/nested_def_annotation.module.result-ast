@@ -1,103 +1,111 @@
-[
-    @0-115 SpaceAfter(
-        SpaceBefore(
-            Value(
-                Body(
-                    @0-4 Identifier(
-                        "main",
-                    ),
-                    @11-115 SpaceBefore(
-                        Defs(
-                            [
-                                @43-93 Value(
-                                    AnnotatedBody {
-                                        ann_pattern: @11-23 Identifier(
-                                            "wrappedNotEq",
-                                        ),
-                                        ann_type: @26-38 Function(
-                                            [
-                                                @26-27 BoundVariable(
-                                                    "a",
-                                                ),
-                                                @29-30 BoundVariable(
-                                                    "a",
-                                                ),
-                                            ],
-                                            @34-38 Apply(
-                                                "",
-                                                "Bool",
-                                                [],
-                                            ),
-                                        ),
-                                        comment: None,
-                                        body_pattern: @43-55 Identifier(
-                                            "wrappedNotEq",
-                                        ),
-                                        body_expr: @58-93 Closure(
-                                            [
-                                                @59-63 Identifier(
-                                                    "num1",
-                                                ),
-                                                @65-69 Identifier(
-                                                    "num2",
-                                                ),
-                                            ],
-                                            @81-93 SpaceBefore(
-                                                BinOps(
-                                                    [
-                                                        (
-                                                            @81-85 Var {
-                                                                module_name: "",
-                                                                ident: "num1",
-                                                            },
-                                                            @86-88 NotEquals,
-                                                        ),
-                                                    ],
-                                                    @89-93 Var {
-                                                        module_name: "",
-                                                        ident: "num2",
-                                                    },
-                                                ),
-                                                [
-                                                    Newline,
-                                                ],
-                                            ),
-                                        ),
-                                    },
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-115,
+    ],
+    space_before: [
+        Slice(start = 1, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 1),
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier(
+                "main",
+            ),
+            @11-115 SpaceBefore(
+                Defs(
+                    [
+                        @43-93 Value(
+                            AnnotatedBody {
+                                ann_pattern: @11-23 Identifier(
+                                    "wrappedNotEq",
                                 ),
-                            ],
-                            @99-115 SpaceBefore(
-                                Apply(
-                                    @99-111 Var {
-                                        module_name: "",
-                                        ident: "wrappedNotEq",
-                                    },
+                                ann_type: @26-38 Function(
                                     [
-                                        @112-113 Num(
-                                            "2",
+                                        @26-27 BoundVariable(
+                                            "a",
                                         ),
-                                        @114-115 Num(
-                                            "3",
+                                        @29-30 BoundVariable(
+                                            "a",
                                         ),
                                     ],
-                                    Space,
+                                    @34-38 Apply(
+                                        "",
+                                        "Bool",
+                                        [],
+                                    ),
                                 ),
-                                [
-                                    Newline,
-                                    Newline,
-                                ],
-                            ),
+                                comment: None,
+                                body_pattern: @43-55 Identifier(
+                                    "wrappedNotEq",
+                                ),
+                                body_expr: @58-93 Closure(
+                                    [
+                                        @59-63 Identifier(
+                                            "num1",
+                                        ),
+                                        @65-69 Identifier(
+                                            "num2",
+                                        ),
+                                    ],
+                                    @81-93 SpaceBefore(
+                                        BinOps(
+                                            [
+                                                (
+                                                    @81-85 Var {
+                                                        module_name: "",
+                                                        ident: "num1",
+                                                    },
+                                                    @86-88 NotEquals,
+                                                ),
+                                            ],
+                                            @89-93 Var {
+                                                module_name: "",
+                                                ident: "num2",
+                                            },
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                ),
+                            },
+                        ),
+                    ],
+                    @99-115 SpaceBefore(
+                        Apply(
+                            @99-111 Var {
+                                module_name: "",
+                                ident: "wrappedNotEq",
+                            },
+                            [
+                                @112-113 Num(
+                                    "2",
+                                ),
+                                @114-115 Num(
+                                    "3",
+                                ),
+                            ],
+                            Space,
                         ),
                         [
+                            Newline,
                             Newline,
                         ],
                     ),
                 ),
+                [
+                    Newline,
+                ],
             ),
-            [],
         ),
-        [
-            Newline,
-        ],
-    ),
-]
+    ],
+}
