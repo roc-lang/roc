@@ -1,3 +1,4 @@
+use crate::num::NumericRange;
 use crate::pretty_print::Parens;
 use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
@@ -254,7 +255,7 @@ pub enum Type {
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
     Apply(Symbol, Vec<Type>, Region),
     Variable(Variable),
-    RangedNumber(Box<Type>, Vec<Variable>),
+    RangedNumber(Box<Type>, NumericRange),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }
@@ -324,7 +325,7 @@ impl Clone for Type {
             }
             Self::Apply(arg0, arg1, arg2) => Self::Apply(*arg0, arg1.clone(), *arg2),
             Self::Variable(arg0) => Self::Variable(*arg0),
-            Self::RangedNumber(arg0, arg1) => Self::RangedNumber(arg0.clone(), arg1.clone()),
+            Self::RangedNumber(arg0, arg1) => Self::RangedNumber(arg0.clone(), *arg1),
             Self::Erroneous(arg0) => Self::Erroneous(arg0.clone()),
         }
     }
@@ -564,8 +565,8 @@ impl fmt::Debug for Type {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
-                        // e.g. the "*" at the end of `[ Foo ]*`
-                        // or the "r" at the end of `[ DivByZero ]r`
+                        // e.g. the "*" at the end of `[Foo]*`
+                        // or the "r" at the end of `[DivByZero]r`
                         other.fmt(f)
                     }
                 }
@@ -584,8 +585,8 @@ impl fmt::Debug for Type {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
-                        // e.g. the "*" at the end of `[ Foo ]*`
-                        // or the "r" at the end of `[ DivByZero ]r`
+                        // e.g. the "*" at the end of `[Foo]*`
+                        // or the "r" at the end of `[DivByZero]r`
                         other.fmt(f)
                     }
                 }
@@ -634,8 +635,8 @@ impl fmt::Debug for Type {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
-                        // e.g. the "*" at the end of `[ Foo ]*`
-                        // or the "r" at the end of `[ DivByZero ]r`
+                        // e.g. the "*" at the end of `[Foo]*`
+                        // or the "r" at the end of `[DivByZero]r`
                         other.fmt(f)
                     }
                 }?;
@@ -1089,9 +1090,7 @@ impl Type {
             } => actual_type.contains_variable(rep_variable),
             HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
             Apply(_, args, _) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
-            RangedNumber(typ, vars) => {
-                typ.contains_variable(rep_variable) || vars.iter().any(|&v| v == rep_variable)
-            }
+            RangedNumber(typ, _) => typ.contains_variable(rep_variable),
             EmptyRec | EmptyTagUnion | Erroneous(_) => false,
         }
     }
@@ -1381,17 +1380,17 @@ impl Type {
     ///
     /// ```roc
     /// U8
-    /// [ A I8 ]
-    /// [ A [ B [ C U8 ] ] ]
-    /// [ A (R a) ] as R a
+    /// [A I8]
+    /// [A [B [C U8]]]
+    /// [A (R a)] as R a
     /// ```
     ///
     /// The following are not:
     ///
     /// ```roc
-    /// [ A I8, B U8 ]
-    /// [ A [ B [ Result U8 {} ] ] ]         (Result U8 {} is actually [ Ok U8, Err {} ])
-    /// [ A { lst: List (R a) } ] as R a     (List a is morally [ Cons (List a), Nil ] as List a)
+    /// [A I8, B U8 ]
+    /// [A [B [Result U8 {}]]]         (Result U8 {} is actually [Ok U8, Err {}])
+    /// [A { lst: List (R a) }] as R a     (List a is morally [Cons (List a), Nil] as List a)
     /// ```
     pub fn is_narrow(&self) -> bool {
         match self.shallow_dealias() {
@@ -1594,9 +1593,8 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             }
             variables_help(actual, accum);
         }
-        RangedNumber(typ, vars) => {
+        RangedNumber(typ, _) => {
             variables_help(typ, accum);
-            accum.extend(vars.iter().copied());
         }
         Apply(_, args, _) => {
             for x in args {
@@ -1730,9 +1728,8 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             }
             variables_help_detailed(actual, accum);
         }
-        RangedNumber(typ, vars) => {
+        RangedNumber(typ, _) => {
             variables_help_detailed(typ, accum);
-            accum.type_variables.extend(vars);
         }
         Apply(_, args, _) => {
             for x in args {
@@ -1923,8 +1920,8 @@ pub enum PatternCategory {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum AliasKind {
     /// A structural alias is something like
-    ///   List a : [ Nil, Cons a (List a) ]
-    /// It is typed structurally, so that a `List U8` is always equal to a `[ Nil ]_`, for example.
+    ///   List a : [Nil, Cons a (List a)]
+    /// It is typed structurally, so that a `List U8` is always equal to a `[Nil]_`, for example.
     Structural,
     /// An opaque alias corresponds to an opaque type from the language syntax, like
     ///   Age := U32

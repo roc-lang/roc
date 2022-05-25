@@ -267,7 +267,7 @@ pub fn canonicalize_annotation(
     annotation: &TypeAnnotation,
     region: Region,
     var_store: &mut VarStore,
-    abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &[Symbol],
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = VecSet::default();
@@ -284,7 +284,7 @@ pub fn canonicalize_annotation(
                     var_store,
                     &mut introduced_variables,
                     clause,
-                    abilities_in_scope,
+                    pending_abilities_in_scope,
                     &mut references,
                 );
                 if let Err(err_type) = opt_err {
@@ -320,7 +320,7 @@ pub fn canonicalize_annotation(
     }
 }
 
-fn make_apply_symbol(
+pub(crate) fn make_apply_symbol(
     env: &mut Env,
     region: Region,
     scope: &mut Scope,
@@ -359,7 +359,7 @@ fn make_apply_symbol(
 /// Retrieves all symbols in an annotations that reference a type definition, that is either an
 /// alias or an opaque type.
 ///
-/// For example, in `[ A Age U8, B Str {} ]`, there are three type definition references - `Age`,
+/// For example, in `[A Age U8, B Str {}]`, there are three type definition references - `Age`,
 /// `U8`, and `Str`.
 pub fn find_type_def_symbols(
     scope: &mut Scope,
@@ -908,7 +908,7 @@ fn canonicalize_has_clause(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     clause: &Loc<roc_parse::ast::HasClause<'_>>,
-    abilities_in_local_scope: &[Symbol],
+    pending_abilities_in_scope: &[Symbol],
     references: &mut VecSet<Symbol>,
 ) -> Result<(), Type> {
     let Loc {
@@ -929,7 +929,7 @@ fn canonicalize_has_clause(
             let symbol = make_apply_symbol(env, ability.region, scope, module_name, ident)?;
 
             // Ability defined locally, whose members we are constructing right now...
-            if !abilities_in_local_scope.contains(&symbol)
+            if !pending_abilities_in_scope.contains(&symbol)
                 // or an ability that was imported from elsewhere
                 && !scope.abilities_store.is_ability(symbol)
             {

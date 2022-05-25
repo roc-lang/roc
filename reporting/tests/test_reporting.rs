@@ -12,6 +12,7 @@ mod test_reporting {
     use bumpalo::Bump;
     use indoc::indoc;
     use roc_can::abilities::AbilitiesStore;
+    use roc_can::expr::PendingDerives;
     use roc_load::{self, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_region::all::LineInfo;
@@ -42,8 +43,7 @@ mod test_reporting {
     }
 
     fn promote_expr_to_module(src: &str) -> String {
-        let mut buffer =
-            String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
+        let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
 
         for line in src.lines() {
             // indent the body!
@@ -229,6 +229,9 @@ mod test_reporting {
             &mut unify_problems,
             &constraints,
             &constraint,
+            // Use `new_report_problem_as` in order to get proper derives.
+            // TODO: remove the non-new reporting test infra.
+            PendingDerives::default(),
             &mut solve_aliases,
             &mut abilities_store,
             var,
@@ -524,9 +527,9 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Booly : [ Yes, No ]
+                Booly : [Yes, No]
 
-                Booly : [ Yes, No, Maybe ]
+                Booly : [Yes, No, Maybe]
 
                 x : List Booly
                 x = []
@@ -540,13 +543,13 @@ mod test_reporting {
 
                 The `Booly` name is first defined here:
 
-                1│  Booly : [ Yes, No ]
-                    ^^^^^^^^^^^^^^^^^^^
+                1│  Booly : [Yes, No]
+                    ^^^^^^^^^^^^^^^^^
 
                 But then it's defined a second time here:
 
-                3│  Booly : [ Yes, No, Maybe ]
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                3│  Booly : [Yes, No, Maybe]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since these aliases have the same name, it's easy to use the wrong one
                 on accident. Give one of them a new name.
@@ -564,14 +567,14 @@ mod test_reporting {
     //                 [
     //                     Yes,
     //                     No
-    //                 ]
+    //                ]
     //
     //             Booly :
     //                 [
     //                     Yes,
     //                     No,
     //                     Maybe
-    //                 ]
+    //                ]
     //
     //             x =
     //                 No
@@ -587,7 +590,7 @@ mod test_reporting {
     //             2│>    [
     //             3│>        Yes,
     //             4│>        No
-    //             5│>    ]
+    //             5│>   ]
     //
     //             But then it's defined a second time here:
     //
@@ -596,7 +599,7 @@ mod test_reporting {
     //             9 │>        Yes,
     //             10│>        No,
     //             11│>        Maybe
-    //             12│>    ]
+    //             12│>   ]
     //
     //             Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
     //         ),
@@ -670,7 +673,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `bar` value
+                Nothing is named `bar` in this scope.
 
                 8│          4 -> bar baz "yay"
                                  ^^^
@@ -698,7 +701,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `true` value
+                Nothing is named `true` in this scope.
 
                 1│  if true then 1 else 2
                        ^^^^
@@ -753,7 +756,7 @@ mod test_reporting {
                  y = 9
 
                  box = \class, htmlChildren ->
-                     div [ class ] []
+                     div [class] []
 
                  div = \_, _ -> 4
 
@@ -863,7 +866,7 @@ mod test_reporting {
                 r#"
                 <cyan>── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─<reset>
 
-                I cannot find a `theAdmin` value
+                Nothing is named `theAdmin` in this scope.
 
                 <cyan>3<reset><cyan>│<reset>  <white>theAdmin<reset>
                     <red>^^^^^^^^<reset>
@@ -1087,7 +1090,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                [ 1, 3, "foo" ]
+                [1, 3, "foo"]
                 "#
             ),
             indoc!(
@@ -1096,8 +1099,8 @@ mod test_reporting {
 
                 This list contains elements with different types:
 
-                1│  [ 1, 3, "foo" ]
-                            ^^^^^
+                1│  [1, 3, "foo"]
+                           ^^^^^
 
                 Its 3rd element is a string of type:
 
@@ -1335,7 +1338,7 @@ mod test_reporting {
                 r#"
                 bar = { bar : 0x3 }
 
-                f : { foo : Num.Int * } -> [ Yes, No ]
+                f : { foo : Num.Int * } -> [Yes, No]
                 f = \_ -> Yes
 
                 f bar
@@ -1373,7 +1376,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Red, Green ] -> [ Yes, No ]
+                f : [Red, Green] -> [Yes, No]
                 f = \_ -> Yes
 
                 f Blue
@@ -1390,11 +1393,11 @@ mod test_reporting {
 
                 This `Blue` tag has the type:
 
-                    [ Blue ]a
+                    [Blue]a
 
                 But `f` needs the 1st argument to be:
 
-                    [ Green, Red ]
+                    [Green, Red]
 
                 Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1411,7 +1414,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Red (Num.Int *), Green Str ] -> Str
+                f : [Red (Num.Int *), Green Str] -> Str
                 f = \_ -> "yes"
 
                 f (Blue 3.14)
@@ -1428,11 +1431,11 @@ mod test_reporting {
 
                 This `Blue` tag application has the type:
 
-                    [ Blue (Frac a) ]b
+                    [Blue (Frac a)]b
 
                 But `f` needs the 1st argument to be:
 
-                    [ Green Str, Red (Int *) ]
+                    [Green Str, Red (Int *)]
 
                 Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1721,7 +1724,7 @@ mod test_reporting {
 
                 But the branch patterns have type:
 
-                    { foo : [ True ] }
+                    { foo : [True] }
 
                 The branches must be cases of the `when` condition's type!
                 "#
@@ -1753,7 +1756,7 @@ mod test_reporting {
 
                 But the branch patterns have type:
 
-                    { foo : [ True ] }
+                    { foo : [True] }
 
                 The branches must be cases of the `when` condition's type!
                 "#
@@ -1775,7 +1778,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `foo` value
+                Nothing is named `foo` in this scope.
 
                 2│      { foo: _ } -> foo
                                       ^^^
@@ -1883,7 +1886,7 @@ mod test_reporting {
 
                 But you are trying to use it as:
 
-                    [ Foo a ]
+                    [Foo a]
                 "#
             ),
         )
@@ -2161,7 +2164,7 @@ mod test_reporting {
 
                 This `Foo` tag has the type:
 
-                    [ Foo ]a
+                    [Foo]a
 
                 But the type annotation on `f` says it should be:
 
@@ -2222,7 +2225,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Str -> [ Ok Num.I64, InvalidFoo ]
+                f : Str -> [Ok Num.I64, InvalidFoo]
                 f = \_ -> ok 4
 
                 f
@@ -2232,7 +2235,7 @@ mod test_reporting {
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `ok` value
+                Nothing is named `ok` in this scope.
 
                 2│  f = \_ -> ok 4
                               ^^
@@ -2288,7 +2291,7 @@ mod test_reporting {
 
                 This `Ok` tag has the type:
 
-                    [ Ok ]a
+                    [Ok]a
 
                 But the type annotation on `f` says it should be:
 
@@ -2566,7 +2569,7 @@ mod test_reporting {
 
                 This `True` boolean has the type:
 
-                    [ True ]a
+                    [True]a
 
                 But `add` needs the 2nd argument to be:
 
@@ -2581,7 +2584,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ A ] -> [ A, B ]
+                f : [A] -> [A, B]
                 f = \a -> a
 
                 f
@@ -2593,17 +2596,17 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
-                1│  f : [ A ] -> [ A, B ]
+                1│  f : [A] -> [A, B]
                 2│  f = \a -> a
                               ^
 
                 This `a` value is a:
 
-                    [ A ]
+                    [A]
 
                 But the type annotation on `f` says it should be:
 
-                    [ A, B ]
+                    [A, B]
 
                 Tip: Looks like a closed tag union does not have the `B` tag.
 
@@ -2619,7 +2622,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ A ] -> [ A, B, C ]
+                f : [A] -> [A, B, C]
                 f = \a -> a
 
                 f
@@ -2631,17 +2634,17 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
-                1│  f : [ A ] -> [ A, B, C ]
+                1│  f : [A] -> [A, B, C]
                 2│  f = \a -> a
                               ^
 
                 This `a` value is a:
 
-                    [ A ]
+                    [A]
 
                 But the type annotation on `f` says it should be:
 
-                    [ A, B, C ]
+                    [A, B, C]
 
                 Tip: Looks like a closed tag union does not have the `C` and `B` tags.
 
@@ -2657,7 +2660,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Either : [ Left {}, Right Str ]
+                Either : [Left {}, Right Str]
 
                 x : Either
                 x = Left {}
@@ -2694,7 +2697,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : [ Left {}, Right Str ]
+                x : [Left {}, Right Str]
                 x = Left {}
 
 
@@ -2714,11 +2717,11 @@ mod test_reporting {
 
                 This `x` value is a:
 
-                    [ Left {}, Right Str ]
+                    [Left {}, Right Str]
 
                 But you are trying to use it as:
 
-                    [ Left a ]
+                    [Left a]
 
                 Tip: Looks like a closed tag union does not have the `Right` tag.
 
@@ -2762,7 +2765,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : [ Red, Green ]
+                x : [Red, Green]
                 x = Green
 
                 when x is
@@ -2793,7 +2796,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                x : [ Red, Green, Blue ]
+                x : [Red, Green, Blue]
                 x = Red
 
                 when x is
@@ -2826,7 +2829,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                RemoteData e a :  [ NotAsked, Loading, Failure e, Success a ]
+                RemoteData e a :  [NotAsked, Loading, Failure e, Success a]
 
                 x : RemoteData Num.I64 Str
 
@@ -2891,7 +2894,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                y : [ Nothing, Just Num.I64 ]
+                y : [Nothing, Just Num.I64]
                 y = Just 4
                 x = { a: y, b: 42}
 
@@ -3270,7 +3273,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                a : [ Foo Num.I64, Bar {}, Foo Str ]
+                a : [Foo Num.I64, Bar {}, Foo Str]
                 a = Foo "foo"
 
                 a
@@ -3282,13 +3285,13 @@ mod test_reporting {
 
                 This tag union type defines the `Foo` tag twice!
 
-                1│  a : [ Foo Num.I64, Bar {}, Foo Str ]
-                          ^^^^^^^^^^^          ^^^^^^^
+                1│  a : [Foo Num.I64, Bar {}, Foo Str]
+                         ^^^^^^^^^^^          ^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
-                1│  a : [ Foo Num.I64, Bar {}, Foo Str ]
-                                               ^^^^^^^
+                1│  a : [Foo Num.I64, Bar {}, Foo Str]
+                                              ^^^^^^^
 
                 For clarity, remove the previous `Foo` definitions from this tag union
                 type.
@@ -3459,7 +3462,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Pair a b : [ Pair a b ]
+                Pair a b : [Pair a b]
 
                 x : Pair Num.I64
                 x = Pair 2 3
@@ -3487,7 +3490,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Pair a b : [ Pair a b ]
+                Pair a b : [Pair a b]
 
                 x : Pair Num.I64 Num.I64 Num.I64
                 x = 3
@@ -3515,7 +3518,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Foo a : [ Foo ]
+                Foo a : [Foo]
 
                 f : Foo Num.I64
 
@@ -3528,7 +3531,7 @@ mod test_reporting {
 
                 The `a` type parameter is not used in the `Foo` alias definition:
 
-                1│  Foo a : [ Foo ]
+                1│  Foo a : [Foo]
                         ^
 
                 Roc does not allow unused type alias parameters!
@@ -3569,7 +3572,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                ConsList a : [ Cons a (ConsList a), Nil ]
+                ConsList a : [Cons a (ConsList a), Nil]
 
                 x : ConsList {}
                 x = Cons {} (Cons "foo" Nil)
@@ -3589,11 +3592,11 @@ mod test_reporting {
 
                 This `Cons` tag application has the type:
 
-                    [ Cons {} [ Cons Str [ Cons {} a, Nil ] as a, Nil ], Nil ]
+                    [Cons {} [Cons Str [Cons {} a, Nil] as a, Nil], Nil]
 
                 But the type annotation on `x` says it should be:
 
-                    [ Cons {} a, Nil ] as a
+                    [Cons {} a, Nil] as a
                 "#
             ),
         )
@@ -3604,8 +3607,8 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                AList a b : [ ACons a (BList a b), ANil ]
-                BList a b : [ BCons a (AList a b), BNil ]
+                AList a b : [ACons a (BList a b), ANil]
+                BList a b : [BCons a (AList a b), BNil]
 
                 x : AList Num.I64 Num.I64
                 x = ACons 0 (BCons 1 (ACons "foo" BNil ))
@@ -3630,14 +3633,12 @@ mod test_reporting {
 
                 This `ACons` tag application has the type:
 
-                    [ ACons (Num (Integer Signed64)) [
-                    BCons (Num (Integer Signed64)) [ ACons Str [ BCons I64 [
-                    ACons I64 (BList I64 I64), ANil ] as ∞, BNil ], ANil ], BNil ],
-                    ANil ]
+                    [ACons (Num (Integer Signed64)) [BCons (Num (Integer Signed64)) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
+                    ANil] as ∞, BNil], ANil], BNil], ANil]
 
                 But the type annotation on `x` says it should be:
 
-                    [ ACons I64 (BList I64 I64), ANil ] as a
+                    [ACons I64 (BList I64 I64), ANil] as a
                 "#
             ),
         )
@@ -3996,7 +3997,7 @@ mod test_reporting {
 
                 This `y` value is a:
 
-                    [ True ]a
+                    [True]a
 
                 But `add` needs the 2nd argument to be:
 
@@ -4369,9 +4370,9 @@ mod test_reporting {
             indoc!(
                 r#"
                 # The color of a node. Leaves are considered Black.
-                NodeColor : [ Red, Black ]
+                NodeColor : [Red, Black]
 
-                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
+                RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
                 # Create an empty dictionary.
                 empty : RBTree k v
@@ -4561,8 +4562,8 @@ mod test_reporting {
                 1│  f : [
                          ^
 
-                Tag unions look like [ Many I64, None ], so I was expecting to see a
-                tag name next.
+                Tag unions look like [Many I64, None], so I was expecting to see a tag
+                name next.
             "#
             ),
         )
@@ -4573,7 +4574,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Yes,
+                f : [Yes,
                 "#
             ),
             indoc!(
@@ -4582,8 +4583,8 @@ mod test_reporting {
 
                 I am partway through parsing a tag union type, but I got stuck here:
 
-                1│  f : [ Yes,
-                              ^
+                1│  f : [Yes,
+                             ^
 
                 I was expecting to see a closing square bracket before this, so try
                 adding a ] and see if that helps?
@@ -4597,7 +4598,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ lowercase ]
+                f : [lowercase]
                 "#
             ),
             indoc!(
@@ -4606,8 +4607,8 @@ mod test_reporting {
 
                 I am partway through parsing a tag union type, but I got stuck here:
 
-                1│  f : [ lowercase ]
-                          ^
+                1│  f : [lowercase]
+                         ^
 
                 I was expecting to see a tag name.
 
@@ -4622,7 +4623,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Good, bad ]
+                f : [Good, bad]
                 "#
             ),
             indoc!(
@@ -4631,8 +4632,8 @@ mod test_reporting {
 
                 I am partway through parsing a tag union type, but I got stuck here:
 
-                1│  f : [ Good, bad ]
-                                ^
+                1│  f : [Good, bad]
+                               ^
 
                 I was expecting to see a tag name.
 
@@ -5575,7 +5576,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                [ 1, 2, , 3 ]
+                [1, 2, , 3]
                 "#
             ),
             indoc!(
@@ -5584,8 +5585,8 @@ mod test_reporting {
 
                 I am partway through started parsing a list, but I got stuck here:
 
-                1│  [ 1, 2, , 3 ]
-                            ^
+                1│  [1, 2, , 3]
+                           ^
 
                 I was expecting to see a list entry before this comma, so try adding a
                 list entry and see if that helps?
@@ -5599,7 +5600,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                [ 1, 2,
+                [1, 2,
                 "#
             ),
             indoc!(
@@ -5608,8 +5609,8 @@ mod test_reporting {
 
                 I am partway through started parsing a list, but I got stuck here:
 
-                1│  [ 1, 2,
-                           ^
+                1│  [1, 2,
+                          ^
 
                 I was expecting to see a closing square bracket before this, so try
                 adding a ] and see if that helps?
@@ -6064,17 +6065,17 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                [ "foo", bar("") ]
+                ["foo", bar("")]
                 "#
             ),
             indoc!(
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `bar` value
+                Nothing is named `bar` in this scope.
 
-                1│  [ "foo", bar("") ]
-                             ^^^
+                1│  ["foo", bar("")]
+                            ^^^
 
                 Did you mean one of these?
 
@@ -6206,8 +6207,8 @@ All branches in an `if` must have the same type!
                 r#"
                 app "test-base64"
                     packages { pf: "platform" }
-                    imports [pf.Task, Base64 ]
-                    provides [ main, @Foo ] to pf
+                    imports [pf.Task, Base64]
+                    provides [main, @Foo] to pf
                 "#
             ),
             indoc!(
@@ -6216,13 +6217,13 @@ All branches in an `if` must have the same type!
 
                 I am partway through parsing a provides list, but I got stuck here:
 
-                3│      imports [pf.Task, Base64 ]
-                4│      provides [ main, @Foo ] to pf
-                                         ^
+                3│      imports [pf.Task, Base64]
+                4│      provides [main, @Foo] to pf
+                                        ^
 
                 I was expecting a type name, value name or function name next, like
 
-                    provides [ Animal, default, tame ]
+                    provides [Animal, default, tame]
             "#
             ),
         )
@@ -6238,7 +6239,7 @@ All branches in an `if` must have the same type!
                     exposes []
                     packages {}
                     imports [Task]
-                    provides [ mainForHost ]
+                    provides [mainForHost]
                     effects fx.Effect
                          {
                              putChar : I64 -> Effect {},
@@ -6272,7 +6273,7 @@ All branches in an `if` must have the same type!
             indoc!(
                 r#"
                 interface Foobar
-                    exposes [ main, Foo ]
+                    exposes [main, Foo]
                 "#
             ),
             indoc!(
@@ -6281,12 +6282,12 @@ All branches in an `if` must have the same type!
 
                 I am partway through parsing a header, but I got stuck here:
 
-                2│      exposes [ main, Foo ]
-                                             ^
+                2│      exposes [main, Foo]
+                                           ^
 
                 I am expecting the `imports` keyword next, like
 
-                    imports [ Animal, default, tame ]
+                    imports [Animal, default, tame]
                 "#
             ),
         )
@@ -6298,8 +6299,8 @@ All branches in an `if` must have the same type!
             indoc!(
                 r#"
                 interface Foobar
-                    exposes [ main, @Foo ]
-                    imports [pf.Task, Base64 ]
+                    exposes [main, @Foo]
+                    imports [pf.Task, Base64]
                 "#
             ),
             indoc!(
@@ -6309,12 +6310,12 @@ All branches in an `if` must have the same type!
                 I am partway through parsing an `exposes` list, but I got stuck here:
 
                 1│  interface Foobar
-                2│      exposes [ main, @Foo ]
-                                        ^
+                2│      exposes [main, @Foo]
+                                       ^
 
                 I was expecting a type name, value name or function name next, like
 
-                    exposes [ Animal, default, tame ]
+                    exposes [Animal, default, tame]
             "#
             ),
         )
@@ -6326,8 +6327,8 @@ All branches in an `if` must have the same type!
             indoc!(
                 r#"
                 interface foobar
-                    exposes [ main, @Foo ]
-                    imports [pf.Task, Base64 ]
+                    exposes [main, @Foo]
+                    imports [pf.Task, Base64]
                 "#
             ),
             indoc!(
@@ -6352,8 +6353,8 @@ All branches in an `if` must have the same type!
             indoc!(
                 r#"
                 app foobar
-                    exposes [ main, @Foo ]
-                    imports [pf.Task, Base64 ]
+                    exposes [main, @Foo]
+                    imports [pf.Task, Base64]
                 "#
             ),
             indoc!(
@@ -6427,8 +6428,8 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                x : List [ Foo Str ]
-                x = List.map [ 1, 2 ] Foo
+                x : List [Foo Str]
+                x = List.map [1, 2] Foo
 
                 x
                 "#
@@ -6439,17 +6440,17 @@ All branches in an `if` must have the same type!
 
                 Something is off with the body of the `x` definition:
 
-                1│  x : List [ Foo Str ]
-                2│  x = List.map [ 1, 2 ] Foo
-                        ^^^^^^^^^^^^^^^^^^^^^
+                1│  x : List [Foo Str]
+                2│  x = List.map [1, 2] Foo
+                        ^^^^^^^^^^^^^^^^^^^
 
                 This `map` call produces:
 
-                    List [ Foo Num a ]
+                    List [Foo Num a]
 
                 But the type annotation on `x` says it should be:
 
-                    List [ Foo Str ]
+                    List [Foo Str]
                 "#
             ),
         )
@@ -6616,7 +6617,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                x <- List.map [ "a", "b" ]
+                x <- List.map ["a", "b"]
 
                 x + 1
                 "#
@@ -6627,7 +6628,7 @@ All branches in an `if` must have the same type!
 
                 The 2nd argument to `map` is not what I expect:
 
-                1│>  x <- List.map [ "a", "b" ]
+                1│>  x <- List.map ["a", "b"]
                 2│>
                 3│>  x + 1
 
@@ -6797,7 +6798,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Result a b : [ Ok a, Err b ]
+                Result a b : [Ok a, Err b]
 
                 canIGo : _ -> Result _
                 canIGo = \color ->
@@ -6829,7 +6830,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Result a b : [ Ok a, Err b ]
+                Result a b : [Ok a, Err b]
 
                 canIGo : _ -> Result _ _ _
                 canIGo = \color ->
@@ -7011,7 +7012,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                f : List elem -> [ Nil, Cons elem a ] as a
+                f : List elem -> [Nil, Cons elem a] as a
                 "#
             ),
             indoc!(
@@ -7020,8 +7021,8 @@ All branches in an `if` must have the same type!
 
                 The inline type after this `as` is not a type alias:
 
-                1│  f : List elem -> [ Nil, Cons elem a ] as a
-                                                             ^
+                1│  f : List elem -> [Nil, Cons elem a] as a
+                                                           ^
 
                 Inline alias types must start with an uppercase identifier and be
                 followed by zero or more type arguments, like Point or List a.
@@ -7035,7 +7036,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
+                f : List elem -> [Nil, Cons elem a] as Module.LinkedList a
                 "#
             ),
             indoc!(
@@ -7044,8 +7045,8 @@ All branches in an `if` must have the same type!
 
                 This type alias has a qualified name:
 
-                1│  f : List elem -> [ Nil, Cons elem a ] as Module.LinkedList a
-                                                             ^
+                1│  f : List elem -> [Nil, Cons elem a] as Module.LinkedList a
+                                                           ^
 
                 An alias introduces a new name to the current scope, so it must be
                 unqualified.
@@ -7059,7 +7060,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                f : List elem -> [ Nil, Cons elem a ] as LinkedList U
+                f : List elem -> [Nil, Cons elem a] as LinkedList U
                 "#
             ),
             indoc!(
@@ -7068,8 +7069,8 @@ All branches in an `if` must have the same type!
 
                 This alias type argument is not lowercase:
 
-                1│  f : List elem -> [ Nil, Cons elem a ] as LinkedList U
-                                                                        ^
+                1│  f : List elem -> [Nil, Cons elem a] as LinkedList U
+                                                                      ^
 
                 All type arguments must be lowercase.
                 "#
@@ -7101,11 +7102,11 @@ All branches in an `if` must have the same type!
 
                 This `Name` tag application has the type:
 
-                    [ Name Str ]a
+                    [Name Str]a
 
                 But `isEmpty` needs the 1st argument to be:
 
-                    [ Email Str ]
+                    [Email Str]
 
                 Tip: Seems like a tag typo. Maybe `Name` should be `Email`?
 
@@ -7241,12 +7242,12 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Job : [ Job { inputs : List Str } ]
+                Job : [Job { inputs : List Str }]
                 job : { inputs ? List Str } -> Job
                 job = \{ inputs } ->
                     Job { inputs }
 
-                job { inputs: [ "build", "test" ] }
+                job { inputs: ["build", "test"] }
                 "#
             ),
             indoc!(
@@ -7279,13 +7280,13 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Job : [ Job { inputs : List Job } ]
+                Job : [Job { inputs : List Job }]
 
                 job : { inputs : List Str } -> Job
                 job = \{ inputs } ->
                     Job { inputs }
 
-                job { inputs: [ "build", "test" ] }
+                job { inputs: ["build", "test"] }
                 "#
             ),
             indoc!(
@@ -7301,11 +7302,11 @@ All branches in an `if` must have the same type!
 
                 This `Job` tag application has the type:
 
-                    [ Job { inputs : List Str } ]
+                    [Job { inputs : List Str }]
 
                 But the type annotation on `job` says it should be:
 
-                    [ Job { inputs : List a } ] as a
+                    [Job { inputs : List a }] as a
                 "#
             ),
         )
@@ -7316,7 +7317,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Nested a : [ Chain a (Nested (List a)), Term ]
+                Nested a : [Chain a (Nested (List a)), Term]
 
                 s : Nested Str
 
@@ -7329,12 +7330,12 @@ All branches in an `if` must have the same type!
 
                 `Nested` is a nested datatype. Here is one recursive usage of it:
 
-                1│  Nested a : [ Chain a (Nested (List a)), Term ]
-                                          ^^^^^^^^^^^^^^^
+                1│  Nested a : [Chain a (Nested (List a)), Term]
+                                         ^^^^^^^^^^^^^^^
 
                 But recursive usages of `Nested` must match its definition:
 
-                1│  Nested a : [ Chain a (Nested (List a)), Term ]
+                1│  Nested a : [Chain a (Nested (List a)), Term]
                     ^^^^^^^^
 
                 Nested datatypes are not supported in Roc.
@@ -7350,7 +7351,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                f : {} -> [ Chain a (Nested (List a)), Term ] as Nested a
+                f : {} -> [Chain a (Nested (List a)), Term] as Nested a
 
                 f
                 "#
@@ -7361,13 +7362,13 @@ All branches in an `if` must have the same type!
 
                 `Nested` is a nested datatype. Here is one recursive usage of it:
 
-                1│  f : {} -> [ Chain a (Nested (List a)), Term ] as Nested a
-                                         ^^^^^^^^^^^^^^^
+                1│  f : {} -> [Chain a (Nested (List a)), Term] as Nested a
+                                        ^^^^^^^^^^^^^^^
 
                 But recursive usages of `Nested` must match its definition:
 
-                1│  f : {} -> [ Chain a (Nested (List a)), Term ] as Nested a
-                                                                     ^^^^^^^^
+                1│  f : {} -> [Chain a (Nested (List a)), Term] as Nested a
+                                                                   ^^^^^^^^
 
                 Nested datatypes are not supported in Roc.
 
@@ -8086,7 +8087,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                R a : [ Only (R a) ]
+                R a : [Only (R a)]
 
                 v : R Str
                 v
@@ -8098,7 +8099,7 @@ All branches in an `if` must have the same type!
 
                 The `R` alias is self-recursive in an invalid way:
 
-                1│  R a : [ Only (R a) ]
+                1│  R a : [Only (R a)]
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
@@ -8113,7 +8114,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                R a : [ Only { very: [ Deep (R a) ] } ]
+                R a : [Only { very: [Deep (R a)] }]
 
                 v : R Str
                 v
@@ -8125,7 +8126,7 @@ All branches in an `if` must have the same type!
 
                 The `R` alias is self-recursive in an invalid way:
 
-                1│  R a : [ Only { very: [ Deep (R a) ] } ]
+                1│  R a : [Only { very: [Deep (R a)] }]
                     ^
 
                 Recursion in aliases is only allowed if recursion happens behind a
@@ -8140,8 +8141,8 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Foo a : [ Thing (Bar a) ]
-                Bar a : [ Stuff (Foo a) ]
+                Foo a : [Thing (Bar a)]
+                Bar a : [Stuff (Foo a)]
 
                 v : Bar Str
                 v
@@ -8153,7 +8154,7 @@ All branches in an `if` must have the same type!
 
                 The `Foo` alias is recursive in an invalid way:
 
-                1│  Foo a : [ Thing (Bar a) ]
+                1│  Foo a : [Thing (Bar a)]
                     ^^^
 
                 The `Foo` alias depends on itself through the following chain of
@@ -8177,9 +8178,9 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Result a b : [ Ok a, Err b ]
+                Result a b : [Ok a, Err b]
 
-                Foo a : [ Blah (Result (Bar a) []) ]
+                Foo a : [Blah (Result (Bar a) [])]
                 Bar a : Foo a
 
                 v : Bar Str
@@ -8263,7 +8264,7 @@ All branches in an `if` must have the same type!
             ),
             // TODO: get rid of the first error. Consider parsing OtherModule.@Age to completion
             // and checking it during can. The reason the error appears is because it is parsed as
-            // Apply(Error(OtherModule), [ @Age, 21 ])
+            // Apply(Error(OtherModule), [@Age, 21])
             indoc!(
                 r#"
                 ── OPAQUE TYPE NOT APPLIED ─────────────────────────────── /code/proj/Main.roc ─
@@ -8495,7 +8496,7 @@ All branches in an `if` must have the same type!
 
                 The argument is a pattern that matches a `Age` tag of type:
 
-                    [ Age a ]
+                    [Age a]
 
                 But the annotation on `f` says the 1st argument should be:
 
@@ -8538,7 +8539,7 @@ All branches in an `if` must have the same type!
 
                 But all the previous branches match:
 
-                    F [ A ]a
+                    F [A]a
                 "#
             ),
         )
@@ -8551,7 +8552,7 @@ All branches in an `if` must have the same type!
                 r#"
                 F n := n
 
-                v : F [ A, B, C ]
+                v : F [A, B, C]
 
                 when v is
                     @F A -> ""
@@ -8570,11 +8571,11 @@ All branches in an `if` must have the same type!
 
                 This `v` value is a:
 
-                    F [ A, B, C ]
+                    F [A, B, C]
 
                 But the branch patterns have type:
 
-                    F [ A, B ]
+                    F [A, B]
 
                 The branches must be cases of the `when` condition's type!
 
@@ -8723,7 +8724,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                f : [ A ]Str
+                f : [A]Str
                 f
                 "#
             ),
@@ -8733,8 +8734,8 @@ All branches in an `if` must have the same type!
 
                 This tag union extension type is invalid:
 
-                1│  f : [ A ]Str
-                             ^^^
+                1│  f : [A]Str
+                           ^^^
 
                 Note: A tag union extension variable can only contain a type variable
                 or another tag union.
@@ -8748,7 +8749,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                Type : [ Constructor UnknownType ]
+                Type : [Constructor UnknownType]
 
                 insertHelper : UnknownType, Type -> Type
                 insertHelper = \h, m ->
@@ -8762,10 +8763,10 @@ All branches in an `if` must have the same type!
                 r#"
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `UnknownType` value
+                Nothing is named `UnknownType` in this scope.
 
-                1│  Type : [ Constructor UnknownType ]
-                                         ^^^^^^^^^^^
+                1│  Type : [Constructor UnknownType]
+                                        ^^^^^^^^^^^
 
                 Did you mean one of these?
 
@@ -8776,7 +8777,7 @@ All branches in an `if` must have the same type!
 
                 ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                I cannot find a `UnknownType` value
+                Nothing is named `UnknownType` in this scope.
 
                 3│  insertHelper : UnknownType, Type -> Type
                                    ^^^^^^^^^^^
@@ -8962,7 +8963,7 @@ All branches in an `if` must have the same type!
         report_problem_as(
             indoc!(
                 r#"
-                I : [ A (Num.Int *), B (Num.Int *) ]
+                I : [A (Num.Int *), B (Num.Int *)]
                 a : I
                 a
                 "#
@@ -8975,8 +8976,8 @@ All branches in an `if` must have the same type!
 
                 Here is one occurrence:
 
-                1│  I : [ A (Num.Int *), B (Num.Int *) ]
-                                     ^
+                1│  I : [A (Num.Int *), B (Num.Int *)]
+                                    ^
 
                 Tip: Type variables must be bound before the `:`. Perhaps you intended
                 to add a type parameter to this type?
@@ -9081,7 +9082,7 @@ All branches in an `if` must have the same type!
             "alias_in_has_clause",
             indoc!(
                 r#"
-                app "test" provides [ hash ] to "./platform"
+                app "test" provides [hash] to "./platform"
 
                 Hash has hash : a, b -> Num.U64 | a has Hash, b has Bool.Bool
                 "#
@@ -9105,7 +9106,7 @@ All branches in an `if` must have the same type!
             "shadowed_type_variable_in_has_clause",
             indoc!(
                 r#"
-                app "test" provides [ ab1 ] to "./platform"
+                app "test" provides [ab1] to "./platform"
 
                 Ab1 has ab1 : a -> {} | a has Ab1, a has Ab1
                 "#
@@ -9137,7 +9138,7 @@ All branches in an `if` must have the same type!
             "ability_shadows_ability",
             indoc!(
                 r#"
-                app "test" provides [ ab ] to "./platform"
+                app "test" provides [ab] to "./platform"
 
                 Ability has ab : a -> U64 | a has Ability
 
@@ -9171,7 +9172,7 @@ All branches in an `if` must have the same type!
             "ability_member_does_not_bind_ability",
             indoc!(
                 r#"
-                app "test" provides [ ] to "./platform"
+                app "test" provides [] to "./platform"
 
                 Ability has ab : {} -> {}
                 "#
@@ -9213,7 +9214,7 @@ All branches in an `if` must have the same type!
             "ability_member_binds_parent_twice",
             indoc!(
                 r#"
-                app "test" provides [ ] to "./platform"
+                app "test" provides [] to "./platform"
 
                 Eq has eq : a, b -> Bool.Bool | a has Eq, b has Eq
                 "#
@@ -9244,7 +9245,7 @@ All branches in an `if` must have the same type!
             "has_clause_outside_of_ability",
             indoc!(
                 r#"
-                app "test" provides [ f ] to "./platform"
+                app "test" provides [f] to "./platform"
 
                 Hash has hash : (a | a has Hash) -> Num.U64
 
@@ -9287,7 +9288,7 @@ All branches in an `if` must have the same type!
             "ability_specialization_with_non_implementing_type",
             indoc!(
                 r#"
-                app "test" provides [ hash ] to "./platform"
+                app "test" provides [hash] to "./platform"
 
                 Hash has hash : a -> Num.U64 | a has Hash
 
@@ -9321,7 +9322,7 @@ All branches in an `if` must have the same type!
             "ability_specialization_does_not_match_type",
             indoc!(
                 r#"
-                app "test" provides [ hash ] to "./platform"
+                app "test" provides [hash] to "./platform"
 
                 Hash has hash : a -> U64 | a has Hash
 
@@ -9357,7 +9358,7 @@ All branches in an `if` must have the same type!
             "ability_specialization_is_incomplete",
             indoc!(
                 r#"
-                app "test" provides [ eq, le ] to "./platform"
+                app "test" provides [eq, le] to "./platform"
 
                 Eq has
                     eq : a, a -> Bool | a has Eq
@@ -9390,7 +9391,7 @@ All branches in an `if` must have the same type!
             "ability_specialization_overly_generalized",
             indoc!(
                 r#"
-                app "test" provides [ hash ] to "./platform"
+                app "test" provides [hash] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -9432,7 +9433,7 @@ All branches in an `if` must have the same type!
             "ability_specialization_conflicting_specialization_types",
             indoc!(
                 r#"
-                app "test" provides [ eq ] to "./platform"
+                app "test" provides [eq] to "./platform"
 
                 Eq has
                     eq : a, a -> Bool | a has Eq
@@ -9454,7 +9455,7 @@ All branches in an `if` must have the same type!
 
                 This value is a declared specialization of type:
 
-                    You, AndI -> [ False, True ]
+                    You, AndI -> [False, True]
 
                 But the type annotation on `eq` says it must match:
 
@@ -9475,7 +9476,7 @@ All branches in an `if` must have the same type!
             "ability_specialization_checked_against_annotation",
             indoc!(
                 r#"
-                app "test" provides [ hash ] to "./platform"
+                app "test" provides [hash] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -9529,7 +9530,7 @@ All branches in an `if` must have the same type!
             "ability_specialization_called_with_non_specializing",
             indoc!(
                 r#"
-                app "test" provides [ noGoodVeryBadTerrible ] to "./platform"
+                app "test" provides [noGoodVeryBadTerrible] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -9558,7 +9559,7 @@ All branches in an `if` must have the same type!
 
                 Roc can't generate an implementation of the `#UserApp.Hash` ability for
 
-                    [ A (Num a) ]b
+                    [A (Num a)]b
 
                 Only builtin abilities can have generated implementations!
 
@@ -9587,7 +9588,7 @@ All branches in an `if` must have the same type!
             "ability_not_on_toplevel",
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 main =
                     Hash has
@@ -9617,7 +9618,7 @@ All branches in an `if` must have the same type!
             "expression_generalization_to_ability_is_an_error",
             indoc!(
                 r#"
-                app "test" provides [ hash, hashable ] to "./platform"
+                app "test" provides [hash, hashable] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -9663,7 +9664,7 @@ All branches in an `if` must have the same type!
             "ability_value_annotations_are_an_error",
             indoc!(
                 r#"
-                app "test" provides [ result ] to "./platform"
+                app "test" provides [result] to "./platform"
 
                 Hash has
                     hash : a -> U64 | a has Hash
@@ -9746,7 +9747,7 @@ All branches in an `if` must have the same type!
 
                 But the branch patterns have type:
 
-                    [ False, True, Wat ]
+                    [False, True, Wat]
 
                 The branches must be cases of the `when` condition's type!
                 "#
@@ -9781,8 +9782,8 @@ All branches in an `if` must have the same type!
                 r#"
                 app "test-missing-comma"
                     packages { pf: "platform" }
-                    imports [ pf.Task Base64 ]
-                    provides [ main, @Foo ] to pf
+                    imports [pf.Task Base64]
+                    provides [main, @Foo] to pf
                 "#
             ),
             indoc!(
@@ -9792,12 +9793,12 @@ All branches in an `if` must have the same type!
                 I am partway through parsing a imports list, but I got stuck here:
 
                 2│      packages { pf: "platform" }
-                3│      imports [ pf.Task Base64 ]
-                                          ^
+                3│      imports [pf.Task Base64]
+                                         ^
 
                 I am expecting a comma or end of list, like
 
-                    imports [ Math, Util ]"#
+                    imports [Shape, Vector]"#
             ),
         )
     }
@@ -9860,7 +9861,7 @@ All branches in an `if` must have the same type!
             "nested_specialization",
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 Default has default : {} -> a | a has Default
 
@@ -9892,7 +9893,7 @@ All branches in an `if` must have the same type!
             "recursion_var_specialization_error",
             indoc!(
                 r#"
-                Job a : [ Job (List (Job a)) ]
+                Job a : [Job (List (Job a))]
 
                 job : Job Str
 
@@ -9915,7 +9916,7 @@ All branches in an `if` must have the same type!
 
                 But `isEq` needs the 2nd argument to be:
 
-                    List [ Job ∞ ] as ∞
+                    List [Job ∞] as ∞
                 "#
             ),
         )
@@ -9927,7 +9928,7 @@ All branches in an `if` must have the same type!
             "type_error_in_apply_is_circular",
             indoc!(
                 r#"
-                app "test" provides [ go ] to "./platform"
+                app "test" provides [go] to "./platform"
 
                 S a : { set : Set a }
 
@@ -10037,7 +10038,7 @@ All branches in an `if` must have the same type!
             "function_does_not_implement_encoding",
             indoc!(
                 r#"
-                app "test" imports [ Encode ] provides [ main ] to "./platform"
+                app "test" imports [Encode] provides [main] to "./platform"
 
                 main = Encode.toEncoder \x -> x
                 "#
@@ -10068,7 +10069,7 @@ All branches in an `if` must have the same type!
             "cycle_through_non_function",
             indoc!(
                 r#"
-                app "test" imports [ Encode ] provides [ main ] to "./platform"
+                app "test" imports [Encode] provides [main] to "./platform"
 
                 main = \x -> Encode.toEncoder { x: x }
                 "#
@@ -10106,7 +10107,7 @@ All branches in an `if` must have the same type!
             "cycle_through_non_function",
             indoc!(
                 r#"
-                app "test" imports [ Encode ] provides [ main ] to "./platform"
+                app "test" imports [Encode] provides [main] to "./platform"
 
                 A := {}
                 main = Encode.toEncoder { x: @A {} }
@@ -10134,6 +10135,166 @@ All branches in an `if` must have the same type!
 
                 Tip: `A` does not implement `Encoding`. Consider adding a custom
                 implementation or `has Encode.Encoding` to the definition of `A`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn derive_non_builtin_ability() {
+        new_report_problem_as(
+            "cycle_through_non_function",
+            indoc!(
+                r#"
+                app "test" provides [A] to "./platform"
+
+                Ab has ab : a -> a | a has Ab
+
+                A := {} has [Ab]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── ILLEGAL DERIVE ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                This ability cannot be derived:
+
+                5│  A := {} has [Ab]
+                                 ^^
+
+                Only builtin abilities can be derived.
+
+                Note: The builtin abilities are `Encode.Encoding`
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn has_encoding_for_function() {
+        new_report_problem_as(
+            "has_encoding_for_function",
+            indoc!(
+                r#"
+                app "test" imports [Encode] provides [A] to "./platform"
+
+                A a := a -> a has [Encode.Encoding]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+                Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+
+                3│  A a := a -> a has [Encode.Encoding]
+                                       ^^^^^^^^^^^^^^^
+
+                Note: `Encoding` cannot be generated for functions.
+
+                Tip: You can define a custom implementation of `Encode.Encoding` for `A`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn has_encoding_for_non_encoding_alias() {
+        new_report_problem_as(
+            "has_encoding_for_non_encoding_alias",
+            indoc!(
+                r#"
+                app "test" imports [Encode] provides [A] to "./platform"
+
+                A := B has [Encode.Encoding]
+
+                B := {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+                Roc can't derive an implementation of the `Encode.Encoding` for `A`:
+
+                3│  A := B has [Encode.Encoding]
+                                ^^^^^^^^^^^^^^^
+
+                Tip: `B` does not implement `Encoding`. Consider adding a custom
+                implementation or `has Encode.Encoding` to the definition of `B`.
+
+                Tip: You can define a custom implementation of `Encode.Encoding` for `A`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn has_encoding_for_other_has_encoding() {
+        new_report_problem_as(
+            "has_encoding_for_other_has_encoding",
+            indoc!(
+                r#"
+                app "test" imports [Encode] provides [A] to "./platform"
+
+                A := B has [Encode.Encoding]
+
+                B := {} has [Encode.Encoding]
+                "#
+            ),
+            indoc!(""), // no error
+        )
+    }
+
+    #[test]
+    fn has_encoding_for_recursive_deriving() {
+        new_report_problem_as(
+            "has_encoding_for_recursive_deriving",
+            indoc!(
+                r#"
+                app "test" imports [Encode] provides [MyNat] to "./platform"
+
+                MyNat := [S MyNat, Z] has [Encode.Encoding]
+                "#
+            ),
+            indoc!(""), // no error
+        )
+    }
+
+    #[test]
+    fn has_encoding_dominated_by_custom() {
+        new_report_problem_as(
+            "has_encoding_dominated_by_custom",
+            indoc!(
+                r#"
+                app "test" imports [Encode.{ Encoding, toEncoder, custom }] provides [A] to "./platform"
+
+                A := {} has [Encode.Encoding]
+
+                toEncoder = \@A {} -> custom \l, _ -> l
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CONFLICTING DERIVE AND IMPLEMENTATION ───────────────── /code/proj/Main.roc ─
+
+                `A` both derives and custom-implements `Encode.Encoding`. We found the
+                derive here:
+
+                3│  A := {} has [Encode.Encoding]
+                                 ^^^^^^^^^^^^^^^
+
+                and one custom implementation of `Encode.Encoding` here:
+
+                5│  toEncoder = \@A {} -> custom \l, _ -> l
+                    ^^^^^^^^^
+
+                Derived and custom implementations can conflict, so one of them needs
+                to be removed!
+
+                Note: We'll try to compile your program using the custom
+                implementation first, and fall-back on the derived implementation if
+                needed. Make sure to disambiguate which one you want!
                 "#
             ),
         )

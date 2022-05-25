@@ -5,6 +5,7 @@ use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
+use roc_types::num::NumericRange;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
@@ -413,7 +414,7 @@ fn unify_ranged_number(
     pool: &mut Pool,
     ctx: &Context,
     real_var: Variable,
-    range_vars: VariableSubsSlice,
+    range_vars: NumericRange,
 ) -> Outcome {
     let other_content = &ctx.second_desc.content;
 
@@ -431,7 +432,7 @@ fn unify_ranged_number(
         &RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, real_var, other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, ctx.first, other_range_vars, ctx.mode)
+                check_valid_range(subs, ctx.first, other_range_vars)
             } else {
                 outcome
             }
@@ -444,41 +445,41 @@ fn unify_ranged_number(
         return outcome;
     }
 
-    check_valid_range(subs, pool, ctx.second, range_vars, ctx.mode)
+    check_valid_range(subs, ctx.second, range_vars)
 }
 
-fn check_valid_range(
-    subs: &mut Subs,
-    pool: &mut Pool,
-    var: Variable,
-    range: VariableSubsSlice,
-    mode: Mode,
-) -> Outcome {
-    let slice = subs.get_subs_slice(range).to_vec();
+fn check_valid_range(subs: &mut Subs, var: Variable, range: NumericRange) -> Outcome {
+    let content = subs.get_content_without_compacting(var);
 
-    let mut it = slice.iter().peekable();
-    while let Some(&possible_var) = it.next() {
-        let snapshot = subs.snapshot();
-        let old_pool = pool.clone();
-        let outcome = unify_pool(subs, pool, var, possible_var, mode | Mode::RIGID_AS_FLEX);
-        if outcome.mismatches.is_empty() {
-            // Okay, we matched some type in the range.
-            subs.rollback_to(snapshot);
-            *pool = old_pool;
-            return Outcome::default();
-        } else if it.peek().is_some() {
-            // We failed to match something in the range, but there are still things we can try.
-            subs.rollback_to(snapshot);
-            *pool = old_pool;
-        } else {
-            subs.commit_snapshot(snapshot);
+    match content {
+        &Content::Alias(symbol, _, actual, _) => {
+            match range.contains_symbol(symbol) {
+                None => {
+                    // symbol not recognized; go into the alias
+                    return check_valid_range(subs, actual, range);
+                }
+                Some(false) => {
+                    let outcome = Outcome {
+                        mismatches: vec![Mismatch::TypeNotInRange],
+                        must_implement_ability: Default::default(),
+                    };
+
+                    return outcome;
+                }
+                Some(true) => { /* fall through */ }
+            }
+        }
+
+        Content::RangedNumber(_, _) => {
+            // these ranges always intersect, we need more information before we can say more
+        }
+
+        _ => {
+            // anything else is definitely a type error, and will be reported elsewhere
         }
     }
 
-    Outcome {
-        mismatches: vec![Mismatch::TypeNotInRange],
-        ..Outcome::default()
-    }
+    Outcome::default()
 }
 
 #[inline(always)]
@@ -502,7 +503,7 @@ fn unify_two_aliases(
             .into_iter()
             .zip(other_args.all_variables().into_iter());
 
-        let args_unification_snapshot = subs.snapshot();
+        let length_before = subs.len();
 
         for (l, r) in it {
             let l_var = subs[l];
@@ -514,10 +515,9 @@ fn unify_two_aliases(
             outcome.union(merge(subs, ctx, *other_content));
         }
 
-        let args_unification_had_changes = !subs
-            .vars_since_snapshot(&args_unification_snapshot)
-            .is_empty();
-        subs.commit_snapshot(args_unification_snapshot);
+        let length_after = subs.len();
+
+        let args_unification_had_changes = length_after != length_before;
 
         if !args.is_empty() && args_unification_had_changes && outcome.mismatches.is_empty() {
             // We need to unify the real vars because unification of type variables
@@ -577,7 +577,7 @@ fn unify_alias(
         RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, real_var, *other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, real_var, *other_range_vars, ctx.mode)
+                check_valid_range(subs, real_var, *other_range_vars)
             } else {
                 outcome
             }
@@ -638,7 +638,7 @@ fn unify_opaque(
             // This opaque might be a number, check if it unifies with the target ranged number var.
             let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, ctx.first, *other_range_vars, ctx.mode)
+                check_valid_range(subs, ctx.first, *other_range_vars)
             } else {
                 outcome
             }
@@ -769,7 +769,7 @@ fn unify_structure(
         RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
-                check_valid_range(subs, pool, ctx.first, *other_range_vars, ctx.mode)
+                check_valid_range(subs, ctx.first, *other_range_vars)
             } else {
                 outcome
             }
@@ -783,9 +783,9 @@ fn unify_structure(
 //
 // When might this not be the case? For example, in the code
 //
-//   Indirect : [ Indirect ConsList ]
+//   Indirect : [Indirect ConsList]
 //
-//   ConsList : [ Nil, Cons Indirect ]
+//   ConsList : [Nil, Cons Indirect]
 //
 //   l : ConsList
 //   l = Cons (Indirect (Cons (Indirect Nil)))
@@ -793,10 +793,10 @@ fn unify_structure(
 //   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
 //   l
 //
-// Suppose `ConsList` has the expanded type `[ Nil, Cons [ Indirect <rec> ] ] as <rec>`.
+// Suppose `ConsList` has the expanded type `[Nil, Cons [Indirect <rec>]] as <rec>`.
 // After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
 // the tentative total-type of the application annotated "region-a" would be
-// `<v> = [ Nil, Cons [ Indirect <v> ] ] as <rec>`. That is, the type of the recursive tag union
+// `<v> = [Nil, Cons [Indirect <v>]] as <rec>`. That is, the type of the recursive tag union
 // would be inlined at the site "v", rather than passing through the correct recursion variable
 // "rec" first.
 //
@@ -1323,13 +1323,13 @@ fn unify_tag_union_new(
         // This is inspired by
         //
         //
-        //      f : [ Red, Green ] -> Bool
+        //      f : [Red, Green] -> Bool
         //      f = \_ -> True
         //
         //      f Blue
         //
-        //  In this case, we want the mismatch to be between `[ Blue ]a` and `[ Red, Green ]`, but
-        //  without rolling back, the mismatch is between `[ Blue, Red, Green ]a` and `[ Red, Green ]`.
+        //  In this case, we want the mismatch to be between `[Blue]a` and `[Red, Green]`, but
+        //  without rolling back, the mismatch is between `[Blue, Red, Green]a` and `[Red, Green]`.
         //  TODO is this also required for the other cases?
 
         let snapshot = subs.snapshot();
@@ -1417,7 +1417,7 @@ fn unify_shared_tags_new(
             let expected = subs[expected_index];
             // NOTE the arguments of a tag can be recursive. For instance in the expression
             //
-            //  ConsList a : [ Nil, Cons a (ConsList a) ]
+            //  ConsList a : [Nil, Cons a (ConsList a)]
             //
             //  Cons 1 (Cons "foo" Nil)
             //
@@ -1430,11 +1430,11 @@ fn unify_shared_tags_new(
             // The strategy is to expand the recursive tag union as deeply as the non-recursive one
             // is.
             //
-            // > RecursiveTagUnion(rvar, [ Cons a rvar, Nil ], ext)
+            // > RecursiveTagUnion(rvar, [Cons a rvar, Nil], ext)
             //
             // Conceptually becomes
             //
-            // > RecursiveTagUnion(rvar, [ Cons a [ Cons a rvar, Nil ], Nil ], ext)
+            // > RecursiveTagUnion(rvar, [Cons a [Cons a rvar, Nil], Nil], ext)
             //
             // and so on until the whole non-recursive tag union can be unified with it.
             //

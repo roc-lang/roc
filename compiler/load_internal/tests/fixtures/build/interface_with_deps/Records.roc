@@ -1,5 +1,5 @@
 interface Records
-    exposes [ intVal ]
+    exposes [intVal]
     imports []
 
 intVal =

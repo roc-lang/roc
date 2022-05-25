@@ -198,14 +198,14 @@ pub fn to_pattern2<'a>(
                         env.var_store.fresh(),
                         match int {
                             IntValue::U128(_) => todo!(),
-                            IntValue::I128(n) => n as i64, // FIXME
+                            IntValue::I128(n) => i128::from_ne_bytes(n) as i64, // FIXME
                         },
                     )
                 }
                 Ok((_, ParsedNumResult::Int(int, _bound))) => {
                     Pattern2::IntLiteral(IntVal::I64(match int {
                         IntValue::U128(_) => todo!(),
-                        IntValue::I128(n) => n as i64, // FIXME
+                        IntValue::I128(n) => i128::from_ne_bytes(n) as i64, // FIXME
                     }))
                 }
                 Ok((_, ParsedNumResult::Float(int, _bound))) => {
@@ -228,7 +228,7 @@ pub fn to_pattern2<'a>(
                 Ok((int, _bound)) => {
                     let int = match int {
                         IntValue::U128(_) => todo!(),
-                        IntValue::I128(n) => n as i64, // FIXME
+                        IntValue::I128(n) => i128::from_ne_bytes(n) as i64, // FIXME
                     };
                     if *is_negative {
                         Pattern2::IntLiteral(IntVal::I64(-int))

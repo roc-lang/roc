@@ -6,16 +6,31 @@ use crate::{
     Buf,
 };
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum Braces {
+    Square,
+    Curly,
+}
+
 pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
     buf: &mut Buf<'buf>,
     indent: u16,
-    start: char,
-    end: char,
+    braces: Braces,
     items: Collection<'a, T>,
     newline: Newlines,
 ) where
     <T as ExtractSpaces<'a>>::Item: Formattable,
 {
+    let start = match braces {
+        Braces::Curly => '{',
+        Braces::Square => '[',
+    };
+
+    let end = match braces {
+        Braces::Curly => '}',
+        Braces::Square => ']',
+    };
+
     if items.is_multiline() {
         let braces_indent = indent;
         let item_indent = braces_indent + INDENT;
@@ -74,16 +89,19 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
         // there is no comment to add
         buf.indent(indent);
         buf.push(start);
-        let mut iter = items.iter().peekable();
-        while let Some(item) = iter.next() {
-            buf.spaces(1);
+        let mut iter = items.iter().enumerate().peekable();
+        while let Some((index, item)) = iter.next() {
+            if braces == Braces::Curly || index != 0 {
+                buf.spaces(1);
+            }
+
             item.format(buf, indent);
             if iter.peek().is_some() {
                 buf.push(',');
             }
         }
 
-        if !items.is_empty() {
+        if !items.is_empty() && braces == Braces::Curly {
             buf.spaces(1);
         }
     }

@@ -1,7 +1,7 @@
 app "nqueens"
     packages { pf: "platform" }
-    imports [ pf.Task ]
-    provides [ main ] to pf
+    imports [pf.Task]
+    provides [main] to pf
 
 main : Task.Task {} []
 main =
@@ -13,7 +13,7 @@ main =
                 |> Num.toStr
                 |> Task.putLine
 
-ConsList a : [ Nil, Cons a (ConsList a) ]
+ConsList a : [Nil, Cons a (ConsList a)]
 
 queens = \n -> length (findSolutions n n)
 

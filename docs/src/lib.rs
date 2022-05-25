@@ -640,7 +640,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
             // TODO(abilities): fill me in
         }
         TypeAnnotation::ObscuredTagUnion => {
-            buf.push_str("[ @.. ]");
+            buf.push_str("[@..]");
         }
         TypeAnnotation::ObscuredRecord => {
             buf.push_str("{ @.. }");

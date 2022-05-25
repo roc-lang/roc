@@ -1,7 +1,7 @@
 app "cfold"
     packages { pf: "platform" }
-    imports [ pf.Task ]
-    provides [ main ] to pf
+    imports [pf.Task]
+    provides [main] to pf
 
 # adapted from https://github.com/koka-lang/koka/blob/master/test/bench/haskell/cfold.hs
 main : Task.Task {} []

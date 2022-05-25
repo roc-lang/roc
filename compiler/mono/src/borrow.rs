@@ -288,7 +288,7 @@ impl<'a> ParamMap<'a> {
     fn visit_stmt(&mut self, arena: &'a Bump, _fnid: Symbol, stmt: &Stmt<'a>) {
         use Stmt::*;
 
-        let mut stack = bumpalo::vec![ in arena; stmt ];
+        let mut stack = bumpalo::vec![in arena; stmt];
 
         while let Some(stmt) = stack.pop() {
             match stmt {
@@ -1001,7 +1001,7 @@ fn call_info_call<'a>(call: &crate::ir::Call<'a>, info: &mut CallInfo<'a>) {
 fn call_info_stmt<'a>(arena: &'a Bump, stmt: &Stmt<'a>, info: &mut CallInfo<'a>) {
     use Stmt::*;
 
-    let mut stack = bumpalo::vec![ in arena; stmt ];
+    let mut stack = bumpalo::vec![in arena; stmt];
 
     while let Some(stmt) = stack.pop() {
         match stmt {

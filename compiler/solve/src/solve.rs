@@ -1,12 +1,13 @@
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
-    DeferredMustImplementAbility, Resolved, Unfulfilled,
+    DeferredObligations, DeriveKey, PendingDerivesTable, Resolved, Unfulfilled,
 };
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
+use roc_can::expr::PendingDerives;
 use roc_collections::all::MutMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
@@ -95,6 +96,12 @@ pub enum TypeError {
         typ: ErrorType,
         ability: Symbol,
         member: Symbol,
+    },
+    DominatedDerive {
+        opaque: Symbol,
+        ability: Symbol,
+        derive_region: Region,
+        impl_region: Region,
     },
 }
 
@@ -418,7 +425,7 @@ impl Env {
 const DEFAULT_POOLS: usize = 8;
 
 #[derive(Clone, Debug)]
-struct Pools(Vec<Vec<Variable>>);
+pub(crate) struct Pools(Vec<Vec<Variable>>);
 
 impl Default for Pools {
     fn default() -> Self {
@@ -481,6 +488,7 @@ pub fn run(
     mut subs: Subs,
     aliases: &mut Aliases,
     constraint: &Constraint,
+    pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
 ) -> (Solved<Subs>, Env) {
     let env = run_in_place(
@@ -489,6 +497,7 @@ pub fn run(
         &mut subs,
         aliases,
         constraint,
+        pending_derives,
         abilities_store,
     );
 
@@ -502,6 +511,7 @@ fn run_in_place(
     subs: &mut Subs,
     aliases: &mut Aliases,
     constraint: &Constraint,
+    pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
 ) -> Env {
     let mut pools = Pools::default();
@@ -513,7 +523,8 @@ fn run_in_place(
     let rank = Rank::toplevel();
     let arena = Bump::new();
 
-    let mut deferred_must_implement_abilities = DeferredMustImplementAbility::default();
+    let pending_derives = PendingDerivesTable::new(subs, aliases, pending_derives);
+    let mut deferred_obligations = DeferredObligations::new(pending_derives);
 
     let state = solve(
         &arena,
@@ -526,12 +537,14 @@ fn run_in_place(
         subs,
         constraint,
         abilities_store,
-        &mut deferred_must_implement_abilities,
+        &mut deferred_obligations,
     );
 
     // Now that the module has been solved, we can run through and check all
-    // types claimed to implement abilities.
-    problems.extend(deferred_must_implement_abilities.check_all(subs, abilities_store));
+    // types claimed to implement abilities. This will also tell us what derives
+    // are legal, which we need to register.
+    let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
+    problems.extend(obligation_problems);
 
     state.env
 }
@@ -584,7 +597,7 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
     abilities_store: &mut AbilitiesStore,
-    deferred_must_implement_abilities: &mut DeferredMustImplementAbility,
+    deferred_obligations: &mut DeferredObligations,
 ) -> State {
     let initial = Work::Constraint {
         env: &Env::default(),
@@ -644,7 +657,7 @@ fn solve(
                         rank,
                         abilities_store,
                         problems,
-                        deferred_must_implement_abilities,
+                        deferred_obligations,
                         *symbol,
                         *loc_var,
                     );
@@ -749,7 +762,7 @@ fn solve(
                         rank,
                         abilities_store,
                         problems,
-                        deferred_must_implement_abilities,
+                        deferred_obligations,
                         *symbol,
                         *loc_var,
                     );
@@ -804,7 +817,7 @@ fn solve(
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
-                            deferred_must_implement_abilities.add(
+                            deferred_obligations.add(
                                 must_implement_ability,
                                 AbilityImplError::BadExpr(*region, category.clone(), actual),
                             );
@@ -911,7 +924,7 @@ fn solve(
                             } => {
                                 introduce(subs, rank, pools, &vars);
                                 if !must_implement_ability.is_empty() {
-                                    deferred_must_implement_abilities.add(
+                                    deferred_obligations.add(
                                         must_implement_ability,
                                         AbilityImplError::BadExpr(
                                             *region,
@@ -988,7 +1001,7 @@ fn solve(
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
-                            deferred_must_implement_abilities.add(
+                            deferred_obligations.add(
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(*region, category.clone(), actual),
                             );
@@ -1150,7 +1163,7 @@ fn solve(
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
-                            deferred_must_implement_abilities.add(
+                            deferred_obligations.add(
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(
                                     *region,
@@ -1443,14 +1456,13 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
     while let Some(var) = stack.pop() {
         use {Content::*, FlatType::*};
 
-        let mut desc = subs.get(var);
+        let desc = subs.get(var);
         if let Structure(TagUnion(tags, ext)) = desc.content {
             if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
                 let new_ext = subs.fresh_unnamed_flex_var();
                 subs.set_rank(new_ext, desc.rank);
                 let new_union = Structure(TagUnion(tags, new_ext));
-                desc.content = new_union;
-                subs.set(var, desc);
+                subs.set_content(var, new_union);
             }
 
             // Also open up all nested tag unions.
@@ -1479,7 +1491,7 @@ fn check_ability_specialization(
     rank: Rank,
     abilities_store: &mut AbilitiesStore,
     problems: &mut Vec<TypeError>,
-    deferred_must_implement_abilities: &mut DeferredMustImplementAbility,
+    deferred_obligations: &mut DeferredObligations,
     symbol: Symbol,
     symbol_loc_var: Loc<Variable>,
 ) {
@@ -1519,9 +1531,10 @@ fn check_ability_specialization(
                         subs.commit_snapshot(snapshot);
                         introduce(subs, rank, pools, &vars);
 
+                        let specialization_region = symbol_loc_var.region;
                         let specialization = MemberSpecialization {
                             symbol,
-                            region: symbol_loc_var.region,
+                            region: specialization_region,
                         };
                         abilities_store.register_specialization_for_type(
                             root_symbol,
@@ -1531,8 +1544,16 @@ fn check_ability_specialization(
 
                         // Make sure we check that the opaque has specialized all members of the
                         // ability, after we finish solving the module.
-                        deferred_must_implement_abilities
+                        deferred_obligations
                             .add(must_implement_ability, AbilityImplError::IncompleteAbility);
+                        // This specialization dominates any derives that might be present.
+                        deferred_obligations.dominate(
+                            DeriveKey {
+                                opaque,
+                                ability: parent_ability,
+                            },
+                            specialization_region,
+                        );
                     }
                     Some(Obligated::Adhoc(var)) => {
                         // This is a specialization of a structural type - never allowed.
@@ -1701,7 +1722,7 @@ fn either_type_index_to_var(
     }
 }
 
-fn type_to_var(
+pub(crate) fn type_to_var(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -1833,10 +1854,9 @@ fn type_to_variable<'a>(
             Variable(_) | EmptyRec | EmptyTagUnion => {
                 unreachable!("This variant should never be deferred!")
             }
-            RangedNumber(typ, vars) => {
+            RangedNumber(typ, range) => {
                 let ty_var = helper!(typ);
-                let vars = VariableSubsSlice::insert_into_subs(subs, vars.iter().copied());
-                let content = Content::RangedNumber(ty_var, vars);
+                let content = Content::RangedNumber(ty_var, *range);
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
@@ -2495,11 +2515,9 @@ fn check_for_infinite_type(
     let var = loc_var.value;
 
     while let Err((recursive, _chain)) = subs.occurs(var) {
-        let description = subs.get(recursive);
-
         // try to make a tag union recursive, see if that helps
-        match description.content {
-            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+        match subs.get_content_without_compacting(recursive) {
+            &Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
                 subs.mark_tag_union_recursive(recursive, tags, ext_var);
             }
 
@@ -2586,8 +2604,10 @@ fn pool_to_rank_table(
     // the vast majority of young variables have young_rank
     let mut i = 0;
     while i < young_vars.len() {
-        let var = young_vars[i];
-        let rank = subs.get_rank_set_mark(var, young_mark);
+        let var = subs.get_root_key(young_vars[i]);
+
+        subs.set_mark_unchecked(var, young_mark);
+        let rank = subs.get_rank_unchecked(var);
 
         if rank != young_rank {
             debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
@@ -2615,27 +2635,24 @@ fn adjust_rank(
     group_rank: Rank,
     var: Variable,
 ) -> Rank {
-    let desc = subs.get_ref_mut(var);
+    let var = subs.get_root_key(var);
 
-    let desc_rank = desc.rank;
-    let desc_mark = desc.mark;
+    let desc_rank = subs.get_rank_unchecked(var);
+    let desc_mark = subs.get_mark_unchecked(var);
 
     if desc_mark == young_mark {
-        // SAFETY: in this function (and functions it calls, we ONLY modify rank and mark, never content!
-        // hence, we can have an immutable reference to it even though we also have a mutable
-        // reference to the Subs as a whole. This prevents a clone of the content, which turns out
-        // to be quite expensive.
         let content = {
-            let ptr = &desc.content as *const _;
+            let ptr = subs.get_content_unchecked(var) as *const _;
             unsafe { &*ptr }
         };
 
         // Mark the variable as visited before adjusting content, as it may be cyclic.
-        desc.mark = visit_mark;
+        subs.set_mark_unchecked(var, visit_mark);
 
         let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
 
-        subs.set_rank_mark(var, max_rank, visit_mark);
+        subs.set_rank_unchecked(var, max_rank);
+        subs.set_mark_unchecked(var, visit_mark);
 
         max_rank
     } else if desc_mark == visit_mark {
@@ -2646,8 +2663,8 @@ fn adjust_rank(
         let min_rank = group_rank.min(desc_rank);
 
         // TODO from elm-compiler: how can min_rank ever be group_rank?
-        desc.rank = min_rank;
-        desc.mark = visit_mark;
+        subs.set_rank_unchecked(var, min_rank);
+        subs.set_mark_unchecked(var, visit_mark);
 
         min_rank
     }
@@ -2734,12 +2751,12 @@ fn adjust_rank_content(
                     // Normally this is not a problem because of the loop below that maximizes the
                     // rank from nested types in the union. But suppose we have the simple tag
                     // union
-                    //   [ Z ]{}
+                    //   [Z]{}
                     // there are no nested types in the tags, and the empty tag union is at rank 0,
                     // so we promote the tag union to rank 0. Now if we introduce the presence
                     // constraint
-                    //   [ Z ]{} += [ S a ]
-                    // we'll wind up with [ Z, S a ]{}, but it will be at rank 0, and "a" will get
+                    //   [Z]{} += [S a]
+                    // we'll wind up with [Z, S a]{}, but it will be at rank 0, and "a" will get
                     // over-generalized. Really, the empty tag union should be introduced at
                     // whatever current group rank we're at, and so that's how we encode it here.
                     if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_none() {
@@ -2781,7 +2798,7 @@ fn adjust_rank_content(
                     // For example, see the `recursion_var_specialization_error` reporting test -
                     // there, we have
                     //
-                    //      Job a : [ Job (List (Job a)) a ]
+                    //      Job a : [Job (List (Job a)) a]
                     //
                     //      job : Job Str
                     //
@@ -2885,19 +2902,20 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     while let Some(var) = stack.pop() {
         visited.push(var);
 
-        let desc = subs.get_ref_mut(var);
-        if desc.copy.is_some() {
+        if subs.get_copy(var).is_some() {
             continue;
         }
 
-        desc.rank = Rank::NONE;
-        desc.mark = Mark::NONE;
-        desc.copy = OptVariable::from(var);
+        subs.modify(var, |desc| {
+            desc.rank = Rank::NONE;
+            desc.mark = Mark::NONE;
+            desc.copy = OptVariable::from(var);
+        });
 
         use Content::*;
         use FlatType::*;
 
-        match &desc.content {
+        match subs.get_content_without_compacting(var) {
             RigidVar(name) => {
                 // what it's all about: convert the rigid var into a flex var
                 let name = *name;
@@ -2905,17 +2923,25 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                 // NOTE: we must write to the mutually borrowed `desc` value here
                 // using `subs.set` does not work (unclear why, really)
                 // but get_ref_mut approach saves a lookup, so the weirdness is worth it
-                desc.content = FlexVar(Some(name));
-                desc.rank = max_rank;
-                desc.mark = Mark::NONE;
-                desc.copy = OptVariable::NONE;
+                subs.modify(var, |d| {
+                    *d = Descriptor {
+                        content: FlexVar(Some(name)),
+                        rank: max_rank,
+                        mark: Mark::NONE,
+                        copy: OptVariable::NONE,
+                    }
+                })
             }
             &RigidAbleVar(name, ability) => {
                 // Same as `RigidVar` above
-                desc.content = FlexAbleVar(Some(name), ability);
-                desc.rank = max_rank;
-                desc.mark = Mark::NONE;
-                desc.copy = OptVariable::NONE;
+                subs.modify(var, |d| {
+                    *d = Descriptor {
+                        content: FlexAbleVar(Some(name), ability),
+                        rank: max_rank,
+                        mark: Mark::NONE,
+                        copy: OptVariable::NONE,
+                    }
+                })
             }
             FlexVar(_) | FlexAbleVar(_, _) | Error => (),
 
@@ -2988,10 +3014,8 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 
                 stack.push(var);
             }
-            &RangedNumber(typ, vars) => {
+            &RangedNumber(typ, _) => {
                 stack.push(typ);
-
-                stack.extend(var_slice!(vars));
             }
         }
     }
@@ -2999,13 +3023,13 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     // we have tracked all visited variables, and can now traverse them
     // in one go (without looking at the UnificationTable) and clear the copy field
     for var in visited {
-        let descriptor = subs.get_ref_mut(var);
-
-        if descriptor.copy.is_some() {
-            descriptor.rank = Rank::NONE;
-            descriptor.mark = Mark::NONE;
-            descriptor.copy = OptVariable::NONE;
-        }
+        subs.modify(var, |descriptor| {
+            if descriptor.copy.is_some() {
+                descriptor.rank = Rank::NONE;
+                descriptor.mark = Mark::NONE;
+                descriptor.copy = OptVariable::NONE;
+            }
+        });
     }
 }
 
@@ -3018,27 +3042,35 @@ fn deep_copy_var_in(
 ) -> Variable {
     let mut visited = bumpalo::collections::Vec::with_capacity_in(256, arena);
 
-    let copy = deep_copy_var_help(subs, rank, pools, &mut visited, var);
+    let pool = pools.get_mut(rank);
+    let copy = deep_copy_var_help(subs, rank, pool, &mut visited, var);
 
     // we have tracked all visited variables, and can now traverse them
     // in one go (without looking at the UnificationTable) and clear the copy field
     for var in visited {
-        let descriptor = subs.get_ref_mut(var);
-
-        if descriptor.copy.is_some() {
-            descriptor.rank = Rank::NONE;
-            descriptor.mark = Mark::NONE;
-            descriptor.copy = OptVariable::NONE;
-        }
+        subs.set_copy_unchecked(var, OptVariable::NONE);
     }
 
     copy
 }
 
+#[inline]
+fn has_trivial_copy(subs: &Subs, root_var: Variable) -> Option<Variable> {
+    let existing_copy = subs.get_copy_unchecked(root_var);
+
+    if let Some(copy) = existing_copy.into_variable() {
+        Some(copy)
+    } else if subs.get_rank_unchecked(root_var) != Rank::NONE {
+        Some(root_var)
+    } else {
+        None
+    }
+}
+
 fn deep_copy_var_help(
     subs: &mut Subs,
     max_rank: Rank,
-    pools: &mut Pools,
+    pool: &mut Vec<Variable>,
     visited: &mut bumpalo::collections::Vec<'_, Variable>,
     var: Variable,
 ) -> Variable {
@@ -3046,24 +3078,12 @@ fn deep_copy_var_help(
     use roc_types::subs::FlatType::*;
 
     let subs_len = subs.len();
-    let desc = subs.get_ref_mut(var);
+    let var = subs.get_root_key(var);
 
-    if let Some(copy) = desc.copy.into_variable() {
+    // either this variable has been copied before, or does not have NONE rank
+    if let Some(copy) = has_trivial_copy(subs, var) {
         return copy;
-    } else if desc.rank != Rank::NONE {
-        return var;
     }
-
-    visited.push(var);
-
-    let make_descriptor = |content| Descriptor {
-        content,
-        rank: max_rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
-    };
-
-    let content = desc.content;
 
     // Safety: Here we make a variable that is 1 position out of bounds.
     // The reason is that we can now keep the mutable reference to `desc`
@@ -3071,17 +3091,40 @@ fn deep_copy_var_help(
     // variable is in-bounds before it is ever used.
     let copy = unsafe { Variable::from_index(subs_len as u32) };
 
-    pools.get_mut(max_rank).push(copy);
+    visited.push(var);
+    pool.push(copy);
 
     // Link the original variable to the new variable. This lets us
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    desc.mark = Mark::NONE;
-    desc.copy = copy.into();
+    subs.set_mark_unchecked(var, Mark::NONE);
+    subs.set_copy_unchecked(var, copy.into());
 
-    let actual_copy = subs.fresh(make_descriptor(content));
+    let content = *subs.get_content_unchecked(var);
+
+    let copy_descriptor = Descriptor {
+        content,
+        rank: max_rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
+
+    let actual_copy = subs.fresh(copy_descriptor);
     debug_assert_eq!(copy, actual_copy);
+
+    macro_rules! copy_sequence {
+        ($length:expr, $variables:expr) => {{
+            let new_variables = SubsSlice::reserve_into_subs(subs, $length as _);
+            for (target_index, var_index) in (new_variables.indices()).zip($variables) {
+                let var = subs[var_index];
+                let copy_var = deep_copy_var_help(subs, max_rank, pool, visited, var);
+                subs.variables[target_index] = copy_var;
+            }
+
+            new_variables
+        }};
+    }
 
     // Now we recursively copy the content of the variable.
     // We have already marked the variable as copied, so we
@@ -3090,27 +3133,17 @@ fn deep_copy_var_help(
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, arguments) => {
-                    let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-                    for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                        let var = subs[var_index];
-                        let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                        subs.variables[target_index] = copy_var;
-                    }
+                    let new_arguments = copy_sequence!(arguments.len(), arguments);
 
                     Apply(symbol, new_arguments)
                 }
 
                 Func(arguments, closure_var, ret_var) => {
-                    let new_ret_var = deep_copy_var_help(subs, max_rank, pools, visited, ret_var);
+                    let new_ret_var = deep_copy_var_help(subs, max_rank, pool, visited, ret_var);
                     let new_closure_var =
-                        deep_copy_var_help(subs, max_rank, pools, visited, closure_var);
+                        deep_copy_var_help(subs, max_rank, pool, visited, closure_var);
 
-                    let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
-                    for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
-                        let var = subs[var_index];
-                        let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                        subs.variables[target_index] = copy_var;
-                    }
+                    let new_arguments = copy_sequence!(arguments.len(), arguments);
 
                     Func(new_arguments, new_closure_var, new_ret_var)
                 }
@@ -3119,15 +3152,7 @@ fn deep_copy_var_help(
 
                 Record(fields, ext_var) => {
                     let record_fields = {
-                        let new_variables =
-                            VariableSubsSlice::reserve_into_subs(subs, fields.len());
-
-                        let it = (new_variables.indices()).zip(fields.iter_variables());
-                        for (target_index, var_index) in it {
-                            let var = subs[var_index];
-                            let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                            subs.variables[target_index] = copy_var;
-                        }
+                        let new_variables = copy_sequence!(fields.len(), fields.iter_variables());
 
                         RecordFields {
                             length: fields.length,
@@ -3139,7 +3164,7 @@ fn deep_copy_var_help(
 
                     Record(
                         record_fields,
-                        deep_copy_var_help(subs, max_rank, pools, visited, ext_var),
+                        deep_copy_var_help(subs, max_rank, pool, visited, ext_var),
                     )
                 }
 
@@ -3150,27 +3175,20 @@ fn deep_copy_var_help(
                     for (target_index, index) in it {
                         let slice = subs[index];
 
-                        let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
-                        let it = (new_variables.indices()).zip(slice);
-                        for (target_index, var_index) in it {
-                            let var = subs[var_index];
-                            let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                            subs.variables[target_index] = copy_var;
-                        }
-
+                        let new_variables = copy_sequence!(slice.len(), slice);
                         subs.variable_slices[target_index] = new_variables;
                     }
 
                     let union_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
 
-                    let new_ext = deep_copy_var_help(subs, max_rank, pools, visited, ext_var);
+                    let new_ext = deep_copy_var_help(subs, max_rank, pool, visited, ext_var);
                     TagUnion(union_tags, new_ext)
                 }
 
                 FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
                     tag_name,
                     symbol,
-                    deep_copy_var_help(subs, max_rank, pools, visited, ext_var),
+                    deep_copy_var_help(subs, max_rank, pool, visited, ext_var),
                 ),
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
@@ -3180,27 +3198,20 @@ fn deep_copy_var_help(
                     for (target_index, index) in it {
                         let slice = subs[index];
 
-                        let new_variables = VariableSubsSlice::reserve_into_subs(subs, slice.len());
-                        let it = (new_variables.indices()).zip(slice);
-                        for (target_index, var_index) in it {
-                            let var = subs[var_index];
-                            let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                            subs.variables[target_index] = copy_var;
-                        }
-
+                        let new_variables = copy_sequence!(slice.len(), slice);
                         subs.variable_slices[target_index] = new_variables;
                     }
 
                     let union_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
 
-                    let new_ext = deep_copy_var_help(subs, max_rank, pools, visited, ext_var);
-                    let new_rec_var = deep_copy_var_help(subs, max_rank, pools, visited, rec_var);
+                    let new_ext = deep_copy_var_help(subs, max_rank, pool, visited, ext_var);
+                    let new_rec_var = deep_copy_var_help(subs, max_rank, pool, visited, rec_var);
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
             };
 
-            subs.set(copy, make_descriptor(Structure(new_flat_type)));
+            subs.set_content_unchecked(copy, Structure(new_flat_type));
 
             copy
         }
@@ -3211,41 +3222,33 @@ fn deep_copy_var_help(
             opt_name,
             structure,
         } => {
-            let new_structure = deep_copy_var_help(subs, max_rank, pools, visited, structure);
+            let new_structure = deep_copy_var_help(subs, max_rank, pool, visited, structure);
 
-            subs.set(
-                copy,
-                make_descriptor(RecursionVar {
-                    opt_name,
-                    structure: new_structure,
-                }),
-            );
+            let content = RecursionVar {
+                opt_name,
+                structure: new_structure,
+            };
+
+            subs.set_content_unchecked(copy, content);
 
             copy
         }
 
         RigidVar(name) => {
-            subs.set(copy, make_descriptor(FlexVar(Some(name))));
+            subs.set_content_unchecked(copy, FlexVar(Some(name)));
 
             copy
         }
 
         RigidAbleVar(name, ability) => {
-            subs.set(copy, make_descriptor(FlexAbleVar(Some(name), ability)));
+            subs.set_content_unchecked(copy, FlexAbleVar(Some(name), ability));
 
             copy
         }
 
         Alias(symbol, arguments, real_type_var, kind) => {
             let new_variables =
-                SubsSlice::reserve_into_subs(subs, arguments.all_variables_len as _);
-            for (target_index, var_index) in
-                (new_variables.indices()).zip(arguments.all_variables())
-            {
-                let var = subs[var_index];
-                let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                subs.variables[target_index] = copy_var;
-            }
+                copy_sequence!(arguments.all_variables_len, arguments.all_variables());
 
             let new_arguments = AliasVariables {
                 variables_start: new_variables.start,
@@ -3253,27 +3256,20 @@ fn deep_copy_var_help(
             };
 
             let new_real_type_var =
-                deep_copy_var_help(subs, max_rank, pools, visited, real_type_var);
+                deep_copy_var_help(subs, max_rank, pool, visited, real_type_var);
             let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
 
-            subs.set(copy, make_descriptor(new_content));
+            subs.set_content_unchecked(copy, new_content);
 
             copy
         }
 
-        RangedNumber(typ, range_vars) => {
-            let new_type_var = deep_copy_var_help(subs, max_rank, pools, visited, typ);
+        RangedNumber(typ, range) => {
+            let new_type_var = deep_copy_var_help(subs, max_rank, pool, visited, typ);
 
-            let new_vars = SubsSlice::reserve_into_subs(subs, range_vars.len());
-            for (target_index, var_index) in (new_vars.indices()).zip(range_vars) {
-                let var = subs[var_index];
-                let copy_var = deep_copy_var_help(subs, max_rank, pools, visited, var);
-                subs.variables[target_index] = copy_var;
-            }
+            let new_content = RangedNumber(new_type_var, range);
 
-            let new_content = RangedNumber(new_type_var, new_vars);
-
-            subs.set(copy, make_descriptor(new_content));
+            subs.set_content_unchecked(copy, new_content);
 
             copy
         }

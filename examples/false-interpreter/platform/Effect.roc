@@ -1,7 +1,7 @@
 hosted Effect
-    exposes [ Effect, after, map, always, forever, loop, openFile, closeFile, withFileOpen, getFileLine, getFileBytes, putLine, putRaw, getLine, getChar ]
+    exposes [Effect, after, map, always, forever, loop, openFile, closeFile, withFileOpen, getFileLine, getFileBytes, putLine, putRaw, getLine, getChar]
     imports []
-    generates Effect with [ after, map, always, forever, loop ]
+    generates Effect with [after, map, always, forever, loop]
 
 openFile : Str -> Effect U64
 

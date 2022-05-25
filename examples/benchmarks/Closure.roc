@@ -1,7 +1,7 @@
 app "closure"
     packages { pf: "platform" }
-    imports [ pf.Task ]
-    provides [ main ] to pf
+    imports [pf.Task]
+    provides [main] to pf
 
 # see https://github.com/rtfeldman/roc/issues/985
 main : Task.Task {} []

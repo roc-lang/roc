@@ -1,10 +1,10 @@
 interface Base64.Encode
-    exposes [ toBytes ]
-    imports [ Bytes.Encode.{ Encoder } ]
+    exposes [toBytes]
+    imports [Bytes.Encode.{ Encoder }]
 
 InvalidChar : U8
 
-# State : [ None, One U8, Two U8, Three U8 ]
+# State : [None, One U8, Two U8, Three U8]
 toBytes : Str -> List U8
 toBytes = \str ->
     str
@@ -133,7 +133,7 @@ encodeCharacters = \a, b, c, d ->
             combined : U16
             combined = Num.intCast (Num.shiftRightBy 8 n)
 
-            Ok (Bytes.Encode.sequence [ Bytes.Encode.u16 BE combined, Bytes.Encode.u8 b3 ])
+            Ok (Bytes.Encode.sequence [Bytes.Encode.u16 BE combined, Bytes.Encode.u8 b3])
 
 # is the character a base64 digit?
 # The base16 digits are: A-Z, a-z, 0-1, '+' and '/'

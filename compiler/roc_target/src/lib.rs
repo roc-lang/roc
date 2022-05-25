@@ -2,6 +2,8 @@
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]
 
+use strum_macros::EnumIter;
+
 #[derive(Debug, Clone, Copy)]
 pub struct TargetInfo {
     pub architecture: Architecture,
@@ -10,6 +12,13 @@ pub struct TargetInfo {
 impl TargetInfo {
     pub const fn ptr_width(&self) -> PtrWidth {
         self.architecture.ptr_width()
+    }
+
+    pub const fn ptr_size(&self) -> usize {
+        match self.ptr_width() {
+            PtrWidth::Bytes4 => 4,
+            PtrWidth::Bytes8 => 8,
+        }
     }
 
     pub const fn ptr_alignment_bytes(&self) -> usize {
@@ -43,19 +52,25 @@ impl From<&target_lexicon::Triple> for TargetInfo {
     }
 }
 
+impl From<Architecture> for TargetInfo {
+    fn from(architecture: Architecture) -> Self {
+        Self { architecture }
+    }
+}
+
 #[repr(u8)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PtrWidth {
     Bytes4 = 4,
     Bytes8 = 8,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
 pub enum Architecture {
     X86_64,
     X86_32,
     Aarch64,
-    Arm,
+    Aarch32,
     Wasm32,
 }
 
@@ -64,8 +79,8 @@ impl Architecture {
         use Architecture::*;
 
         match self {
-            X86_64 | Aarch64 | Arm => PtrWidth::Bytes8,
-            X86_32 | Wasm32 => PtrWidth::Bytes4,
+            X86_64 | Aarch64 => PtrWidth::Bytes8,
+            X86_32 | Aarch32 | Wasm32 => PtrWidth::Bytes4,
         }
     }
 
@@ -80,7 +95,7 @@ impl From<target_lexicon::Architecture> for Architecture {
             target_lexicon::Architecture::X86_64 => Architecture::X86_64,
             target_lexicon::Architecture::X86_32(_) => Architecture::X86_32,
             target_lexicon::Architecture::Aarch64(_) => Architecture::Aarch64,
-            target_lexicon::Architecture::Arm(_) => Architecture::Arm,
+            target_lexicon::Architecture::Arm(_) => Architecture::Aarch32,
             target_lexicon::Architecture::Wasm32 => Architecture::Wasm32,
             _ => unreachable!("unsupported architecture"),
         }

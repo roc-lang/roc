@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 target-lexicon = "0.12.3"
+strum = "0.24.0"
+strum_macros = "0.24"

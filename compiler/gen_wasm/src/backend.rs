@@ -3,6 +3,7 @@ use bumpalo::collections::{String, Vec};
 use code_builder::Align;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
+use roc_error_macros::internal_error;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
@@ -10,9 +11,8 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Param, Proc,
     ProcLayout, Stmt,
 };
-
-use roc_error_macros::internal_error;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
+use roc_std::RocDec;
 
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
@@ -817,8 +817,12 @@ impl<'a> WasmBackend<'a> {
                 match (lit, value_type) {
                     (Literal::Float(x), ValueType::F64) => self.code_builder.f64_const(*x as f64),
                     (Literal::Float(x), ValueType::F32) => self.code_builder.f32_const(*x as f32),
-                    (Literal::Int(x), ValueType::I64) => self.code_builder.i64_const(*x as i64),
-                    (Literal::Int(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
+                    (Literal::Int(x), ValueType::I64) => {
+                        self.code_builder.i64_const(i128::from_ne_bytes(*x) as i64)
+                    }
+                    (Literal::Int(x), ValueType::I32) => {
+                        self.code_builder.i32_const(i128::from_ne_bytes(*x) as i32)
+                    }
                     (Literal::Bool(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
                     (Literal::Byte(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
                     _ => invalid_error(),
@@ -840,13 +844,13 @@ impl<'a> WasmBackend<'a> {
                 };
 
                 match lit {
-                    Literal::Decimal(decimal) => {
-                        let (upper_bits, lower_bits) = decimal.as_bits();
+                    Literal::Decimal(bytes) => {
+                        let (upper_bits, lower_bits) = RocDec::from_ne_bytes(*bytes).as_bits();
                         write128(lower_bits as i64, upper_bits);
                     }
                     Literal::Int(x) => {
-                        let lower_bits = (*x & 0xffff_ffff_ffff_ffff) as i64;
-                        let upper_bits = (*x >> 64) as i64;
+                        let lower_bits = (i128::from_ne_bytes(*x) & 0xffff_ffff_ffff_ffff) as i64;
+                        let upper_bits = (i128::from_ne_bytes(*x) >> 64) as i64;
                         write128(lower_bits, upper_bits);
                     }
                     Literal::Float(_) => {

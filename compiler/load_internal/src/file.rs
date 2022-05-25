@@ -9,6 +9,7 @@ use roc_builtins::std::borrow_stdlib;
 use roc_can::abilities::{AbilitiesStore, SolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
+use roc_can::expr::PendingDerives;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::{
@@ -366,6 +367,7 @@ fn start_phase<'a>(
                     imported_modules,
                     declarations,
                     dep_idents,
+                    pending_derives,
                     ..
                 } = constrained;
 
@@ -375,6 +377,7 @@ fn start_phase<'a>(
                     module_timing,
                     constraints,
                     constraint,
+                    pending_derives,
                     var_store,
                     imported_modules,
                     &state.exposed_types,
@@ -536,6 +539,9 @@ struct ConstrainedModule {
     var_store: VarStore,
     dep_idents: IdentIdsByModule,
     module_timing: ModuleTiming,
+    // Rather than adding pending derives as constraints, hand them directly to solve because they
+    // must be solved at the end of a module.
+    pending_derives: PendingDerives,
 }
 
 #[derive(Debug)]
@@ -885,6 +891,7 @@ enum BuildTask<'a> {
         module_timing: ModuleTiming,
         constraints: Constraints,
         constraint: ConstraintSoa,
+        pending_derives: PendingDerives,
         var_store: VarStore,
         declarations: Vec<Declaration>,
         dep_idents: IdentIdsByModule,
@@ -3119,7 +3126,7 @@ fn send_header<'a>(
 
         // For each of our imports, add an entry to deps_by_name
         //
-        // e.g. for `imports [ pf.Foo.{ bar } ]`, add `Foo` to deps_by_name
+        // e.g. for `imports [pf.Foo.{ bar }]`, add `Foo` to deps_by_name
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
@@ -3168,7 +3175,7 @@ fn send_header<'a>(
             // created an IdentId for this, when it was imported exposed
             // in a dependent module.
             //
-            // For example, if module A has [ B.{ foo } ], then
+            // For example, if module A has [B.{ foo }], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
             let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
@@ -3333,7 +3340,7 @@ fn send_header_two<'a>(
 
         // For each of our imports, add an entry to deps_by_name
         //
-        // e.g. for `imports [ pf.Foo.{ bar } ]`, add `Foo` to deps_by_name
+        // e.g. for `imports [pf.Foo.{ bar }]`, add `Foo` to deps_by_name
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
@@ -3413,7 +3420,7 @@ fn send_header_two<'a>(
             // created an IdentId for this, when it was imported exposed
             // in a dependent module.
             //
-            // For example, if module A has [ B.{ foo } ], then
+            // For example, if module A has [B.{ foo }], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
             let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
@@ -3500,6 +3507,7 @@ impl<'a> BuildTask<'a> {
         module_timing: ModuleTiming,
         constraints: Constraints,
         constraint: ConstraintSoa,
+        pending_derives: PendingDerives,
         var_store: VarStore,
         imported_modules: MutMap<ModuleId, Region>,
         exposed_types: &ExposedByModule,
@@ -3542,6 +3550,7 @@ impl<'a> BuildTask<'a> {
             exposed_for_module,
             constraints,
             constraint,
+            pending_derives,
             var_store,
             declarations,
             dep_idents,
@@ -3616,6 +3625,7 @@ fn run_solve_solve(
     exposed_for_module: ExposedForModule,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
+    pending_derives: PendingDerives,
     mut var_store: VarStore,
     module: Module,
 ) -> (
@@ -3663,6 +3673,7 @@ fn run_solve_solve(
             subs,
             solve_aliases,
             abilities_store,
+            pending_derives,
         );
 
         let module_id = module.module_id;
@@ -3713,6 +3724,7 @@ fn run_solve<'a>(
     exposed_for_module: ExposedForModule,
     constraints: Constraints,
     constraint: ConstraintSoa,
+    pending_derives: PendingDerives,
     var_store: VarStore,
     decls: Vec<Declaration>,
     dep_idents: IdentIdsByModule,
@@ -3733,6 +3745,7 @@ fn run_solve<'a>(
                     exposed_for_module,
                     constraints,
                     constraint,
+                    pending_derives,
                     var_store,
                     module,
                 ),
@@ -3754,6 +3767,7 @@ fn run_solve<'a>(
                 exposed_for_module,
                 constraints,
                 constraint,
+                pending_derives,
                 var_store,
                 module,
             )
@@ -3987,6 +4001,7 @@ fn canonicalize_and_constrain<'a>(
         ident_ids: module_output.scope.locals.ident_ids,
         dep_idents,
         module_timing,
+        pending_derives: module_output.pending_derives,
     };
 
     CanAndCon {
@@ -4476,6 +4491,7 @@ fn run_task<'a>(
             exposed_for_module,
             constraints,
             constraint,
+            pending_derives,
             var_store,
             ident_ids,
             declarations,
@@ -4489,6 +4505,7 @@ fn run_task<'a>(
             exposed_for_module,
             constraints,
             constraint,
+            pending_derives,
             var_store,
             declarations,
             dep_idents,
@@ -4703,8 +4720,8 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                                 alloc.concat([
                                     alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
                                     alloc.reflow(r"but won't output any executable."),
-                                ])
-                            ]);
+                               ])
+                           ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),
@@ -4719,8 +4736,8 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                                 alloc.concat([
                                     alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
                                     alloc.reflow(r"but won't output any executable."),
-                                ])
-                            ]);
+                               ])
+                           ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),
@@ -4735,8 +4752,8 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                                 alloc.concat([
                                     alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
                                     alloc.reflow(r"but won't output any executable."),
-                                ])
-                            ]);
+                               ])
+                           ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),

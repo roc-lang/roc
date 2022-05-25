@@ -10,7 +10,7 @@ Some of these have `#` inside their name (`first#list`, `#lt` ..). This is a tri
 
 But we can use these values and some of these are necessary for implementing builtins. For example, `List.get` returns tags, and it is not easy for us to create tags when composing LLVM. What is easier however, is:
 - ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, Nat -> elem` in LLVM
-- ..writing `List elem, Nat -> Result elem [ OutOfBounds ]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Nat` index exists.
+- ..writing `List elem, Nat -> Result elem [OutOfBounds]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Nat` index exists.
 
 
 ### can/src/builtins.rs

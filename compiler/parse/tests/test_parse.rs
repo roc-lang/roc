@@ -66,7 +66,7 @@ mod test_parse {
                         ".",
                         stringify!($kind)
                     )),*,
-                ].iter().map(|t| *t).collect::<std::collections::HashSet<&str>>();
+               ].iter().map(|t| *t).collect::<std::collections::HashSet<&str>>();
 
                 fn list(dir: &std::path::Path) -> std::vec::Vec<String> {
                     std::fs::read_dir(dir).unwrap().map(|f| f.unwrap().file_name().to_str().unwrap().to_string()).collect::<std::vec::Vec<_>>()
@@ -424,9 +424,9 @@ mod test_parse {
     fn unicode_escape_in_middle() {
         assert_segments(r#""Hi, \u(123)!""#, |arena| {
             bumpalo::vec![in arena;
-                Plaintext("Hi, "),
-                Unicode(Loc::new(8, 11, "123")),
-                Plaintext("!")
+                 Plaintext("Hi, "),
+                 Unicode(Loc::new(8, 11, "123")),
+                 Plaintext("!")
             ]
         });
     }
@@ -435,8 +435,8 @@ mod test_parse {
     fn unicode_escape_in_front() {
         assert_segments(r#""\u(1234) is a unicode char""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Loc::new(4, 8, "1234")),
-                Plaintext(" is a unicode char")
+                 Unicode(Loc::new(4, 8, "1234")),
+                 Plaintext(" is a unicode char")
             ]
         });
     }
@@ -445,8 +445,8 @@ mod test_parse {
     fn unicode_escape_in_back() {
         assert_segments(r#""this is unicode: \u(1)""#, |arena| {
             bumpalo::vec![in arena;
-                Plaintext("this is unicode: "),
-                Unicode(Loc::new(21, 22, "1"))
+                 Plaintext("this is unicode: "),
+                 Unicode(Loc::new(21, 22, "1"))
             ]
         });
     }
@@ -455,11 +455,11 @@ mod test_parse {
     fn unicode_escape_multiple() {
         assert_segments(r#""\u(a1) this is \u(2Bcd) unicode \u(ef97)""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Loc::new(4, 6, "a1")),
-                Plaintext(" this is "),
-                Unicode(Loc::new(19, 23, "2Bcd")),
-                Plaintext(" unicode "),
-                Unicode(Loc::new(36, 40, "ef97"))
+                 Unicode(Loc::new(4, 6, "a1")),
+                 Plaintext(" this is "),
+                 Unicode(Loc::new(19, 23, "2Bcd")),
+                 Plaintext(" unicode "),
+                 Unicode(Loc::new(36, 40, "ef97"))
             ]
         });
     }
@@ -475,9 +475,9 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Plaintext("Hi, "),
-                Interpolated(Loc::new(7, 11, expr)),
-                Plaintext("!")
+                 Plaintext("Hi, "),
+                 Interpolated(Loc::new(7, 11, expr)),
+                 Plaintext("!")
             ]
         });
     }
@@ -491,8 +491,8 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Interpolated(Loc::new(3, 7, expr)),
-                Plaintext(", hi!")
+                 Interpolated(Loc::new(3, 7, expr)),
+                 Plaintext(", hi!")
             ]
         });
     }
@@ -506,8 +506,8 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Plaintext("Hello "),
-                Interpolated(Loc::new(9, 13, expr))
+                 Plaintext("Hello "),
+                 Interpolated(Loc::new(9, 13, expr))
             ]
         });
     }
@@ -526,11 +526,11 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Plaintext("Hi, "),
-                Interpolated(Loc::new(7, 11, expr1)),
-                Plaintext("! How is "),
-                Interpolated(Loc::new(23, 30, expr2)),
-                Plaintext(" going?")
+                 Plaintext("Hi, "),
+                 Interpolated(Loc::new(7, 11, expr1)),
+                 Plaintext("! How is "),
+                 Interpolated(Loc::new(23, 30, expr2)),
+                 Plaintext(" going?")
             ]
         });
     }
@@ -618,7 +618,7 @@ mod test_parse {
     //     let arguments = bumpalo::vec![in &arena;
     //         Located::new(0, 0, 6, 9, int_type),
     //         Located::new(0, 0, 11, 16, float_type)
-    //     ];
+    //    ];
     //     let return_type = Located::new(0, 0, 20, 24, bool_type);
     //     let fn_ann = TypeAnnotation::Function(&arguments, &return_type);
     //     let signature = Def::Annotation(
@@ -629,7 +629,7 @@ mod test_parse {
     //     let args = bumpalo::vec![in &arena;
     //     Located::new(1,1,7,8, Identifier("x")),
     //     Located::new(1,1,10,11, Underscore)
-    //     ];
+    //    ];
     //     let body = Located::new(1, 1, 15, 17, Num("42"));
 
     //     let closure = Expr::Closure(&args, &body);
@@ -678,7 +678,7 @@ mod test_parse {
     //     let tags = bumpalo::vec![in &arena;
     //         Located::new(0, 0, 8, 12, tag1),
     //         Located::new(0, 0, 14, 27, tag2)
-    //     ];
+    //    ];
     //     let loc_wildcard = Located::new(0, 0, 29, 30, TypeAnnotation::Wildcard);
     //     let applied_ann = TypeAnnotation::TagUnion {
     //         tags: tags.into_bump_slice(),
@@ -704,7 +704,7 @@ mod test_parse {
     //     assert_parses_to(
     //         indoc!(
     //             r#"
-    //             foo : [ True, Perhaps Thing ]*
+    //             foo : [True, Perhaps Thing]*
     //             foo = True
 
     //             42
@@ -732,7 +732,7 @@ mod test_parse {
     //     let tags = bumpalo::vec![in &arena;
     //         Located::new(0, 0, 8, 12, tag1),
     //         Located::new(0, 0, 14, 27, tag2)
-    //     ];
+    //    ];
     //     let applied_ann = TypeAnnotation::TagUnion {
     //         tags: tags.into_bump_slice(),
     //         ext: None,
@@ -757,7 +757,7 @@ mod test_parse {
     //     assert_parses_to(
     //         indoc!(
     //             r#"
-    //             foo : [ True, Perhaps Thing ]
+    //             foo : [True, Perhaps Thing]
     //             foo = True
 
     //             42

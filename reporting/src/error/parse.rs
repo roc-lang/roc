@@ -1087,7 +1087,7 @@ fn to_list_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
-                    alloc.parser_suggestion("[ 1, 2, 3 ]"),
+                    alloc.parser_suggestion("[1, 2, 3]"),
                     alloc.reflow(" or even just "),
                     alloc.parser_suggestion("[]"),
                     alloc.reflow(". Anything where there is an open and a close square bracket, "),
@@ -2426,7 +2426,7 @@ fn to_ttag_union_report<'a>(
                     alloc.region_with_subregion(lines.convert_region(surroundings), region),
                     alloc.concat([
                         alloc.reflow(r"Tag unions look like "),
-                        alloc.parser_suggestion("[ Many I64, None ],"),
+                        alloc.parser_suggestion("[Many I64, None],"),
                         alloc.reflow(" so I was expecting to see a tag name next."),
                     ]),
                 ]);
@@ -2498,7 +2498,7 @@ fn to_ttag_union_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
                     alloc.reflow(r"Tag unions look like "),
-                    alloc.parser_suggestion("[ Many I64, None ],"),
+                    alloc.parser_suggestion("[Many I64, None],"),
                     alloc.reflow(" so I was expecting to see a tag name next."),
                 ]),
                 note_for_tag_union_type_indent(alloc),
@@ -2637,7 +2637,7 @@ fn to_tinparens_report<'a>(
                         alloc.region_with_subregion(lines.convert_region(surroundings), region),
                         alloc.concat([
                             alloc.reflow(r"Tag unions look like "),
-                            alloc.parser_suggestion("[ Many I64, None ],"),
+                            alloc.parser_suggestion("[Many I64, None],"),
                             alloc.reflow(" so I was expecting to see a tag name next."),
                         ]),
                     ]);
@@ -2712,7 +2712,7 @@ fn to_tinparens_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
                     alloc.reflow(r"Tag unions look like "),
-                    alloc.parser_suggestion("[ Many I64, None ],"),
+                    alloc.parser_suggestion("[Many I64, None],"),
                     alloc.reflow(" so I was expecting to see a tag name next."),
                 ]),
                 note_for_tag_union_type_indent(alloc),
@@ -3157,7 +3157,7 @@ fn to_generates_with_report<'a>(
                     "I was expecting a type name, value name or function name next, like",
                 )]),
                 alloc
-                    .parser_suggestion("provides [ Animal, default, tame ]")
+                    .parser_suggestion("provides [Animal, default, tame]")
                     .indent(4),
             ]);
 
@@ -3182,7 +3182,7 @@ fn to_generates_with_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("with [ after, map ]")
+                    .parser_suggestion("with [after, map]")
                     .indent(4),
             ]);
 
@@ -3223,7 +3223,7 @@ fn to_provides_report<'a>(
                     "I was expecting a type name, value name or function name next, like",
                 )]),
                 alloc
-                    .parser_suggestion("provides [ Animal, default, tame ]")
+                    .parser_suggestion("provides [Animal, default, tame]")
                     .indent(4),
             ]);
 
@@ -3248,7 +3248,7 @@ fn to_provides_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("provides [ Animal, default, tame ]")
+                    .parser_suggestion("provides [Animal, default, tame]")
                     .indent(4),
             ]);
 
@@ -3288,7 +3288,7 @@ fn to_exposes_report<'a>(
                     "I was expecting a type name, value name or function name next, like",
                 )]),
                 alloc
-                    .parser_suggestion("exposes [ Animal, default, tame ]")
+                    .parser_suggestion("exposes [Animal, default, tame]")
                     .indent(4),
             ]);
 
@@ -3313,7 +3313,7 @@ fn to_exposes_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("exposes [ Animal, default, tame ]")
+                    .parser_suggestion("exposes [Animal, default, tame]")
                     .indent(4),
             ]);
 
@@ -3352,7 +3352,7 @@ fn to_imports_report<'a>(
                     "I was expecting a type name, value name or function name next, like ",
                 )]),
                 alloc
-                    .parser_suggestion("imports [ Animal, default, tame ]")
+                    .parser_suggestion("imports [Animal, default, tame]")
                     .indent(4),
             ]);
 
@@ -3377,7 +3377,7 @@ fn to_imports_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("imports [ Animal, default, tame ]")
+                    .parser_suggestion("imports [Animal, default, tame]")
                     .indent(4),
             ]);
 
@@ -3423,7 +3423,7 @@ fn to_imports_report<'a>(
                 alloc.reflow(r"I am partway through parsing a imports list, but I got stuck here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([alloc.reflow("I am expecting a comma or end of list, like")]),
-                alloc.parser_suggestion("imports [ Math, Util ]").indent(4),
+                alloc.parser_suggestion("imports [Shape, Vector]").indent(4),
             ]);
 
             Report {

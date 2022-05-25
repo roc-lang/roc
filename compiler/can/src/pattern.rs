@@ -2,8 +2,8 @@ use crate::annotation::freshen_opaque_def;
 use crate::env::Env;
 use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
 use crate::num::{
-    finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatBound, IntBound,
-    NumericBound, ParsedNumResult,
+    finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatBound, IntBound, NumBound,
+    ParsedNumResult,
 };
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
@@ -35,7 +35,7 @@ pub enum Pattern {
         // definition, which we then use during constraint generation. For example
         // suppose we have
         //
-        //   Id n := [ Id U64 n ]
+        //   Id n := [Id U64 n]
         //   strToBool : Str -> Bool
         //
         //   f = \@Id who -> strToBool who
@@ -45,7 +45,7 @@ pub enum Pattern {
         // the variable "n".
         // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
         // for the expression from the opaque definition. `type_arguments` is something like
-        // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
+        // [(n, fresh1)], and `specialized_def_type` becomes "[Id U64 fresh1]".
         specialized_def_type: Box<Type>,
         type_arguments: Vec<OptAbleVar>,
         lambda_set_variables: Vec<LambdaSet>,
@@ -55,7 +55,7 @@ pub enum Pattern {
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
     },
-    NumLiteral(Variable, Box<str>, IntValue, NumericBound),
+    NumLiteral(Variable, Box<str>, IntValue, NumBound),
     IntLiteral(Variable, Variable, Box<str>, IntValue, IntBound),
     FloatLiteral(Variable, Variable, Box<str>, f64, FloatBound),
     StrLiteral(Box<str>),
@@ -402,11 +402,15 @@ pub fn canonicalize_pattern<'a>(
                     malformed_pattern(env, problem, region)
                 }
                 Ok((int, bound)) => {
+                    use std::ops::Neg;
+
                     let sign_str = if is_negative { "-" } else { "" };
                     let int_str = format!("{}{}", sign_str, int).into_boxed_str();
                     let i = match int {
                         // Safety: this is fine because I128::MAX = |I128::MIN| - 1
-                        IntValue::I128(n) if is_negative => IntValue::I128(-n),
+                        IntValue::I128(n) if is_negative => {
+                            IntValue::I128(i128::from_ne_bytes(n).neg().to_ne_bytes())
+                        }
                         IntValue::I128(n) => IntValue::I128(n),
                         IntValue::U128(_) => unreachable!(),
                     };

@@ -130,6 +130,7 @@ pub enum Problem {
     },
     AbilityUsedAsType(Lowercase, Symbol, Region),
     NestedSpecialization(Symbol, Region),
+    IllegalDerive(Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -232,8 +233,8 @@ pub enum RuntimeError {
     /// ```roc
     /// app "hello"
     ///     packages { pf: "platform" }
-    ///     imports [ pf.Stdout]
-    ///     provides [ main ] to pf
+    ///     imports [pf.Stdout]
+    ///     provides [main] to pf
     ///
     /// main : Task.Task {} [] // Task isn't imported!
     /// main = Stdout.line "I'm a Roc application!"

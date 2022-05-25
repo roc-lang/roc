@@ -33,7 +33,7 @@ fn applied_tag_nothing_ir() {
     assert_evals_to!(
         indoc!(
             r#"
-                Maybe a : [ Just a, Nothing ]
+                Maybe a : [Just a, Nothing]
 
                 x : Maybe I64
                 x = Nothing
@@ -53,7 +53,7 @@ fn applied_tag_nothing() {
     assert_evals_to!(
         indoc!(
             r#"
-                Maybe a : [ Just a, Nothing ]
+                Maybe a : [Just a, Nothing]
 
                 x : Maybe I64
                 x = Nothing
@@ -73,7 +73,7 @@ fn applied_tag_just() {
     assert_evals_to!(
         indoc!(
             r#"
-                Maybe a : [ Just a, Nothing ]
+                Maybe a : [Just a, Nothing]
 
                 y : Maybe I64
                 y = Just 0x4
@@ -92,7 +92,7 @@ fn applied_tag_just_ir() {
     assert_evals_to!(
         indoc!(
             r#"
-                Maybe a : [ Just a, Nothing ]
+                Maybe a : [Just a, Nothing]
 
                 y : Maybe I64
                 y = Just 0x4
@@ -111,8 +111,8 @@ fn applied_tag_just_enum() {
     assert_evals_to!(
         indoc!(
             r#"
-                Fruit : [ Orange, Apple, Banana ]
-                Maybe a : [ Just a, Nothing ]
+                Fruit : [Orange, Apple, Banana]
+                Maybe a : [Just a, Nothing]
 
                 orange : Fruit
                 orange = Orange
@@ -184,7 +184,7 @@ fn basic_enum() {
     assert_evals_to!(
         indoc!(
             r#"
-                Fruit : [ Apple, Orange, Banana ]
+                Fruit : [Apple, Orange, Banana]
 
                 apple : Fruit
                 apple = Apple
@@ -206,7 +206,7 @@ fn basic_enum() {
 //        assert_evals_to!(
 //            indoc!(
 //                r#"
-//                LinkedList a : [ Cons a (LinkedList a), Nil ]
+//                LinkedList a : [Cons a (LinkedList a), Nil]
 //
 //                empty : LinkedList I64
 //                empty = Nil
@@ -225,7 +225,7 @@ fn basic_enum() {
 //        assert_evals_to!(
 //            indoc!(
 //                r#"
-//                LinkedList a : [ Cons a (LinkedList a), Nil ]
+//                LinkedList a : [Cons a (LinkedList a), Nil]
 //
 //                singleton : LinkedList I64
 //                singleton = Cons 0x1 Nil
@@ -244,7 +244,7 @@ fn basic_enum() {
 //        assert_evals_to!(
 //            indoc!(
 //                r#"
-//                LinkedList a : [ Cons a (LinkedList a), Nil ]
+//                LinkedList a : [Cons a (LinkedList a), Nil]
 //
 //                isEmpty : LinkedList a -> Bool
 //                isEmpty = \list ->
@@ -318,7 +318,7 @@ fn when_on_nothing() {
     assert_evals_to!(
         indoc!(
             r#"
-                x : [ Nothing, Just I64 ]
+                x : [Nothing, Just I64]
                 x = Nothing
 
                 when x is
@@ -337,7 +337,7 @@ fn when_on_just() {
     assert_evals_to!(
         indoc!(
             r#"
-                x : [ Nothing, Just I64 ]
+                x : [Nothing, Just I64]
                 x = Just 41
 
                 when x is
@@ -375,7 +375,7 @@ fn when_on_these() {
     assert_evals_to!(
         indoc!(
             r#"
-                These a b : [ This a, That b, These a b ]
+                These a b : [This a, That b, These a b]
 
                 x : These I64 I64
                 x = These 0x3 0x2
@@ -452,9 +452,9 @@ fn maybe_is_just_not_nested() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                Maybe a : [ Just a, Nothing ]
+                Maybe a : [Just a, Nothing]
 
                 isJust : Maybe a -> Bool
                 isJust = \list ->
@@ -477,7 +477,7 @@ fn maybe_is_just_nested() {
     assert_evals_to!(
         indoc!(
             r#"
-                Maybe a : [ Just a, Nothing ]
+                Maybe a : [Just a, Nothing]
 
                 isJust : Maybe a -> Bool
                 isJust = \list ->
@@ -499,7 +499,7 @@ fn nested_pattern_match() {
     assert_evals_to!(
         indoc!(
             r#"
-                Maybe a : [ Nothing, Just a ]
+                Maybe a : [Nothing, Just a]
 
                 x : Maybe (Maybe I64)
                 x = Just (Just 41)
@@ -712,7 +712,7 @@ fn when_on_enum() {
     assert_evals_to!(
         indoc!(
             r#"
-                Fruit : [ Apple, Orange, Banana ]
+                Fruit : [Apple, Orange, Banana]
 
                 apple : Fruit
                 apple = Apple
@@ -734,7 +734,7 @@ fn pattern_matching_unit() {
     assert_evals_to!(
         indoc!(
             r#"
-                Unit : [ Unit ]
+                Unit : [Unit]
 
                 f : Unit -> I64
                 f = \Unit -> 42
@@ -749,7 +749,7 @@ fn pattern_matching_unit() {
     assert_evals_to!(
         indoc!(
             r#"
-                Unit : [ Unit ]
+                Unit : [Unit]
 
                 x : Unit
                 x = Unit
@@ -793,7 +793,7 @@ fn one_element_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-                x : [ Pair I64 ]
+                x : [Pair I64]
                 x = Pair 2
 
                 x
@@ -810,9 +810,9 @@ fn nested_tag_union() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                Maybe a : [ Nothing, Just a ]
+                Maybe a : [Nothing, Just a]
 
                 x : Maybe (Maybe I64)
                 x = Just (Just 41)
@@ -831,7 +831,7 @@ fn unit_type() {
     assert_evals_to!(
         indoc!(
             r#"
-                Unit : [ Unit ]
+                Unit : [Unit]
 
                 v : Unit
                 v = Unit
@@ -868,7 +868,7 @@ fn join_point_when() {
         indoc!(
             r#"
             wrapper = \{} ->
-                x : [ Red, White, Blue ]
+                x : [Red, White, Blue]
                 x = Blue
 
                 y =
@@ -976,7 +976,7 @@ fn alignment_in_multi_tag_construction_two() {
     assert_evals_to!(
         indoc!(
             r"#
-                x : [ Three Bool I64, Empty ]
+                x : [Three Bool I64, Empty]
                 x = Three (1 == 1) 32
 
                 x
@@ -994,7 +994,7 @@ fn alignment_in_multi_tag_construction_three() {
     assert_evals_to!(
         indoc!(
             r"#
-                x : [ Three Bool [ Red, Green, Blue ] I64, Empty ]
+                x : [Three Bool [Red, Green, Blue] I64, Empty]
                 x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
 
                 x
@@ -1011,7 +1011,7 @@ fn alignment_in_multi_tag_pattern_match() {
     assert_evals_to!(
         indoc!(
             r"#
-                x : [ Three Bool I64, Empty ]
+                x : [Three Bool I64, Empty]
                 x = Three (1 == 1) 32
 
                 when x is
@@ -1029,7 +1029,7 @@ fn alignment_in_multi_tag_pattern_match() {
     assert_evals_to!(
         indoc!(
             r"#
-                x : [ Three Bool [ Red, Green, Blue ] I64, Empty ]
+                x : [Three Bool [Red, Green, Blue] I64, Empty]
                 x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
 
                 when x is
@@ -1052,7 +1052,7 @@ fn phantom_polymorphic() {
     assert_evals_to!(
         indoc!(
             r"#
-                Point coordinate : [ Point coordinate I64 I64 ]
+                Point coordinate : [Point coordinate I64 I64]
 
                 World := {}
 
@@ -1080,7 +1080,7 @@ fn phantom_polymorphic_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 Point coordinate : { coordinate : coordinate, x : I64, y : I64 }
 
@@ -1126,7 +1126,7 @@ fn nested_recursive_literal() {
     assert_evals_to!(
         indoc!(
             r"#
-                Expr : [ Add Expr Expr, Val I64, Var I64 ]
+                Expr : [Add Expr Expr, Val I64, Var I64]
 
                 e : Expr
                 e = Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))
@@ -1146,9 +1146,9 @@ fn newtype_wrapper() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                ConsList a : [ Nil, Cons a (ConsList a) ]
+                ConsList a : [Nil, Cons a (ConsList a)]
 
                 foo : ConsList I64 -> ConsList I64
                 foo = \t ->
@@ -1170,8 +1170,8 @@ fn applied_tag_function() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : List [ Foo Str ]
-            x = List.map [ "a", "b" ] Foo
+            x : List [Foo Str]
+            x = List.map ["a", "b"] Foo
 
             x
             "#
@@ -1188,7 +1188,7 @@ fn applied_tag_function_result() {
         indoc!(
             r#"
             x : List (Result Str *)
-            x = List.map [ "a", "b" ] Ok
+            x = List.map ["a", "b"] Ok
 
             List.keepOks x (\y -> y)
             "#
@@ -1205,10 +1205,10 @@ fn applied_tag_function_linked_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            ConsList a : [ Nil, Cons a (ConsList a) ]
+            ConsList a : [Nil, Cons a (ConsList a)]
 
             x : List (ConsList Str)
-            x = List.map2 [ "a", "b" ] [ Nil, Cons "c" Nil ] Cons
+            x = List.map2 ["a", "b"] [Nil, Cons "c" Nil] Cons
 
             when List.first x is
                 Ok (Cons "a" Nil) -> 1
@@ -1226,10 +1226,10 @@ fn applied_tag_function_pair() {
     assert_evals_to!(
         indoc!(
             r#"
-            Pair a : [ Pair a a ]
+            Pair a : [Pair a a]
 
             x : List (Pair Str)
-            x = List.map2 [ "a", "b" ] [ "c", "d" ] Pair
+            x = List.map2 ["a", "b"] ["c", "d"] Pair
 
             when List.first x is
                 Ok (Pair "a" "c") -> 1
@@ -1248,7 +1248,7 @@ fn tag_must_be_its_own_type() {
     assert_evals_to!(
         indoc!(
             r#"
-            z : [ A, B, C ]
+            z : [A, B, C]
             z = Z
 
             z
@@ -1266,7 +1266,7 @@ fn recursive_tag_union_into_flat_tag_union() {
     assert_evals_to!(
         indoc!(
             r#"
-            Item : [ Shallow [ L Str, R Str ], Deep Item ]
+            Item : [Shallow [L Str, R Str], Deep Item]
             i : Item
             i = Deep (Shallow (R "woo"))
             i
@@ -1301,7 +1301,7 @@ fn monomorphized_applied_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main =
                 a = A "abc"
@@ -1471,12 +1471,12 @@ fn issue_2445() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            none : [ None, Update a ]
+            none : [None, Update a]
             none = None
 
-            press : [ None, Update U8 ]
+            press : [None, Update U8]
             press = none
 
             main =
@@ -1496,7 +1496,7 @@ fn issue_2458() {
     assert_evals_to!(
         indoc!(
             r#"
-            Foo a : [ Blah (Bar a), Nothing {} ]
+            Foo a : [Blah (Bar a), Nothing {}]
             Bar a : Foo a
 
             v : Bar {}
@@ -1519,7 +1519,7 @@ fn issue_2458_deep_recursion_var() {
     assert_evals_to!(
         indoc!(
             r#"
-            Foo a : [ Blah (Result (Bar a) {}) ]
+            Foo a : [Blah (Result (Bar a) {})]
             Bar a : Foo a
 
             v : Bar {}
@@ -1540,9 +1540,9 @@ fn issue_1162() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+            RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
             balance : a, RBTree a -> RBTree a
             balance = \key, left ->
@@ -1576,7 +1576,7 @@ fn polymorphic_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : [ Y U8 ]*
+            x : [Y U8]*
             x = Y 3
             x
             "#
@@ -1608,11 +1608,11 @@ fn opaque_assign_to_symbol() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ out ] to "./platform"
+            app "test" provides [out] to "./platform"
 
             Variable := U8
 
-            fromUtf8 : U8 -> Result Variable [ InvalidVariableUtf8 ]
+            fromUtf8 : U8 -> Result Variable [InvalidVariableUtf8]
             fromUtf8 = \char ->
                 Ok (@Variable char)
 
@@ -1638,33 +1638,33 @@ fn issue_2777_default_branch_codegen() {
                 Red -> "red"
                 Yellow -> "yellow"
                 _ -> "unknown"
-            
+
             r1 = Red |> f1 |> Str.concat (f1 Orange)
-            
+
             f2 = \color ->
               when color is
                 Red -> "red"
                 Yellow -> "yellow"
                 Green -> "green"
                 _ -> "unknown"
-            
+
             r2 = Red |> f2 |> Str.concat (f2 Orange)
-            
+
             f3 = \color ->
               when color is
                 Red -> "red"
                 Yellow -> "yellow"
                 Green -> "green"
                 _ -> "unknown"
-            
+
             r3 = Orange |> f3 |> Str.concat (f3 Red)
-            
+
             f4 = \color ->
               when color is
                 Red -> "red"
                 Yellow | Gold -> "yellow"
                 _ -> "unknown"
-            
+
             r4 = Red |> f4 |> Str.concat (f4 Orange)
 
             [r1, r2, r3, r4]
@@ -1687,7 +1687,7 @@ fn issue_2900_unreachable_pattern() {
     assert_evals_to!(
         indoc!(
             r#"
-            foo : [ Foo, Bar, Baz, Blah ] -> Str
+            foo : [Foo, Bar, Baz, Blah] -> Str
             foo = \arg ->
                 when arg is
                     Foo -> "foo"

@@ -1,5 +1,5 @@
 interface Variable
-    exposes [ Variable, fromUtf8, toIndex, totalCount, toStr ]
+    exposes [Variable, fromUtf8, toIndex, totalCount, toStr]
     imports []
 
 # Variables in False can only be single letters. Thus, the valid variables are "a" to "z".
@@ -16,13 +16,13 @@ totalCount =
 
 toStr : Variable -> Str
 toStr = \@Variable char ->
-    when Str.fromUtf8 [ char ] is
+    when Str.fromUtf8 [char] is
         Ok str ->
             str
         _ ->
             "_"
 
-fromUtf8 : U8 -> Result Variable [ InvalidVariableUtf8 ]
+fromUtf8 : U8 -> Result Variable [InvalidVariableUtf8]
 fromUtf8 = \char ->
     if
         char

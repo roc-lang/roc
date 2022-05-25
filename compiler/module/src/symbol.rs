@@ -48,6 +48,8 @@ const SYMBOL_HAS_NICHE: () =
 #[cfg(debug_assertions)]
 const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
 
+pub const BUILTIN_ABILITIES: &[Symbol] = &[Symbol::ENCODE_ENCODING];
+
 /// In Debug builds only, Symbol has a name() method that lets
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
@@ -83,6 +85,10 @@ impl Symbol {
 
     pub const fn is_builtin(self) -> bool {
         self.module_id().is_builtin()
+    }
+
+    pub fn is_builtin_ability(self) -> bool {
+        BUILTIN_ABILITIES.contains(&self)
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
@@ -1148,9 +1154,9 @@ define_builtins! {
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
-        1 BOOL_FALSE: "False" imported // Bool.Bool = [ False, True ]
+        1 BOOL_FALSE: "False" imported // Bool.Bool = [False, True]
                                        // NB: not strictly needed; used for finding tag names in error suggestions
-        2 BOOL_TRUE: "True" imported // Bool.Bool = [ False, True ]
+        2 BOOL_TRUE: "True" imported // Bool.Bool = [False, True]
                                      // NB: not strictly needed; used for finding tag names in error suggestions
         3 BOOL_AND: "and"
         4 BOOL_OR: "or"
@@ -1258,9 +1264,9 @@ define_builtins! {
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
-        1 RESULT_OK: "Ok" imported // Result.Result a e = [ Ok a, Err e ]
+        1 RESULT_OK: "Ok" imported // Result.Result a e = [Ok a, Err e]
                                    // NB: not strictly needed; used for finding tag names in error suggestions
-        2 RESULT_ERR: "Err" imported // Result.Result a e = [ Ok a, Err e ]
+        2 RESULT_ERR: "Err" imported // Result.Result a e = [Ok a, Err e]
                                      // NB: not strictly needed; used for finding tag names in error suggestions
         3 RESULT_MAP: "map"
         4 RESULT_MAP_ERR: "mapErr"

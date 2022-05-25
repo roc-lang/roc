@@ -3,7 +3,7 @@ platform "multi-module"
     exposes []
     packages {}
     imports []
-    provides [ mainForHost ]
+    provides [mainForHost]
 
 mainForHost : Str
 mainForHost = main

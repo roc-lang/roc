@@ -124,7 +124,7 @@ use roc_std::{RocList, RocStr};
 //         RocList::from_slice(&[
 //             RocStr::from_slice(b"01234567789abcdefghi"),
 //             RocStr::from_slice(b"01234567789abcdefghi")
-//         ]),
+//        ]),
 //         RocList<RocStr>
 //     );
 
@@ -137,7 +137,7 @@ use roc_std::{RocList, RocStr};
 //         RocList::from_slice(&[
 //             RocStr::from_slice(b"01234567789abcdefghi "),
 //             RocStr::from_slice(b" 01234567789abcdefghi")
-//         ]),
+//        ]),
 //         RocList<RocStr>
 //     );
 // }
@@ -154,7 +154,7 @@ use roc_std::{RocList, RocStr};
 //             RocStr::from_slice(b"J"),
 //             RocStr::from_slice(b"J"),
 //             RocStr::from_slice(b"J")
-//         ]),
+//        ]),
 //         RocList<RocStr>
 //     );
 // }
@@ -227,7 +227,7 @@ use roc_std::{RocList, RocStr};
 //             RocStr::from_slice(b"1"),
 //             RocStr::from_slice(b"2"),
 //             RocStr::from_slice(b"")
-//         ]),
+//        ]),
 //         RocList<RocStr>
 //     );
 // }
@@ -246,7 +246,7 @@ use roc_std::{RocList, RocStr};
 //             RocStr::from_slice(b"3"),
 //             RocStr::from_slice(b"4"),
 //             RocStr::from_slice(b"")
-//         ]),
+//        ]),
 //         RocList<RocStr>
 //     );
 // }
@@ -287,7 +287,7 @@ fn small_str_zeroed_literal() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 createStr = \isForRealThisTime ->
                     if isForRealThisTime then
@@ -493,7 +493,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97 ] is
+//                     when Str.fromUtf8 [97] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
@@ -508,7 +508,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 98, 99, 0x7E ] is
+//                     when Str.fromUtf8 [97, 98, 99, 0x7E] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
@@ -523,7 +523,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 0xE2, 0x88, 0x86 ] is
+//                     when Str.fromUtf8 [0xE2, 0x88, 0x86] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
@@ -538,7 +538,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 0xE2, 0x88, 0x86, 0xC5, 0x93, 0xC2, 0xAC ] is
+//                     when Str.fromUtf8 [0xE2, 0x88, 0x86, 0xC5, 0x93, 0xC2, 0xAC] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
@@ -553,7 +553,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 0xF0, 0x9F, 0x92, 0x96 ] is
+//                     when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
@@ -568,7 +568,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 0xF0, 0x9F, 0x92, 0x96, 0xF0, 0x9F, 0xA4, 0xA0, 0xF0, 0x9F, 0x9A, 0x80 ] is
+//                     when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96, 0xF0, 0x9F, 0xA4, 0xA0, 0xF0, 0x9F, 0x9A, 0x80] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
@@ -583,7 +583,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 0xF0, 0x9F, 0x92, 0x96, 98, 0xE2, 0x88, 0x86 ] is
+//                     when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96, 98, 0xE2, 0x88, 0x86] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
@@ -598,7 +598,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 98, 0x80, 99 ] is
+//                     when Str.fromUtf8 [97, 98, 0x80, 99] is
 //                         Err (BadUtf8 InvalidStartByte byteIndex) ->
 //                             if byteIndex == 2 then
 //                                 "a"
@@ -617,7 +617,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 98, 99, 0xC2 ] is
+//                     when Str.fromUtf8 [97, 98, 99, 0xC2] is
 //                         Err (BadUtf8 UnexpectedEndOfSequence byteIndex) ->
 //                             if byteIndex == 3 then
 //                                 "a"
@@ -636,7 +636,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 98, 99, 0xC2, 0x00 ] is
+//                     when Str.fromUtf8 [97, 98, 99, 0xC2, 0x00] is
 //                         Err (BadUtf8 ExpectedContinuation byteIndex) ->
 //                             if byteIndex == 3 then
 //                                 "a"
@@ -655,7 +655,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 0xF0, 0x80, 0x80, 0x80 ] is
+//                     when Str.fromUtf8 [97, 0xF0, 0x80, 0x80, 0x80] is
 //                         Err (BadUtf8 OverlongEncoding byteIndex) ->
 //                             if byteIndex == 1 then
 //                                 "a"
@@ -674,7 +674,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 0xF4, 0x90, 0x80, 0x80 ] is
+//                     when Str.fromUtf8 [97, 0xF4, 0x90, 0x80, 0x80] is
 //                         Err (BadUtf8 CodepointTooLarge byteIndex) ->
 //                             if byteIndex == 1 then
 //                                 "a"
@@ -693,7 +693,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 98, 0xED, 0xA0, 0x80 ] is
+//                     when Str.fromUtf8 [97, 98, 0xED, 0xA0, 0x80] is
 //                         Err (BadUtf8 EncodesSurrogateHalf byteIndex) ->
 //                             if byteIndex == 2 then
 //                                 "a"
@@ -724,7 +724,7 @@ fn str_equality() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                 Expr : [ Add Expr Expr, Val I64, Var I64 ]
+//                 Expr : [Add Expr Expr, Val I64, Var I64]
 
 //                 expr : Expr
 //                 expr = Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))

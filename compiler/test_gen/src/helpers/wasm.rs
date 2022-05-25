@@ -20,7 +20,7 @@ const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
 const PANIC_MSG_NAME: &str = "panic_msg";
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
+    let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!

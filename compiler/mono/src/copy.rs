@@ -391,14 +391,14 @@ fn deep_copy_type_vars<'a>(
     // in one go (without looking at the UnificationTable) and clear the copy field
     let mut result = Vec::with_capacity_in(copied.len(), arena);
     for var in copied {
-        let descriptor = subs.get_ref_mut(var);
-
-        if let Some(copy) = descriptor.copy.into_variable() {
-            result.push((var, copy));
-            descriptor.copy = OptVariable::NONE;
-        } else {
-            debug_assert!(false, "{:?} marked as copied but it wasn't", var);
-        }
+        subs.modify(var, |descriptor| {
+            if let Some(copy) = descriptor.copy.into_variable() {
+                result.push((var, copy));
+                descriptor.copy = OptVariable::NONE;
+            } else {
+                debug_assert!(false, "{:?} marked as copied but it wasn't", var);
+            }
+        })
     }
 
     debug_assert!(result.contains(&(var, cloned_var)));
@@ -413,7 +413,7 @@ fn deep_copy_type_vars<'a>(
         // Always deal with the root, so that unified variables are treated the same.
         let var = subs.get_root_key_without_compacting(var);
 
-        let desc = subs.get_ref_mut(var);
+        let desc = subs.get(var);
 
         // Unlike `deep_copy_var` in solve, here we are cloning *all* flex and rigid vars.
         // So we only want to short-circuit if we've already done the cloning work for a particular
@@ -432,7 +432,7 @@ fn deep_copy_type_vars<'a>(
         };
 
         let copy = subs.fresh(copy_descriptor);
-        subs.get_ref_mut(var).copy = copy.into();
+        subs.set_copy(var, copy.into());
 
         visited.push(var);
 
@@ -456,7 +456,7 @@ fn deep_copy_type_vars<'a>(
                 let new_arguments = VariableSubsSlice::reserve_into_subs(subs, $slice.len());
                 for (target_index, var_index) in (new_arguments.indices()).zip($slice) {
                     let var = subs[var_index];
-                    let copy_var = subs.get_ref(var).copy.into_variable().unwrap_or(var);
+                    let copy_var = subs.get_copy(var).into_variable().unwrap_or(var);
                     subs.variables[target_index] = copy_var;
                 }
                 new_arguments
@@ -611,15 +611,10 @@ fn deep_copy_type_vars<'a>(
                 })
             }
 
-            RangedNumber(typ, range_vars) => {
+            RangedNumber(typ, range) => {
                 let new_typ = descend_var!(typ);
-                descend_slice!(range_vars);
 
-                perform_clone!({
-                    let new_range_vars = clone_var_slice!(range_vars);
-
-                    RangedNumber(new_typ, new_range_vars)
-                })
+                perform_clone!(RangedNumber(new_typ, range))
             }
             Error => Error,
         };

@@ -6,6 +6,6 @@ app "helloWorld"
     # packages { pf: "web-platform" } # See ./web-platform/README.md
     # packages { pf: "zig-platform" }
     imports []
-    provides [ main ] to pf
+    provides [main] to pf
 
 main = "Hello, World!\n"

@@ -3457,7 +3457,9 @@ dependencies = [
  "bumpalo",
  "clap 3.1.17",
  "cli_utils",
+ "ctor",
  "dircpy",
+ "indexmap",
  "indoc",
  "pretty_assertions",
  "roc_builtins",
@@ -3472,9 +3474,10 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "roc_types",
+ "strum",
+ "strum_macros",
  "target-lexicon",
  "tempfile",
- "ven_graph",
 ]
 
 [[package]]
@@ -3589,7 +3592,9 @@ dependencies = [
  "cli_utils",
  "const_format",
  "criterion 0.3.5 (git+https://github.com/Anton-4/criterion.rs)",
+ "errno",
  "indoc",
+ "libc",
  "mimalloc",
  "pretty_assertions",
  "roc_build",
@@ -4064,6 +4069,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_std",
  "roc_target",
  "roc_test_utils",
  "roc_types",
@@ -4110,6 +4116,8 @@ dependencies = [
 name = "roc_target"
 version = "0.1.0"
 dependencies = [
+ "strum",
+ "strum_macros",
  "target-lexicon",
 ]
 

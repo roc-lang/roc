@@ -876,11 +876,11 @@ fn type_to_variable<'a>(
             // for uniqueness types only: recursive aliases "introduce" an unbound uniqueness
             // attribute in the body, when
             //
-            // Peano : [ S Peano, Z ]
+            // Peano : [S Peano, Z]
             //
             // becomes
             //
-            // Peano : [ S (Attr u Peano), Z ]
+            // Peano : [S (Attr u Peano), Z]
             //
             // This `u` variable can be different between lists, so giving just one variable to
             // this type is incorrect.
@@ -1849,18 +1849,8 @@ fn deep_copy_var_help(
         }
 
         RangedNumber(typ, vars) => {
-            let mut new_vars = Vec::with_capacity(vars.len());
-
-            for var_index in vars {
-                let var = subs[var_index];
-                let new_var = deep_copy_var_help(subs, max_rank, pools, var);
-                new_vars.push(new_var);
-            }
-
-            let new_slice = VariableSubsSlice::insert_into_subs(subs, new_vars.drain(..));
-
             let new_real_type = deep_copy_var_help(subs, max_rank, pools, typ);
-            let new_content = RangedNumber(new_real_type, new_slice);
+            let new_content = RangedNumber(new_real_type, vars);
 
             subs.set(copy, make_descriptor(new_content));
 

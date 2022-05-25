@@ -9,6 +9,7 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_solve::ability::{UnderivableReason, Unfulfilled};
 use roc_solve::solve;
+use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
     AliasKind, Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt,
@@ -220,6 +221,39 @@ pub fn type_problem<'b>(
                 severity: Severity::RuntimeError,
             })
         }
+        DominatedDerive {
+            opaque,
+            ability,
+            derive_region,
+            impl_region,
+        } => {
+            let stack = [
+                alloc.concat([
+                    alloc.symbol_unqualified(opaque),
+                    alloc.reflow(" both derives and custom-implements "),
+                    alloc.symbol_qualified(ability),
+                    alloc.reflow(". We found the derive here:"),
+                ]),
+                alloc.region(lines.convert_region(derive_region)),
+                alloc.concat([
+                    alloc.reflow("and one custom implementation of "),
+                    alloc.symbol_qualified(ability),
+                    alloc.reflow(" here:"),
+                ]),
+                alloc.region(lines.convert_region(impl_region)),
+                alloc.concat([
+                    alloc.reflow("Derived and custom implementations can conflict, so one of them needs to be removed!"),
+                ]),
+                alloc.note("").append(alloc.reflow("We'll try to compile your program using the custom implementation first, and fall-back on the derived implementation if needed. Make sure to disambiguate which one you want!")),
+            ];
+
+            Some(Report {
+                title: "CONFLICTING DERIVE AND IMPLEMENTATION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity: Severity::Warning,
+            })
+        }
     }
 }
 
@@ -255,31 +289,12 @@ fn report_unfulfilled_ability<'a>(
 
             alloc.stack(stack)
         }
-        Unfulfilled::Underivable {
+        Unfulfilled::AdhocUnderivable {
             typ,
             ability,
             reason,
         } => {
-            let reason = match reason {
-                UnderivableReason::NotABuiltin => {
-                    Some(alloc.reflow("Only builtin abilities can have generated implementations!"))
-                }
-                UnderivableReason::SurfaceNotDerivable => underivable_hint(alloc, ability, &typ),
-                UnderivableReason::NestedNotDerivable(nested_typ) => {
-                    let hint = underivable_hint(alloc, ability, &nested_typ);
-                    let reason = alloc.stack(
-                        [
-                            alloc.reflow("In particular, an implementation for"),
-                            alloc.type_block(error_type_to_doc(alloc, nested_typ)),
-                            alloc.reflow("cannot be generated."),
-                        ]
-                        .into_iter()
-                        .chain(hint),
-                    );
-                    Some(reason)
-                }
-            };
-
+            let reason = report_underivable_reason(alloc, reason, ability, &typ);
             let stack = [
                 alloc.concat([
                     alloc.reflow("Roc can't generate an implementation of the "),
@@ -292,6 +307,63 @@ fn report_unfulfilled_ability<'a>(
             .chain(reason);
 
             alloc.stack(stack)
+        }
+        Unfulfilled::OpaqueUnderivable {
+            typ,
+            ability,
+            opaque,
+            derive_region,
+            reason,
+        } => {
+            let reason = report_underivable_reason(alloc, reason, ability, &typ);
+            let stack = [
+                alloc.concat([
+                    alloc.reflow("Roc can't derive an implementation of the "),
+                    alloc.symbol_qualified(ability),
+                    alloc.reflow(" for "),
+                    alloc.symbol_unqualified(opaque),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(lines.convert_region(derive_region)),
+            ]
+            .into_iter()
+            .chain(reason)
+            .chain(std::iter::once(alloc.tip().append(alloc.concat([
+                alloc.reflow("You can define a custom implementation of "),
+                alloc.symbol_qualified(ability),
+                alloc.reflow(" for "),
+                alloc.symbol_unqualified(opaque),
+                alloc.reflow("."),
+            ]))));
+
+            alloc.stack(stack)
+        }
+    }
+}
+
+fn report_underivable_reason<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    reason: UnderivableReason,
+    ability: Symbol,
+    typ: &ErrorType,
+) -> Option<RocDocBuilder<'a>> {
+    match reason {
+        UnderivableReason::NotABuiltin => {
+            Some(alloc.reflow("Only builtin abilities can have generated implementations!"))
+        }
+        UnderivableReason::SurfaceNotDerivable => underivable_hint(alloc, ability, typ),
+        UnderivableReason::NestedNotDerivable(nested_typ) => {
+            let hint = underivable_hint(alloc, ability, &nested_typ);
+            let reason = alloc.stack(
+                [
+                    alloc.reflow("In particular, an implementation for"),
+                    alloc.type_block(error_type_to_doc(alloc, nested_typ)),
+                    alloc.reflow("cannot be generated."),
+                ]
+                .into_iter()
+                .chain(hint),
+            );
+            Some(reason)
         }
     }
 }
@@ -1144,7 +1216,7 @@ fn to_expr_report<'b>(
                     region,
                     Some(expr_region),
                     alloc.concat([
-                        alloc.string(format!("The {} argument to ", ith)),
+                        alloc.string(format!("The {ith} argument to ")),
                         this_function.clone(),
                         alloc.text(" is not what I expect:"),
                     ]),
@@ -1152,7 +1224,7 @@ fn to_expr_report<'b>(
                     alloc.concat([
                         alloc.text("But "),
                         this_function,
-                        alloc.string(format!(" needs the {} argument to be:", ith)),
+                        alloc.string(format!(" needs the {ith} argument to be:")),
                     ]),
                     None,
                 )
@@ -3170,7 +3242,7 @@ mod report_text {
             };
 
             let starts =
-                std::iter::once(alloc.reflow("[ ")).chain(std::iter::repeat(alloc.reflow(", ")));
+                std::iter::once(alloc.reflow("[")).chain(std::iter::repeat(alloc.reflow(", ")));
 
             let entries_doc = alloc.concat(
                 entries
@@ -3179,7 +3251,7 @@ mod report_text {
                     .map(|(entry, start)| start.append(entry_to_doc(entry))),
             );
 
-            entries_doc.append(alloc.reflow(" ]")).append(ext_doc)
+            entries_doc.append(alloc.reflow("]")).append(ext_doc)
         }
     }
 
@@ -3209,7 +3281,7 @@ mod report_text {
             };
 
             let starts =
-                std::iter::once(alloc.reflow("[ ")).chain(std::iter::repeat(alloc.reflow(", ")));
+                std::iter::once(alloc.reflow("[")).chain(std::iter::repeat(alloc.reflow(", ")));
 
             let entries_doc = alloc.concat(
                 entries
@@ -3219,7 +3291,7 @@ mod report_text {
             );
 
             entries_doc
-                .append(alloc.reflow(" ]"))
+                .append(alloc.reflow("]"))
                 .append(ext_doc)
                 .append(alloc.text(" as "))
                 .append(rec_var)
@@ -3779,13 +3851,13 @@ fn pattern_to_doc_help<'b>(
     match pattern {
         Anything => alloc.text("_"),
         Literal(l) => match l {
-            Int(i) => alloc.text(i.to_string()),
-            U128(i) => alloc.text(i.to_string()),
+            Int(i) => alloc.text(i128::from_ne_bytes(i).to_string()),
+            U128(i) => alloc.text(u128::from_ne_bytes(i).to_string()),
             Bit(true) => alloc.text("True"),
             Bit(false) => alloc.text("False"),
             Byte(b) => alloc.text(b.to_string()),
             Float(f) => alloc.text(f.to_string()),
-            Decimal(d) => alloc.text(d.to_string()),
+            Decimal(d) => alloc.text(RocDec::from_ne_bytes(d).to_string()),
             Str(s) => alloc.string(s.into()),
         },
         Ctor(union, tag_id, args) => {
