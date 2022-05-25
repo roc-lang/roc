@@ -287,9 +287,8 @@ impl RocType {
             }
             RocType::Struct { fields, .. } => fields.iter().any(|field| match field {
                 Field::NonRecursive(_, type_id) => types.get(*type_id).has_enumeration(types),
-                // This has an enumeration iff there's an enumeration somewhere else.
-                // We don't want to recurse here, because that would recurse forever!
-                Field::Recursive(_, _) => false,
+                // If this struct has a recursive field, that means we're inside an enumeration!
+                Field::Recursive(_, _) => true,
             }),
             RocType::TransparentWrapper { content, .. } => {
                 types.get(*content).has_enumeration(types)
