@@ -4,7 +4,7 @@ use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PlatformHeader};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
-use roc_collections::soa::{EitherIndex, Slice};
+use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
@@ -334,7 +334,7 @@ pub enum ValueDef<'a> {
     Expect(&'a Loc<Expr<'a>>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Defs<'a> {
     pub tags: std::vec::Vec<EitherIndex<TypeDef<'a>, ValueDef<'a>>>,
     pub regions: std::vec::Vec<Region>,
@@ -346,11 +346,61 @@ pub struct Defs<'a> {
 }
 
 impl<'a> Defs<'a> {
-    pub fn defs(&self) -> impl Iterator<Item = Result<&TypeDef<'a>, &ValueDef<'a>>> {
+    pub fn defs<I>(&self) -> impl Iterator<Item = Result<&TypeDef<'a>, &ValueDef<'a>>> {
         self.tags.iter().map(|tag| match tag.split() {
             Ok(type_index) => Ok(&self.type_defs[type_index.index()]),
             Err(value_index) => Err(&self.value_defs[value_index.index()]),
         })
+    }
+
+    pub fn last(&self) -> Option<Result<&TypeDef<'a>, &ValueDef<'a>>> {
+        self.tags.last().map(|tag| match tag.split() {
+            Ok(type_index) => Ok(&self.type_defs[type_index.index()]),
+            Err(value_index) => Err(&self.value_defs[value_index.index()]),
+        })
+    }
+
+    /// NOTE assumes the def itself is pushed already!
+    fn push_def_help(
+        &mut self,
+        tag: EitherIndex<TypeDef<'a>, ValueDef<'a>>,
+        region: Region,
+        spaces_before: &[CommentOrNewline<'a>],
+        spaces_after: &[CommentOrNewline<'a>],
+    ) {
+        self.tags.push(tag);
+
+        self.regions.push(region);
+
+        let before = Slice::extend_new(&mut self.spaces, spaces_before.iter().copied());
+        self.space_before.push(before);
+
+        let after = Slice::extend_new(&mut self.spaces, spaces_after.iter().copied());
+        self.space_after.push(after);
+    }
+
+    pub fn push_value_def(
+        &mut self,
+        value_def: ValueDef<'a>,
+        region: Region,
+        spaces_before: &[CommentOrNewline<'a>],
+        spaces_after: &[CommentOrNewline<'a>],
+    ) {
+        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
+        let tag = EitherIndex::from_right(value_def_index);
+        self.push_def_help(tag, region, spaces_before, spaces_after)
+    }
+
+    pub fn push_type_def(
+        &mut self,
+        type_def: TypeDef<'a>,
+        region: Region,
+        spaces_before: &[CommentOrNewline<'a>],
+        spaces_after: &[CommentOrNewline<'a>],
+    ) {
+        let type_def_index = Index::push_new(&mut self.type_defs, type_def);
+        let tag = EitherIndex::from_left(type_def_index);
+        self.push_def_help(tag, region, spaces_before, spaces_after)
     }
 }
 
