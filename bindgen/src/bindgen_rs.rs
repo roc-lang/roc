@@ -616,6 +616,7 @@ fn add_tag_union(
         } else {
             format!("impl Copy for {name} {{}}\n\n")
         };
+
         let opt_impl = Some(format!("{opt_impl_prefix}impl Clone for {name}"));
         let mut buf = r#"fn clone(&self) -> Self {
         let mut answer = unsafe {
@@ -932,10 +933,16 @@ fn write_nullable_unwrapped(
 
     // The opaque struct for the tag union
     {
-        let derive = derive_str(types.get(id), types);
+        // These need their own Clone impl because they have
+        // a refcount to bump
+        let derive_extras = if types.get(id).has_float(types) {
+            ""
+        } else {
+            ", Eq, Ord, Hash"
+        };
         let body = format!(
-            r#"{derive}
-#[repr(C)]
+            r#"#[repr(C)]
+#[derive(PartialEq, PartialOrd{derive_extras})]
 pub struct {name} {{
     pointer: *mut {wrapped_payload_type_name},
 }}"#
@@ -1174,6 +1181,25 @@ pub struct {name} {{
     }}"#
             ),
         );
+    }
+
+    // The Clone impl for the tag union
+    {
+        // Note that these never have Copy because they always contain a pointer.
+        let opt_impl = Some(format!("impl Clone for {name}"));
+
+        // Recursive tag unions need a custom Clone which bumps refcount.
+        let body = r#"fn clone(&self) -> Self {
+        roc_std::ReferenceCount::increment(self);
+
+        Self {
+            pointer: self.pointer
+        }
+    }
+"#
+        .to_string();
+
+        add_decl(impls, opt_impl, architecture, body);
     }
 
     // The Drop impl for the tag union
