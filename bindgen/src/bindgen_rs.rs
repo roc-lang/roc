@@ -409,7 +409,7 @@ fn add_tag_union(
                     | RocType::TransparentWrapper { .. } => {
                         (payload_type_name.clone(), get_payload)
                     }
-                    RocType::Struct { name, fields } => {
+                    RocType::Struct { .. } => {
                         todo!();
                     }
                 };
@@ -956,7 +956,7 @@ fn add_nullable_unwrapped(
     null_tag: &str,
     non_null_tag: &str,
     non_null_payload: TypeId,
-    null_represents_first_tag: bool,
+    _null_represents_first_tag: bool, // TODO use this!
     types: &Types,
     impls: &mut Impls,
 ) {

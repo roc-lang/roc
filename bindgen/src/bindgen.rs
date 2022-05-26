@@ -418,7 +418,7 @@ fn add_tag_union(
                     // e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
                     NullableUnwrapped {
                         nullable_id: null_represents_first_tag,
-                        other_fields,
+                        other_fields: _, // TODO use this!
                     } => {
                         // NullableUnwrapped tag unions should always have exactly 2 tags.
                         debug_assert_eq!(tags.len(), 2);
