@@ -233,9 +233,7 @@ fn add_tag_union(
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
     let discriminant_name = add_discriminant(name, architecture, tag_names, types, impls);
     let typ = types.get(type_id);
-    // TODO also do this for other targets. Remember, these can change based on more
-    // than just pointer width; e.g. on wasm, the alignments of U16 and U8 are both 4!
-    let target_info = TargetInfo::from(&target_lexicon::Triple::host());
+    let target_info = architecture.into();
     let discriminant_offset = RocTagUnion::discriminant_offset(tags, types, target_info);
     let size = typ.size(types, target_info);
 
