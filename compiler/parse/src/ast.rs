@@ -346,7 +346,7 @@ pub struct Defs<'a> {
 }
 
 impl<'a> Defs<'a> {
-    pub fn defs<I>(&self) -> impl Iterator<Item = Result<&TypeDef<'a>, &ValueDef<'a>>> {
+    pub fn defs(&self) -> impl Iterator<Item = Result<&TypeDef<'a>, &ValueDef<'a>>> {
         self.tags.iter().map(|tag| match tag.split() {
             Ok(type_index) => Ok(&self.type_defs[type_index.index()]),
             Err(value_index) => Err(&self.value_defs[value_index.index()]),

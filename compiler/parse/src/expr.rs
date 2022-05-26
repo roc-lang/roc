@@ -17,6 +17,7 @@ use crate::state::State;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_collections::soa::Slice;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
@@ -924,78 +925,94 @@ fn parse_toplevel_defs_end<'a>(
                         let region = Region::span_across(&loc_pattern.region, &loc_def_expr.region);
 
                         if spaces_before_current.len() <= 1 {
+                            let comment = match spaces_before_current.get(0) {
+                                Some(CommentOrNewline::LineComment(s)) => Some(*s),
+                                Some(CommentOrNewline::DocComment(s)) => Some(*s),
+                                _ => None,
+                            };
+
                             match defs.last() {
-                                Some((
-                                    before_ann_spaces,
-                                    Def::Value(ValueDef::Annotation(ann_pattern, ann_type)),
-                                )) => {
-                                    return append_body_definition_help(
-                                        arena,
-                                        defs,
+                                Some(Err(ValueDef::Annotation(ann_pattern, ann_type))) => {
+                                    // join this body with the preceding annotation
+
+                                    let value_def = ValueDef::AnnotatedBody {
+                                        ann_pattern: arena.alloc(*ann_pattern),
+                                        ann_type: arena.alloc(*ann_type),
+                                        comment,
+                                        body_pattern: arena.alloc(loc_pattern),
+                                        body_expr: &*arena.alloc(loc_def_expr),
+                                    };
+
+                                    let region = Region::span_across(&ann_pattern.region, &region);
+
+                                    defs.push_value_def(
+                                        value_def,
                                         region,
-                                        before_ann_spaces,
                                         spaces_before_current,
-                                        loc_pattern,
-                                        loc_def_expr,
-                                        ann_pattern,
-                                        ann_type,
-                                    );
+                                        &[],
+                                    )
                                 }
-                                Some((
-                                    before_ann_spaces,
-                                    Def::Type(TypeDef::Alias {
-                                        header,
-                                        ann: ann_type,
-                                    }),
-                                )) => {
+                                Some(Ok(TypeDef::Alias {
+                                    header,
+                                    ann: ann_type,
+                                })) => {
                                     // This is a case like
                                     //   UserId x : [UserId Int]
                                     //   UserId x = UserId 42
                                     // We optimistically parsed the first line as an alias; we now turn it
                                     // into an annotation.
+
                                     let loc_name =
                                         arena.alloc(header.name.map(|x| Pattern::Tag(x)));
                                     let ann_pattern = Pattern::Apply(loc_name, header.vars);
+
                                     let vars_region =
                                         Region::across_all(header.vars.iter().map(|v| &v.region));
                                     let region_ann_pattern =
                                         Region::span_across(&loc_name.region, &vars_region);
                                     let loc_ann_pattern = Loc::at(region_ann_pattern, ann_pattern);
 
-                                    return append_body_definition_help(
-                                        arena,
-                                        defs,
+                                    let value_def = ValueDef::AnnotatedBody {
+                                        ann_pattern: arena.alloc(loc_ann_pattern),
+                                        ann_type: arena.alloc(*ann_type),
+                                        comment,
+                                        body_pattern: arena.alloc(loc_pattern),
+                                        body_expr: &*arena.alloc(loc_def_expr),
+                                    };
+
+                                    let region = Region::span_across(&header.name.region, &region);
+
+                                    defs.push_value_def(
+                                        value_def,
                                         region,
-                                        before_ann_spaces,
                                         spaces_before_current,
-                                        loc_pattern,
-                                        loc_def_expr,
-                                        arena.alloc(loc_ann_pattern),
-                                        ann_type,
-                                    );
+                                        &[],
+                                    )
                                 }
                                 _ => {
-                                    defs.extend(last);
+                                    // the previous and current def can't be joined up
+                                    let value_def = ValueDef::Body(
+                                        arena.alloc(loc_pattern),
+                                        &*arena.alloc(loc_def_expr),
+                                    );
+
+                                    defs.push_value_def(
+                                        value_def,
+                                        region,
+                                        spaces_before_current,
+                                        &[],
+                                    )
                                 }
                             }
-                        }
-
-                        // the previous and current def can't be joined up
-                        let mut loc_def = Loc::at(
-                            region,
-                            Def::Value(ValueDef::Body(
+                        } else {
+                            // the previous and current def can't be joined up
+                            let value_def = ValueDef::Body(
                                 arena.alloc(loc_pattern),
                                 &*arena.alloc(loc_def_expr),
-                            )),
-                        );
+                            );
 
-                        if !spaces_before_current.is_empty() {
-                            loc_def = arena
-                                .alloc(loc_def.value)
-                                .with_spaces_before(spaces_before_current, loc_def.region);
+                            defs.push_value_def(value_def, region, spaces_before_current, &[])
                         }
-
-                        defs.push(arena.alloc(loc_def));
                     };
 
                     parse_toplevel_defs_end(options, column, defs, arena, state)
@@ -2290,11 +2307,22 @@ pub fn toplevel_defs<'a>(min_indent: u32) -> impl Parser<'a, Defs<'a>, EExpr<'a>
 
         let output = Defs::default();
 
-        let (_, output, state) =
+        let (_, mut output, state) =
             parse_toplevel_defs_end(options, start_column, output, arena, state)?;
 
         let (_, final_space, state) =
             space0_e(start_column, EExpr::IndentEnd).parse(arena, state)?;
+
+        // add surrounding whitespace
+        let before = Slice::extend_new(&mut output.spaces, initial_space.iter().copied());
+        let after = Slice::extend_new(&mut output.spaces, final_space.iter().copied());
+
+        debug_assert!(output.space_before[0].is_empty());
+        output.space_before[0] = before;
+
+        let last = output.tags.len() - 1;
+        debug_assert!(output.space_after[last].is_empty() || after.is_empty());
+        output.space_after[last] = after;
 
         Ok((MadeProgress, output, state))
     }
