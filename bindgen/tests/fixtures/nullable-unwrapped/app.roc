@@ -3,4 +3,4 @@ app "app"
     imports []
     provides [main] to pf
 
-main = Nil
+main = Cons "World!" (Cons "Hello " Nil)
