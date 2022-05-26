@@ -18,7 +18,7 @@ interface Unicode.Scalar
         ]
 
 ## A [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value)
-Scalar : [ @Scalar U32 ]
+Scalar := U32
 
 toStr : Scalar -> Str
 toStr = \@Scalar u32

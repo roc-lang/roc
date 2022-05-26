@@ -3,7 +3,7 @@ name = "roc_reporting"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 roc_collections = { path = "../compiler/collections" }
@@ -15,7 +15,7 @@ roc_problem = { path = "../compiler/problem" }
 roc_types = { path = "../compiler/types" }
 roc_can = { path = "../compiler/can" }
 roc_solve = { path = "../compiler/solve" }
-roc_mono = { path = "../compiler/mono" }
+roc_std = { path = "../roc_std" }
 ven_pretty = { path = "../vendor/pretty" }
 distance = "0.4.0"
 bumpalo = { version = "3.8.0", features = ["collections"] }
@@ -23,6 +23,7 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 [dev-dependencies]
 roc_constrain = { path = "../compiler/constrain" }
 roc_builtins = { path = "../compiler/builtins" }
+roc_load = { path = "../compiler/load" }
 roc_problem = { path = "../compiler/problem" }
 roc_parse = { path = "../compiler/parse" }
 roc_target = { path = "../compiler/roc_target" }

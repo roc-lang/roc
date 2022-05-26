@@ -7,6 +7,7 @@ use roc_can::operator::desugar_def;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
+use roc_module::symbol::IdentIdsByModule;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_parse::pattern::PatternType;
@@ -48,7 +49,7 @@ pub fn canonicalize_module_defs<'a>(
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
-    dep_idents: MutMap<ModuleId, IdentIds>,
+    dep_idents: IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     mut exposed_symbols: MutSet<Symbol>,
@@ -100,7 +101,7 @@ pub fn canonicalize_module_defs<'a>(
 
     // Exposed values are treated like defs that appear before any others, e.g.
     //
-    // imports [ Foo.{ bar, baz } ]
+    // imports [Foo.{ bar, baz }]
     //
     // ...is basically the same as if we'd added these extra defs at the start of the module:
     //
@@ -120,7 +121,7 @@ pub fn canonicalize_module_defs<'a>(
                 Ok(()) => {
                     // Add an entry to exposed_imports using the current module's name
                     // as the key; e.g. if this is the Foo module and we have
-                    // exposes [ Bar.{ baz } ] then insert Foo.baz as the key, so when
+                    // exposes [Bar.{ baz }] then insert Foo.baz as the key, so when
                     // anything references `baz` in this Foo module, it will resolve to Bar.baz.
                     can_exposed_imports.insert(symbol, expr_var);
 

@@ -20,15 +20,6 @@ fn zig_executable() -> String {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
-    // When we build on Netlify, zig is not installed (but also not used,
-    // since all we're doing is generating docs), so we can skip the steps
-    // that require having zig installed.
-    if env::var_os("NO_ZIG_INSTALLED").is_some() {
-        // We still need to do the other things before this point, because
-        // setting the env vars is needed for other parts of the build.
-        return;
-    }
-
     // "." is relative to where "build.rs" is
     // dunce can be removed once ziglang/zig#5109 is fixed
     let build_script_dir_path = dunce::canonicalize(Path::new(".")).unwrap();
@@ -36,23 +27,15 @@ fn main() {
 
     // LLVM .bc FILES
 
-    generate_bc_file(&bitcode_path, &build_script_dir_path, "ir", "builtins-host");
+    generate_bc_file(&bitcode_path, "ir", "builtins-host");
 
     if !DEBUG {
-        generate_bc_file(
-            &bitcode_path,
-            &build_script_dir_path,
-            "ir-wasm32",
-            "builtins-wasm32",
-        );
+        generate_bc_file(&bitcode_path, "ir-wasm32", "builtins-wasm32");
     }
 
-    generate_bc_file(
-        &bitcode_path,
-        &build_script_dir_path,
-        "ir-i386",
-        "builtins-i386",
-    );
+    generate_bc_file(&bitcode_path, "ir-i386", "builtins-i386");
+
+    generate_bc_file(&bitcode_path, "ir-x86_64", "builtins-x86_64");
 
     // OBJECT FILES
     #[cfg(windows)]
@@ -115,38 +98,31 @@ fn generate_object_file(
         println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
 
         // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
-        fs::copy(src_obj, dest_obj).expect("Failed to copy object file.");
+        fs::copy(src_obj, dest_obj).unwrap_or_else(|err| {
+            panic!(
+                "Failed to copy object file {} to {}: {:?}",
+                src_obj, dest_obj, err
+            );
+        });
     }
 }
 
-fn generate_bc_file(
-    bitcode_path: &Path,
-    build_script_dir_path: &Path,
-    zig_object: &str,
-    file_name: &str,
-) {
+fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     let mut ll_path = bitcode_path.join(file_name);
     ll_path.set_extension("ll");
     let dest_ir_host = ll_path.to_str().expect("Invalid dest ir path");
 
     println!("Compiling host ir to: {}", dest_ir_host);
 
+    let mut bc_path = bitcode_path.join(file_name);
+    bc_path.set_extension("bc");
+    let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
+    println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
+
     run_command(
         &bitcode_path,
         &zig_executable(),
         &["build", zig_object, "-Drelease=true"],
-    );
-
-    let mut bc_path = bitcode_path.join(file_name);
-    bc_path.set_extension("bc");
-    let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
-
-    println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
-
-    run_command(
-        &build_script_dir_path,
-        "llvm-as",
-        &[dest_ir_host, "-o", dest_bc_64bit],
     );
 }
 

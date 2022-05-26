@@ -1,6 +1,0 @@
-MalformedIdent(
-    "@One.Two.Whee",
-    BadPrivateTag(
-        @4,
-    ),
-)

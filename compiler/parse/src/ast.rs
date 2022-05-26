@@ -188,11 +188,9 @@ pub enum Expr<'a> {
     Underscore(&'a str),
 
     // Tags
-    GlobalTag(&'a str),
-    PrivateTag(&'a str),
+    Tag(&'a str),
 
-    // Reference to an opaque type, e.g. $Opaq
-    // TODO(opaques): $->@ in the above comment
+    // Reference to an opaque type, e.g. @Opaq
     OpaqueRef(&'a str),
 
     // Pattern Matching
@@ -278,6 +276,12 @@ pub struct AbilityMember<'a> {
     pub typ: Loc<TypeAnnotation<'a>>,
 }
 
+impl AbilityMember<'_> {
+    pub fn region(&self) -> Region {
+        Region::across_all([self.name.region, self.typ.region].iter())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TypeDef<'a> {
     /// A type alias. This is like a standalone annotation, except the pattern
@@ -293,6 +297,7 @@ pub enum TypeDef<'a> {
     Opaque {
         header: TypeHeader<'a>,
         typ: Loc<TypeAnnotation<'a>>,
+        derived: Option<Loc<Derived<'a>>>,
     },
 
     /// An ability definition. E.g.
@@ -376,11 +381,41 @@ impl<'a> From<ValueDef<'a>> for Def<'a> {
     }
 }
 
+/// Should always be a zero-argument `Apply`; we'll check this in canonicalization
+pub type AbilityName<'a> = Loc<TypeAnnotation<'a>>;
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct HasClause<'a> {
     pub var: Loc<Spaced<'a, &'a str>>,
-    // Should always be a zero-argument `Apply`; we'll check this in canonicalization
-    pub ability: Loc<TypeAnnotation<'a>>,
+    pub ability: AbilityName<'a>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum Derived<'a> {
+    /// `has [Eq, Hash]`
+    Has(Collection<'a, AbilityName<'a>>),
+
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a Derived<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Derived<'a>, &'a [CommentOrNewline<'a>]),
+}
+
+impl Derived<'_> {
+    pub fn collection(&self) -> &Collection<AbilityName> {
+        let mut it = self;
+        loop {
+            match it {
+                Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => {
+                    it = inner;
+                }
+                Self::Has(collection) => return collection,
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.collection().is_empty()
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -394,7 +429,7 @@ pub enum TypeAnnotation<'a> {
     /// A bound type variable, e.g. `a` in `(a -> a)`
     BoundVariable(&'a str),
 
-    /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
+    /// Inline type alias, e.g. `as List a` in `[Cons a (List a), Nil] as List a`
     As(
         &'a Loc<TypeAnnotation<'a>>,
         &'a [CommentOrNewline<'a>],
@@ -410,8 +445,8 @@ pub enum TypeAnnotation<'a> {
 
     /// A tag union, e.g. `[
     TagUnion {
-        /// The row type variable in an open tag union, e.g. the `a` in `[ Foo, Bar ]a`.
-        /// This is None if it's a closed tag union like `[ Foo, Bar]`.
+        /// The row type variable in an open tag union, e.g. the `a` in `[Foo, Bar]a`.
+        /// This is None if it's a closed tag union like `[Foo, Bar]`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
         tags: Collection<'a, Loc<Tag<'a>>>,
     },
@@ -435,12 +470,7 @@ pub enum TypeAnnotation<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tag<'a> {
-    Global {
-        name: Loc<&'a str>,
-        args: &'a [Loc<TypeAnnotation<'a>>],
-    },
-
-    Private {
+    Apply {
         name: Loc<&'a str>,
         args: &'a [Loc<TypeAnnotation<'a>>],
     },
@@ -516,8 +546,7 @@ pub enum Pattern<'a> {
     // Identifier
     Identifier(&'a str),
 
-    GlobalTag(&'a str),
-    PrivateTag(&'a str),
+    Tag(&'a str),
 
     OpaqueRef(&'a str),
 
@@ -572,8 +601,7 @@ pub enum Base {
 impl<'a> Pattern<'a> {
     pub fn from_ident(arena: &'a Bump, ident: Ident<'a>) -> Pattern<'a> {
         match ident {
-            Ident::GlobalTag(string) => Pattern::GlobalTag(string),
-            Ident::PrivateTag(string) => Pattern::PrivateTag(string),
+            Ident::Tag(string) => Pattern::Tag(string),
             Ident::OpaqueRef(string) => Pattern::OpaqueRef(string),
             Ident::Access { module_name, parts } => {
                 if parts.len() == 1 {
@@ -622,8 +650,7 @@ impl<'a> Pattern<'a> {
 
         match (self, other) {
             (Identifier(x), Identifier(y)) => x == y,
-            (GlobalTag(x), GlobalTag(y)) => x == y,
-            (PrivateTag(x), PrivateTag(y)) => x == y,
+            (Tag(x), Tag(y)) => x == y,
             (Apply(constructor_x, args_x), Apply(constructor_y, args_y)) => {
                 let equivalent_args = args_x
                     .iter()
@@ -705,7 +732,7 @@ impl<'a, T> Collection<'a, T> {
         }
     }
 
-    pub fn with_items(items: &'a [T]) -> Collection<'a, T> {
+    pub const fn with_items(items: &'a [T]) -> Collection<'a, T> {
         Collection {
             items,
             final_comments: None,
@@ -905,6 +932,15 @@ impl<'a> Spaceable<'a> for Has<'a> {
     }
 }
 
+impl<'a> Spaceable<'a> for Derived<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Derived::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        Derived::SpaceAfter(self, spaces)
+    }
+}
+
 impl<'a> Expr<'a> {
     pub fn loc_ref(&'a self, region: Region) -> Loc<&'a Self> {
         Loc {
@@ -921,7 +957,7 @@ impl<'a> Expr<'a> {
     }
 
     pub fn is_tag(&self) -> bool {
-        matches!(self, Expr::GlobalTag(_) | Expr::PrivateTag(_))
+        matches!(self, Expr::Tag(_))
     }
 }
 
@@ -987,6 +1023,7 @@ impl_extract_spaces!(Expr);
 impl_extract_spaces!(Pattern);
 impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
+impl_extract_spaces!(TypeAnnotation);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;

@@ -22,7 +22,7 @@ pub trait Wasm32Result {
     fn insert_wrapper<'a>(
         arena: &'a Bump,
         module: &mut WasmModule<'a>,
-        wrapper_name: &str,
+        wrapper_name: &'static str,
         main_function_index: u32,
     ) {
         insert_wrapper_metadata(arena, module, wrapper_name);
@@ -38,7 +38,7 @@ pub trait Wasm32Result {
 pub fn insert_wrapper_for_layout<'a>(
     arena: &'a Bump,
     module: &mut WasmModule<'a>,
-    wrapper_name: &str,
+    wrapper_name: &'static str,
     main_fn_index: u32,
     layout: &Layout<'a>,
 ) {
@@ -84,8 +84,12 @@ pub fn insert_wrapper_for_layout<'a>(
     }
 }
 
-fn insert_wrapper_metadata<'a>(arena: &'a Bump, module: &mut WasmModule<'a>, wrapper_name: &str) {
-    let index = module.import.function_count
+fn insert_wrapper_metadata<'a>(
+    arena: &'a Bump,
+    module: &mut WasmModule<'a>,
+    wrapper_name: &'static str,
+) {
+    let index = (module.import.fn_signatures.len() as u32)
         + module.code.preloaded_count
         + module.code.code_builders.len() as u32;
 
@@ -95,7 +99,7 @@ fn insert_wrapper_metadata<'a>(arena: &'a Bump, module: &mut WasmModule<'a>, wra
     });
 
     module.export.append(Export {
-        name: arena.alloc_slice_copy(wrapper_name.as_bytes()),
+        name: wrapper_name,
         ty: ExportType::Func,
         index,
     });
@@ -103,7 +107,7 @@ fn insert_wrapper_metadata<'a>(arena: &'a Bump, module: &mut WasmModule<'a>, wra
     let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
         flags: 0,
         index,
-        name: wrapper_name.to_string(),
+        name: wrapper_name,
     });
     module.linking.symbol_table.push(linker_symbol);
 }

@@ -1,14 +1,14 @@
 interface WithBuiltins
-    exposes [ floatTest, divisionFn, divisionTest, intTest, constantNum, fromDep2, divDep1ByDep2 ]
-    imports [ Dep1, Dep2.{ two } ]
+    exposes [floatTest, divisionFn, divisionTest, intTest, constantNum, fromDep2, divDep1ByDep2]
+    imports [Dep1, Dep2.{ two }]
 
-floatTest = Num.maxFloat
+floatTest = Num.maxF64
 
 divisionFn = Num.div
 
 x = 5.0
 
-divisionTest = Num.maxFloat / x
+divisionTest = Num.maxF64 / x
 
 intTest = Num.maxI64
 

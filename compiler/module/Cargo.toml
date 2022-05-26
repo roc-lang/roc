@@ -2,7 +2,7 @@
 name = "roc_module"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
-edition = "2018"
+edition = "2021"
 license = "UPL-1.0"
 
 [dependencies]
@@ -14,4 +14,3 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 lazy_static = "1.4.0"
 static_assertions = "1.1.0"
 snafu = { version = "0.6.10", features = ["backtraces"] }
-arrayvec = "0.7.2"

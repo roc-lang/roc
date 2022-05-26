@@ -3,68 +3,88 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-21.11";
-    nixpkgs-unstable = { url = "github:NixOS/nixpkgs/nixpkgs-unstable"; };
-    # zig = { url = "github:roarkanize/zig-overlay"; };
+    rust-overlay.url = "github:oxalica/rust-overlay"; # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
+    zig.url = "github:roarkanize/zig-overlay"; # using an overlay allows for quick updates after zig releases
+    flake-utils.url = "github:numtide/flake-utils"; # to easily make configs for all architectures
   };
 
-  outputs = { self, nixpkgs, nixpkgs-unstable }:
-    let
-      pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      unstable-pkgs = nixpkgs-unstable.legacyPackages.x86_64-linux;
-      llvmPkgs = pkgs.llvmPackages_12;
+  outputs = { self, nixpkgs, rust-overlay, zig, flake-utils }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        overlays = [ (import rust-overlay) ];
+        pkgs = import nixpkgs { 
+          inherit system overlays;
+        };
+        llvmPkgs = pkgs.llvmPackages_13;
 
-      linuxInputs = with pkgs; [
-        valgrind # used in cli tests, see cli/tests/cli_run.rs
-        vulkan-headers
-        vulkan-loader
-        vulkan-tools
-        vulkan-validation-layers
-        xorg.libX11
-        xorg.libXcursor
-        xorg.libXrandr
-        xorg.libXi
-        xorg.libxcb
-        alsa-lib
-      ];
+        # get current working directory
+        cwd = builtins.toString ./.;
+        rust = pkgs.rust-bin.fromRustupToolchainFile "${cwd}/rust-toolchain.toml";
 
-      sharedInputs = (with pkgs; [
-        # build libraries
-        cmake
-        git
-        python3
-        llvmPkgs.llvm.dev
-        llvmPkgs.clang
-        libxkbcommon
-        pkg-config
-        zig # roc builtins are implemented in zig, see compiler/builtins/bitcode/
+        linuxInputs = with pkgs;
+          lib.optionals stdenv.isLinux [
+            valgrind # used in cli tests, see cli/tests/cli_run.rs
+            vulkan-headers
+            vulkan-loader
+            vulkan-tools
+            vulkan-validation-layers
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXrandr
+            xorg.libXi
+            xorg.libxcb
+            alsa-lib
+          ];
 
-        # lib deps
-        libffi
-        libxml2
-        ncurses
-        zlib
-        libiconv
+        darwinInputs = with pkgs;
+          lib.optionals stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks; [
+            AppKit
+            CoreFoundation
+            CoreServices
+            CoreVideo
+            Foundation
+            Metal
+            Security
+        ]);
 
-        # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
-        llvmPkgs.lld
-        # debugir
-      ]) ++ (with unstable-pkgs; [
-        rustc
-        cargo
-        clippy
-        rustfmt
-      ]);
-    in {
+        zig-toolchain = zig.packages.${system}."0.9.1";
 
-      devShell.x86_64-linux = pkgs.mkShell {
-        buildInputs = sharedInputs ++ linuxInputs;
+        sharedInputs = (with pkgs; [
+          # build libraries
+          cmake
+          git
+          python3
+          llvmPkgs.llvm.dev
+          llvmPkgs.clang
+          libxkbcommon
+          pkg-config
+          zig-toolchain # roc builtins are implemented in zig, see compiler/builtins/bitcode/
 
-        LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
-        NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
-        LD_LIBRARY_PATH = with pkgs;
-          lib.makeLibraryPath
-          ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
-      };
+          # lib deps
+          libffi
+          libxml2
+          ncurses
+          zlib
+          libiconv
 
-    };
+          # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
+          llvmPkgs.lld
+          # debugir
+          rust
+        ]);
+      in {
+
+        devShell = pkgs.mkShell {
+          buildInputs = sharedInputs ++ darwinInputs ++ linuxInputs;
+
+          LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
+          NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
+          LD_LIBRARY_PATH = with pkgs;
+            lib.makeLibraryPath
+            ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
+          NIXPKGS_ALLOW_UNFREE = 1; # to run the editor with NVIDIA's closed source drivers
+        };
+
+    }
+  );
 }

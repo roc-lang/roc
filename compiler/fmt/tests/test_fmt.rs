@@ -10,60 +10,153 @@ mod test_fmt {
     use roc_fmt::def::fmt_def;
     use roc_fmt::module::fmt_module;
     use roc_fmt::Buf;
+    use roc_parse::ast::Module;
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::Parser;
     use roc_parse::state::State;
-    use roc_test_utils::assert_multiline_str_eq;
+    use roc_test_utils::{assert_multiline_str_eq, workspace_root};
 
     // Not intended to be used directly in tests; please use expr_formats_to or expr_formats_same
-    fn expect_format_expr_helper(input: &str, expected: &str) {
+    fn expr_formats_to(input: &str, expected: &str) {
         let arena = Bump::new();
-        match roc_parse::test_helpers::parse_expr_with(&arena, input.trim()) {
+        let input = input.trim();
+        let expected = expected.trim();
+
+        match roc_parse::test_helpers::parse_expr_with(&arena, input) {
             Ok(actual) => {
+                use roc_fmt::spaces::RemoveSpaces;
+
                 let mut buf = Buf::new_in(&arena);
 
                 actual.format_with_options(&mut buf, Parens::NotNeeded, Newlines::Yes, 0);
 
-                assert_multiline_str_eq!(expected, buf.as_str());
+                let output = buf.as_str();
+
+                assert_multiline_str_eq!(expected, output);
+
+                let reparsed_ast = roc_parse::test_helpers::parse_expr_with(&arena, output).unwrap_or_else(|err| {
+                    panic!(
+                        "After formatting, the source code no longer parsed!\n\nParse error was: {:?}\n\nThe code that failed to parse:\n\n{}\n\n",
+                        err, output
+                    );
+                });
+
+                let ast_normalized = actual.remove_spaces(&arena);
+                let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+
+                // HACK!
+                // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
+                // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
+                // I don't have the patience to debug this right now, so let's leave it for another day...
+                // TODO: fix PartialEq impl on ast types
+                if format!("{:?}", ast_normalized) != format!("{:?}", reparsed_ast_normalized) {
+                    panic!(
+                        "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
+                        * * * Source code before formatting:\n{}\n\n\
+                        * * * Source code after formatting:\n{}\n\n",
+                        input,
+                        output
+                    );
+                }
+
+                // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
+                let mut reformatted_buf = Buf::new_in(&arena);
+                reparsed_ast.format_with_options(&mut reformatted_buf, Parens::NotNeeded, Newlines::Yes, 0);
+
+                if output != reformatted_buf.as_str() {
+                    eprintln!("Formatting bug; formatting is not stable. Reformatting the formatted code changed it again, as follows:\n\n");
+
+                    assert_multiline_str_eq!(output, reformatted_buf.as_str());
+                }
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", input, error)
         };
-    }
-
-    fn expr_formats_to(input: &str, expected: &str) {
-        let input = input.trim_end();
-        let expected = expected.trim_end();
-
-        // First check that input formats to the expected version
-        expect_format_expr_helper(input, expected);
-
-        // Parse the expected result format it, asserting that it doesn't change
-        // It's important that formatting be stable / idempotent
-        expect_format_expr_helper(expected, expected);
     }
 
     fn expr_formats_same(input: &str) {
         expr_formats_to(input, input);
     }
 
+    fn fmt_module_and_defs<'a>(
+        arena: &Bump,
+        src: &str,
+        module: &Module<'a>,
+        state: State<'a>,
+        buf: &mut Buf<'_>,
+    ) {
+        fmt_module(buf, module);
+
+        match module_defs().parse(arena, state) {
+            Ok((_, loc_defs, _)) => {
+                for loc_def in loc_defs {
+                    fmt_def(buf, arena.alloc(loc_def.value), 0);
+                }
+            }
+            Err(error) => panic!("Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
+        }
+    }
+
     // Not intended to be used directly in tests; please use module_formats_to or module_formats_same
     fn expect_format_module_helper(src: &str, expected: &str) {
         let arena = Bump::new();
+        let src = src.trim();
+        let expected = expected.trim();
+
         match module::parse_header(&arena, State::new(src.as_bytes())) {
             Ok((actual, state)) => {
+                use roc_fmt::spaces::RemoveSpaces;
+
                 let mut buf = Buf::new_in(&arena);
 
-                fmt_module(&mut buf, &actual);
+                fmt_module_and_defs(&arena, src, &actual, state, &mut buf);
 
-                match module_defs().parse(&arena, state) {
-                    Ok((_, loc_defs, _)) => {
-                        for loc_def in loc_defs {
-                            fmt_def(&mut buf, arena.alloc(loc_def.value), 0);
-                        }
-                    }
-                    Err(error) => panic!("Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
+                let output = buf.as_str().trim();
+
+                let (reparsed_ast, state) = module::parse_header(&arena, State::new(output.as_bytes())).unwrap_or_else(|err| {
+                    panic!(
+                        "After formatting, the source code no longer parsed!\n\nParse error was: {:?}\n\nThe code that failed to parse:\n\n{}\n\n",
+                        err, output
+                    );
+                });
+
+                let ast_normalized = actual.remove_spaces(&arena);
+                let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+
+                // HACK!
+                // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
+                // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
+                // I don't have the patience to debug this right now, so let's leave it for another day...
+                // TODO: fix PartialEq impl on ast types
+                if format!("{:?}", ast_normalized) != format!("{:?}", reparsed_ast_normalized) {
+                    panic!(
+                        "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
+                        * * * Source code before formatting:\n{}\n\n\
+                        * * * Source code after formatting:\n{}\n\n",
+                        src,
+                        output
+                    );
                 }
-                assert_multiline_str_eq!(expected, buf.as_str())
+
+                // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
+                let mut reformatted_buf = Buf::new_in(&arena);
+
+                fmt_module_and_defs(&arena, output, &reparsed_ast, state, &mut reformatted_buf);
+
+                let reformatted = reformatted_buf.as_str().trim();
+
+                if output != reformatted {
+                    eprintln!("Formatting bug; formatting is not stable. Reformatting the formatted code changed it again, as follows:\n\n");
+
+                    assert_multiline_str_eq!(output, reformatted);
+                }
+
+                // If everything was idempotent re-parsing worked, finally assert
+                // that the formatted code was what we expected it to be.
+                //
+                // Do this last because if there were any serious problems with the
+                // formatter (e.g. it wasn't idempotent), we want to know about
+                // those more than we want to know that the expectation failed!
+                assert_multiline_str_eq!(expected, output);
             }
             Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
         };
@@ -106,26 +199,61 @@ mod test_fmt {
     }
 
     #[test]
-    #[ignore]
-    fn def_with_comment_on_same_line() {
-        // TODO(joshuawarner32): make trailing comments format stabily
-        // This test currently fails because the comment ends up as SpaceBefore for the following `a`
-        // This works fine when formatted _once_ - but if you format again, the formatter wants to
-        // insert a newline between `a = "Hello"` and the comment, further muddying the waters.
-        // Clearly the formatter shouldn't be allowed to migrate a comment around like that.
+    fn def_with_inline_comment() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 0 # comment
+
+            x
+            "#
+        ));
+
         expr_formats_to(
             indoc!(
                 r#"
-                a = "Hello" # This variable is for greeting
+                x = 0# comment
 
-                a
+                x
                 "#
             ),
             indoc!(
                 r#"
-                a = "Hello"
-                # This variable is for greeting
-                a
+                x = 0 # comment
+
+                x
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                x = 0# comment
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                x = 0 # comment
+
+                x
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                x = 0  # comment
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                x = 0 # comment
+
+                x
                 "#
             ),
         );
@@ -152,6 +280,698 @@ mod test_fmt {
                 a = "Hello"
 
                 a
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn type_annotation_allow_blank_line_before_and_after_comment() {
+        expr_formats_same(indoc!(
+            r#"
+                person : {
+                    firstName : Str,
+                    # comment
+                    lastName : Str,
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person : {
+                    firstName : Str,
+
+                    # comment
+                    lastName : Str,
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person : {
+                    firstName : Str,
+                    # comment
+
+                    lastName : Str,
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person : {
+                    firstName : Str,
+
+                    # comment
+
+                    lastName : Str,
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person : {
+                    firstName : Str,
+
+                    # comment 1
+
+                    lastName : Str,
+
+                    # comment 2
+                    # comment 3
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person : {
+                    firstName : Str,
+
+                    # comment 1
+
+                    lastName : Str,
+                    # comment 2
+                    # comment 3
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                person : {
+
+                    # comment
+
+                    firstName : Str,
+                    lastName : Str,
+                }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person : {
+                    # comment
+
+                    firstName : Str,
+                    lastName : Str,
+                }
+
+                person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                person : {
+                    firstName : Str,
+                    lastName : Str,
+
+                    # comment
+
+                }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person : {
+                    firstName : Str,
+                    lastName : Str,
+
+                    # comment
+                }
+
+                person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                person : {
+                    firstName : Str,
+
+
+                    # comment
+                    lastName : Str,
+                }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person : {
+                    firstName : Str,
+
+                    # comment
+                    lastName : Str,
+                }
+
+                person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                person : {
+                    firstName : Str,
+                    # comment
+
+
+                    lastName : Str,
+                }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person : {
+                    firstName : Str,
+                    # comment
+
+                    lastName : Str,
+                }
+
+                person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                person : {
+                    firstName : Str,
+
+
+                    # comment
+
+
+                    lastName : Str,
+                }
+
+                person
+                "#
+            ),
+            indoc!(
+                r#"
+                person : {
+                    firstName : Str,
+
+                    # comment
+
+                    lastName : Str,
+                }
+
+                person
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn record_allow_blank_line_before_and_after_comment() {
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+                    # comment 1
+                    lastName: "last",
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+                    # comment 1
+
+                    lastName: "last",
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+
+                    # comment 1
+                    lastName: "last",
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+
+                    # comment 1
+
+                    lastName: "last",
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+
+                    # comment 1
+
+                    lastName: "last",
+
+                    # comment 2
+                    # comment 3
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                person = {
+                    firstName: "first",
+
+                    # comment 1
+
+                    lastName: "last",
+                    # comment 2
+                    # comment 3
+                }
+
+                person
+                "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    person = {
+
+                        # comment
+
+                        firstName: "first",
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+            indoc!(
+                r#"
+                    person = {
+                        # comment
+
+                        firstName: "first",
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+                        lastName: "last",
+
+                        # comment
+
+                    }
+
+                    person
+                "#
+            ),
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+                        lastName: "last",
+
+                        # comment
+                    }
+
+                    person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+
+
+                        # comment 1
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+
+                        # comment 1
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+                        # comment 1
+
+
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+                        # comment 1
+
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+
+
+                        # comment 1
+
+
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+            indoc!(
+                r#"
+                    person = {
+                        firstName: "first",
+
+                        # comment 1
+
+                        lastName: "last",
+                    }
+
+                    person
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn list_allow_blank_line_before_and_after_comment() {
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+                    # comment
+                    1,
+                ]
+
+                list
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+
+                    # comment
+                    1,
+                ]
+
+                list
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+                    # comment
+
+                    1,
+                ]
+
+                list
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+
+                    # comment
+
+                    1,
+                ]
+
+                list
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+
+                    # comment 1
+
+                    1,
+
+                    # comment 2
+                    # comment 3
+                ]
+
+                list
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                list = [
+                    0,
+
+                    # comment 1
+
+                    1,
+                    # comment 2
+                    # comment 3
+                ]
+
+                list
+                "#
+        ));
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+
+                    # comment
+
+                    0,
+                    1,
+                ]
+
+                list
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    # comment
+
+                    0,
+                    1,
+                ]
+
+                list
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+                    0,
+                    1,
+
+                    # comment
+
+                ]
+
+                list
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    0,
+                    1,
+
+                    # comment
+                ]
+
+                list
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+                    0,
+
+
+                    # comment
+                    1,
+                ]
+
+                list
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    0,
+
+                    # comment
+                    1,
+                ]
+
+                list
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+                    0,
+                    # comment
+
+
+                    1,
+                ]
+
+                list
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    0,
+                    # comment
+
+                    1,
+                ]
+
+                list
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                list = [
+                    0,
+
+
+                    # comment
+
+
+                    1,
+                ]
+
+                list
+                "#
+            ),
+            indoc!(
+                r#"
+                list = [
+                    0,
+
+                    # comment
+
+                    1,
+                ]
+
+                list
                 "#
             ),
         );
@@ -627,6 +1447,392 @@ mod test_fmt {
     }
 
     #[test]
+    fn lambda_returns_record() {
+        expr_formats_same(indoc!(
+            r#"
+                toRecord = \_ -> {
+                    x: 1,
+                    y: 2,
+                    z: 3,
+                }
+
+                toRecord
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                    func = \_ ->
+                        { x: 1, y: 2, z: 3 }
+
+                    func
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                toRecord = \_ ->
+                    val = 0
+
+                    {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                toRecord
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    toRecord = \_ ->
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    toRecord
+                "#
+            ),
+            indoc!(
+                r#"
+                    toRecord = \_ -> {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    toRecord
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn lambda_returns_list() {
+        expr_formats_same(indoc!(
+            r#"
+                toList = \_ -> [
+                    1,
+                    2,
+                    3,
+                ]
+
+                toList
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                    func = \_ ->
+                        [1, 2, 3]
+
+                    func
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                toList = \_ ->
+                    val = 0
+
+                    [
+                        1,
+                        2,
+                        3,
+                    ]
+
+                toList
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    toList = \_ ->
+                        [
+                            1,
+                            2,
+                            3,
+                        ]
+
+                    toList
+                "#
+            ),
+            indoc!(
+                r#"
+                    toList = \_ -> [
+                        1,
+                        2,
+                        3,
+                    ]
+
+                    toList
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn multiline_list_func_arg() {
+        expr_formats_same(indoc!(
+            r#"
+                    result = func arg [
+                        1,
+                        2,
+                        3,
+                    ]
+
+                    result
+                "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg
+                        [ 1, 2, 3 ]
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func
+                        arg
+                        [1, 2, 3]
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg [
+                            1,
+                            2,
+                            3,
+                        ]
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func arg [
+                        1,
+                        2,
+                        3,
+                    ]
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func [
+                            1,
+                            2,
+                            3,
+                        ]
+                        arg
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func
+                        [
+                            1,
+                            2,
+                            3,
+                        ]
+                        arg
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg
+                        [
+                            1,
+                            2,
+                            3,
+                        ]
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func arg [
+                        1,
+                        2,
+                        3,
+                    ]
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+                    result = func
+                        arg
+                        [
+                            1,
+                            2,
+                            3,
+                        ]
+
+                    result
+                "#
+        ));
+    }
+
+    #[test]
+    fn multiline_record_func_arg() {
+        expr_formats_same(indoc!(
+            r#"
+                result = func arg {
+                    x: 1,
+                    y: 2,
+                    z: 3,
+                }
+
+                result
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg
+                        { x: 1, y: 2, z: 3 }
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func
+                        arg
+                        { x: 1, y: 2, z: 3 }
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func arg {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+                        arg
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+                        arg
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    result = func arg
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    result
+                "#
+            ),
+            indoc!(
+                r#"
+                    result = func arg {
+                        x: 1,
+                        y: 2,
+                        z: 3,
+                    }
+
+                    result
+                "#
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+                    result = func
+                        arg
+                        {
+                            x: 1,
+                            y: 2,
+                            z: 3,
+                        }
+
+                    result
+                "#
+        ));
+    }
+
+    #[test]
     fn record_updating() {
         expr_formats_same(indoc!(
             r#"
@@ -824,11 +2030,10 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                f :
-                    {
-                        y : Int *,
-                        x : Int *,
-                    }
+                f : {
+                    y : Int *,
+                    x : Int *,
+                }
 
                 f"#
             ),
@@ -839,14 +2044,38 @@ mod test_fmt {
     fn trailing_comma_in_record_annotation_same() {
         expr_formats_same(indoc!(
             r#"
-                f :
-                    {
+                f : {
+                    y : Int *,
+                    x : Int *,
+                }
+
+                f
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    f :
+                        {
+                            y : Int *,
+                            x : Int *,
+                        }
+
+                    f
+                "#
+            ),
+            indoc!(
+                r#"
+                    f : {
                         y : Int *,
                         x : Int *,
                     }
 
-                f"#
-        ));
+                    f
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -867,7 +2096,18 @@ mod test_fmt {
                 f :
                     {}
 
-                f"#
+                f
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                f :
+                    {
+                    }
+
+                f
+            "#
         ));
     }
 
@@ -906,10 +2146,9 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                f :
-                    {
-                        # comment
-                    }
+                f : {
+                    # comment
+                }
 
                 f"#
             ),
@@ -917,16 +2156,152 @@ mod test_fmt {
     }
 
     #[test]
-    #[ignore]
-    fn multiline_inside_empty_record_annotation() {
+    fn multiline_curly_brace_type() {
         expr_formats_same(indoc!(
             r#"
-                f :
-                    {
-                    }
+                x : {
+                    a : Int,
+                }
 
-                f"#
+                x
+            "#
         ));
+
+        expr_formats_same(indoc!(
+            r#"
+                x :
+                    { a : Int }
+
+                x
+            "#
+        ));
+    }
+
+    #[test]
+    fn multiline_brace_type() {
+        expr_formats_same(indoc!(
+            r#"
+                x : [
+                    Int,
+                ]
+
+                x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                x :
+                    [Int]
+
+                x
+            "#
+        ));
+    }
+
+    #[test]
+    fn multiline_fn_signature() {
+        expr_formats_same(indoc!(
+            r#"
+                foo :
+                    Str,
+                    Nat
+                    -> Bool
+
+                foo
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+                        Str, Int, Nat -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Int,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+
+                        Str,
+                        Nat
+                        
+                        -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    foo :
+
+                        Str, Nat -> Bool
+
+                    foo
+                "#
+            ),
+            indoc!(
+                r#"
+                    foo :
+                        Str,
+                        Nat
+                        -> Bool
+
+                    foo
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -945,12 +2320,11 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                f :
-                    {
-                        x : Int *,
-                        # comment 1
-                        # comment 2
-                    }
+                f : {
+                    x : Int *,
+                    # comment 1
+                    # comment 2
+                }
 
                 f"#
             ),
@@ -1081,13 +2455,14 @@ mod test_fmt {
 
     #[test]
     fn one_item_list() {
-        expr_formats_same(indoc!("[ 4 ] "));
+        expr_formats_same(indoc!("[4]"));
+        expr_formats_to(indoc!("[ 4 ]"), indoc!("[4]"));
     }
 
     #[test]
     fn two_item_list() {
-        expr_formats_same(indoc!("[ 7, 8 ] "));
-        expr_formats_to(indoc!("[   7  ,   8  ] "), indoc!("[ 7, 8 ] "));
+        expr_formats_same(indoc!("[7, 8]"));
+        expr_formats_to(indoc!("[   7  ,   8  ]"), indoc!("[7, 8]"));
     }
 
     #[test]
@@ -1227,6 +2602,7 @@ mod test_fmt {
                 r#"
                 [
                     # Thirty Seven
+
                     37,
                     # Thirty Eight
                     38,
@@ -1301,6 +2677,27 @@ mod test_fmt {
     fn multi_line_list_def() {
         expr_formats_same(indoc!(
             r#"
+                l = [
+                    1,
+                    2,
+                ]
+
+                l
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                l =
+                    [1, 2]
+
+                l
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
                 l =
                     [
                         1,
@@ -1308,8 +2705,19 @@ mod test_fmt {
                     ]
 
                 l
-            "#
-        ));
+                "#
+            ),
+            indoc!(
+                r#"
+                l = [
+                    1,
+                    2,
+                ]
+
+                l
+                "#
+            ),
+        );
 
         expr_formats_to(
             indoc!(
@@ -1324,11 +2732,10 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                results =
-                    [
-                        Ok 4,
-                        Ok 5,
-                    ]
+                results = [
+                    Ok 4,
+                    Ok 5,
+                ]
 
                 allOks results
                 "#
@@ -1368,6 +2775,61 @@ mod test_fmt {
     #[test]
     fn empty_record() {
         expr_formats_same("{}");
+        expr_formats_to("{ }", "{}");
+    }
+
+    #[test]
+    fn empty_record_patterns() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                    f = \{  } -> "Hello World"
+
+                    f
+                "#
+            ),
+            indoc!(
+                r#"
+                    f = \{} -> "Hello World"
+
+                    f
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    f = \a, b -> {  }
+
+                    f
+                "#
+            ),
+            indoc!(
+                r#"
+                    f = \a, b -> {}
+
+                    f
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    { } <- f a b
+
+                    {}
+                "#
+            ),
+            indoc!(
+                r#"
+                    {} <- f a b
+
+                    {}
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -1419,16 +2881,67 @@ mod test_fmt {
     fn multi_line_record_def() {
         expr_formats_same(indoc!(
             r#"
+                pos = {
+                    x: 4,
+                    y: 11,
+                    z: 16,
+                }
+
+                pos
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
                 pos =
+                    { x: 4, y: 11, z: 16 }
+
+                pos
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                myDef =
+                    list = [
+                        a,
+                        b,
+                    ]
+
                     {
+                        c,
+                        d,
+                    }
+
+                myDef
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    pos =
+                        {
+                            x: 4,
+                            y: 11,
+                            z: 16,
+                        }
+
+                    pos
+                "#
+            ),
+            indoc!(
+                r#"
+                    pos = {
                         x: 4,
                         y: 11,
                         z: 16,
                     }
 
-                pos
-            "#
-        ));
+                    pos
+                "#
+            ),
+        );
 
         expr_formats_to(
             indoc!(
@@ -1443,11 +2956,10 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                pos =
-                    {
-                        x: 5,
-                        y: 10,
-                    }
+                pos = {
+                    x: 5,
+                    y: 10,
+                }
 
                 pos
                 "#
@@ -1804,7 +3316,6 @@ mod test_fmt {
             when b is
                 1 ->
                     1
-
                 _ ->
                     2
             "#
@@ -1834,7 +3345,6 @@ mod test_fmt {
                 when year is
                     1999 ->
                         1
-
                     _ ->
                         0
                 "#
@@ -1851,7 +3361,6 @@ mod test_fmt {
                 1 ->
                     # when 1
                     1
-
                 # important
                 # fall through
                 _ ->
@@ -1885,7 +3394,6 @@ mod test_fmt {
                     when c is
                         6 | 7 ->
                             8
-
                 3 | 4 ->
                     5
         "#
@@ -1959,25 +3467,16 @@ mod test_fmt {
                  | 2
                  | 3 ->
                     4
-
                 5 | 6 | 7 ->
                     8
-
                 9
-                 | 10 ->
-                    11
-
+                 | 10 -> 11
                 12 | 13 ->
                     when c is
-                        14 | 15 ->
-                            16
-
+                        14 | 15 -> 16
                         17
-                         | 18 ->
-                            19
-
-                20 ->
-                    21
+                         | 18 -> 19
+                20 -> 21
                 "#
             ),
         );
@@ -1996,12 +3495,9 @@ mod test_fmt {
             indoc!(
                 r#"
             when b is
-                3 ->
-                    4
-
+                3 -> 4
                 9
-                 | 8 ->
-                    9
+                 | 8 -> 9
             "#
             ),
         );
@@ -2026,7 +3522,6 @@ mod test_fmt {
                 when b is
                     1 ->
                         1
-
                     # when 1
                     # fall through
                     _ ->
@@ -2045,7 +3540,6 @@ mod test_fmt {
             is
                 1 ->
                     Nothing
-
                 _ ->
                     Just True
             "#
@@ -2063,7 +3557,6 @@ mod test_fmt {
             is
                 Complex x y ->
                     simplify x y
-
                 Simple z ->
                     z
             "#
@@ -2098,7 +3591,6 @@ mod test_fmt {
             is
                 2 ->
                     x
-
                 _ ->
                     y
             "#
@@ -2135,10 +3627,67 @@ mod test_fmt {
             is
                 4 ->
                     x
-
                 _ ->
                     y
             "#
+            ),
+        );
+    }
+
+    #[test]
+    fn single_line_when_patterns() {
+        expr_formats_same(indoc!(
+            r#"
+            when x is
+                Foo -> 1
+                Bar -> 2
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            when x is
+                Foo -> 1
+                Bar ->
+                    2
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+
+                    Bar ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+                    Bar ->
+                        2
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+
+                    Bar -> 2
+                "#
+            ),
+            indoc!(
+                r#"
+                when x is
+                    Foo -> 1
+                    Bar -> 2
+                "#
             ),
         );
     }
@@ -2225,7 +3774,6 @@ mod test_fmt {
             when maybeScore is
                 Just score if score > 21 ->
                     win
-
                 _ ->
                     nextRound
             "#
@@ -2239,10 +3787,8 @@ mod test_fmt {
             when authenticationResponse is
                 Ok user if hasPermission user ->
                     loadPage route user
-
                 Ok user ->
                     PageNotFound
-
                 Err _ ->
                     ErrorPage
             "#
@@ -2348,7 +3894,6 @@ mod test_fmt {
             when f x == g y == h z is
                 True ->
                     Ok 1
-
                 False ->
                     Err 2
             "#
@@ -2537,7 +4082,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 2 % 3
-                    %% 5
+                    // 5
                     + 7
                 "#
             ),
@@ -2545,7 +4090,7 @@ mod test_fmt {
                 r#"
                 2
                     % 3
-                    %% 5
+                    // 5
                     + 7
                 "#
             ),
@@ -2619,6 +4164,18 @@ mod test_fmt {
         ));
     }
 
+    #[test]
+    fn func_call_trailing_multiline_lambda() {
+        expr_formats_same(indoc!(
+            r#"
+                list = List.map [1, 2, 3] \x ->
+                    x + 1
+
+                list
+            "#
+        ));
+    }
+
     // MODULES
 
     #[test]
@@ -2662,7 +4219,7 @@ mod test_fmt {
         module_formats_same(indoc!(
             r#"
                 interface Foo
-                    exposes [ Bar, Baz, a, b ]
+                    exposes [Bar, Baz, a, b]
                     imports []"#
         ));
     }
@@ -2672,8 +4229,8 @@ mod test_fmt {
         module_formats_same(indoc!(
             r#"
                 interface Foo
-                    exposes [ Bar, Baz, a, b ]
-                    imports [ Blah, Thing.{ foo, bar }, Stuff ]"#
+                    exposes [Bar, Baz, a, b]
+                    imports [Blah, Thing.{ foo, bar }, Stuff]"#
         ));
     }
 
@@ -2700,7 +4257,7 @@ mod test_fmt {
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
-                app "Foo" packages { pf: "platform" } imports [] provides [ main ] to pf"#
+                app "Foo" packages { pf: "platform" } imports [] provides [main] to pf"#
         ));
     }
 
@@ -2711,8 +4268,41 @@ mod test_fmt {
             requires { Model, Msg } { main : Effect {} } \
             exposes [] \
             packages {} \
-            imports [ Task.{ Task } ] \
-            provides [ mainForHost ]",
+            imports [Task.{ Task }] \
+            provides [mainForHost]",
+        );
+    }
+
+    #[test]
+    fn format_tui_package_config() {
+        // At one point this failed to reformat.
+        module_formats_to(
+            indoc!(
+                r#"
+                    platform "tui"
+                        requires { Model } { main : { init : ({} -> Model), update : (Model, Str -> Model), view : (Model -> Str) } }
+                        exposes []
+                        packages {}
+                        imports []
+                        provides [ mainForHost ]
+
+                    mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
+                    mainForHost = main
+                "#
+            ),
+            indoc!(
+                r#"
+                    platform "tui"
+                        requires { Model } { main : { init : {} -> Model, update : Model, Str -> Model, view : Model -> Str } }
+                        exposes []
+                        packages {}
+                        imports []
+                        provides [mainForHost]
+
+                    mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
+                    mainForHost = main
+                "#
+            ),
         );
     }
 
@@ -2755,7 +4345,7 @@ mod test_fmt {
     fn list_alias() {
         expr_formats_same(indoc!(
             r#"
-            ConsList a : [ Cons a (ConsList a), Nil ]
+            ConsList a : [Cons a (ConsList a), Nil]
 
             f : ConsList a -> ConsList a
             f = \_ -> Nil
@@ -2793,15 +4383,70 @@ mod test_fmt {
     fn multiline_tag_union_annotation() {
         expr_formats_same(indoc!(
             r#"
-            b :
-                [
-                    True,
-                    False,
-                ]
+            b : [
+                True,
+                False,
+            ]
 
             b
             "#
         ));
+
+        expr_formats_same(indoc!(
+            r#"
+            b :
+                [True, False]
+
+            b
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                b :
+                    [
+                        True,
+                        False,
+                    ]
+
+                b
+                "#
+            ),
+            indoc!(
+                r#"
+                b : [
+                    True,
+                    False,
+                ]
+
+                b
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                b : [
+                        True,
+                        False,
+                    ]
+
+                b
+                "#
+            ),
+            indoc!(
+                r#"
+                b : [
+                    True,
+                    False,
+                ]
+
+                b
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -2838,14 +4483,13 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                b :
-                    [
-                        True,
-                        # comment 1
-                        False,
-                        # comment 2
-                        # comment 3
-                    ]
+                b : [
+                    True,
+                    # comment 1
+                    False,
+                    # comment 2
+                    # comment 3
+                ]
 
                 b
                 "#
@@ -2857,7 +4501,7 @@ mod test_fmt {
     fn tag_union() {
         expr_formats_same(indoc!(
             r#"
-            f : [ True, False ] -> [ True, False ]
+            f : [True, False] -> [True, False]
             f = \x -> x
 
             a
@@ -2891,12 +4535,11 @@ mod test_fmt {
     fn recursive_tag_union() {
         expr_formats_same(indoc!(
             r#"
-            f : [ Cons a (ConsList a), Nil ] as ConsList a -> [ Just a, Nothing ]
+            f : [Cons a (ConsList a), Nil] as ConsList a -> [Just a, Nothing]
             f = \list ->
                 when list is
                     Nil ->
                         Nothing
-
                     Cons first _ ->
                         Just first
 
@@ -3005,6 +4648,57 @@ mod test_fmt {
                 )
             "#
         ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0
+                            )
+                "#
+            ),
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (
+                            a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0
+                        )
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0)
+                "#
+            ),
+            indoc!(
+                r#"
+                    Task.fromResult
+                        (
+                            a, b <- binaryOp ctx
+                            if a == b then
+                                -1
+                            else
+                                0
+                        )
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -3026,11 +4720,135 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             foo :
-                (Str -> Bool) -> Bool
+                (Str -> Bool)
+                -> Bool
 
             42
             "#
         ));
+
+        expr_formats_same(indoc!(
+            r#"
+            foo :
+                (Str -> Bool),
+                Str
+                -> Bool
+            foo = \bar, baz ->
+                42
+
+            42
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool) -> Bool
+
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool)
+                    -> Bool
+
+                42
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool), Str -> Bool
+                foo = \bar, baz ->
+                    42
+
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool),
+                    Str
+                    -> Bool
+                foo = \bar, baz ->
+                    42
+
+                42
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool), Str -> Bool # comment
+                foo = \bar, baz ->
+                    42
+
+                42
+                "#
+            ),
+            indoc!(
+                r#"
+                foo :
+                    (Str -> Bool),
+                    Str
+                    -> Bool # comment
+                foo = \bar, baz ->
+                    42
+
+                42
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn opaque_has_clause() {
+        expr_formats_same(indoc!(
+            r#"
+            A := U8 has [Eq, Hash]
+
+            0
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            A :=
+                U8
+                has [Eq, Hash]
+
+            0
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                A := a | a has Hash has [ Eq, Hash ]
+
+                0
+                "#
+            ),
+            indoc!(
+                r#"
+                A :=
+                    a | a has Hash
+                    has [Eq, Hash]
+
+                0
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -3040,14 +4858,34 @@ mod test_fmt {
     /// `cargo run -- format $(find examples -name \*.roc)`
     fn test_fmt_examples() {
         let mut count = 0;
-        let mut root = std::env::current_dir()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_owned();
+        let mut root = workspace_root();
         root.push("examples");
+        for entry in walkdir::WalkDir::new(&root) {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension() == Some(std::ffi::OsStr::new("roc")) {
+                count += 1;
+                let src = std::fs::read_to_string(path).unwrap();
+                println!("Now trying to format {}", path.display());
+                module_formats_same(&src);
+            }
+        }
+        assert!(
+            count > 0,
+            "Expecting to find at least 1 .roc file to format under {}",
+            root.display()
+        );
+    }
+
+    #[test]
+    /// Test that builtins are formatted correctly
+    /// If this test fails on your diff, it probably means you need to re-format a builtin.
+    /// Try this:
+    /// `cargo run -- format $(find compiler/builtins/roc -name \*.roc)`
+    fn test_fmt_builtins() {
+        let mut count = 0;
+        let mut root = workspace_root();
+        root.push("compiler/builtins/roc");
         for entry in walkdir::WalkDir::new(&root) {
             let entry = entry.unwrap();
             let path = entry.path();

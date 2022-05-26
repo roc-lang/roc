@@ -40,6 +40,9 @@ impl FloatWidth {
     pub const fn stack_size(&self) -> u32 {
         use FloatWidth::*;
 
+        // NOTE: this must never use mem::size_of, because that returns the size
+        // for the target of *the compiler itself* (e.g. this Rust code), not what
+        // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
             F32 => 4,
             F64 => 8,
@@ -49,33 +52,24 @@ impl FloatWidth {
 
     pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
         use roc_target::Architecture;
-        use std::mem::align_of;
         use FloatWidth::*;
 
-        // TODO actually alignment is architecture-specific
+        // NOTE: this must never use mem::align_of, because that returns the alignment
+        // for the target of *the compiler itself* (e.g. this Rust code), not what
+        // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
-            F32 => align_of::<f32>() as u32,
-            F64 => match target_info.architecture {
-                Architecture::X86_64
-                | Architecture::Aarch64
-                | Architecture::Arm
-                | Architecture::Wasm32 => 8,
-                Architecture::X86_32 => 4,
+            F32 => 4,
+            F64 | F128 => match target_info.architecture {
+                Architecture::X86_64 | Architecture::Aarch64 | Architecture::Wasm32 => 8,
+                Architecture::X86_32 | Architecture::Aarch32 => 4,
             },
-            F128 => align_of::<i128>() as u32,
         }
     }
 
     pub const fn try_from_symbol(symbol: Symbol) -> Option<Self> {
         match symbol {
-            Symbol::NUM_F64 | Symbol::NUM_BINARY64 | Symbol::NUM_AT_BINARY64 => {
-                Some(FloatWidth::F64)
-            }
-
-            Symbol::NUM_F32 | Symbol::NUM_BINARY32 | Symbol::NUM_AT_BINARY32 => {
-                Some(FloatWidth::F32)
-            }
-
+            Symbol::NUM_F64 | Symbol::NUM_BINARY64 => Some(FloatWidth::F64),
+            Symbol::NUM_F32 | Symbol::NUM_BINARY32 => Some(FloatWidth::F32),
             _ => None,
         }
     }
@@ -102,9 +96,13 @@ impl IntWidth {
 
         matches!(self, I8 | I16 | I32 | I64 | I128)
     }
+
     pub const fn stack_size(&self) -> u32 {
         use IntWidth::*;
 
+        // NOTE: this must never use mem::size_of, because that returns the size
+        // for the target of *the compiler itself* (e.g. this Rust code), not what
+        // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
             U8 | I8 => 1,
             U16 | I16 => 2,
@@ -116,46 +114,42 @@ impl IntWidth {
 
     pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
         use roc_target::Architecture;
-        use std::mem::align_of;
         use IntWidth::*;
 
+        // NOTE: this must never use mem::align_of, because that returns the alignment
+        // for the target of *the compiler itself* (e.g. this Rust code), not what
+        // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
-            U8 | I8 => align_of::<i8>() as u32,
-            U16 | I16 => align_of::<i16>() as u32,
-            U32 | I32 => align_of::<i32>() as u32,
+            U8 | I8 => 1,
+            U16 | I16 => 2,
+            U32 | I32 => 4,
             U64 | I64 => match target_info.architecture {
                 Architecture::X86_64
                 | Architecture::Aarch64
-                | Architecture::Arm
+                | Architecture::Aarch32
                 | Architecture::Wasm32 => 8,
                 Architecture::X86_32 => 4,
             },
-            U128 | I128 => align_of::<i128>() as u32,
+            U128 | I128 => {
+                // the C ABI defines 128-bit integers to always be 16B aligned,
+                // according to https://reviews.llvm.org/D28990#655487
+                16
+            }
         }
     }
 
     pub const fn try_from_symbol(symbol: Symbol) -> Option<Self> {
         match symbol {
-            Symbol::NUM_I128 | Symbol::NUM_SIGNED128 | Symbol::NUM_AT_SIGNED128 => {
-                Some(IntWidth::I128)
-            }
-            Symbol::NUM_I64 | Symbol::NUM_SIGNED64 | Symbol::NUM_AT_SIGNED64 => Some(IntWidth::I64),
-            Symbol::NUM_I32 | Symbol::NUM_SIGNED32 | Symbol::NUM_AT_SIGNED32 => Some(IntWidth::I32),
-            Symbol::NUM_I16 | Symbol::NUM_SIGNED16 | Symbol::NUM_AT_SIGNED16 => Some(IntWidth::I16),
-            Symbol::NUM_I8 | Symbol::NUM_SIGNED8 | Symbol::NUM_AT_SIGNED8 => Some(IntWidth::I8),
-            Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 | Symbol::NUM_AT_UNSIGNED128 => {
-                Some(IntWidth::U128)
-            }
-            Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 | Symbol::NUM_AT_UNSIGNED64 => {
-                Some(IntWidth::U64)
-            }
-            Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 | Symbol::NUM_AT_UNSIGNED32 => {
-                Some(IntWidth::U32)
-            }
-            Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 | Symbol::NUM_AT_UNSIGNED16 => {
-                Some(IntWidth::U16)
-            }
-            Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 | Symbol::NUM_AT_UNSIGNED8 => Some(IntWidth::U8),
+            Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => Some(IntWidth::I128),
+            Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => Some(IntWidth::I64),
+            Symbol::NUM_I32 | Symbol::NUM_SIGNED32 => Some(IntWidth::I32),
+            Symbol::NUM_I16 | Symbol::NUM_SIGNED16 => Some(IntWidth::I16),
+            Symbol::NUM_I8 | Symbol::NUM_SIGNED8 => Some(IntWidth::I8),
+            Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 => Some(IntWidth::U128),
+            Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => Some(IntWidth::U64),
+            Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => Some(IntWidth::U32),
+            Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => Some(IntWidth::U16),
+            Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => Some(IntWidth::U8),
             _ => None,
         }
     }
@@ -283,7 +277,9 @@ pub const NUM_ATAN: IntrinsicName = float_intrinsic!("roc_builtins.num.atan");
 pub const NUM_IS_FINITE: IntrinsicName = float_intrinsic!("roc_builtins.num.is_finite");
 pub const NUM_POW_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.pow_int");
 pub const NUM_DIV_CEIL: IntrinsicName = int_intrinsic!("roc_builtins.num.div_ceil");
-pub const NUM_ROUND: IntrinsicName = float_intrinsic!("roc_builtins.num.round");
+
+pub const NUM_ROUND_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f32");
+pub const NUM_ROUND_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f64");
 
 pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
 pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
@@ -359,6 +355,7 @@ pub const LIST_REPLACE_IN_PLACE: &str = "roc_builtins.list.replace_in_place";
 pub const LIST_ANY: &str = "roc_builtins.list.any";
 pub const LIST_ALL: &str = "roc_builtins.list.all";
 pub const LIST_FIND_UNSAFE: &str = "roc_builtins.list.find_unsafe";
+pub const LIST_IS_UNIQUE: &str = "roc_builtins.list.is_unique";
 
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
@@ -378,6 +375,9 @@ pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null"
 pub const UTILS_EXPECT_FAILED: &str = "roc_builtins.expect.expect_failed";
 pub const UTILS_GET_EXPECT_FAILURES: &str = "roc_builtins.expect.get_expect_failures";
 pub const UTILS_DEINIT_FAILURES: &str = "roc_builtins.expect.deinit_failures";
+
+pub const UTILS_LONGJMP: &str = "longjmp";
+pub const UTILS_SETJMP: &str = "setjmp";
 
 #[derive(Debug, Default)]
 pub struct IntToIntrinsicName {

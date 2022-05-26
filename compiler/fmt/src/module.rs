@@ -1,5 +1,5 @@
 use crate::annotation::{Formattable, Newlines};
-use crate::collection::fmt_collection;
+use crate::collection::{fmt_collection, Braces};
 use crate::expr::fmt_str_literal;
 use crate::spaces::{fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
@@ -11,7 +11,7 @@ use roc_parse::header::{
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
-pub fn fmt_module<'a, 'buf>(buf: &mut Buf<'buf>, module: &'a Module<'a>) {
+pub fn fmt_module<'a>(buf: &mut Buf<'_>, module: &'a Module<'a>) {
     match module {
         Module::Interface { header } => {
             fmt_interface_header(buf, header);
@@ -173,7 +173,7 @@ pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHe
 }
 
 fn fmt_requires<'a, 'buf>(buf: &mut Buf<'buf>, requires: &PlatformRequires<'a>, indent: u16) {
-    fmt_collection(buf, indent, '{', '}', requires.rigids, Newlines::No);
+    fmt_collection(buf, indent, Braces::Curly, requires.rigids, Newlines::No);
 
     buf.push_str(" {");
     buf.spaces(1);
@@ -242,7 +242,13 @@ fn fmt_imports<'a, 'buf>(
     loc_entries: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     indent: u16,
 ) {
-    fmt_collection(buf, indent + INDENT, '[', ']', loc_entries, Newlines::No)
+    fmt_collection(
+        buf,
+        indent + INDENT,
+        Braces::Square,
+        loc_entries,
+        Newlines::No,
+    )
 }
 
 fn fmt_provides<'a, 'buf>(
@@ -251,10 +257,16 @@ fn fmt_provides<'a, 'buf>(
     loc_provided_types: Option<Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>>,
     indent: u16,
 ) {
-    fmt_collection(buf, indent, '[', ']', loc_exposed_names, Newlines::No);
+    fmt_collection(buf, indent, Braces::Square, loc_exposed_names, Newlines::No);
     if let Some(loc_provided) = loc_provided_types {
         fmt_default_spaces(buf, &[], indent);
-        fmt_collection(buf, indent + INDENT, '{', '}', loc_provided, Newlines::No);
+        fmt_collection(
+            buf,
+            indent + INDENT,
+            Braces::Curly,
+            loc_provided,
+            Newlines::No,
+        );
     }
 }
 
@@ -272,7 +284,13 @@ fn fmt_exposes<'buf, N: Formattable + Copy>(
     loc_entries: Collection<'_, Loc<Spaced<'_, N>>>,
     indent: u16,
 ) {
-    fmt_collection(buf, indent + INDENT, '[', ']', loc_entries, Newlines::No)
+    fmt_collection(
+        buf,
+        indent + INDENT,
+        Braces::Square,
+        loc_entries,
+        Newlines::No,
+    )
 }
 
 pub trait FormatName {
@@ -323,7 +341,7 @@ fn fmt_packages<'a, 'buf>(
     loc_entries: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
     indent: u16,
 ) {
-    fmt_collection(buf, indent, '{', '}', loc_entries, Newlines::No)
+    fmt_collection(buf, indent, Braces::Curly, loc_entries, Newlines::No)
 }
 
 impl<'a> Formattable for PackageEntry<'a> {
@@ -364,7 +382,13 @@ fn fmt_imports_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &ImportsEntry<'a>, in
             if !loc_exposes_entries.is_empty() {
                 buf.push('.');
 
-                fmt_collection(buf, indent, '{', '}', *loc_exposes_entries, Newlines::No)
+                fmt_collection(
+                    buf,
+                    indent,
+                    Braces::Curly,
+                    *loc_exposes_entries,
+                    Newlines::No,
+                )
             }
         }
 
@@ -376,7 +400,7 @@ fn fmt_imports_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &ImportsEntry<'a>, in
             if !entries.is_empty() {
                 buf.push('.');
 
-                fmt_collection(buf, indent, '{', '}', *entries, Newlines::No)
+                fmt_collection(buf, indent, Braces::Curly, *entries, Newlines::No)
             }
         }
     }

@@ -19,7 +19,7 @@ extern "C" {
     fn roc_main_size() -> i64;
 
     #[link_name = "roc__mainForHost_1_Fx_caller"]
-    fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8) -> ();
+    fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8);
 
     #[allow(dead_code)]
     #[link_name = "roc__mainForHost_1_Fx_size"]
@@ -74,7 +74,9 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    let arg = env::args().nth(1).unwrap();
+    let arg = env::args()
+        .nth(1)
+        .expect("Please pass a .false file as a command-line argument to the false interpreter!");
     let arg = RocStr::from(arg.as_str());
 
     let size = unsafe { roc_main_size() } as usize;

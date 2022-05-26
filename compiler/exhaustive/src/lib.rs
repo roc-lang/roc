@@ -2,9 +2,11 @@
 //! http://moscova.inria.fr/~maranget/papers/warn/warn.pdf
 
 use roc_collections::all::{HumanIndex, MutMap};
-use roc_module::ident::{Lowercase, TagIdIntType, TagName};
+use roc_module::{
+    ident::{Lowercase, TagIdIntType, TagName},
+    symbol::Symbol,
+};
 use roc_region::all::Region;
-use roc_std::RocDec;
 
 use self::Pattern::*;
 
@@ -15,9 +17,9 @@ pub struct Union {
 }
 
 impl Union {
-    pub fn newtype_wrapper(tag_name: TagName, arity: usize) -> Self {
+    pub fn newtype_wrapper(name: CtorName, arity: usize) -> Self {
         let alternatives = vec![Ctor {
-            name: tag_name,
+            name,
             tag_id: TagId(0),
             arity,
         }];
@@ -41,8 +43,23 @@ pub enum RenderAs {
 pub struct TagId(pub TagIdIntType);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CtorName {
+    Tag(TagName),
+    Opaque(Symbol),
+}
+
+impl CtorName {
+    pub fn is_tag(&self, tag_name: &TagName) -> bool {
+        match self {
+            Self::Tag(test) => test == tag_name,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Ctor {
-    pub name: TagName,
+    pub name: CtorName,
     pub tag_id: TagId,
     pub arity: usize,
 }
@@ -54,14 +71,15 @@ pub enum Pattern {
     Ctor(Union, TagId, std::vec::Vec<Pattern>),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Literal {
-    Int(i128),
-    U128(u128),
+    Int([u8; 16]),
+    U128([u8; 16]),
     Bit(bool),
     Byte(u8),
+    /// Stores the float bits
     Float(u64),
-    Decimal(RocDec),
+    Decimal([u8; 16]),
     Str(Box<str>),
 }
 
@@ -77,14 +95,14 @@ pub enum Error {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Context {
     BadArg,
     BadDestruct,
     BadCase,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Guard {
     HasGuard,
     NoGuard,

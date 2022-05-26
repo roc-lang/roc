@@ -5,12 +5,14 @@ use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
+use roc_load::Threading;
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
+use roc_reporting::report::RenderTarget;
 use target_lexicon::Triple;
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
+    let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!
@@ -57,6 +59,8 @@ fn create_llvm_module<'a>(
         src_dir,
         Default::default(),
         target_info,
+        RenderTarget::ColorTerminal,
+        Threading::Single,
     );
 
     let mut loaded = match loaded {
@@ -81,15 +85,12 @@ fn create_llvm_module<'a>(
     let mut delayed_errors = Vec::new();
 
     for (home, (module_path, src)) in loaded.sources {
-        use roc_reporting::report::{
-            can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
-        };
+        use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
 
         let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
         let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();
-        let mono_problems = loaded.mono_problems.remove(&home).unwrap_or_default();
 
-        let error_count = can_problems.len() + type_problems.len() + mono_problems.len();
+        let error_count = can_problems.len() + type_problems.len();
 
         if error_count == 0 {
             continue;
@@ -104,8 +105,8 @@ fn create_llvm_module<'a>(
 
         use roc_problem::can::Problem::*;
         for problem in can_problems.into_iter() {
-            // Ignore "unused" problems
             match problem {
+                // Ignore "unused" problems
                 UnusedDef(_, _)
                 | UnusedArgument(_, _, _)
                 | UnusedImport(_, _)
@@ -120,6 +121,8 @@ fn create_llvm_module<'a>(
                     delayed_errors.push(buf.clone());
                     lines.push(buf);
                 }
+                // We should be able to compile even when abilities are used as types
+                AbilityUsedAsType(..) => {}
                 _ => {
                     let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
                     let mut buf = String::new();
@@ -139,16 +142,6 @@ fn create_llvm_module<'a>(
 
                 lines.push(buf);
             }
-        }
-
-        for problem in mono_problems {
-            let report = mono_problem(&alloc, &line_info, module_path.clone(), problem);
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            delayed_errors.push(buf.clone());
-            lines.push(buf);
         }
     }
 
@@ -423,13 +416,14 @@ fn wasm_roc_panic(address: u32, tag_id: u32) {
             MEMORY.with(|f| {
                 let memory = f.borrow().unwrap();
 
-                let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(address);
-                let width = 100;
-                let c_ptr = (ptr.deref(memory, 0, width)).unwrap();
+                let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
+                let index = address as usize;
+                let slice = &memory_bytes[index..];
+                let c_ptr: *const u8 = slice.as_ptr();
 
                 use std::ffi::CStr;
                 use std::os::raw::c_char;
-                let slice = unsafe { CStr::from_ptr(c_ptr as *const _ as *const c_char) };
+                let slice = unsafe { CStr::from_ptr(c_ptr as *const c_char) };
                 string = slice.to_str().unwrap();
             });
 

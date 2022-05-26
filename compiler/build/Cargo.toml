@@ -3,7 +3,7 @@ name = "roc_build"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 roc_collections = { path = "../collections" }
@@ -20,16 +20,18 @@ roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_load = { path = "../load" }
 roc_target = { path = "../roc_target" }
-roc_gen_llvm = { path = "../gen_llvm", optional = true }
-roc_gen_wasm = { path = "../gen_wasm", optional = true }
+roc_gen_llvm = { path = "../gen_llvm" }
+roc_gen_wasm = { path = "../gen_wasm" }
 roc_gen_dev = { path = "../gen_dev", default-features = false }
 roc_reporting = { path = "../../reporting" }
+roc_error_macros = { path = "../../error_macros" }
 roc_std = { path = "../../roc_std", default-features = false }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 libloading = "0.7.1"
 tempfile = "3.2.0"
-inkwell = { path = "../../vendor/inkwell", optional = true }
-target-lexicon = "0.12.2"
+inkwell = { path = "../../vendor/inkwell" }
+target-lexicon = "0.12.3"
+wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 serde_json = "1.0.69"
@@ -39,8 +41,4 @@ target-arm = []
 target-aarch64 = ["roc_gen_dev/target-aarch64"]
 target-x86 = []
 target-x86_64 = ["roc_gen_dev/target-x86_64"]
-target-wasm32 = ["roc_gen_wasm"]
-
-# This is a separate feature because when we generate docs on Netlify,
-# it doesn't have LLVM installed. (Also, it doesn't need to do code gen.)
-llvm = ["inkwell", "roc_gen_llvm"]
+target-wasm32 = []

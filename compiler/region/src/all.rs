@@ -279,16 +279,16 @@ pub struct Loc<T> {
 }
 
 impl<T> Loc<T> {
-    pub fn new(start: u32, end: u32, value: T) -> Loc<T> {
+    pub const fn new(start: u32, end: u32, value: T) -> Loc<T> {
         let region = Region::new(Position::new(start), Position::new(end));
         Loc { region, value }
     }
 
-    pub fn at(region: Region, value: T) -> Loc<T> {
+    pub const fn at(region: Region, value: T) -> Loc<T> {
         Loc { region, value }
     }
 
-    pub fn at_zero(value: T) -> Loc<T> {
+    pub const fn at_zero(value: T) -> Loc<T> {
         let region = Region::zero();
         Loc { region, value }
     }
@@ -376,6 +376,17 @@ impl LineInfo {
             start: self.convert_pos(region.start()),
             end: self.convert_pos(region.end()),
         }
+    }
+
+    pub fn convert_line_column(&self, lc: LineColumn) -> Position {
+        let offset = self.line_offsets[lc.line as usize] + lc.column;
+        Position::new(offset)
+    }
+
+    pub fn convert_line_column_region(&self, lc_region: LineColumnRegion) -> Region {
+        let start = self.convert_line_column(lc_region.start);
+        let end = self.convert_line_column(lc_region.end);
+        Region::new(start, end)
     }
 }
 

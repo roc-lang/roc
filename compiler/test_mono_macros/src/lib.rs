@@ -14,10 +14,12 @@ pub fn mono_test(_args: TokenStream, item: TokenStream) -> TokenStream {
     let body = task_fn.block.clone();
 
     let visibility = &task_fn.vis;
+    let attributes = task_fn.attrs;
 
     let result = quote! {
         #[test]
-        #visibility fn #name(#args) -> () {
+        #(#attributes)*
+        #visibility fn #name(#args) {
             compiles_to_ir(#name_str, #body);
 
         }

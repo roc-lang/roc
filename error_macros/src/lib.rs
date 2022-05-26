@@ -66,6 +66,23 @@ macro_rules! assert_sizeof_all {
     };
 }
 
+/// Assert that a type has the expected size on all targets except wasm
+#[macro_export]
+macro_rules! assert_sizeof_non_wasm {
+    ($t: ty, $expected_size: expr) => {
+        #[cfg(not(target_family = "wasm"))]
+        static_assertions::assert_eq_size!($t, [u8; $expected_size]);
+    };
+}
+
+/// Assert that a type has `Copy`
+#[macro_export]
+macro_rules! assert_copyable {
+    ($t: ty) => {
+        static_assertions::assert_impl_all!($t: Copy);
+    };
+}
+
 // LARGE SCALE PROJECTS
 //
 // This section is for "todo!"-style macros enabled in sections where large-scale changes to the

@@ -45,11 +45,11 @@ pub fn eq_generic<'a>(
 
     Stmt::Let(
         Symbol::BOOL_TRUE,
-        Expr::Literal(Literal::Int(1)),
+        Expr::Literal(Literal::Int(1i128.to_ne_bytes())),
         LAYOUT_BOOL,
         root.arena.alloc(Stmt::Let(
             Symbol::BOOL_FALSE,
-            Expr::Literal(Literal::Int(0)),
+            Expr::Literal(Literal::Int(0i128.to_ne_bytes())),
             LAYOUT_BOOL,
             root.arena.alloc(main_body),
         )),
@@ -601,7 +601,7 @@ fn eq_list<'a>(
     // let size = literal int
     let size = root.create_symbol(ident_ids, "size");
     let size_expr = Expr::Literal(Literal::Int(
-        elem_layout.stack_size(root.target_info) as i128
+        (elem_layout.stack_size(root.target_info) as i128).to_ne_bytes(),
     ));
     let size_stmt = |next| Stmt::Let(size, size_expr, layout_isize, next);
 

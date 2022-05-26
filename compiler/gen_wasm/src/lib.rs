@@ -8,7 +8,8 @@ pub mod wasm_module;
 pub mod wasm32_result;
 pub mod wasm32_sized;
 
-use bumpalo::{self, collections::Vec, Bump};
+use bumpalo::collections::{String, Vec};
+use bumpalo::{self, Bump};
 
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevelWrapperType;
@@ -17,6 +18,7 @@ use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 use roc_target::TargetInfo;
+use wasm_module::parse::ParseError;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::wasm_module::{
@@ -47,15 +49,25 @@ pub struct Env<'a> {
     pub exposed_to_host: MutSet<Symbol>,
 }
 
-/// Entry point for Roc CLI
-pub fn build_module<'a>(
+/// Parse the preprocessed host binary
+/// If successful, the module can be passed to build_app_binary
+pub fn parse_host<'a>(arena: &'a Bump, host_bytes: &[u8]) -> Result<WasmModule<'a>, ParseError> {
+    WasmModule::preload(arena, host_bytes)
+}
+
+/// Generate a Wasm module in binary form, ready to write to a file. Entry point from roc_build.
+///   env            environment data from previous compiler stages
+///   interns        names of functions and variables (as memory-efficient interned strings)
+///   host_module    parsed module from a Wasm object file containing all of the non-Roc code
+///   procedures     Roc code in monomorphized intermediate representation
+pub fn build_app_binary<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    preload_bytes: &[u8],
+    host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> std::vec::Vec<u8> {
     let (mut wasm_module, called_preload_fns, _) =
-        build_module_without_wrapper(env, interns, preload_bytes, procedures);
+        build_app_module(env, interns, host_module, procedures);
 
     wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
 
@@ -64,11 +76,14 @@ pub fn build_module<'a>(
     buffer
 }
 
-/// Entry point for REPL (repl_wasm) and integration tests (test_gen)
-pub fn build_module_without_wrapper<'a>(
+/// Generate an unserialized Wasm module
+/// Shared by all consumers of gen_wasm: roc_build, roc_repl_wasm, and test_gen
+/// (roc_repl_wasm and test_gen will add more generated code for a wrapper function
+/// that defines a common interface to `main`, independent of return type.)
+pub fn build_app_module<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    preload_bytes: &[u8],
+    host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
     let mut layout_ids = LayoutIds::default();
@@ -93,17 +108,18 @@ pub fn build_module_without_wrapper<'a>(
         let fn_name = layout_ids
             .get_toplevel(sym, &proc_layout)
             .to_symbol_string(sym, interns);
+        let name = String::from_str_in(&fn_name, env.arena).into_bump_str();
 
         if env.exposed_to_host.contains(&sym) {
             maybe_main_fn_index = Some(fn_index);
             exports.push(Export {
-                name: env.arena.alloc_slice_copy(fn_name.as_bytes()),
+                name,
                 ty: ExportType::Func,
                 index: fn_index,
             });
         }
 
-        let linker_sym = SymInfo::for_function(fn_index, fn_name);
+        let linker_sym = SymInfo::for_function(fn_index, name);
         let linker_sym_index = linker_symbols.len() as u32;
 
         // linker_sym_index is redundant for these procs from user code, but needed for generated helpers!
@@ -118,19 +134,16 @@ pub fn build_module_without_wrapper<'a>(
         fn_index += 1;
     }
 
-    // Pre-load the WasmModule with data from the platform & builtins object file
-    let initial_module = WasmModule::preload(env.arena, preload_bytes);
-
     // Adjust Wasm function indices to account for functions from the object file
     let fn_index_offset: u32 =
-        initial_module.import.function_count + initial_module.code.preloaded_count;
+        host_module.import.fn_signatures.len() as u32 + host_module.code.preloaded_count;
 
     let mut backend = WasmBackend::new(
         env,
         interns,
         layout_ids,
         proc_lookup,
-        initial_module,
+        host_module,
         fn_index_offset,
         CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
     );
@@ -253,6 +266,7 @@ pub struct WasmDebugLogSettings {
     helper_procs_ir: bool,
     let_stmt_ir: bool,
     instructions: bool,
+    storage_map: bool,
     pub keep_test_binary: bool,
 }
 
@@ -262,5 +276,6 @@ pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
     helper_procs_ir: false && cfg!(debug_assertions),
     let_stmt_ir: false && cfg!(debug_assertions),
     instructions: false && cfg!(debug_assertions),
+    storage_map: false && cfg!(debug_assertions),
     keep_test_binary: false && cfg!(debug_assertions),
 };

@@ -4,7 +4,7 @@ description = "The LLVM backend for the Roc compiler"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 roc_alias_analysis = { path = "../alias_analysis" }
@@ -15,7 +15,8 @@ roc_error_macros = { path = "../../error_macros" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
 roc_std = { path = "../../roc_std", default-features = false }
+roc_debug_flags = { path = "../debug_flags" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 inkwell = { path = "../../vendor/inkwell" }
-target-lexicon = "0.12.2"
+target-lexicon = "0.12.3"

@@ -3,20 +3,20 @@ name = "roc_can"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 roc_collections = { path = "../collections" }
 roc_error_macros = { path = "../../error_macros" }
+roc_exhaustive = { path = "../exhaustive" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
-roc_builtins = { path = "../builtins" }
-ven_graph = { path = "../../vendor/pathfinding" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 static_assertions = "1.1.0"
+bitvec = "1"
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"

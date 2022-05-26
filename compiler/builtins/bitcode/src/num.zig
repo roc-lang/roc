@@ -24,7 +24,7 @@ pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
             const radix = 0;
             if (std.fmt.parseInt(T, buf.asSlice(), radix)) |success| {
                 return .{ .errorcode = 0, .value = success };
-            } else |err| {
+            } else |_| {
                 return .{ .errorcode = 1, .value = 0 };
             }
         }
@@ -37,7 +37,7 @@ pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
         fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
             if (std.fmt.parseFloat(T, buf.asSlice())) |success| {
                 return .{ .errorcode = 0, .value = success };
-            } else |err| {
+            } else |_| {
                 return .{ .errorcode = 1, .value = 0 };
             }
         }
@@ -90,10 +90,19 @@ pub fn exportAtan(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
-pub fn exportRound(comptime T: type, comptime name: []const u8) void {
+pub fn exportRoundF32(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
-        fn func(input: T) callconv(.C) i64 {
-            return @floatToInt(i64, (@round(input)));
+        fn func(input: f32) callconv(.C) T {
+            return @floatToInt(T, (@round(input)));
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportRoundF64(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: f64) callconv(.C) T {
+            return @floatToInt(T, (@round(input)));
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
@@ -102,7 +111,7 @@ pub fn exportRound(comptime T: type, comptime name: []const u8) void {
 pub fn exportDivCeil(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(a: T, b: T) callconv(.C) T {
-            return math.divCeil(T, a, b) catch unreachable;
+            return math.divCeil(T, a, b) catch @panic("TODO runtime exception for dividing by 0!");
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });

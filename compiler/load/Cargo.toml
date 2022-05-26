@@ -3,7 +3,7 @@ name = "roc_load"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 roc_load_internal = { path = "../load_internal" }
@@ -13,10 +13,12 @@ roc_constrain= { path = "../constrain" }
 roc_types = { path = "../types" }
 roc_module = { path = "../module" }
 roc_collections = { path = "../collections" }
+roc_reporting = { path = "../../reporting" }
 
 [build-dependencies]
 roc_load_internal = { path = "../load_internal" }
 roc_builtins = { path = "../builtins" }
 roc_module = { path = "../module" }
+roc_reporting = { path = "../../reporting" }
 roc_target = { path = "../roc_target" }
 bumpalo = { version = "3.8.0", features = ["collections"] }

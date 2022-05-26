@@ -1,23 +1,23 @@
-procedure List.3 (#Attr.2, #Attr.3):
-    let Test.20 : U64 = lowlevel ListLen #Attr.2;
-    let Test.17 : Int1 = lowlevel NumLt #Attr.3 Test.20;
-    if Test.17 then
-        let Test.19 : {} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-        let Test.18 : [C {}, C {}] = Ok Test.19;
-        ret Test.18;
+procedure List.2 (#Attr.2, #Attr.3):
+    let List.144 : U64 = lowlevel ListLen #Attr.2;
+    let List.141 : Int1 = lowlevel NumLt #Attr.3 List.144;
+    if List.141 then
+        let List.143 : {} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+        let List.142 : [C {}, C {}] = Ok List.143;
+        ret List.142;
     else
-        let Test.16 : {} = Struct {};
-        let Test.15 : [C {}, C {}] = Err Test.16;
-        ret Test.15;
+        let List.140 : {} = Struct {};
+        let List.139 : [C {}, C {}] = Err List.140;
+        ret List.139;
 
 procedure Test.2 (Test.6):
-    let Test.24 : Str = "bar";
-    ret Test.24;
+    let Test.18 : Str = "bar";
+    ret Test.18;
 
 procedure Test.0 ():
-    joinpoint Test.22 Test.3:
+    joinpoint Test.16 Test.3:
         let Test.14 : U64 = 0i64;
-        let Test.7 : [C {}, C {}] = CallByName List.3 Test.3 Test.14;
+        let Test.7 : [C {}, C {}] = CallByName List.2 Test.3 Test.14;
         dec Test.3;
         let Test.11 : U8 = 1i64;
         let Test.12 : U8 = GetTagId Test.7;
@@ -32,11 +32,11 @@ procedure Test.0 ():
             let Test.10 : Str = "bad!";
             ret Test.10;
     in
-    let Test.25 : Int1 = false;
-    if Test.25 then
+    let Test.19 : Int1 = false;
+    if Test.19 then
         let Test.1 : List {} = Array [];
-        jump Test.22 Test.1;
+        jump Test.16 Test.1;
     else
-        let Test.23 : {} = Struct {};
-        let Test.21 : List {} = Array [Test.23];
-        jump Test.22 Test.21;
+        let Test.17 : {} = Struct {};
+        let Test.15 : List {} = Array [Test.17];
+        jump Test.16 Test.15;

@@ -1,7 +1,7 @@
 app "quicksort"
     packages { pf: "quicksort-platform" }
     imports []
-    provides [ quicksort ] to pf
+    provides [quicksort] to pf
 
 quicksort = \originalList ->
     n = List.len originalList
@@ -19,18 +19,17 @@ quicksortHelp = \list, low, high ->
     else
         list
 
-partition : Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]
+partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
 partition = \low, high, initialList ->
     when List.get initialList high is
         Ok pivot ->
             when partitionHelp low low initialList high pivot is
                 Pair newI newList ->
                     Pair newI (swap newI high newList)
-
         Err _ ->
             Pair low initialList
 
-partitionHelp : Nat, Nat, List (Num c), Nat, Num c -> [ Pair Nat (List (Num c)) ]
+partitionHelp : Nat, Nat, List (Num c), Nat, Num c -> [Pair Nat (List (Num c))]
 partitionHelp = \i, j, list, high, pivot ->
     if j < high then
         when List.get list j is
@@ -39,7 +38,6 @@ partitionHelp = \i, j, list, high, pivot ->
                     partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
                 else
                     partitionHelp i (j + 1) list high pivot
-
             Err _ ->
                 Pair i list
     else
@@ -52,7 +50,6 @@ swap = \i, j, list ->
             list
                 |> List.set i atJ
                 |> List.set j atI
-
         _ ->
             # to prevent a decrement on list
             # turns out this is very important for optimizations

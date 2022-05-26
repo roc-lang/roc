@@ -705,7 +705,7 @@ pub fn listWalkUntil(
     dec: Dec,
     output: Opaque,
 ) callconv(.C) void {
-    // [ Continue a, Stop a ]
+    // [Continue a, Stop a]
 
     if (accum_width == 0) {
         return;
@@ -734,7 +734,7 @@ pub fn listWalkUntil(
 
             caller(data, bytes_ptr, element, bytes_ptr);
 
-            // [ Continue ..., Stop ]
+            // [Continue ..., Stop]
             const tag_id = has_tag_id(0, bytes_ptr);
 
             if (!tag_id.matched) {
@@ -1326,7 +1326,6 @@ pub fn listFindUnsafe(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
     element_width: usize,
     inc: Inc,
     dec: Dec,
@@ -1354,4 +1353,10 @@ pub fn listFindUnsafe(
     } else {
         return .{ .value = null, .found = false };
     }
+}
+
+pub fn listIsUnique(
+    list: RocList,
+) callconv(.C) bool {
+    return list.isEmpty() or list.isUnique();
 }

@@ -1,0 +1,22 @@
+procedure List.28 (#Attr.2, #Attr.3):
+    let List.143 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
+    let Bool.14 : Int1 = lowlevel ListIsUnique #Attr.2;
+    if Bool.14 then
+        ret List.143;
+    else
+        decref #Attr.2;
+        ret List.143;
+
+procedure List.54 (List.98):
+    let List.141 : {} = Struct {};
+    let List.140 : List I64 = CallByName List.28 List.98 List.141;
+    ret List.140;
+
+procedure Num.46 (#Attr.2, #Attr.3):
+    let Num.273 : U8 = lowlevel NumCompare #Attr.2 #Attr.3;
+    ret Num.273;
+
+procedure Test.0 ():
+    let Test.2 : List I64 = Array [4i64, 3i64, 2i64, 1i64];
+    let Test.1 : List I64 = CallByName List.54 Test.2;
+    ret Test.1;

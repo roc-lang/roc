@@ -77,25 +77,28 @@ pub fn expr_to_expr2<'a>(
         }
         Num(string) => {
             match finish_parsing_num(string) {
-                Ok(ParsedNumResult::UnknownNum(int, _) | ParsedNumResult::Int(int, _)) => {
+                Ok((
+                    parsed,
+                    ParsedNumResult::UnknownNum(int, _) | ParsedNumResult::Int(int, _),
+                )) => {
                     let expr = Expr2::SmallInt {
                         number: IntVal::I64(match int {
                             IntValue::U128(_) => todo!(),
-                            IntValue::I128(n) => n as i64, // FIXME
+                            IntValue::I128(n) => i128::from_ne_bytes(n) as i64, // FIXME
                         }),
                         var: env.var_store.fresh(),
                         // TODO non-hardcode
                         style: IntStyle::Decimal,
-                        text: PoolStr::new(string, env.pool),
+                        text: PoolStr::new(parsed, env.pool),
                     };
 
                     (expr, Output::default())
                 }
-                Ok(ParsedNumResult::Float(float, _)) => {
+                Ok((parsed, ParsedNumResult::Float(float, _))) => {
                     let expr = Expr2::Float {
                         number: FloatVal::F64(float),
                         var: env.var_store.fresh(),
-                        text: PoolStr::new(string, env.pool),
+                        text: PoolStr::new(parsed, env.pool),
                     };
 
                     (expr, Output::default())
@@ -126,7 +129,7 @@ pub fn expr_to_expr2<'a>(
                     let expr = Expr2::SmallInt {
                         number: IntVal::I64(match int {
                             IntValue::U128(_) => todo!(),
-                            IntValue::I128(n) => n as i64, // FIXME
+                            IntValue::I128(n) => i128::from_ne_bytes(n) as i64, // FIXME
                         }),
                         var: env.var_store.fresh(),
                         // TODO non-hardcode
@@ -173,25 +176,11 @@ pub fn expr_to_expr2<'a>(
             (expr, output)
         }
 
-        GlobalTag(tag) => {
-            // a global tag without any arguments
+        Tag(tag) => {
+            // a tag without any arguments
             (
-                Expr2::GlobalTag {
+                Expr2::Tag {
                     name: PoolStr::new(tag, env.pool),
-                    variant_var: env.var_store.fresh(),
-                    ext_var: env.var_store.fresh(),
-                    arguments: PoolVec::empty(env.pool),
-                },
-                Output::default(),
-            )
-        }
-        PrivateTag(name) => {
-            // a private tag without any arguments
-            let ident_id = env.ident_ids.get_or_insert(&(*name).into());
-            let name = Symbol::new(env.home, ident_id);
-            (
-                Expr2::PrivateTag {
-                    name,
                     variant_var: env.var_store.fresh(),
                     ext_var: env.var_store.fresh(),
                     arguments: PoolVec::empty(env.pool),
@@ -557,23 +546,12 @@ pub fn expr_to_expr2<'a>(
                     // We can't call a runtime error; bail out by propagating it!
                     return (fn_expr, output);
                 }
-                Expr2::GlobalTag {
+                Expr2::Tag {
                     variant_var,
                     ext_var,
                     name,
                     ..
-                } => Expr2::GlobalTag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    arguments: args,
-                },
-                Expr2::PrivateTag {
-                    variant_var,
-                    ext_var,
-                    name,
-                    ..
-                } => Expr2::PrivateTag {
+                } => Expr2::Tag {
                     variant_var,
                     ext_var,
                     name,

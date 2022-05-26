@@ -3,7 +3,9 @@ name = "roc_target"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-target-lexicon = "0.12.2"
+target-lexicon = "0.12.3"
+strum = "0.24.0"
+strum_macros = "0.24"

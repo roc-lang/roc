@@ -1,5 +1,7 @@
 use crate::solve::{self, Aliases};
+use roc_can::abilities::{AbilitiesStore, SolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
+use roc_can::expr::PendingDerives;
 use roc_can::module::RigidVariables;
 use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
@@ -19,11 +21,15 @@ pub struct SolvedModule {
     /// to create the types for HostExposed. This
     /// has some overlap with the StorageSubs fields,
     /// so maybe we can get rid of this at some point
+    ///
+    /// Contains both variables of symbols that are explicitly exposed by the header,
+    /// and the variables of any solved ability specializations we have.
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
 
     /// Used when importing this module into another module
     pub stored_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub storage_subs: StorageSubs,
+    pub solved_specializations: SolvedSpecializations,
 }
 
 pub fn run_solve(
@@ -32,11 +38,20 @@ pub fn run_solve(
     rigid_variables: RigidVariables,
     mut subs: Subs,
     mut aliases: Aliases,
-) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
-    let env = solve::Env::default();
-
+    mut abilities_store: AbilitiesStore,
+    pending_derives: PendingDerives,
+) -> (
+    Solved<Subs>,
+    solve::Env,
+    Vec<solve::TypeError>,
+    AbilitiesStore,
+) {
     for (var, name) in rigid_variables.named {
         subs.rigid_var(var, name);
+    }
+
+    for (var, (name, ability)) in rigid_variables.able {
+        subs.rigid_able_var(var, name, ability);
     }
 
     for var in rigid_variables.wildcards {
@@ -50,14 +65,15 @@ pub fn run_solve(
     // Run the solver to populate Subs.
     let (solved_subs, solved_env) = solve::run(
         constraints,
-        &env,
         &mut problems,
         subs,
         &mut aliases,
         &constraint,
+        pending_derives,
+        &mut abilities_store,
     );
 
-    (solved_subs, solved_env, problems)
+    (solved_subs, solved_env, problems, abilities_store)
 }
 
 pub fn exposed_types_storage_subs(

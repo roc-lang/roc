@@ -59,9 +59,9 @@ use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
+use roc_types::pretty_print::name_and_print_var;
 use roc_types::solved_types::Solved;
-use roc_types::subs::{Subs, Variable};
-use roc_types::{pretty_print::content_to_string, subs::VarStore};
+use roc_types::subs::{Subs, VarStore, Variable};
 use snafu::OptionExt;
 use threadpool::ThreadPool;
 use winit::event::VirtualKeyCode;
@@ -462,17 +462,10 @@ impl<'a> EdModel<'a> {
 
         let subs = solved.inner_mut();
 
-        let content = subs.get_content_without_compacting(var);
+        let pretty_var =
+            name_and_print_var(var, subs, self.module.env.home, &self.loaded_module.interns);
 
-        PoolStr::new(
-            &content_to_string(
-                content,
-                subs,
-                self.module.env.home,
-                &self.loaded_module.interns,
-            ),
-            self.module.env.pool,
-        )
+        PoolStr::new(&pretty_var, self.module.env.pool)
     }
 
     fn run_solve(
@@ -1390,7 +1383,7 @@ pub mod test_ed_update {
         expected_post_lines: Vec<String>,
         new_char_seq: &str,
     ) -> Result<(), String> {
-        let mut code_str = pre_lines.join("\n").replace("┃", "");
+        let mut code_str = pre_lines.join("\n").replace('┃', "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();
@@ -1460,11 +1453,11 @@ pub mod test_ed_update {
     macro_rules! ovec {
         ( $( $x:expr ),* ) => {
             {
-                let mut temp_vec = Vec::new();
-                $(
-                    temp_vec.push($x.to_owned());
-                )*
-                temp_vec
+                vec![
+                    $(
+                        $x.to_owned(),
+                    )*
+                ]
             }
         };
     }
@@ -2596,7 +2589,7 @@ pub mod test_ed_update {
         input_seq: &str,
         repeats: usize,
     ) -> Result<(), String> {
-        let mut code_str = pre_lines.join("").replace("┃", "");
+        let mut code_str = pre_lines.join("").replace('┃', "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();
@@ -3008,7 +3001,7 @@ pub mod test_ed_update {
         expected_tooltips: Vec<String>,
         new_char_seq: &str,
     ) -> Result<(), String> {
-        let mut code_str = pre_lines.join("").replace("┃", "");
+        let mut code_str = pre_lines.join("").replace('┃', "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();
@@ -3169,7 +3162,7 @@ pub mod test_ed_update {
 
         assert_type_tooltips_clean(
             ovec!["val = [ [ 0, 1, \"2\" ], [ 3, 4, 5 ┃] ]"],
-            ovec!["List (Num *)", "List (List <type mismatch>)"],
+            ovec!["List (Num *)", "List <type mismatch>"],
         )?;
 
         Ok(())
@@ -3186,7 +3179,7 @@ pub mod test_ed_update {
         repeats: usize,
         move_caret_fun: ModelMoveCaretFun,
     ) -> Result<(), String> {
-        let mut code_str = pre_lines.join("").replace("┃", "");
+        let mut code_str = pre_lines.join("").replace('┃', "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();
@@ -3350,7 +3343,7 @@ pub mod test_ed_update {
         expected_post_lines: Vec<String>,
         repeats: usize,
     ) -> Result<(), String> {
-        let mut code_str = pre_lines.join("").replace("┃", "");
+        let mut code_str = pre_lines.join("").replace('┃', "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();

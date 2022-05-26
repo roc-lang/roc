@@ -3,7 +3,7 @@ name = "roc_ast"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 description = "AST as used by the editor and (soon) docs. In contrast to the compiler, these types do not keep track of a location in a file."
 
 [dependencies]
@@ -19,6 +19,7 @@ roc_unify = { path = "../compiler/unify"}
 roc_load = { path = "../compiler/load" }
 roc_target = { path = "../compiler/roc_target" }
 roc_error_macros = { path = "../error_macros" }
+roc_reporting = { path = "../reporting" }
 arrayvec = "0.7.2"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 page_size = "0.4.2"

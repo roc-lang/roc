@@ -1,4 +1,4 @@
-interface Base64.Decode exposes [ fromBytes ] imports [ Bytes.Decode.{ Decoder, DecodeProblem } ]
+interface Base64.Decode exposes [fromBytes] imports [Bytes.Decode.{ Decoder, DecodeProblem }]
 
 fromBytes : List U8 -> Result Str DecodeProblem
 fromBytes = \bytes ->
@@ -20,11 +20,10 @@ loopHelp = \{ remaining, string } ->
         c = Num.intCast z
         combined = Num.bitwiseOr (Num.bitwiseOr (Num.shiftLeftBy 16 a) (Num.shiftLeftBy 8 b)) c
 
-        Loop
-            {
-                remaining: remaining - 3,
-                string: Str.concat string (bitsToChars combined 0),
-            }
+        Loop {
+            remaining: remaining - 3,
+            string: Str.concat string (bitsToChars combined 0),
+        }
     else if remaining == 0 then
         Bytes.Decode.succeed (Done string)
     else if remaining == 2 then
@@ -51,7 +50,6 @@ bitsToChars = \bits, missing ->
     when Str.fromUtf8 (bitsToCharsHelp bits missing) is
         Ok str ->
             str
-
         Err _ ->
             ""
 
@@ -90,14 +88,11 @@ bitsToCharsHelp = \bits, missing ->
 
     when missing is
         0 ->
-            [ p, q, r, s ]
-
+            [p, q, r, s]
         1 ->
-            [ p, q, r, equals ]
-
+            [p, q, r, equals]
         2 ->
-            [ p, q, equals, equals ]
-
+            [p, q, equals, equals]
         _ ->
             # unreachable
             []
@@ -120,11 +115,9 @@ unsafeToChar = \n ->
             62 ->
                 # '+'
                 43
-
             63 ->
                 # '/'
                 47
-
             _ ->
                 # anything else is invalid '\u{0000}'
                 0

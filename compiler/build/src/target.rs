@@ -1,11 +1,9 @@
-#[cfg(feature = "llvm")]
 use inkwell::{
     targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple},
     OptimizationLevel,
 };
-#[cfg(feature = "llvm")]
 use roc_mono::ir::OptLevel;
-use target_lexicon::{Architecture, OperatingSystem, Triple};
+use target_lexicon::{Architecture, Environment, OperatingSystem, Triple};
 
 pub fn target_triple_str(target: &Triple) -> &'static str {
     // Best guide I've found on how to determine these magic strings:
@@ -60,8 +58,20 @@ pub fn target_zig_str(target: &Triple) -> &'static str {
         Triple {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Linux,
+            environment: Environment::Musl,
+            ..
+        } => "x86_64-linux-musl",
+        Triple {
+            architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Linux,
             ..
         } => "x86_64-linux-gnu",
+        Triple {
+            architecture: Architecture::X86_32(target_lexicon::X86_32Architecture::I386),
+            operating_system: OperatingSystem::Linux,
+            environment: Environment::Musl,
+            ..
+        } => "i386-linux-musl",
         Triple {
             architecture: Architecture::X86_32(target_lexicon::X86_32Architecture::I386),
             operating_system: OperatingSystem::Linux,
@@ -86,7 +96,6 @@ pub fn target_zig_str(target: &Triple) -> &'static str {
     }
 }
 
-#[cfg(feature = "llvm")]
 pub fn init_arch(target: &Triple) {
     match target.architecture {
         Architecture::X86_64 | Architecture::X86_32(_)
@@ -130,16 +139,24 @@ pub fn arch_str(target: &Triple) -> &'static str {
     }
 }
 
-#[cfg(feature = "llvm")]
 pub fn target_machine(
     target: &Triple,
     opt: OptimizationLevel,
     reloc: RelocMode,
-    model: CodeModel,
 ) -> Option<TargetMachine> {
     let arch = arch_str(target);
 
     init_arch(target);
+
+    let code_model = match target.architecture {
+        // LLVM 12 will not compile our programs without a large code model.
+        // The reason is not totally clear to me, but my guess is a few special-cases in
+        //   llvm/lib/Target/AArch64/AArch64ISelLowering.cpp (instructions)
+        //   llvm/lib/Target/AArch64/AArch64Subtarget.cpp (GoT tables)
+        // Revisit when upgrading to LLVM 13.
+        Architecture::Aarch64(..) => CodeModel::Large,
+        _ => CodeModel::Default,
+    };
 
     Target::from_name(arch).unwrap().create_target_machine(
         &TargetTriple::create(target_triple_str(target)),
@@ -147,11 +164,10 @@ pub fn target_machine(
         "", // TODO: this probably should be TargetMachine::get_host_cpu_features() to enable all features.
         opt,
         reloc,
-        model,
+        code_model,
     )
 }
 
-#[cfg(feature = "llvm")]
 pub fn convert_opt_level(level: OptLevel) -> OptimizationLevel {
     match level {
         OptLevel::Development | OptLevel::Normal => OptimizationLevel::None,

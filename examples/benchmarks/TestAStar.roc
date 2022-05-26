@@ -1,7 +1,7 @@
 app "test-astar"
     packages { pf: "platform" }
-    imports [ pf.Task, AStar ]
-    provides [ main ] to pf
+    imports [pf.Task, AStar]
+    provides [main] to pf
 
 main : Task.Task {} []
 main =
@@ -20,13 +20,12 @@ showBool = \b ->
     when b is
         True ->
             "True"
-
         False ->
             "False"
 
 test1 : Bool
 test1 =
-    example1 == [ 2, 4 ]
+    example1 == [2, 4]
 
 example1 : List I64
 example1 =
@@ -34,14 +33,11 @@ example1 =
     step = \n ->
         when n is
             1 ->
-                Set.fromList [ 2, 3 ]
-
+                Set.fromList [2, 3]
             2 ->
-                Set.fromList [ 4 ]
-
+                Set.fromList [4]
             3 ->
-                Set.fromList [ 4 ]
-
+                Set.fromList [4]
             _ ->
                 Set.fromList []
 
@@ -51,6 +47,5 @@ example1 =
     when AStar.findPath cost step 1 4 is
         Ok path ->
             path
-
         Err _ ->
             []

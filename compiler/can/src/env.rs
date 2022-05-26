@@ -1,17 +1,18 @@
 use crate::procedure::References;
-use roc_collections::all::{MutMap, MutSet};
+use crate::scope::Scope;
+use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIdsByModule, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 
 /// The canonicalization environment for a particular module.
 pub struct Env<'a> {
-    /// The module's path. Private tags and unqualified references to identifiers
+    /// The module's path. Opaques and unqualified references to identifiers
     /// are assumed to be relative to this path.
     pub home: ModuleId,
 
-    pub dep_idents: &'a MutMap<ModuleId, IdentIds>,
+    pub dep_idents: &'a IdentIdsByModule,
 
     pub module_ids: &'a ModuleIds,
 
@@ -24,47 +25,38 @@ pub struct Env<'a> {
     /// current tail-callable symbol
     pub tailcallable_symbol: Option<Symbol>,
 
-    /// current closure name (if any)
-    pub closure_name_symbol: Option<Symbol>,
-
     /// Symbols of values/functions which were referenced by qualified lookups.
-    pub qualified_value_lookups: MutSet<Symbol>,
+    pub qualified_value_lookups: VecSet<Symbol>,
 
     /// Symbols of types which were referenced by qualified lookups.
-    pub qualified_type_lookups: MutSet<Symbol>,
+    pub qualified_type_lookups: VecSet<Symbol>,
 
-    pub top_level_symbols: MutSet<Symbol>,
-
-    pub ident_ids: IdentIds,
-    pub exposed_ident_ids: IdentIds,
+    pub top_level_symbols: VecSet<Symbol>,
 }
 
 impl<'a> Env<'a> {
     pub fn new(
         home: ModuleId,
-        dep_idents: &'a MutMap<ModuleId, IdentIds>,
+        dep_idents: &'a IdentIdsByModule,
         module_ids: &'a ModuleIds,
-        exposed_ident_ids: IdentIds,
     ) -> Env<'a> {
         Env {
             home,
             dep_idents,
             module_ids,
-            ident_ids: exposed_ident_ids.clone(), // we start with these, but will add more later
-            exposed_ident_ids,
             problems: Vec::new(),
             closures: MutMap::default(),
-            qualified_value_lookups: MutSet::default(),
-            qualified_type_lookups: MutSet::default(),
+            qualified_value_lookups: VecSet::default(),
+            qualified_type_lookups: VecSet::default(),
             tailcallable_symbol: None,
-            closure_name_symbol: None,
-            top_level_symbols: MutSet::default(),
+            top_level_symbols: VecSet::default(),
         }
     }
 
     /// Returns Err if the symbol resolved, but it was not exposed by the given module
     pub fn qualified_lookup(
         &mut self,
+        scope: &Scope,
         module_name_str: &str,
         ident: &str,
         region: Region,
@@ -85,7 +77,7 @@ impl<'a> Env<'a> {
                 // You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
                 if module_id == self.home {
-                    match self.ident_ids.get_id(&ident) {
+                    match scope.locals.ident_ids.get_id(&ident) {
                         Some(ident_id) => {
                             let symbol = Symbol::new(module_id, ident_id);
 
@@ -97,16 +89,21 @@ impl<'a> Env<'a> {
 
                             Ok(symbol)
                         }
-                        None => Err(RuntimeError::LookupNotInScope(
-                            Loc {
-                                value: ident,
-                                region,
-                            },
-                            self.ident_ids
-                                .idents()
-                                .map(|(_, string)| string.as_ref().into())
-                                .collect(),
-                        )),
+                        None => {
+                            let error = RuntimeError::LookupNotInScope(
+                                Loc {
+                                    value: ident,
+                                    region,
+                                },
+                                scope
+                                    .locals
+                                    .ident_ids
+                                    .ident_strs()
+                                    .map(|(_, string)| string.into())
+                                    .collect(),
+                            );
+                            Err(error)
+                        }
                     }
                 } else {
                     match self.dep_idents.get(&module_id) {
@@ -124,11 +121,11 @@ impl<'a> Env<'a> {
                             }
                             None => {
                                 let exposed_values = exposed_ids
-                                    .idents()
+                                    .ident_strs()
                                     .filter(|(_, ident)| {
-                                        ident.as_ref().starts_with(|c: char| c.is_lowercase())
+                                        ident.starts_with(|c: char| c.is_lowercase())
                                     })
-                                    .map(|(_, ident)| Lowercase::from(ident.as_ref()))
+                                    .map(|(_, ident)| Lowercase::from(ident))
                                     .collect();
                                 Err(RuntimeError::ValueNotExposed {
                                     module_name,
@@ -165,22 +162,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    /// Generates a unique, new symbol like "$1" or "$5",
-    /// using the home module as the module_id.
-    ///
-    /// This is used, for example, during canonicalization of an Expr::Closure
-    /// to generate a unique symbol to refer to that closure.
-    pub fn gen_unique_symbol(&mut self) -> Symbol {
-        let ident_id = self.ident_ids.gen_unique();
-
-        Symbol::new(self.home, ident_id)
-    }
-
     pub fn problem(&mut self, problem: Problem) {
         self.problems.push(problem)
-    }
-
-    pub fn register_closure(&mut self, symbol: Symbol, references: References) {
-        self.closures.insert(symbol, references);
     }
 }

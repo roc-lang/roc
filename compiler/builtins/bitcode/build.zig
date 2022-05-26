@@ -5,7 +5,7 @@ const CrossTarget = std.zig.CrossTarget;
 const Arch = std.Target.Cpu.Arch;
 
 pub fn build(b: *Builder) void {
-    // b.setPreferredReleaseMode(builtin.Mode.Debug
+    // b.setPreferredReleaseMode(.Debug);
     b.setPreferredReleaseMode(.ReleaseFast);
     const mode = b.standardReleaseOptions();
 
@@ -28,12 +28,14 @@ pub fn build(b: *Builder) void {
             // TODO allow for native target for maximum speed
         },
     });
-    const i386_target = makeI386Target();
+    const linux32_target = makeLinux32Target();
+    const linux64_target = makeLinux64Target();
     const wasm32_target = makeWasm32Target();
 
     // LLVM IR
     generateLlvmIrFile(b, mode, host_target, main_path, "ir", "builtins-host");
-    generateLlvmIrFile(b, mode, i386_target, main_path, "ir-i386", "builtins-i386");
+    generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "builtins-i386");
+    generateLlvmIrFile(b, mode, linux64_target, main_path, "ir-x86_64", "builtins-x86_64");
     generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "builtins-wasm32");
 
     // Generate Object Files
@@ -55,8 +57,9 @@ fn generateLlvmIrFile(
     const obj = b.addObject(object_name, main_path);
     obj.setBuildMode(mode);
     obj.strip = true;
-    obj.emit_llvm_ir = true;
-    obj.emit_bin = false;
+    obj.emit_llvm_ir = .emit;
+    obj.emit_llvm_bc = .emit;
+    obj.emit_bin = .no_emit;
     obj.target = target;
 
     const ir = b.step(step_name, "Build LLVM ir");
@@ -87,10 +90,20 @@ fn generateObjectFile(
     obj_step.dependOn(&obj.step);
 }
 
-fn makeI386Target() CrossTarget {
+fn makeLinux32Target() CrossTarget {
     var target = CrossTarget.parse(.{}) catch unreachable;
 
     target.cpu_arch = std.Target.Cpu.Arch.i386;
+    target.os_tag = std.Target.Os.Tag.linux;
+    target.abi = std.Target.Abi.musl;
+
+    return target;
+}
+
+fn makeLinux64Target() CrossTarget {
+    var target = CrossTarget.parse(.{}) catch unreachable;
+
+    target.cpu_arch = std.Target.Cpu.Arch.x86_64;
     target.os_tag = std.Target.Os.Tag.linux;
     target.abi = std.Target.Abi.musl;
 

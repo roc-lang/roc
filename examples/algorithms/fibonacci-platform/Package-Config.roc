@@ -3,7 +3,7 @@ platform "fibonacci"
     exposes []
     packages {}
     imports []
-    provides [ mainForHost ]
+    provides [mainForHost]
 
 mainForHost : I64 -> I64
 mainForHost = \a -> main a

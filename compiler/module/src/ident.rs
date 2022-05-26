@@ -3,12 +3,17 @@ pub use roc_ident::IdentStr;
 use std::fmt;
 
 /// This could be uppercase or lowercase, qualified or unqualified.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct Ident(pub IdentStr);
 
 impl Ident {
     pub fn as_inline_str(&self) -> &IdentStr {
         &self.0
+    }
+
+    #[inline(always)]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
     }
 }
 
@@ -44,34 +49,27 @@ pub type TagIdIntType = u16;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TagName {
-    /// Global tags have no module, but tend to be short strings (since they're
+    /// Tags have no module, but tend to be short strings (since they're
     /// never qualified), so we store them as ident strings.
     ///
     /// This is allows canonicalization to happen in parallel without locks.
-    /// If global tags had a Symbol representation, then each module would have to
-    /// deal with contention on a global mutex around translating global tag strings
+    /// If tags had a Symbol representation, then each module would have to
+    /// deal with contention on a global mutex around translating tag strings
     /// into integers. (Record field labels work the same way, for the same reason.)
-    Global(Uppercase),
-
-    /// Private tags are associated with a specific module, and as such use a
-    /// Symbol just like all other module-specific identifiers.
-    Private(Symbol),
+    Tag(Uppercase),
 
     /// Used to connect the closure size to the function it corresponds to
     Closure(Symbol),
 }
 
 roc_error_macros::assert_sizeof_aarch64!(TagName, 24);
-roc_error_macros::assert_sizeof_wasm!(TagName, 16);
+roc_error_macros::assert_sizeof_wasm!(TagName, 12);
 roc_error_macros::assert_sizeof_default!(TagName, 24);
 
 impl TagName {
     pub fn as_ident_str(&self, interns: &Interns, home: ModuleId) -> IdentStr {
         match self {
-            TagName::Global(uppercase) => uppercase.as_ident_str().clone(),
-            TagName::Private(symbol) => {
-                symbol.fully_qualified(interns, home).as_ident_str().clone()
-            }
+            TagName::Tag(uppercase) => uppercase.as_ident_str().clone(),
             TagName::Closure(symbol) => {
                 symbol.fully_qualified(interns, home).as_ident_str().clone()
             }
@@ -90,6 +88,9 @@ impl ModuleName {
     pub const DICT: &'static str = "Dict";
     pub const SET: &'static str = "Set";
     pub const RESULT: &'static str = "Result";
+    pub const BOX: &'static str = "Box";
+    pub const ENCODE: &'static str = "Encode";
+    pub const JSON: &'static str = "Json";
 
     pub fn as_str(&self) -> &str {
         self.0.as_str()
@@ -200,6 +201,12 @@ impl Lowercase {
 impl<'a> From<&'a str> for Lowercase {
     fn from(string: &'a str) -> Self {
         Self(string.into())
+    }
+}
+
+impl<'a> From<&'a Lowercase> for &'a str {
+    fn from(lowercase: &'a Lowercase) -> Self {
+        lowercase.as_str()
     }
 }
 

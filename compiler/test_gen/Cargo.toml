@@ -3,7 +3,7 @@ name = "test_gen"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 
 [[test]]
 name = "test_gen"
@@ -37,22 +37,22 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 either = "1.6.1"
 libc = "0.2.106"
 inkwell = { path = "../../vendor/inkwell" }
-target-lexicon = "0.12.2"
+target-lexicon = "0.12.3"
 libloading = "0.7.1"
-wasmer-wasi = "2.0.0"
+wasmer-wasi = "2.2.1"
 tempfile = "3.2.0"
 indoc = "1.0.3"
 
 # Wasmer singlepass compiler only works on x86_64.
 [target.'cfg(target_arch = "x86_64")'.dev-dependencies]
-wasmer = { version = "2.0.0", default-features = false, features = ["default-singlepass", "default-universal"] }
+wasmer = { version = "2.2.1", default-features = false, features = ["singlepass", "universal"] }
 
 [target.'cfg(not(target_arch = "x86_64"))'.dev-dependencies]
-wasmer = { version = "2.0.0", default-features = false, features = ["default-cranelift", "default-universal"] }
+wasmer = { version = "2.2.1", default-features = false, features = ["cranelift", "universal"] }
 
 [features]
 default = ["gen-llvm"]
-gen-llvm = ["roc_build/llvm"]
+gen-llvm = []
 gen-dev = []
 gen-wasm = []
 wasm-cli-run = []

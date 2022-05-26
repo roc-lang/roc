@@ -66,7 +66,7 @@ mod test_parse {
                         ".",
                         stringify!($kind)
                     )),*,
-                ].iter().map(|t| *t).collect::<std::collections::HashSet<&str>>();
+               ].iter().map(|t| *t).collect::<std::collections::HashSet<&str>>();
 
                 fn list(dir: &std::path::Path) -> std::vec::Vec<String> {
                     std::fs::read_dir(dir).unwrap().map(|f| f.unwrap().file_name().to_str().unwrap().to_string()).collect::<std::vec::Vec<_>>()
@@ -77,7 +77,7 @@ mod test_parse {
                 let pass_or_fail_names = list(&base);
                 let mut extra_test_files = std::collections::HashSet::new();
                 for res in pass_or_fail_names {
-                    assert!(res == "pass" || res == "fail");
+                    assert!(res == "pass" || res == "fail", "a pass or fail filename was neither \"pass\" nor \"fail\", but rather: {:?}", res);
                     let res_dir = base.join(&res);
                     for file in list(&res_dir) {
                         let test = if let Some(test) = file.strip_suffix(".roc") {
@@ -122,6 +122,7 @@ mod test_parse {
     snapshot_tests! {
         fail/type_argument_no_arrow.expr,
         fail/type_double_comma.expr,
+        pass/plus_if.expr,
         pass/list_closing_indent_not_enough.expr,
         pass/ability_single_line.expr,
         pass/ability_multi_line.expr,
@@ -131,9 +132,8 @@ mod test_parse {
         pass/add_with_spaces.expr,
         pass/annotated_record_destructure.expr,
         pass/annotated_tag_destructure.expr,
-        pass/apply_global_tag.expr,
-        pass/apply_parenthetical_global_tag_args.expr,
-        pass/apply_private_tag.expr,
+        pass/apply_tag.expr,
+        pass/apply_parenthetical_tag_args.expr,
         pass/apply_three_args.expr,
         pass/apply_two_args.expr,
         pass/apply_unary_negation.expr,
@@ -141,8 +141,7 @@ mod test_parse {
         pass/basic_apply.expr,
         pass/basic_docs.expr,
         pass/basic_field.expr,
-        pass/basic_global_tag.expr,
-        pass/basic_private_tag.expr,
+        pass/basic_tag.expr,
         pass/basic_var.expr,
         pass/closure_with_underscores.expr,
         pass/comment_after_def.module,
@@ -162,6 +161,7 @@ mod test_parse {
         pass/equals_with_spaces.expr,
         pass/equals.expr,
         pass/expect.expr,
+        pass/record_type_with_function.expr,
         pass/float_with_underscores.expr,
         pass/full_app_header_trailing_commas.header,
         pass/full_app_header.header,
@@ -211,6 +211,7 @@ mod test_parse {
         pass/one_minus_two.expr,
         pass/one_plus_two.expr,
         pass/one_spaced_def.expr,
+        pass/opaque_has_abilities.expr,
         pass/opaque_simple.module,
         pass/opaque_with_type_arguments.module,
         pass/opaque_reference_expr.expr,
@@ -218,6 +219,9 @@ mod test_parse {
         pass/opaque_reference_pattern.expr,
         pass/opaque_reference_pattern_with_arguments.expr,
         pass/ops_with_newlines.expr,
+        pass/outdented_list.expr,
+        pass/outdented_record.expr,
+        pass/outdented_app_with_record.expr,
         pass/packed_singleton_list.expr,
         pass/parenthetical_apply.expr,
         pass/parenthetical_basic_field.expr,
@@ -229,10 +233,9 @@ mod test_parse {
         pass/pos_inf_float.expr,
         pass/positive_float.expr,
         pass/positive_int.expr,
-        pass/private_qualified_tag.expr,
         pass/provides_type.header,
         pass/qualified_field.expr,
-        pass/qualified_global_tag.expr,
+        pass/qualified_tag.expr,
         pass/qualified_var.expr,
         pass/record_destructure_def.expr,
         pass/record_func_type_decl.expr,
@@ -298,7 +301,12 @@ mod test_parse {
         let input_path = parent.join(&format!("{}.{}.roc", name, ty));
         let result_path = parent.join(&format!("{}.{}.result-ast", name, ty));
 
-        let input = std::fs::read_to_string(&input_path).unwrap();
+        let input = std::fs::read_to_string(&input_path).unwrap_or_else(|err| {
+            panic!(
+                "Could not find a snapshot test result at {:?} - {:?}",
+                input_path, err
+            )
+        });
 
         let result = func(&input);
 
@@ -313,7 +321,17 @@ mod test_parse {
         if std::env::var("ROC_PARSER_SNAPSHOT_TEST_OVERWRITE").is_ok() {
             std::fs::write(&result_path, actual_result).unwrap();
         } else {
-            let expected_result = std::fs::read_to_string(&result_path).unwrap();
+            let expected_result = std::fs::read_to_string(&result_path).unwrap_or_else(|e| {
+                panic!(
+                    "Error opening test output file {}:\n\
+                        {:?}
+                        Supposing the file is missing, consider running the tests with:\n\
+                        `env ROC_PARSER_SNAPSHOT_TEST_OVERWRITE=1 cargo test ...`\n\
+                        and committing the file that creates.",
+                    result_path.display(),
+                    e
+                );
+            });
 
             assert_multiline_str_eq!(expected_result, actual_result);
         }
@@ -325,7 +343,7 @@ mod test_parse {
         assert_eq!(Ok(expected_expr), actual);
     }
 
-    fn assert_parsing_fails<'a>(input: &'a str, _reason: SyntaxError) {
+    fn assert_parsing_fails(input: &str, _reason: SyntaxError) {
         let arena = Bump::new();
         let actual = parse_expr_with(&arena, input);
 
@@ -406,9 +424,9 @@ mod test_parse {
     fn unicode_escape_in_middle() {
         assert_segments(r#""Hi, \u(123)!""#, |arena| {
             bumpalo::vec![in arena;
-                Plaintext("Hi, "),
-                Unicode(Loc::new(8, 11, "123")),
-                Plaintext("!")
+                 Plaintext("Hi, "),
+                 Unicode(Loc::new(8, 11, "123")),
+                 Plaintext("!")
             ]
         });
     }
@@ -417,8 +435,8 @@ mod test_parse {
     fn unicode_escape_in_front() {
         assert_segments(r#""\u(1234) is a unicode char""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Loc::new(4, 8, "1234")),
-                Plaintext(" is a unicode char")
+                 Unicode(Loc::new(4, 8, "1234")),
+                 Plaintext(" is a unicode char")
             ]
         });
     }
@@ -427,8 +445,8 @@ mod test_parse {
     fn unicode_escape_in_back() {
         assert_segments(r#""this is unicode: \u(1)""#, |arena| {
             bumpalo::vec![in arena;
-                Plaintext("this is unicode: "),
-                Unicode(Loc::new(21, 22, "1"))
+                 Plaintext("this is unicode: "),
+                 Unicode(Loc::new(21, 22, "1"))
             ]
         });
     }
@@ -437,11 +455,11 @@ mod test_parse {
     fn unicode_escape_multiple() {
         assert_segments(r#""\u(a1) this is \u(2Bcd) unicode \u(ef97)""#, |arena| {
             bumpalo::vec![in arena;
-                Unicode(Loc::new(4, 6, "a1")),
-                Plaintext(" this is "),
-                Unicode(Loc::new(19, 23, "2Bcd")),
-                Plaintext(" unicode "),
-                Unicode(Loc::new(36, 40, "ef97"))
+                 Unicode(Loc::new(4, 6, "a1")),
+                 Plaintext(" this is "),
+                 Unicode(Loc::new(19, 23, "2Bcd")),
+                 Plaintext(" unicode "),
+                 Unicode(Loc::new(36, 40, "ef97"))
             ]
         });
     }
@@ -457,9 +475,9 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Plaintext("Hi, "),
-                Interpolated(Loc::new(7, 11, expr)),
-                Plaintext("!")
+                 Plaintext("Hi, "),
+                 Interpolated(Loc::new(7, 11, expr)),
+                 Plaintext("!")
             ]
         });
     }
@@ -473,8 +491,8 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Interpolated(Loc::new(3, 7, expr)),
-                Plaintext(", hi!")
+                 Interpolated(Loc::new(3, 7, expr)),
+                 Plaintext(", hi!")
             ]
         });
     }
@@ -488,8 +506,8 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Plaintext("Hello "),
-                Interpolated(Loc::new(9, 13, expr))
+                 Plaintext("Hello "),
+                 Interpolated(Loc::new(9, 13, expr))
             ]
         });
     }
@@ -508,11 +526,11 @@ mod test_parse {
             });
 
             bumpalo::vec![in arena;
-                Plaintext("Hi, "),
-                Interpolated(Loc::new(7, 11, expr1)),
-                Plaintext("! How is "),
-                Interpolated(Loc::new(23, 30, expr2)),
-                Plaintext(" going?")
+                 Plaintext("Hi, "),
+                 Interpolated(Loc::new(7, 11, expr1)),
+                 Plaintext("! How is "),
+                 Interpolated(Loc::new(23, 30, expr2)),
+                 Plaintext(" going?")
             ]
         });
     }
@@ -600,7 +618,7 @@ mod test_parse {
     //     let arguments = bumpalo::vec![in &arena;
     //         Located::new(0, 0, 6, 9, int_type),
     //         Located::new(0, 0, 11, 16, float_type)
-    //     ];
+    //    ];
     //     let return_type = Located::new(0, 0, 20, 24, bool_type);
     //     let fn_ann = TypeAnnotation::Function(&arguments, &return_type);
     //     let signature = Def::Annotation(
@@ -611,7 +629,7 @@ mod test_parse {
     //     let args = bumpalo::vec![in &arena;
     //     Located::new(1,1,7,8, Identifier("x")),
     //     Located::new(1,1,10,11, Underscore)
-    //     ];
+    //    ];
     //     let body = Located::new(1, 1, 15, 17, Num("42"));
 
     //     let closure = Expr::Closure(&args, &body);
@@ -643,132 +661,24 @@ mod test_parse {
     // }
 
     // #[test]
-    // fn ann_private_open_union() {
+    // fn ann_open_union() {
     //     let arena = Bump::new();
     //     let newline = bumpalo::vec![in &arena; Newline];
     //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
-    //     let tag1 = Tag::Private {
-    //         name: Located::new(0, 0, 8, 13, "@True"),
-    //         args: &[],
-    //     };
-    //     let tag2arg1 = Located::new(0, 0, 24, 27, TypeAnnotation::Apply("", "Two", &[]));
-    //     let tag2arg2 = Located::new(0, 0, 28, 34, TypeAnnotation::Apply("", "Things", &[]));
-    //     let tag2args = bumpalo::vec![in &arena; tag2arg1, tag2arg2];
-    //     let tag2 = Tag::Private {
-    //         name: Located::new(0, 0, 15, 23, "@Perhaps"),
-    //         args: tag2args.into_bump_slice(),
-    //     };
-    //     let tags = bumpalo::vec![in &arena;
-    //         Located::new(0, 0, 8, 13, tag1),
-    //         Located::new(0, 0, 15, 34, tag2)
-    //     ];
-    //     let loc_wildcard = Located::new(0, 0, 36, 37, TypeAnnotation::Wildcard);
-    //     let applied_ann = TypeAnnotation::TagUnion {
-    //         tags: tags.into_bump_slice(),
-    //         ext: Some(arena.alloc(loc_wildcard)),
-    //     };
-    //     let signature = Def::Annotation(
-    //         Located::new(0, 0, 0, 3, Identifier("foo")),
-    //         Located::new(0, 0, 6, 37, applied_ann),
-    //     );
-    //     let def = Def::Body(
-    //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
-    //     );
-    //     let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
-    //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
-
-    //     let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
-    //     let defs = &[loc_ann, loc_def];
-    //     let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
-    //     let loc_ret = Located::new(3, 3, 0, 2, ret);
-    //     let expected = Defs(defs, arena.alloc(loc_ret));
-
-    //     assert_parses_to(
-    //         indoc!(
-    //             r#"
-    //             foo : [ @True, @Perhaps Two Things ]*
-    //             foo = True
-
-    //             42
-    //             "#
-    //         ),
-    //         expected,
-    //     );
-    // }
-
-    // #[test]
-    // fn ann_private_closed_union() {
-    //     let arena = Bump::new();
-    //     let newline = bumpalo::vec![in &arena; Newline];
-    //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
-    //     let tag1 = Tag::Private {
-    //         name: Located::new(0, 0, 8, 13, "@True"),
-    //         args: &[],
-    //     };
-    //     let tag2arg = Located::new(0, 0, 24, 29, TypeAnnotation::Apply("", "Thing", &[]));
-    //     let tag2args = bumpalo::vec![in &arena; tag2arg];
-    //     let tag2 = Tag::Private {
-    //         name: Located::new(0, 0, 15, 23, "@Perhaps"),
-    //         args: tag2args.into_bump_slice(),
-    //     };
-    //     let tags = bumpalo::vec![in &arena;
-    //         Located::new(0, 0, 8, 13, tag1),
-    //         Located::new(0, 0, 15, 29, tag2)
-    //     ];
-    //     let applied_ann = TypeAnnotation::TagUnion {
-    //         tags: tags.into_bump_slice(),
-    //         ext: None,
-    //     };
-    //     let signature = Def::Annotation(
-    //         Located::new(0, 0, 0, 3, Identifier("foo")),
-    //         Located::new(0, 0, 6, 31, applied_ann),
-    //     );
-    //     let def = Def::Body(
-    //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
-    //     );
-    //     let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
-    //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
-
-    //     let loc_ann = &*arena.alloc(Located::new(0, 0, 0, 3, signature));
-    //     let defs = &[loc_ann, loc_def];
-    //     let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
-    //     let loc_ret = Located::new(3, 3, 0, 2, ret);
-    //     let expected = Defs(defs, arena.alloc(loc_ret));
-
-    //     assert_parses_to(
-    //         indoc!(
-    //             r#"
-    //             foo : [ @True, @Perhaps Thing ]
-    //             foo = True
-
-    //             42
-    //             "#
-    //         ),
-    //         expected,
-    //     );
-    // }
-
-    // #[test]
-    // fn ann_global_open_union() {
-    //     let arena = Bump::new();
-    //     let newline = bumpalo::vec![in &arena; Newline];
-    //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
-    //     let tag1 = Tag::Global {
+    //     let tag1 = Tag::Apply {
     //         name: Located::new(0, 0, 8, 12, "True"),
     //         args: &[],
     //     };
     //     let tag2arg = Located::new(0, 0, 22, 27, TypeAnnotation::Apply("", "Thing", &[]));
     //     let tag2args = bumpalo::vec![in &arena; tag2arg];
-    //     let tag2 = Tag::Global {
+    //     let tag2 = Tag::Apply {
     //         name: Located::new(0, 0, 14, 21, "Perhaps"),
     //         args: tag2args.into_bump_slice(),
     //     };
     //     let tags = bumpalo::vec![in &arena;
     //         Located::new(0, 0, 8, 12, tag1),
     //         Located::new(0, 0, 14, 27, tag2)
-    //     ];
+    //    ];
     //     let loc_wildcard = Located::new(0, 0, 29, 30, TypeAnnotation::Wildcard);
     //     let applied_ann = TypeAnnotation::TagUnion {
     //         tags: tags.into_bump_slice(),
@@ -780,7 +690,7 @@ mod test_parse {
     //     );
     //     let def = Def::Body(
     //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
+    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::Tag("True"))),
     //     );
     //     let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
     //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
@@ -794,7 +704,7 @@ mod test_parse {
     //     assert_parses_to(
     //         indoc!(
     //             r#"
-    //             foo : [ True, Perhaps Thing ]*
+    //             foo : [True, Perhaps Thing]*
     //             foo = True
 
     //             42
@@ -805,24 +715,24 @@ mod test_parse {
     // }
 
     // #[test]
-    // fn ann_global_closed_union() {
+    // fn ann_closed_union() {
     //     let arena = Bump::new();
     //     let newline = bumpalo::vec![in &arena; Newline];
     //     let newlines = bumpalo::vec![in &arena; Newline, Newline];
-    //     let tag1 = Tag::Global {
+    //     let tag1 = Tag::Apply {
     //         name: Located::new(0, 0, 8, 12, "True"),
     //         args: &[],
     //     };
     //     let tag2arg = Located::new(0, 0, 22, 27, TypeAnnotation::Apply("", "Thing", &[]));
     //     let tag2args = bumpalo::vec![in &arena; tag2arg];
-    //     let tag2 = Tag::Global {
+    //     let tag2 = Tag::Apply {
     //         name: Located::new(0, 0, 14, 21, "Perhaps"),
     //         args: tag2args.into_bump_slice(),
     //     };
     //     let tags = bumpalo::vec![in &arena;
     //         Located::new(0, 0, 8, 12, tag1),
     //         Located::new(0, 0, 14, 27, tag2)
-    //     ];
+    //    ];
     //     let applied_ann = TypeAnnotation::TagUnion {
     //         tags: tags.into_bump_slice(),
     //         ext: None,
@@ -833,7 +743,7 @@ mod test_parse {
     //     );
     //     let def = Def::Body(
     //         arena.alloc(Located::new(1, 1, 0, 3, Identifier("foo"))),
-    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::GlobalTag("True"))),
+    //         arena.alloc(Located::new(1, 1, 6, 10, Expr::Tag("True"))),
     //     );
     //     let spaced_def = Def::SpaceBefore(arena.alloc(def), newline.into_bump_slice());
     //     let loc_def = &*arena.alloc(Located::new(1, 1, 0, 10, spaced_def));
@@ -847,7 +757,7 @@ mod test_parse {
     //     assert_parses_to(
     //         indoc!(
     //             r#"
-    //             foo : [ True, Perhaps Thing ]
+    //             foo : [True, Perhaps Thing]
     //             foo = True
 
     //             42
@@ -911,7 +821,7 @@ mod test_parse {
             }
             Err((_, _fail, _state)) => {
                 // dbg!(_fail, _state);
-                assert!(false);
+                panic!("Failed to parse!");
             }
         }
     }

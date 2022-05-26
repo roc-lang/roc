@@ -35,7 +35,7 @@ pub fn refcount_stmt<'a>(
 
             // Define a constant for the amount to increment
             let amount_sym = root.create_symbol(ident_ids, "amount");
-            let amount_expr = Expr::Literal(Literal::Int(*amount as i128));
+            let amount_expr = Expr::Literal(Literal::Int((*amount as i128).to_ne_bytes()));
             let amount_stmt = |next| Stmt::Let(amount_sym, amount_expr, layout_isize, next);
 
             // Call helper proc, passing the Roc structure and constant amount
@@ -107,7 +107,9 @@ pub fn refcount_generic<'a>(
 
     match layout {
         Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
-            unreachable!("Not refcounted: {:?}", layout)
+            // Generate a dummy function that immediately returns Unit
+            // Some higher-order Zig builtins *always* call an RC function on List elements.
+            rc_return_stmt(root, ident_ids, ctx)
         }
         Layout::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx),
         Layout::Builtin(Builtin::List(elem_layout)) => {
@@ -228,7 +230,7 @@ pub fn refcount_reset_proc_body<'a>(
 
         // Zero
         let zero = root.create_symbol(ident_ids, "zero");
-        let zero_expr = Expr::Literal(Literal::Int(0));
+        let zero_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
         let zero_stmt = |next| Stmt::Let(zero, zero_expr, root.layout_isize, next);
 
         // Null pointer with union layout
@@ -272,7 +274,8 @@ pub fn refcount_reset_proc_body<'a>(
     let refcount_1_encoded = match root.target_info.ptr_width() {
         PtrWidth::Bytes4 => i32::MIN as i128,
         PtrWidth::Bytes8 => i64::MIN as i128,
-    };
+    }
+    .to_ne_bytes();
     let refcount_1_expr = Expr::Literal(Literal::Int(refcount_1_encoded));
     let refcount_1_stmt = Stmt::Let(
         refcount_1,
@@ -379,6 +382,8 @@ pub fn rc_ptr_from_data_ptr<'a>(
     mask_lower_bits: bool,
     following: &'a Stmt<'a>,
 ) -> Stmt<'a> {
+    use std::ops::Neg;
+
     // Typecast the structure pointer to an integer
     // Backends expect a number Layout to choose the right "subtract" instruction
     let addr_sym = root.create_symbol(ident_ids, "addr");
@@ -393,7 +398,9 @@ pub fn rc_ptr_from_data_ptr<'a>(
 
     // Mask for lower bits (for tag union id)
     let mask_sym = root.create_symbol(ident_ids, "mask");
-    let mask_expr = Expr::Literal(Literal::Int(-(root.target_info.ptr_width() as i128)));
+    let mask_expr = Expr::Literal(Literal::Int(
+        (root.target_info.ptr_width() as i128).neg().to_ne_bytes(),
+    ));
     let mask_stmt = |next| Stmt::Let(mask_sym, mask_expr, root.layout_isize, next);
 
     let masked_sym = root.create_symbol(ident_ids, "masked");
@@ -408,7 +415,9 @@ pub fn rc_ptr_from_data_ptr<'a>(
 
     // Pointer size constant
     let ptr_size_sym = root.create_symbol(ident_ids, "ptr_size");
-    let ptr_size_expr = Expr::Literal(Literal::Int(root.target_info.ptr_width() as i128));
+    let ptr_size_expr = Expr::Literal(Literal::Int(
+        (root.target_info.ptr_width() as i128).to_ne_bytes(),
+    ));
     let ptr_size_stmt = |next| Stmt::Let(ptr_size_sym, ptr_size_expr, root.layout_isize, next);
 
     // Refcount address
@@ -500,7 +509,7 @@ fn modify_refcount<'a>(
 
         HelperOp::Dec | HelperOp::DecRef(_) => {
             let alignment_sym = root.create_symbol(ident_ids, "alignment");
-            let alignment_expr = Expr::Literal(Literal::Int(alignment as i128));
+            let alignment_expr = Expr::Literal(Literal::Int((alignment as i128).to_ne_bytes()));
             let alignment_stmt = |next| Stmt::Let(alignment_sym, alignment_expr, LAYOUT_U32, next);
 
             let zig_call_expr = Expr::Call(Call {
@@ -543,7 +552,7 @@ fn refcount_str<'a>(
 
     // Zero
     let zero = root.create_symbol(ident_ids, "zero");
-    let zero_expr = Expr::Literal(Literal::Int(0));
+    let zero_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
     let zero_stmt = |next| Stmt::Let(zero, zero_expr, layout_isize, next);
 
     // is_big_str = (last_word >= 0);
@@ -645,7 +654,7 @@ fn refcount_list<'a>(
 
     // Zero
     let zero = root.create_symbol(ident_ids, "zero");
-    let zero_expr = Expr::Literal(Literal::Int(0));
+    let zero_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
     let zero_stmt = |next| Stmt::Let(zero, zero_expr, layout_isize, next);
 
     // let is_empty = lowlevel Eq len zero
@@ -772,7 +781,7 @@ fn refcount_list_elems<'a>(
     // let size = literal int
     let elem_size = root.create_symbol(ident_ids, "elem_size");
     let elem_size_expr = Expr::Literal(Literal::Int(
-        elem_layout.stack_size(root.target_info) as i128
+        (elem_layout.stack_size(root.target_info) as i128).to_ne_bytes(),
     ));
     let elem_size_stmt = |next| Stmt::Let(elem_size, elem_size_expr, layout_isize, next);
 
@@ -1335,7 +1344,7 @@ fn refcount_union_tailrec<'a>(
                     (filtered.into_bump_slice(), tail_stmt.unwrap())
                 } else {
                     let zero = root.create_symbol(ident_ids, "zero");
-                    let zero_expr = Expr::Literal(Literal::Int(0));
+                    let zero_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
                     let zero_stmt = |next| Stmt::Let(zero, zero_expr, root.layout_isize, next);
 
                     let null = root.create_symbol(ident_ids, "null");

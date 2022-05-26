@@ -10,7 +10,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{
-    AliasKind, Category, PReason, PatternCategory, Reason, RecordField, Type, TypeExtension,
+    AliasKind, Category, OptAbleType, PReason, PatternCategory, Reason, RecordField, Type,
+    TypeExtension,
 };
 
 #[derive(Default)]
@@ -18,6 +19,7 @@ pub struct PatternState {
     pub headers: SendMap<Symbol, Loc<Type>>,
     pub vars: Vec<Variable>,
     pub constraints: Vec<Constraint>,
+    pub delayed_is_open_constraints: Vec<Constraint>,
 }
 
 /// If there is a type annotation, the pattern state headers can be optimized by putting the
@@ -50,7 +52,13 @@ fn headers_from_annotation_help(
     headers: &mut SendMap<Symbol, Loc<Type>>,
 ) -> bool {
     match pattern {
-        Identifier(symbol) | Shadowed(_, _, symbol) => {
+        Identifier(symbol)
+        | Shadowed(_, _, symbol)
+        // TODO(abilities): handle linking the member def to the specialization ident
+        | AbilityMemberSpecialization {
+            ident: symbol,
+            specializes: _,
+        } => {
             let typ = Loc::at(annotation.region, annotation.value.clone());
             headers.insert(*symbol, typ);
             true
@@ -158,7 +166,7 @@ fn headers_from_annotation_help(
 /// based on its knowledge of their lengths.
 pub fn constrain_pattern(
     constraints: &mut Constraints,
-    env: &Env,
+    env: &mut Env,
     pattern: &Pattern,
     region: Region,
     expected: PExpected<Type>,
@@ -174,7 +182,7 @@ pub fn constrain_pattern(
             // so, we know that "x" (in this case, a tag union) must be open.
             if could_be_a_tag_union(expected.get_type_ref()) {
                 state
-                    .constraints
+                    .delayed_is_open_constraints
                     .push(constraints.is_open_type(expected.get_type()));
             }
         }
@@ -183,6 +191,25 @@ pub fn constrain_pattern(
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
+            if could_be_a_tag_union(expected.get_type_ref()) {
+                state
+                    .delayed_is_open_constraints
+                    .push(constraints.is_open_type(expected.get_type_ref().clone()));
+            }
+
+            state.headers.insert(
+                *symbol,
+                Loc {
+                    region,
+                    value: expected.get_type(),
+                },
+            );
+        }
+
+        AbilityMemberSpecialization {
+            ident: symbol,
+            specializes: _,
+        } => {
             if could_be_a_tag_union(expected.get_type_ref()) {
                 state
                     .constraints
@@ -469,6 +496,9 @@ pub fn constrain_pattern(
             state.vars.push(*ext_var);
             state.constraints.push(whole_con);
             state.constraints.push(tag_con);
+            state
+                .constraints
+                .append(&mut state.delayed_is_open_constraints);
         }
 
         UnwrappedOpaque {
@@ -479,13 +509,19 @@ pub fn constrain_pattern(
             type_arguments,
             lambda_set_variables,
         } => {
-            // Suppose we are constraining the pattern \@Id who, where Id n := [ Id U64 n ]
+            // Suppose we are constraining the pattern \@Id who, where Id n := [Id U64 n]
             let (arg_pattern_var, loc_arg_pattern) = &**argument;
             let arg_pattern_type = Type::Variable(*arg_pattern_var);
 
             let opaque_type = Type::Alias {
                 symbol: *opaque,
-                type_arguments: type_arguments.clone(),
+                type_arguments: type_arguments
+                    .iter()
+                    .map(|v| OptAbleType {
+                        typ: Type::Variable(v.var),
+                        opt_ability: v.opt_ability,
+                    })
+                    .collect(),
                 lambda_set_variables: lambda_set_variables.clone(),
                 actual: Box::new(arg_pattern_type.clone()),
                 kind: AliasKind::Opaque,
@@ -513,15 +549,15 @@ pub fn constrain_pattern(
             // Link the entire wrapped opaque type (with the now-constrained argument) to the type
             // variables of the opaque type.
             //
-            // For example, suppose we have `O k := [ A k, B k ]`, and the pattern `@O (A s) -> s == ""`.
+            // For example, suppose we have `O k := [A k, B k]`, and the pattern `@O (A s) -> s == ""`.
             // Previous constraints will have solved `typeof s ~ Str`, and we have the
-            // `specialized_def_type` being `[ A k1, B k1 ]`, specializing `k` as `k1` for this opaque
+            // `specialized_def_type` being `[A k1, B k1]`, specializing `k` as `k1` for this opaque
             // usage.
             // We now want to link `typeof s ~ k1`, so to capture this relationship, we link
-            // the type of `A s` (the arg type) to `[ A k1, B k1 ]` (the specialized opaque type).
+            // the type of `A s` (the arg type) to `[A k1, B k1]` (the specialized opaque type).
             //
             // This must **always** be a presence constraint, that is enforcing
-            // `[ A k1, B k1 ] += typeof (A s)`, because we are in a destructure position and not
+            // `[A k1, B k1] += typeof (A s)`, because we are in a destructure position and not
             // all constructors are covered in this branch!
             let link_type_variables_con = constraints.pattern_presence(
                 arg_pattern_type,
@@ -542,9 +578,7 @@ pub fn constrain_pattern(
                 .vars
                 .extend_from_slice(&[*arg_pattern_var, *whole_var]);
             // Also add the fresh variables we created for the type argument and lambda sets
-            state.vars.extend(type_arguments.iter().map(|(_, t)| {
-                t.expect_variable("all type arguments should be fresh variables here")
-            }));
+            state.vars.extend(type_arguments.iter().map(|v| v.var));
             state.vars.extend(lambda_set_variables.iter().map(|v| {
                 v.0.expect_variable("all lambda sets should be fresh variables here")
             }));

@@ -27,7 +27,7 @@ use crate::{
         },
         env::Env,
     },
-    mem_pool::{pool::Pool, pool_str::PoolStr, pool_vec::PoolVec, shallow_clone::ShallowClone},
+    mem_pool::{pool::Pool, pool_vec::PoolVec, shallow_clone::ShallowClone},
 };
 
 /// A presence constraint is an additive constraint that defines the lower bound
@@ -245,32 +245,13 @@ pub fn constrain_expr<'a>(
                 exists(arena, field_vars, And(constraints))
             }
         }
-        Expr2::GlobalTag {
+        Expr2::Tag {
             variant_var,
             ext_var,
             name,
             arguments,
         } => {
-            let tag_name = TagName::Global(name.as_str(env.pool).into());
-
-            constrain_tag(
-                arena,
-                env,
-                expected,
-                region,
-                tag_name,
-                arguments,
-                *ext_var,
-                *variant_var,
-            )
-        }
-        Expr2::PrivateTag {
-            name,
-            arguments,
-            ext_var,
-            variant_var,
-        } => {
-            let tag_name = TagName::Private(*name);
+            let tag_name = TagName::Tag(name.as_str(env.pool).into());
 
             constrain_tag(
                 arena,
@@ -678,10 +659,20 @@ pub fn constrain_expr<'a>(
                     for (index, when_branch_id) in branches.iter_node_ids().enumerate() {
                         let when_branch = env.pool.get(when_branch_id);
 
-                        let pattern_region = region;
                         // let pattern_region = Region::across_all(
                         //     when_branch.patterns.iter(env.pool).map(|v| &v.region),
                         // );
+
+                        let pattern_expected = |sub_pattern, sub_region| {
+                            PExpected::ForReason(
+                                PReason::WhenMatch {
+                                    index: HumanIndex::zero_based(index),
+                                    sub_pattern,
+                                },
+                                cond_type.shallow_clone(),
+                                sub_region,
+                            )
+                        };
 
                         let branch_con = constrain_when_branch(
                             arena,
@@ -689,13 +680,7 @@ pub fn constrain_expr<'a>(
                             // TODO: when_branch.value.region,
                             region,
                             when_branch,
-                            PExpected::ForReason(
-                                PReason::WhenMatch {
-                                    index: HumanIndex::zero_based(index),
-                                },
-                                cond_type.shallow_clone(),
-                                pattern_region,
-                            ),
+                            pattern_expected,
                             Expected::FromAnnotation(
                                 name.clone(),
                                 *arity,
@@ -722,22 +707,26 @@ pub fn constrain_expr<'a>(
                     for (index, when_branch_id) in branches.iter_node_ids().enumerate() {
                         let when_branch = env.pool.get(when_branch_id);
 
-                        let pattern_region = region;
                         // let pattern_region =
                         //     Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
+
+                        let pattern_expected = |sub_pattern, sub_region| {
+                            PExpected::ForReason(
+                                PReason::WhenMatch {
+                                    index: HumanIndex::zero_based(index),
+                                    sub_pattern,
+                                },
+                                cond_type.shallow_clone(),
+                                sub_region,
+                            )
+                        };
 
                         let branch_con = constrain_when_branch(
                             arena,
                             env,
                             region,
                             when_branch,
-                            PExpected::ForReason(
-                                PReason::WhenMatch {
-                                    index: HumanIndex::zero_based(index),
-                                },
-                                cond_type.shallow_clone(),
-                                pattern_region,
-                            ),
+                            pattern_expected,
                             Expected::ForReason(
                                 Reason::WhenBranch {
                                     index: HumanIndex::zero_based(index),
@@ -1296,7 +1285,7 @@ fn constrain_when_branch<'a>(
     env: &mut Env,
     region: Region,
     when_branch: &WhenBranch,
-    pattern_expected: PExpected<Type2>,
+    pattern_expected: impl Fn(HumanIndex, Region) -> PExpected<Type2>,
     expr_expected: Expected<Type2>,
 ) -> Constraint<'a> {
     let when_expr = env.pool.get(when_branch.body);
@@ -1311,8 +1300,14 @@ fn constrain_when_branch<'a>(
 
     // TODO investigate for error messages, is it better to unify all branches with a variable,
     // then unify that variable with the expectation?
-    for pattern_id in when_branch.patterns.iter_node_ids() {
+    for (sub_pattern, pattern_id) in when_branch.patterns.iter_node_ids().enumerate() {
         let pattern = env.pool.get(pattern_id);
+
+        let pattern_expected = pattern_expected(
+            HumanIndex::zero_based(sub_pattern),
+            // TODO: use the proper subpattern region. Not available to us right now.
+            region,
+        );
 
         constrain_pattern(
             arena,
@@ -1320,7 +1315,7 @@ fn constrain_when_branch<'a>(
             pattern,
             // loc_pattern.region,
             region,
-            pattern_expected.shallow_clone(),
+            pattern_expected,
             &mut state,
             true,
         );
@@ -1609,34 +1604,13 @@ pub fn constrain_pattern<'a>(
             state.constraints.push(whole_con);
             state.constraints.push(record_con);
         }
-        GlobalTag {
+        Tag {
             whole_var,
             ext_var,
             tag_name: name,
             arguments,
         } => {
-            let tag_name = TagName::Global(name.as_str(env.pool).into());
-
-            constrain_tag_pattern(
-                arena,
-                env,
-                region,
-                expected,
-                state,
-                *whole_var,
-                *ext_var,
-                arguments,
-                tag_name,
-                destruct_position,
-            );
-        }
-        PrivateTag {
-            whole_var,
-            ext_var,
-            tag_name: name,
-            arguments,
-        } => {
-            let tag_name = TagName::Private(*name);
+            let tag_name = TagName::Tag(name.as_str(env.pool).into());
 
             constrain_tag_pattern(
                 arena,
@@ -1871,8 +1845,8 @@ fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
     let num_num_id = pool.add(num_num_type);
 
     Type2::Alias(
-        Symbol::NUM_FLOAT,
-        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        Symbol::NUM_FRAC,
+        PoolVec::new(vec![range].into_iter(), pool),
         num_num_id,
     )
 }
@@ -1881,21 +1855,11 @@ fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
 fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_FLOATINGPOINT),
-                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = range_type.shallow_clone();
 
-    Type2::Alias(
+    Type2::Opaque(
         Symbol::NUM_FLOATINGPOINT,
-        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        PoolVec::new(vec![range].into_iter(), pool),
         pool.add(alias_content),
     )
 }
@@ -1910,44 +1874,23 @@ fn num_int(pool: &mut Pool, range: TypeId) -> Type2 {
 
     Type2::Alias(
         Symbol::NUM_INT,
-        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        PoolVec::new(vec![range].into_iter(), pool),
         num_num_id,
     )
 }
 
 #[inline(always)]
 fn _num_signed64(pool: &mut Pool) -> Type2 {
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_SIGNED64),
-                PoolVec::empty(pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
-
     Type2::Alias(
         Symbol::NUM_SIGNED64,
         PoolVec::empty(pool),
-        pool.add(alias_content),
+        pool.add(Type2::EmptyTagUnion),
     )
 }
 
 #[inline(always)]
 fn num_unsigned32(pool: &mut Pool) -> Type2 {
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            std::iter::once((
-                TagName::Private(Symbol::NUM_UNSIGNED32),
-                PoolVec::empty(pool),
-            )),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = Type2::EmptyTagUnion;
 
     Type2::Alias(
         Symbol::NUM_UNSIGNED32,
@@ -1960,21 +1903,11 @@ fn num_unsigned32(pool: &mut Pool) -> Type2 {
 fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_INTEGER),
-                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = range_type.shallow_clone();
 
-    Type2::Alias(
+    Type2::Opaque(
         Symbol::NUM_INTEGER,
-        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        PoolVec::new(vec![range].into_iter(), pool),
         pool.add(alias_content),
     )
 }
@@ -1983,24 +1916,11 @@ fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
 fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
     let range_type = pool.get(type_id);
 
-    let alias_content = Type2::TagUnion(
-        PoolVec::new(
-            vec![(
-                TagName::Private(Symbol::NUM_AT_NUM),
-                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
-            )]
-            .into_iter(),
-            pool,
-        ),
-        pool.add(Type2::EmptyTagUnion),
-    );
+    let alias_content = range_type.shallow_clone();
 
-    Type2::Alias(
+    Type2::Opaque(
         Symbol::NUM_NUM,
-        PoolVec::new(
-            vec![(PoolStr::new("range", pool), type_id)].into_iter(),
-            pool,
-        ),
+        PoolVec::new(vec![type_id].into_iter(), pool),
         pool.add(alias_content),
     )
 }
@@ -2017,7 +1937,7 @@ pub mod test_constrain {
     use roc_parse::parser::{SourceError, SyntaxError};
     use roc_region::all::Region;
     use roc_types::{
-        pretty_print::{content_to_string, name_all_type_vars},
+        pretty_print::name_and_print_var,
         solved_types::Solved,
         subs::{Subs, VarStore, Variable},
     };
@@ -2130,11 +2050,6 @@ pub mod test_constrain {
 
                 let subs = solved.inner_mut();
 
-                // name type vars
-                name_all_type_vars(var, subs);
-
-                let content = subs.get_content_without_compacting(var);
-
                 // Connect the ModuleId to it's IdentIds
                 dep_idents.insert(mod_id, env.ident_ids);
 
@@ -2143,7 +2058,7 @@ pub mod test_constrain {
                     all_ident_ids: dep_idents,
                 };
 
-                let actual_str = content_to_string(content, subs, mod_id, &interns);
+                let actual_str = name_and_print_var(var, subs, mod_id, &interns);
 
                 assert_eq!(actual_str, expected_str);
             }
@@ -2255,7 +2170,7 @@ pub mod test_constrain {
         infer_eq(
             indoc!(
                 r#"
-                [ 1, 2 ]
+                [1, 2]
                 "#
             ),
             "List (Num *)",
@@ -2267,7 +2182,7 @@ pub mod test_constrain {
         infer_eq(
             indoc!(
                 r#"
-                [ { x: 1 }, { x: 3 } ]
+                [{ x: 1 }, { x: 3 }]
                 "#
             ),
             "List { x : Num * }",
@@ -2275,26 +2190,14 @@ pub mod test_constrain {
     }
 
     #[test]
-    fn constrain_global_tag() {
+    fn constrain_tag() {
         infer_eq(
             indoc!(
                 r#"
                 Foo
                 "#
             ),
-            "[ Foo ]*",
-        )
-    }
-
-    #[test]
-    fn constrain_private_tag() {
-        infer_eq(
-            indoc!(
-                r#"
-                @Foo
-                "#
-            ),
-            "[ @Foo ]*",
+            "[Foo]*",
         )
     }
 
@@ -2330,7 +2233,7 @@ pub mod test_constrain {
                 if True then Green else Red
                 "#
             ),
-            "[ Green, Red ]*",
+            "[Green, Red]*",
         )
     }
 
@@ -2344,7 +2247,7 @@ pub mod test_constrain {
                     Red -> Purple
                 "#
             ),
-            "[ Blue, Purple ]*",
+            "[Blue, Purple]*",
         )
     }
 
@@ -2382,7 +2285,7 @@ pub mod test_constrain {
         infer_eq(
             indoc!(
                 r#"
-                List.map [ { name: "roc" }, { name: "bird" } ] .name
+                List.map [{ name: "roc" }, { name: "bird" }] .name
                 "#
             ),
             "List Str",
@@ -2397,7 +2300,7 @@ pub mod test_constrain {
                     \a, b -> Pair a b
                 "#
             ),
-            "a, b -> [ Pair a b ]*",
+            "a, b -> [Pair a b]*",
         );
     }
 
@@ -2540,7 +2443,7 @@ pub mod test_constrain {
                     curryPair
                 "#
             ),
-            "a -> (b -> [ Pair a b ]*)",
+            "a -> (b -> [Pair a b]*)",
         );
     }
 
@@ -2655,7 +2558,7 @@ pub mod test_constrain {
                 canIGo
                 "#
             ),
-            "Str -> Result Str [ SlowIt Str, StopIt Str, UnknownColor Str ]*",
+            "Str -> Result Str [SlowIt Str, StopIt Str, UnknownColor Str]*",
         )
     }
 
@@ -2694,7 +2597,7 @@ pub mod test_constrain {
         infer_eq(
             indoc!(
                 r#"
-                badComics: Bool -> [ CowTools _, Thagomizer _ ]
+                badComics: Bool -> [CowTools _, Thagomizer _]
                 badComics = \c ->
                     when c is
                         True -> CowTools "The Far Side"
@@ -2702,18 +2605,18 @@ pub mod test_constrain {
                 badComics
                 "#
             ),
-            "Bool -> [ CowTools Str, Thagomizer Str ]",
+            "Bool -> [CowTools Str, Thagomizer Str]",
         )
     }
 
     #[test]
     fn inference_var_tag_union_ext() {
-        // TODO: we should really be inferring [ Blue, Orange ]a -> [ Lavender, Peach ]a here.
+        // TODO: we should really be inferring [Blue, Orange]a -> [Lavender, Peach]a here.
         // See https://github.com/rtfeldman/roc/issues/2053
         infer_eq(
             indoc!(
                 r#"
-                pastelize: _ -> [ Lavender, Peach ]_
+                pastelize: _ -> [Lavender, Peach]_
                 pastelize = \color ->
                     when color is
                         Blue -> Lavender
@@ -2722,7 +2625,7 @@ pub mod test_constrain {
                 pastelize
                 "#
             ),
-            "[ Blue, Lavender, Orange, Peach ]a -> [ Blue, Lavender, Orange, Peach ]a",
+            "[Blue, Lavender, Orange, Peach]a -> [Blue, Lavender, Orange, Peach]a",
         )
     }
 
@@ -2753,7 +2656,7 @@ pub mod test_constrain {
                        B -> Y
                  "#
             ),
-            "[ A, B ] -> [ X, Y ]*",
+            "[A, B] -> [X, Y]*",
         )
     }
 
@@ -2769,7 +2672,7 @@ pub mod test_constrain {
                        _ -> Z
                  "#
             ),
-            "[ A, B ]* -> [ X, Y, Z ]*",
+            "[A, B]* -> [X, Y, Z]*",
         )
     }
 
@@ -2784,7 +2687,7 @@ pub mod test_constrain {
                        A N -> Y
                  "#
             ),
-            "[ A [ M, N ] ] -> [ X, Y ]*",
+            "[A [M, N]] -> [X, Y]*",
         )
     }
 
@@ -2800,12 +2703,12 @@ pub mod test_constrain {
                        A _ -> Z
                  "#
             ),
-            "[ A [ M, N ]* ] -> [ X, Y, Z ]*",
+            "[A [M, N]*] -> [X, Y, Z]*",
         )
     }
 
     #[test]
-    #[ignore = "TODO: currently [ A [ M [ J ]*, N [ K ]* ] ] -> [ X ]*"]
+    #[ignore = "TODO: currently [A [M [J]*, N [K]*]] -> [X]*"]
     fn infer_union_input_position5() {
         infer_eq(
             indoc!(
@@ -2816,7 +2719,7 @@ pub mod test_constrain {
                        A (N K) -> X
                  "#
             ),
-            "[ A [ M [ J ], N [ K ] ] ] -> [ X ]*",
+            "[A [M [J], N [K]]] -> [X]*",
         )
     }
 
@@ -2832,12 +2735,12 @@ pub mod test_constrain {
                        A N -> X
                  "#
             ),
-            "[ A [ M, N ], B ] -> [ X ]*",
+            "[A [M, N], B] -> [X]*",
         )
     }
 
     #[test]
-    #[ignore = "TODO: currently [ A ]* -> [ A, X ]*"]
+    #[ignore = "TODO: currently [A]* -> [A, X]*"]
     fn infer_union_input_position7() {
         infer_eq(
             indoc!(
@@ -2850,8 +2753,8 @@ pub mod test_constrain {
             ),
             // TODO: we could be a bit smarter by subtracting "A" as a possible
             // tag in the union known by t, which would yield the principal type
-            // [ A, ]a -> [ X ]a
-            "[ A, X ]a -> [ A, X ]a",
+            // [A,]a -> [X]a
+            "[A, X]a -> [A, X]a",
         )
     }
 
@@ -2867,7 +2770,7 @@ pub mod test_constrain {
                          None -> 0
                  "#
             ),
-            "[ None, Some { tag : [ A, B ] }* ] -> Num *",
+            "[None, Some { tag : [A, B] }*] -> Num *",
         )
     }
 
@@ -2877,7 +2780,7 @@ pub mod test_constrain {
         infer_eq(
             indoc!(
                 r#"
-                 opt : [ Some Str, None ]
+                 opt : [Some Str, None]
                  opt = Some ""
                  rcd = { opt }
 
@@ -2902,7 +2805,7 @@ pub mod test_constrain {
                          { x: Red, y ? 5 } -> y
                  "#
             ),
-            "{ x : [ Blue, Red ], y ? Num a }* -> Num a",
+            "{ x : [Blue, Red], y ? Num a }* -> Num a",
         )
     }
 }

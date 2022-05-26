@@ -1,12 +1,76 @@
 use crate::borrow::{ParamMap, BORROWED, OWNED};
 use crate::ir::{
     CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
+    UpdateModeIds,
 };
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+
+/// Data and Function ownership relation for higher-order lowlevels
+///
+/// Normally, the borrowing algorithm figures out how to own/borrow data so that
+/// the borrows match up. But that fails for our higher-order lowlevels, because
+/// they are rigid (cannot add extra inc/dec in there dynamically) and opaque to
+/// the borrow inference.
+///
+/// So, we must fix this up ourselves. This code is deliberately verbose to make
+/// it easier to understand without full context.
+///
+/// If we take `List.map list f` as an example, then there are two orders of freedom:
+///
+/// - `list` can be either owned or borrowed by `List.map`
+/// - `f` can require either owned or borrowed elements from `list`
+///
+/// Hence we get the four options below: the data (`list` in the example) is owned or borrowed by
+/// the higher-order function, and the function argument (`f`) either owns or borrows the elements.
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+enum DataFunction {
+    /// `list` is owned, and `f` expects owned values. That means that when we run the map, all
+    /// list elements will be consumed (because they are passed to `f`, which takes owned values)
+    /// Because we own the whole list, and must consume it, we need to `decref` the list.
+    /// `decref` just decrements the container, and will never recursively decrement elements
+    DataOwnedFunctionOwns,
+    /// `list` is owned, and `f` expects borrowed values. After running `f` for each element, the
+    /// elements are not consumed, and neither is the list. We must consume it though, because we
+    /// own the `list`. Therefore we need to perform a `dec`
+    DataOwnedFunctionBorrows,
+    /// `list` is borrowed, `f` borrows, so the trivial implementation is correct: just map `f`
+    /// over elements of `list`, and don't do anything else.
+    DataBorrowedFunctionBorrows,
+    /// The trickiest case: we only borrow the `list`, but the mapped function `f` needs owned
+    /// values. There are two options
+    ///
+    /// - define some `fBorrow` that takes a borrowed value, `inc`'s it (similar to `.clone()` on
+    ///     an `Rc<T>` in rust) and then passes the (now owned) value to `f`, then rewrite the call
+    ///     to `List.map list fBorrow`
+    /// - `inc` the list (which recursively increments the elements), map `f` over the list,
+    ///     consuming one RC token on the elements, finally `decref` the list.
+    ///
+    /// For simplicity, we use the second option right now, but the first option is probably
+    /// preferable long-term.
+    DataBorrowedFunctionOwns,
+}
+
+impl DataFunction {
+    fn new(vars: &VarMap, lowlevel_argument: Symbol, passed_function_argument: Param) -> Self {
+        use DataFunction::*;
+
+        let data_borrowed = !vars[&lowlevel_argument].consume;
+        let function_borrows = passed_function_argument.borrow;
+
+        match (data_borrowed, function_borrows) {
+            (BORROWED, BORROWED) => DataBorrowedFunctionBorrows,
+            (BORROWED, OWNED) => DataBorrowedFunctionOwns,
+            (OWNED, BORROWED) => DataOwnedFunctionBorrows,
+            (OWNED, OWNED) => DataOwnedFunctionOwns,
+        }
+    }
+}
 
 pub fn free_variables(stmt: &Stmt<'_>) -> MutSet<Symbol> {
     let (mut occurring, bound) = occurring_variables(stmt);
@@ -443,8 +507,10 @@ impl<'a> Context<'a> {
         b
     }
 
-    fn visit_call(
+    #[allow(clippy::too_many_arguments)]
+    fn visit_call<'i>(
         &self,
+        codegen: &mut CodegenTools<'i>,
         z: Symbol,
         call_type: crate::ir::CallType<'a>,
         arguments: &'a [Symbol],
@@ -467,186 +533,8 @@ impl<'a> Context<'a> {
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            HigherOrder(HigherOrderLowLevel {
-                op,
-                closure_env_layout,
-                update_mode,
-                passed_function,
-                ..
-            }) => {
-                // setup
-                use crate::low_level::HigherOrder::*;
-
-                macro_rules! create_call {
-                    ($borrows:expr) => {
-                        Expr::Call(crate::ir::Call {
-                            call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
-                                let mut passed_function = *passed_function;
-                                passed_function.owns_captured_environment = true;
-
-                                let higher_order = HigherOrderLowLevel {
-                                    op: *op,
-                                    closure_env_layout: *closure_env_layout,
-                                    update_mode: *update_mode,
-                                    passed_function,
-                                };
-
-                                CallType::HigherOrder(self.arena.alloc(higher_order))
-                            } else {
-                                call_type
-                            },
-                            arguments,
-                        })
-                    };
-                }
-
-                macro_rules! decref_if_owned {
-                    ($borrows:expr, $argument:expr, $stmt:expr) => {
-                        if !$borrows {
-                            self.arena.alloc(Stmt::Refcounting(
-                                ModifyRc::DecRef($argument),
-                                self.arena.alloc($stmt),
-                            ))
-                        } else {
-                            $stmt
-                        }
-                    };
-                }
-
-                const FUNCTION: bool = BORROWED;
-                const CLOSURE_DATA: bool = BORROWED;
-
-                let function_layout = ProcLayout {
-                    arguments: passed_function.argument_layouts,
-                    result: passed_function.return_layout,
-                };
-
-                let function_ps = match self
-                    .param_map
-                    .get_symbol(passed_function.name, function_layout)
-                {
-                    Some(function_ps) => function_ps,
-                    None => unreachable!(),
-                };
-
-                match op {
-                    ListMap { xs }
-                    | ListKeepIf { xs }
-                    | ListKeepOks { xs }
-                    | ListKeepErrs { xs }
-                    | ListAny { xs }
-                    | ListAll { xs }
-                    | ListFindUnsafe { xs } => {
-                        let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        // if the list is owned, then all elements have been consumed, but not the list itself
-                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
-
-                        let v = create_call!(function_ps.get(1));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListMap2 { xs, ys } => {
-                        let borrows = [
-                            function_ps[0].borrow,
-                            function_ps[1].borrow,
-                            FUNCTION,
-                            CLOSURE_DATA,
-                        ];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
-                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
-
-                        let v = create_call!(function_ps.get(2));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListMap3 { xs, ys, zs } => {
-                        let borrows = [
-                            function_ps[0].borrow,
-                            function_ps[1].borrow,
-                            function_ps[2].borrow,
-                            FUNCTION,
-                            CLOSURE_DATA,
-                        ];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
-                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
-                        let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
-
-                        let v = create_call!(function_ps.get(3));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListMap4 { xs, ys, zs, ws } => {
-                        let borrows = [
-                            function_ps[0].borrow,
-                            function_ps[1].borrow,
-                            function_ps[2].borrow,
-                            function_ps[3].borrow,
-                            FUNCTION,
-                            CLOSURE_DATA,
-                        ];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let b = decref_if_owned!(function_ps[0].borrow, *xs, b);
-                        let b = decref_if_owned!(function_ps[1].borrow, *ys, b);
-                        let b = decref_if_owned!(function_ps[2].borrow, *zs, b);
-                        let b = decref_if_owned!(function_ps[3].borrow, *ws, b);
-
-                        let v = create_call!(function_ps.get(3));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListMapWithIndex { xs } => {
-                        let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
-
-                        let v = create_call!(function_ps.get(2));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListSortWith { xs: _ } => {
-                        let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let v = create_call!(function_ps.get(2));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                    ListWalk { xs, state: _ }
-                    | ListWalkUntil { xs, state: _ }
-                    | ListWalkBackwards { xs, state: _ }
-                    | DictWalk { xs, state: _ } => {
-                        // borrow data structure based on first argument of the folded function
-                        // borrow the default based on second argument of the folded function
-                        let borrows = [
-                            function_ps[1].borrow,
-                            function_ps[0].borrow,
-                            FUNCTION,
-                            CLOSURE_DATA,
-                        ];
-
-                        let b = self.add_dec_after_lowlevel(arguments, &borrows, b, b_live_vars);
-
-                        let b = decref_if_owned!(function_ps[1].borrow, *xs, b);
-
-                        let v = create_call!(function_ps.get(2));
-
-                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                    }
-                }
+            HigherOrder(lowlevel) => {
+                self.visit_higher_order_lowlevel(codegen, z, lowlevel, arguments, l, b, b_live_vars)
             }
 
             Foreign { .. } => {
@@ -688,9 +576,273 @@ impl<'a> Context<'a> {
         }
     }
 
-    #[allow(clippy::many_single_char_names)]
-    fn visit_variable_declaration(
+    #[allow(clippy::too_many_arguments)]
+    fn visit_higher_order_lowlevel<'i>(
         &self,
+        codegen: &mut CodegenTools<'i>,
+        z: Symbol,
+        lowlevel: &'a crate::ir::HigherOrderLowLevel,
+        arguments: &'a [Symbol],
+        l: Layout<'a>,
+        b: &'a Stmt<'a>,
+        b_live_vars: &LiveVarSet,
+    ) -> &'a Stmt<'a> {
+        use crate::low_level::HigherOrder::*;
+        use DataFunction::*;
+
+        let HigherOrderLowLevel {
+            op,
+            passed_function,
+            ..
+        } = lowlevel;
+
+        macro_rules! create_call {
+            ($borrows:expr) => {
+                create_holl_call(self.arena, lowlevel, $borrows, arguments)
+            };
+        }
+
+        let function_layout = ProcLayout {
+            arguments: passed_function.argument_layouts,
+            result: passed_function.return_layout,
+        };
+
+        let function_ps = match self
+            .param_map
+            .get_symbol(passed_function.name, function_layout)
+        {
+            Some(function_ps) => function_ps,
+            None => unreachable!(),
+        };
+
+        macro_rules! handle_ownerships_post {
+            ($stmt:expr, $args:expr) => {{
+                let mut stmt = $stmt;
+
+                for (argument, function_ps) in $args.iter().copied() {
+                    let ownership = DataFunction::new(&self.vars, argument, function_ps);
+
+                    match ownership {
+                        DataOwnedFunctionOwns | DataBorrowedFunctionOwns => {
+                            // elements have been consumed, must still consume the list itself
+                            let rest = self.arena.alloc($stmt);
+                            let rc = Stmt::Refcounting(ModifyRc::DecRef(argument), rest);
+
+                            stmt = self.arena.alloc(rc);
+                        }
+                        DataOwnedFunctionBorrows => {
+                            // must consume list and elements
+                            let rest = self.arena.alloc($stmt);
+                            let rc = Stmt::Refcounting(ModifyRc::Dec(argument), rest);
+
+                            stmt = self.arena.alloc(rc);
+                        }
+                        DataBorrowedFunctionBorrows => {
+                            // list borrows, function borrows, so there is nothing to do
+                        }
+                    }
+                }
+
+                stmt
+            }};
+        }
+
+        macro_rules! handle_ownerships_pre {
+            ($stmt:expr, $args:expr) => {{
+                let mut stmt = self.arena.alloc($stmt);
+
+                for (argument, function_ps) in $args.iter().copied() {
+                    let ownership = DataFunction::new(&self.vars, argument, function_ps);
+
+                    match ownership {
+                        DataBorrowedFunctionOwns => {
+                            // the data is borrowed;
+                            // increment it to own the values so the function can use them
+                            let rc = Stmt::Refcounting(ModifyRc::Inc(argument, 1), stmt);
+
+                            stmt = self.arena.alloc(rc);
+                        }
+                        DataOwnedFunctionOwns | DataOwnedFunctionBorrows => {
+                            // we actually own the data; nothing to do
+                        }
+                        DataBorrowedFunctionBorrows => {
+                            // list borrows, function borrows, so there is nothing to do
+                        }
+                    }
+                }
+
+                stmt
+            }};
+        }
+
+        // incrementing/consuming the closure (if needed) is done by the zig implementation.
+        // We don't want to touch the RC on the roc side, so treat these as borrowed.
+        const FUNCTION: bool = BORROWED;
+        const CLOSURE_DATA: bool = BORROWED;
+
+        let borrows = [FUNCTION, CLOSURE_DATA];
+        let after_arguments = &arguments[op.function_index()..];
+
+        match *op {
+            ListMap { xs }
+            | ListKeepIf { xs }
+            | ListKeepOks { xs }
+            | ListKeepErrs { xs }
+            | ListAny { xs }
+            | ListAll { xs }
+            | ListFindUnsafe { xs } => {
+                let ownerships = [(xs, function_ps[0])];
+
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
+
+                let b = handle_ownerships_post!(b, ownerships);
+
+                let v = create_call!(function_ps.get(1));
+
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
+            }
+            ListMap2 { xs, ys } => {
+                let ownerships = [(xs, function_ps[0]), (ys, function_ps[1])];
+
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
+
+                let b = handle_ownerships_post!(b, ownerships);
+
+                let v = create_call!(function_ps.get(2));
+
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
+            }
+            ListMap3 { xs, ys, zs } => {
+                let ownerships = [
+                    (xs, function_ps[0]),
+                    (ys, function_ps[1]),
+                    (zs, function_ps[2]),
+                ];
+
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
+
+                let b = handle_ownerships_post!(b, ownerships);
+
+                let v = create_call!(function_ps.get(3));
+
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
+            }
+            ListMap4 { xs, ys, zs, ws } => {
+                let ownerships = [
+                    (xs, function_ps[0]),
+                    (ys, function_ps[1]),
+                    (zs, function_ps[2]),
+                    (ws, function_ps[3]),
+                ];
+
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
+
+                let b = handle_ownerships_post!(b, ownerships);
+
+                let v = create_call!(function_ps.get(3));
+
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
+            }
+            ListMapWithIndex { xs } => {
+                let ownerships = [(xs, function_ps[0])];
+
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
+
+                let b = handle_ownerships_post!(b, ownerships);
+
+                let v = create_call!(function_ps.get(2));
+
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
+            }
+            ListSortWith { xs } => {
+                // NOTE: we may apply the function to the same argument multiple times.
+                // for that to be valid, the function must borrow its argument. This is not
+                // enforced at the moment
+                //
+                // we also don't check that both arguments have the same ownership characteristics
+                let ownerships = [(xs, function_ps[0])];
+
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
+
+                // list-sort will sort in-place; that really changes how RC should work
+                let b = {
+                    let ownership = DataFunction::new(&self.vars, xs, function_ps[0]);
+
+                    match ownership {
+                        DataOwnedFunctionOwns => {
+                            // if non-unique, elements have been consumed, must still consume the list itself
+                            let rc = Stmt::Refcounting(ModifyRc::DecRef(xs), b);
+
+                            let condition_stmt = branch_on_list_uniqueness(
+                                self.arena,
+                                codegen,
+                                xs,
+                                l,
+                                b.clone(),
+                                self.arena.alloc(rc),
+                            );
+
+                            &*self.arena.alloc(condition_stmt)
+                        }
+                        DataOwnedFunctionBorrows => {
+                            // must consume list and elements
+                            let rc = Stmt::Refcounting(ModifyRc::Dec(xs), b);
+
+                            let condition_stmt = branch_on_list_uniqueness(
+                                self.arena,
+                                codegen,
+                                xs,
+                                l,
+                                b.clone(),
+                                self.arena.alloc(rc),
+                            );
+
+                            &*self.arena.alloc(condition_stmt)
+                        }
+                        DataBorrowedFunctionOwns => {
+                            // elements have been consumed, must still consume the list itself
+                            let rest = self.arena.alloc(b);
+                            let rc = Stmt::Refcounting(ModifyRc::DecRef(xs), rest);
+
+                            &*self.arena.alloc(rc)
+                        }
+                        DataBorrowedFunctionBorrows => {
+                            // list borrows, function borrows, so there is nothing to do
+                            b
+                        }
+                    }
+                };
+
+                let v = create_call!(function_ps.get(2));
+
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
+            }
+            ListWalk { xs, state: _ }
+            | ListWalkUntil { xs, state: _ }
+            | ListWalkBackwards { xs, state: _ }
+            | DictWalk { xs, state: _ } => {
+                let ownerships = [
+                    // borrow data structure based on second argument of the folded function
+                    (xs, function_ps[1]),
+                ];
+                // borrow the default based on first argument of the folded function
+                // (state, function_ps[0])
+
+                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
+
+                let b = handle_ownerships_post!(b, ownerships);
+
+                let v = create_call!(function_ps.get(2));
+
+                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
+            }
+        }
+    }
+
+    #[allow(clippy::many_single_char_names)]
+    fn visit_variable_declaration<'i>(
+        &self,
+        codegen: &mut CodegenTools<'i>,
         z: Symbol,
         v: Expr<'a>,
         l: Layout<'a>,
@@ -722,7 +874,7 @@ impl<'a> Context<'a> {
             Call(crate::ir::Call {
                 call_type,
                 arguments,
-            }) => self.visit_call(z, call_type, arguments, l, b, b_live_vars),
+            }) => self.visit_call(codegen, z, call_type, arguments, l, b, b_live_vars),
 
             StructAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
@@ -883,7 +1035,11 @@ impl<'a> Context<'a> {
         b
     }
 
-    fn visit_stmt(&self, stmt: &'a Stmt<'a>) -> (&'a Stmt<'a>, LiveVarSet) {
+    fn visit_stmt<'i>(
+        &self,
+        codegen: &mut CodegenTools<'i>,
+        stmt: &'a Stmt<'a>,
+    ) -> (&'a Stmt<'a>, LiveVarSet) {
         use Stmt::*;
 
         // let-chains can be very long, especially for large (list) literals
@@ -902,9 +1058,10 @@ impl<'a> Context<'a> {
                 for (symbol, expr, layout) in triples.iter() {
                     ctx = ctx.update_var_info(**symbol, layout, expr);
                 }
-                let (mut b, mut b_live_vars) = ctx.visit_stmt(cont);
+                let (mut b, mut b_live_vars) = ctx.visit_stmt(codegen, cont);
                 for (symbol, expr, layout) in triples.into_iter().rev() {
                     let pair = ctx.visit_variable_declaration(
+                        codegen,
                         *symbol,
                         (*expr).clone(),
                         *layout,
@@ -923,8 +1080,15 @@ impl<'a> Context<'a> {
         match stmt {
             Let(symbol, expr, layout, cont) => {
                 let ctx = self.update_var_info(*symbol, layout, expr);
-                let (b, b_live_vars) = ctx.visit_stmt(cont);
-                ctx.visit_variable_declaration(*symbol, expr.clone(), *layout, b, &b_live_vars)
+                let (b, b_live_vars) = ctx.visit_stmt(codegen, cont);
+                ctx.visit_variable_declaration(
+                    codegen,
+                    *symbol,
+                    expr.clone(),
+                    *layout,
+                    b,
+                    &b_live_vars,
+                )
             }
 
             Join {
@@ -938,7 +1102,7 @@ impl<'a> Context<'a> {
 
                 let (v, v_live_vars) = {
                     let ctx = self.update_var_info_with_params(xs);
-                    ctx.visit_stmt(v)
+                    ctx.visit_stmt(codegen, v)
                 };
 
                 let mut ctx = self.clone();
@@ -946,7 +1110,7 @@ impl<'a> Context<'a> {
 
                 update_jp_live_vars(*j, xs, v, &mut ctx.jp_live_vars);
 
-                let (b, b_live_vars) = ctx.visit_stmt(b);
+                let (b, b_live_vars) = ctx.visit_stmt(codegen, b);
 
                 (
                     ctx.arena.alloc(Join {
@@ -1001,7 +1165,7 @@ impl<'a> Context<'a> {
                     branches.iter().map(|(label, info, branch)| {
                         // TODO should we use ctor info like Lean?
                         let ctx = self.clone();
-                        let (b, alt_live_vars) = ctx.visit_stmt(branch);
+                        let (b, alt_live_vars) = ctx.visit_stmt(codegen, branch);
                         let b = ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b);
 
                         (*label, info.clone(), b.clone())
@@ -1013,7 +1177,7 @@ impl<'a> Context<'a> {
                 let default_branch = {
                     // TODO should we use ctor info like Lean?
                     let ctx = self.clone();
-                    let (b, alt_live_vars) = ctx.visit_stmt(default_branch.1);
+                    let (b, alt_live_vars) = ctx.visit_stmt(codegen, default_branch.1);
 
                     (
                         default_branch.0.clone(),
@@ -1035,6 +1199,75 @@ impl<'a> Context<'a> {
             RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
+}
+
+fn branch_on_list_uniqueness<'a, 'i>(
+    arena: &'a Bump,
+    codegen: &mut CodegenTools<'i>,
+    list_symbol: Symbol,
+    return_layout: Layout<'a>,
+    then_branch_stmt: Stmt<'a>,
+    else_branch_stmt: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let condition_symbol = Symbol::new(codegen.home, codegen.ident_ids.add_str("listIsUnique"));
+
+    let when_stmt = Stmt::if_then_else(
+        arena,
+        condition_symbol,
+        return_layout,
+        then_branch_stmt,
+        else_branch_stmt,
+    );
+
+    let stmt = arena.alloc(when_stmt);
+
+    // define the condition
+
+    let condition_call_type = CallType::LowLevel {
+        op: roc_module::low_level::LowLevel::ListIsUnique,
+        update_mode: codegen.update_mode_ids.next_id(),
+    };
+
+    let condition_call = crate::ir::Call {
+        call_type: condition_call_type,
+        arguments: arena.alloc([list_symbol]),
+    };
+
+    Stmt::Let(
+        condition_symbol,
+        Expr::Call(condition_call),
+        Layout::bool(),
+        stmt,
+    )
+}
+
+fn create_holl_call<'a>(
+    arena: &'a Bump,
+    holl: &'a crate::ir::HigherOrderLowLevel,
+    param: Option<&Param>,
+    arguments: &'a [Symbol],
+) -> Expr<'a> {
+    let call = crate::ir::Call {
+        call_type: if let Some(OWNED) = param.map(|p| p.borrow) {
+            let mut passed_function = holl.passed_function;
+            passed_function.owns_captured_environment = true;
+
+            let higher_order = HigherOrderLowLevel {
+                op: holl.op,
+                closure_env_layout: holl.closure_env_layout,
+                update_mode: holl.update_mode,
+                passed_function,
+            };
+
+            CallType::HigherOrder(arena.alloc(higher_order))
+        } else {
+            debug_assert!(!holl.passed_function.owns_captured_environment);
+            CallType::HigherOrder(holl)
+        },
+        arguments,
+    };
+
+    Expr::Call(call)
 }
 
 pub fn collect_stmt(
@@ -1127,20 +1360,36 @@ fn update_jp_live_vars(j: JoinPointId, ys: &[Param], v: &Stmt<'_>, m: &mut JPLiv
     m.insert(j, j_live_vars);
 }
 
-pub fn visit_procs<'a>(
+struct CodegenTools<'i> {
+    home: ModuleId,
+    ident_ids: &'i mut IdentIds,
+    update_mode_ids: &'i mut UpdateModeIds,
+}
+
+pub fn visit_procs<'a, 'i>(
     arena: &'a Bump,
+    home: ModuleId,
+    ident_ids: &'i mut IdentIds,
+    update_mode_ids: &'i mut UpdateModeIds,
     param_map: &'a ParamMap<'a>,
     procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     let ctx = Context::new(arena, param_map);
 
+    let mut codegen = CodegenTools {
+        home,
+        ident_ids,
+        update_mode_ids,
+    };
+
     for (key, proc) in procs.iter_mut() {
-        visit_proc(arena, param_map, &ctx, proc, key.1);
+        visit_proc(arena, &mut codegen, param_map, &ctx, proc, key.1);
     }
 }
 
-fn visit_proc<'a>(
+fn visit_proc<'a, 'i>(
     arena: &'a Bump,
+    codegen: &mut CodegenTools<'i>,
     param_map: &'a ParamMap<'a>,
     ctx: &Context<'a>,
     proc: &mut Proc<'a>,
@@ -1161,7 +1410,7 @@ fn visit_proc<'a>(
 
     let stmt = arena.alloc(proc.body.clone());
     let ctx = ctx.update_var_info_with_params(params);
-    let (b, b_live_vars) = ctx.visit_stmt(stmt);
+    let (b, b_live_vars) = ctx.visit_stmt(codegen, stmt);
     let b = ctx.add_dec_for_dead_params(params, b, &b_live_vars);
 
     proc.body = b.clone();

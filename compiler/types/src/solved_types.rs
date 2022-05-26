@@ -1,5 +1,5 @@
 use crate::subs::{VarId, VarStore, Variable};
-use crate::types::{AliasKind, Problem, RecordField, Type, TypeExtension};
+use crate::types::{AliasKind, OptAbleType, Problem, RecordField, Type, TypeExtension};
 use roc_collections::all::{ImMap, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -38,7 +38,7 @@ pub enum SolvedType {
     Rigid(Lowercase),
     Flex(VarId),
     Wildcard,
-    /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
+    /// Inline type alias, e.g. `as List a` in `[Cons a (List a), Nil] as List a`
     Record {
         fields: Vec<(Lowercase, RecordField<SolvedType>)>,
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
@@ -55,7 +55,7 @@ pub enum SolvedType {
 
     Alias(
         Symbol,
-        Vec<(Lowercase, SolvedType)>,
+        Vec<SolvedType>,
         Vec<SolvedLambdaSet>,
         Box<SolvedType>,
         AliasKind,
@@ -63,7 +63,7 @@ pub enum SolvedType {
 
     HostExposedAlias {
         name: Symbol,
-        arguments: Vec<(Lowercase, SolvedType)>,
+        arguments: Vec<SolvedType>,
         lambda_set_variables: Vec<SolvedLambdaSet>,
         actual_var: VarId,
         actual: Box<SolvedType>,
@@ -78,6 +78,7 @@ pub struct BuiltinAlias {
     pub region: Region,
     pub vars: Vec<Loc<Lowercase>>,
     pub typ: SolvedType,
+    pub kind: AliasKind,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -211,8 +212,12 @@ pub fn to_type(
         Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual, kind) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
 
-            for (lowercase, solved_arg) in solved_type_variables {
-                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
+            for solved_arg in solved_type_variables {
+                type_variables.push(OptAbleType {
+                    typ: to_type(solved_arg, free_vars, var_store),
+                    // TODO: is this always correct?
+                    opt_ability: None,
+                });
             }
 
             let mut lambda_set_variables = Vec::with_capacity(solved_lambda_sets.len());
@@ -243,8 +248,8 @@ pub fn to_type(
         } => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
 
-            for (lowercase, solved_arg) in solved_type_variables {
-                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
+            for solved_arg in solved_type_variables {
+                type_variables.push(to_type(solved_arg, free_vars, var_store));
             }
 
             let mut lambda_set_variables = Vec::with_capacity(solved_lambda_sets.len());

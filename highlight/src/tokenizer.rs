@@ -63,15 +63,12 @@ pub enum Token {
     OpAnd = 0b_0110_1101,
     OpOr = 0b_0110_1110,
     OpDoubleSlash = 0b_0110_1111,
-    OpDoublePercent = 0b_0111_0001,
     OpBackpassing = 0b_0111_1010,
 
     TodoNextThing = 0b_1000_0000,
 
     Malformed,
     MalformedOperator,
-
-    PrivateTag,
 
     String,
 
@@ -150,7 +147,6 @@ fn consume_all_tokens(state: &mut LexState, bytes: &[u8], consumer: &mut impl Co
             b']' => (Token::CloseSquare, 1),
             b',' => (Token::Comma, 1),
             b'_' => lex_underscore(bytes),
-            b'@' => lex_private_tag(bytes),
             b'a'..=b'z' => lex_ident(false, bytes),
             b'A'..=b'Z' => lex_ident(true, bytes),
             b'0'..=b'9' => lex_number(bytes),
@@ -395,7 +391,6 @@ fn lex_operator(bytes: &[u8]) -> (Token, usize) {
         b"&" => Token::Ampersand,
         b"||" => Token::OpOr,
         b"//" => Token::OpDoubleSlash,
-        b"%%" => Token::OpDoublePercent,
         b"->" => Token::Arrow,
         b"<-" => Token::OpBackpassing,
         op => {
@@ -408,15 +403,6 @@ fn lex_operator(bytes: &[u8]) -> (Token, usize) {
 
 fn is_ident_continue(ch: u8) -> bool {
     matches!(ch, b'a'..=b'z'|b'A'..=b'Z'|b'0'..=b'9'|b'_')
-}
-
-fn lex_private_tag(bytes: &[u8]) -> (Token, usize) {
-    debug_assert!(bytes[0] == b'@');
-    let mut i = 1;
-    while i < bytes.len() && is_ident_continue(bytes[i]) {
-        i += 1;
-    }
-    (Token::PrivateTag, i)
 }
 
 fn lex_ident(uppercase: bool, bytes: &[u8]) -> (Token, usize) {
@@ -503,7 +489,7 @@ fn lex_string(bytes: &[u8]) -> (Token, usize) {
 }
 
 #[cfg(test)]
-mod tokenizer {
+mod test_tokenizer {
     use super::Token;
     use crate::tokenizer::tokenize;
 
@@ -580,7 +566,7 @@ mod tokenizer {
     when dict is
         Empty ->
             4
-    
+
         Node ->
             5"#,
         );

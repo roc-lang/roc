@@ -15,7 +15,8 @@ comptime {
     // -fcompiler-rt in link.rs instead of doing this. Note that this
     // workaround is present in many host.zig files, so make sure to undo
     // it everywhere!
-    if (std.builtin.os.tag == .macos) {
+    const builtin = @import("builtin");
+    if (builtin.os.tag == .macos) {
         _ = @import("compiler_rt");
     }
 }
@@ -79,15 +80,15 @@ fn view(input: ConstModel) RocStr {
 }
 
 const Align = 2 * @alignOf(usize);
-extern fn malloc(size: usize) callconv(.C) ?*align(Align) c_void;
-extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*c_void;
+extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
+extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*anyopaque;
 extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 const DEBUG: bool = false;
 
-export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
+export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     if (DEBUG) {
         var ptr = malloc(size);
         const stdout = std.io.getStdOut().writer();
@@ -98,7 +99,7 @@ export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     }
 }
 
-export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
+export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     if (DEBUG) {
         const stdout = std.io.getStdOut().writer();
         stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
@@ -107,7 +108,7 @@ export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignmen
     return realloc(@alignCast(Align, @ptrCast([*]u8, c_ptr)), new_size);
 }
 
-export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
+export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     if (DEBUG) {
         const stdout = std.io.getStdOut().writer();
         stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
@@ -116,7 +117,7 @@ export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     free(@alignCast(Align, @ptrCast([*]u8, c_ptr)));
 }
 
-export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
+export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     _ = tag_id;
 
     const stderr = std.io.getStdErr().writer();
@@ -136,17 +137,15 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
 const Unit = extern struct {};
 
 pub export fn main() callconv(.C) u8 {
-    const allocator = std.heap.page_allocator;
-
     var ts1: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
+    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
 
     const program = roc__mainForHost_1_exposed();
 
     call_the_closure(program);
 
     var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts2) catch unreachable;
+    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts2) catch unreachable;
 
     const delta = to_seconds(ts2) - to_seconds(ts1);
 
@@ -161,13 +160,15 @@ fn to_seconds(tms: std.os.timespec) f64 {
 }
 
 fn call_the_closure(program: Program) void {
-    const allocator = std.heap.page_allocator;
+    _ = program;
+
+    var allocator = std.heap.page_allocator;
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
 
     var buf: [1000]u8 = undefined;
 
-    var model = init(allocator);
+    var model = init(&allocator);
 
     while (true) {
         const line = (stdin.readUntilDelimiterOrEof(buf[0..], '\n') catch unreachable) orelse return;
@@ -178,7 +179,7 @@ fn call_the_closure(program: Program) void {
 
         const to_append = RocStr.init(line.ptr, line.len);
 
-        model = update(allocator, model, to_append);
+        model = update(&allocator, model, to_append);
 
         const viewed = view(model);
         for (viewed.asSlice()) |char| {
@@ -265,9 +266,4 @@ fn roc_fx_getInt_help() !i64 {
     const line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
 
     return std.fmt.parseInt(i64, line, 10);
-}
-
-fn readLine() []u8 {
-    const stdin = std.io.getStdIn().reader();
-    return (stdin.readUntilDelimiterOrEof(&line_buf, '\n') catch unreachable) orelse "";
 }

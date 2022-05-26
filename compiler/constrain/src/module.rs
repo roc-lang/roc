@@ -1,12 +1,17 @@
+use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 use roc_builtins::std::StdLib;
+use roc_can::abilities::{AbilitiesStore, MemberTypeInfo, SolvedSpecializations};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
+use roc_can::expected::Expected;
+use roc_can::pattern::Pattern;
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::Loc;
+use roc_region::all::{Loc, Region};
 use roc_types::solved_types::{FreeVars, SolvedType};
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::{AnnotationSource, Category, Type};
 
 /// The types of all exposed values/functions of a collection of modules
 #[derive(Clone, Debug, Default)]
@@ -48,6 +53,10 @@ impl ExposedByModule {
 
         output
     }
+
+    pub fn iter_all(&self) -> impl Iterator<Item = (&ModuleId, &ExposedModuleTypes)> {
+        self.exposed.iter()
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -64,17 +73,8 @@ impl ExposedForModule {
         let mut imported_values = Vec::new();
 
         for symbol in it {
-            // Today, builtins are not actually imported,
-            // but generated in each module that uses them
-            //
-            // This will change when we write builtins in roc
-            if symbol.is_builtin() {
-                continue;
-            }
-
-            if let Some(ExposedModuleTypes::Valid { .. }) =
-                exposed_by_module.exposed.get(&symbol.module_id())
-            {
+            let module = exposed_by_module.exposed.get(&symbol.module_id());
+            if let Some(ExposedModuleTypes { .. }) = module {
                 imported_values.push(*symbol);
             } else {
                 continue;
@@ -90,20 +90,146 @@ impl ExposedForModule {
 
 /// The types of all exposed values/functions of a module
 #[derive(Clone, Debug)]
-pub enum ExposedModuleTypes {
-    Invalid,
-    Valid {
-        stored_vars_by_symbol: Vec<(Symbol, Variable)>,
-        storage_subs: roc_types::subs::StorageSubs,
-    },
+pub struct ExposedModuleTypes {
+    pub stored_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub storage_subs: roc_types::subs::StorageSubs,
+    pub solved_specializations: SolvedSpecializations,
 }
 
 pub fn constrain_module(
     constraints: &mut Constraints,
+    symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
+    abilities_store: &AbilitiesStore,
     declarations: &[Declaration],
     home: ModuleId,
 ) -> Constraint {
-    crate::expr::constrain_decls(constraints, home, declarations)
+    let constraint = crate::expr::constrain_decls(constraints, home, declarations);
+    let constraint =
+        constrain_symbols_from_requires(constraints, symbols_from_requires, home, constraint);
+    let constraint = frontload_ability_constraints(constraints, abilities_store, home, constraint);
+
+    // The module constraint should always save the environment at the end.
+    debug_assert!(constraints.contains_save_the_environment(&constraint));
+
+    constraint
+}
+
+fn constrain_symbols_from_requires(
+    constraints: &mut Constraints,
+    symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
+    home: ModuleId,
+    constraint: Constraint,
+) -> Constraint {
+    symbols_from_requires
+        .into_iter()
+        .fold(constraint, |constraint, (loc_symbol, loc_type)| {
+            if loc_symbol.value.module_id() == home {
+                // 1. Required symbols can only be specified in package modules
+                // 2. Required symbols come from app modules
+                // But, if we are running e.g. `roc check` on a package module, there is no app
+                // module, and we will have instead put the required symbols in the package module
+                // namespace. If this is the case, we want to introduce the symbols as if they had
+                // the types they are annotated with.
+                let rigids = Default::default();
+                let mut env = Env {
+                    home,
+                    rigids,
+                    resolutions_to_make: vec![],
+                };
+                let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(loc_symbol.value));
+
+                let def_pattern_state =
+                    constrain_def_pattern(constraints, &mut env, &pattern, loc_type.value);
+
+                debug_assert!(env.resolutions_to_make.is_empty());
+
+                constrain_def_make_constraint(
+                    constraints,
+                    // No new rigids or flex vars because they are represented in the type
+                    // annotation.
+                    std::iter::empty(),
+                    std::iter::empty(),
+                    Constraint::True,
+                    constraint,
+                    def_pattern_state,
+                )
+            } else {
+                // Otherwise, this symbol comes from an app module - we want to check that the type
+                // provided by the app is in fact what the package module requires.
+                let arity = loc_type.value.arity();
+                let provided_eq_requires_constr = constraints.lookup(
+                    loc_symbol.value,
+                    Expected::FromAnnotation(
+                        loc_symbol.map(|&s| Pattern::Identifier(s)),
+                        arity,
+                        AnnotationSource::RequiredSymbol {
+                            region: loc_type.region,
+                        },
+                        loc_type.value,
+                    ),
+                    loc_type.region,
+                );
+                constraints.and_constraint([provided_eq_requires_constr, constraint])
+            }
+        })
+}
+
+pub fn frontload_ability_constraints(
+    constraints: &mut Constraints,
+    abilities_store: &AbilitiesStore,
+    home: ModuleId,
+    mut constraint: Constraint,
+) -> Constraint {
+    for (member_name, member_data) in abilities_store.root_ability_members().iter() {
+        if let MemberTypeInfo::Local {
+            signature_var,
+            variables: vars,
+            signature,
+        } = &member_data.typ
+        {
+            let signature_var = *signature_var;
+            let rigids = Default::default();
+            let mut env = Env {
+                home,
+                rigids,
+                resolutions_to_make: vec![],
+            };
+            let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(*member_name));
+
+            let mut def_pattern_state = constrain_def_pattern(
+                constraints,
+                &mut env,
+                &pattern,
+                Type::Variable(signature_var),
+            );
+
+            debug_assert!(env.resolutions_to_make.is_empty());
+
+            def_pattern_state.vars.push(signature_var);
+
+            let rigid_variables = vars.rigid_vars.iter().chain(vars.able_vars.iter()).copied();
+            let infer_variables = vars.flex_vars.iter().copied();
+
+            def_pattern_state
+                .constraints
+                .push(constraints.equal_types_var(
+                    signature_var,
+                    Expected::NoExpectation(signature.clone()),
+                    Category::Storage(file!(), line!()),
+                    Region::zero(),
+                ));
+
+            constraint = constrain_def_make_constraint(
+                constraints,
+                rigid_variables,
+                infer_variables,
+                Constraint::True,
+                constraint,
+                def_pattern_state,
+            );
+        }
+    }
+    constraint
 }
 
 #[derive(Debug, Clone)]
@@ -147,17 +273,6 @@ pub fn constrain_builtin_imports(
                 }
             }
             None => {
-                let is_valid_alias = stdlib.applies.contains(&symbol)
-                        // This wasn't a builtin value or Apply; maybe it was a builtin alias.
-                        || roc_types::builtin_aliases::aliases().contains_key(&symbol);
-
-                if !is_valid_alias {
-                    panic!(
-                        "Could not find {:?} in builtin types {:?} or builtin aliases",
-                        symbol, stdlib.types,
-                    );
-                }
-
                 continue;
             }
         };

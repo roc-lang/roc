@@ -4,13 +4,13 @@ Builtins are the functions and modules that are implicitly imported into every m
 
 ### module/src/symbol.rs
 
-Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `mod` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones).
+Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `rem` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones).
 
 Some of these have `#` inside their name (`first#list`, `#lt` ..). This is a trick we are doing to hide implementation details from Roc programmers. To a Roc programmer, a name with `#` in it is invalid, because `#` means everything after it is parsed to a comment. We are constructing these functions manually, so we are circumventing the parsing step and dont have such restrictions. We get to make functions and values with `#` which as a consequence are not accessible to Roc programmers. Roc programmers simply cannot reference them.
 
 But we can use these values and some of these are necessary for implementing builtins. For example, `List.get` returns tags, and it is not easy for us to create tags when composing LLVM. What is easier however, is:
 - ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, Nat -> elem` in LLVM
-- ..writing `List elem, Nat -> Result elem [ OutOfBounds ]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Nat` index exists.
+- ..writing `List elem, Nat -> Result elem [OutOfBounds]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Nat` index exists.
 
 
 ### can/src/builtins.rs
@@ -48,19 +48,19 @@ Since `List.repeat` is implemented entirely as low level functions, its `body` i
 
 ## Connecting the definition to the implementation
 ### module/src/low_level.rs
-This `LowLevel` thing connects the builtin defined in this module to its implementation. Its referenced in `can/src/builtins.rs` and it is used in `gen/src/llvm/build.rs`.
+This `LowLevel` thing connects the builtin defined in this module to its implementation. It's referenced in `can/src/builtins.rs` and it is used in `gen/src/llvm/build.rs`.
 
 ## Bottom level LLVM values and functions
 ### gen/src/llvm/build.rs
-This is where bottom-level functions that need to be written as LLVM are created. If the function leads to a tag thats a good sign it should not be written here in `build.rs`. If its simple fundamental stuff like `INT_ADD` then it certainly should be written here.
+This is where bottom-level functions that need to be written as LLVM are created. If the function leads to a tag thats a good sign it should not be written here in `build.rs`. If it's simple fundamental stuff like `INT_ADD` then it certainly should be written here.
 
 ## Letting the compiler know these functions exist
 ### builtins/src/std.rs
-Its one thing to actually write these functions, its _another_ thing to let the Roc compiler know they exist as part of the standard library. You have to tell the compiler "Hey, this function exists, and it has this type signature". That happens in `std.rs`.
+It's one thing to actually write these functions, it's _another_ thing to let the Roc compiler know they exist as part of the standard library. You have to tell the compiler "Hey, this function exists, and it has this type signature". That happens in `std.rs`.
 
 ## Specifying how we pass args to the function
 ### builtins/mono/src/borrow.rs
-After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelevant. Towards the bottom of this file, add a new case for you builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
+After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelevant. Towards the bottom of this file, add a new case for your builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
 
 ## Testing it
 ### solve/tests/solve_expr.rs
@@ -87,7 +87,7 @@ In this directory, there are a couple files like `gen_num.rs`, `gen_str.rs`, etc
 fn atan() {
     assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
 }
-    ```
+```
 But replace `Num.atan`, the return value, and the return type with your new builtin.
 
 # Mistakes that are easy to make!!

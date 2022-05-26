@@ -1,8 +1,8 @@
 interface File
-    exposes [ line, Handle, withOpen, chunk ]
-    imports [ pf.Effect, Task.{ Task } ]
+    exposes [line, Handle, withOpen, chunk]
+    imports [pf.Effect, Task.{ Task }]
 
-Handle : [ @Handle U64 ]
+Handle := U64
 
 line : Handle -> Task.Task Str *
 line = \@Handle handle -> Effect.after (Effect.getFileLine handle) Task.succeed
@@ -23,5 +23,5 @@ withOpen : Str, (Handle -> Task {} a) -> Task {} a
 withOpen = \path, callback ->
     handle <- Task.await (open path)
     result <- Task.attempt (callback handle)
-    {  } <- Task.await (close handle)
+    {} <- Task.await (close handle)
     Task.fromResult result

@@ -10,24 +10,60 @@ mod helpers;
 #[cfg(test)]
 mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
-    use roc_types::pretty_print::{content_to_string, name_all_type_vars};
+    use lazy_static::lazy_static;
+    use regex::Regex;
+    use roc_can::traverse::{find_ability_member_at, find_type_at};
+    use roc_load::LoadedModule;
+    use roc_module::symbol::{Interns, ModuleId};
+    use roc_problem::can::Problem;
+    use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
+    use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
+    use roc_solve::solve::TypeError;
+    use roc_types::pretty_print::name_and_print_var;
+    use std::path::PathBuf;
 
     // HELPERS
 
-    fn infer_eq_help(
-        src: &str,
-    ) -> Result<
-        (
-            Vec<roc_solve::solve::TypeError>,
-            Vec<roc_problem::can::Problem>,
-            String,
-        ),
-        std::io::Error,
-    > {
+    lazy_static! {
+        static ref RE_TYPE_QUERY: Regex =
+            Regex::new(r#"(?P<where>\^+)(?:\{-(?P<sub>\d+)\})?"#).unwrap();
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct TypeQuery(Region);
+
+    fn parse_queries(src: &str) -> Vec<TypeQuery> {
+        let line_info = LineInfo::new(src);
+        let mut queries = vec![];
+        for (i, line) in src.lines().enumerate() {
+            for capture in RE_TYPE_QUERY.captures_iter(line) {
+                let wher = capture.name("where").unwrap();
+                let subtract_col = capture
+                    .name("sub")
+                    .and_then(|m| str::parse(m.as_str()).ok())
+                    .unwrap_or(0);
+                let (start, end) = (wher.start() as u32, wher.end() as u32);
+                let (start, end) = (start - subtract_col, end - subtract_col);
+                let last_line = i as u32 - 1;
+                let start_lc = LineColumn {
+                    line: last_line,
+                    column: start,
+                };
+                let end_lc = LineColumn {
+                    line: last_line,
+                    column: end,
+                };
+                let lc_region = LineColumnRegion::new(start_lc, end_lc);
+                let region = line_info.convert_line_column_region(lc_region);
+
+                queries.push(TypeQuery(region));
+            }
+        }
+        queries
+    }
+
+    fn run_load_and_infer(src: &str) -> Result<(LoadedModule, String), std::io::Error> {
         use bumpalo::Bump;
-        use std::fs::File;
-        use std::io::Write;
-        use std::path::PathBuf;
         use tempfile::tempdir;
 
         let arena = &Bump::new();
@@ -48,16 +84,14 @@ mod solve_expr {
             let dir = tempdir()?;
             let filename = PathBuf::from("Test.roc");
             let file_path = dir.path().join(filename);
-            let full_file_path = file_path.clone();
-            let mut file = File::create(file_path)?;
-            writeln!(file, "{}", module_src)?;
-            drop(file);
-            let result = roc_load::load_and_typecheck(
+            let result = roc_load::load_and_typecheck_str(
                 arena,
-                full_file_path,
+                file_path,
+                module_src,
                 dir.path(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
+                roc_reporting::report::RenderTarget::Generic,
             );
 
             dir.close()?;
@@ -66,63 +100,98 @@ mod solve_expr {
         };
 
         let loaded = loaded.expect("failed to load module");
+        Ok((loaded, module_src.to_string()))
+    }
 
-        use roc_load::LoadedModule;
-        let LoadedModule {
-            module_id: home,
-            mut can_problems,
-            mut type_problems,
-            interns,
-            mut solved,
-            exposed_to_host,
-            ..
-        } = loaded;
+    fn format_problems(
+        src: &str,
+        home: ModuleId,
+        interns: &Interns,
+        can_problems: Vec<Problem>,
+        type_problems: Vec<TypeError>,
+    ) -> (String, String) {
+        let filename = PathBuf::from("test.roc");
+        let src_lines: Vec<&str> = src.split('\n').collect();
+        let lines = LineInfo::new(src);
+        let alloc = RocDocAllocator::new(&src_lines, home, interns);
+
+        let mut can_reports = vec![];
+        let mut type_reports = vec![];
+
+        for problem in can_problems {
+            let report = can_problem(&alloc, &lines, filename.clone(), problem.clone());
+            can_reports.push(report.pretty(&alloc));
+        }
+
+        for problem in type_problems {
+            if let Some(report) = type_problem(&alloc, &lines, filename.clone(), problem.clone()) {
+                type_reports.push(report.pretty(&alloc));
+            }
+        }
+
+        let mut can_reports_buf = String::new();
+        let mut type_reports_buf = String::new();
+        use roc_reporting::report::CiWrite;
+        alloc
+            .stack(can_reports)
+            .1
+            .render_raw(70, &mut CiWrite::new(&mut can_reports_buf))
+            .unwrap();
+        alloc
+            .stack(type_reports)
+            .1
+            .render_raw(70, &mut CiWrite::new(&mut type_reports_buf))
+            .unwrap();
+
+        (can_reports_buf, type_reports_buf)
+    }
+
+    fn infer_eq_help(src: &str) -> Result<(String, String, String), std::io::Error> {
+        let (
+            LoadedModule {
+                module_id: home,
+                mut can_problems,
+                mut type_problems,
+                interns,
+                mut solved,
+                mut exposed_to_host,
+                abilities_store,
+                ..
+            },
+            src,
+        ) = run_load_and_infer(src)?;
 
         let mut can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
-
-        let subs = solved.inner_mut();
-
-        //        assert!(can_problems.is_empty());
-        //        assert!(type_problems.is_empty());
-        //        let CanExprOut {
-        //            output,
-        //            var_store,
-        //            var,
-        //            constraint,
-        //            home,
-        //            interns,
-        //            problems: mut can_problems,
-        //            ..
-        //        } = can_expr(src);
-        //        let mut subs = Subs::new(var_store.into());
-
-        // TODO fix this
-        // assert_correct_variable_usage(&constraint);
-
-        // name type vars
-        for var in exposed_to_host.values() {
-            name_all_type_vars(*var, subs);
-        }
-
-        let content = {
-            debug_assert!(exposed_to_host.len() == 1);
-            let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
-            subs.get_content_without_compacting(variable)
-        };
-
-        let actual_str = content_to_string(content, subs, home, &interns);
 
         // Disregard UnusedDef problems, because those are unavoidable when
         // returning a function from the test expression.
         can_problems.retain(|prob| !matches!(prob, roc_problem::can::Problem::UnusedDef(_, _)));
 
+        let (can_problems, type_problems) =
+            format_problems(&src, home, &interns, can_problems, type_problems);
+
+        let subs = solved.inner_mut();
+
+        exposed_to_host.retain(|s, _| !abilities_store.is_specialization_name(*s));
+
+        debug_assert!(exposed_to_host.len() == 1);
+        let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
+        let actual_str = name_and_print_var(variable, subs, home, &interns);
+
         Ok((type_problems, can_problems, actual_str))
     }
 
     fn promote_expr_to_module(src: &str) -> String {
-        let mut buffer =
-            String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
+        let mut buffer = String::from(indoc!(
+            r#"
+            app "test"
+                imports []
+                provides [main] to "./platform"
+
+            main =
+            "#
+        ));
 
         for line in src.lines() {
             // indent the body!
@@ -137,7 +206,11 @@ mod solve_expr {
     fn infer_eq(src: &str, expected: &str) {
         let (_, can_problems, actual) = infer_eq_help(src).unwrap();
 
-        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
+        assert!(
+            can_problems.is_empty(),
+            "Canonicalization problems: {}",
+            can_problems
+        );
 
         assert_eq!(actual, expected.to_string());
     }
@@ -145,14 +218,142 @@ mod solve_expr {
     fn infer_eq_without_problem(src: &str, expected: &str) {
         let (type_problems, can_problems, actual) = infer_eq_help(src).unwrap();
 
-        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
+        assert!(
+            can_problems.is_empty(),
+            "Canonicalization problems: {}",
+            can_problems
+        );
 
         if !type_problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
+            panic!(
+                "expected:\n{:?}\ninferred:\n{:?}\nproblems:\n{}",
+                expected, actual, type_problems,
+            );
         }
         assert_eq!(actual, expected.to_string());
+    }
+
+    fn infer_queries(src: &str, expected: &[&'static str]) {
+        let (
+            LoadedModule {
+                module_id: home,
+                mut can_problems,
+                mut type_problems,
+                mut declarations_by_id,
+                mut solved,
+                interns,
+                abilities_store,
+                ..
+            },
+            src,
+        ) = run_load_and_infer(src).unwrap();
+
+        let decls = declarations_by_id.remove(&home).unwrap();
+        let subs = solved.inner_mut();
+
+        let can_problems = can_problems.remove(&home).unwrap_or_default();
+        let type_problems = type_problems.remove(&home).unwrap_or_default();
+
+        let (can_problems, type_problems) =
+            format_problems(&src, home, &interns, can_problems, type_problems);
+
+        assert!(
+            can_problems.is_empty(),
+            "Canonicalization problems: {}",
+            can_problems
+        );
+        assert!(type_problems.is_empty(), "Type problems: {}", type_problems);
+
+        let queries = parse_queries(&src);
+        assert!(!queries.is_empty(), "No queries provided!");
+
+        let mut solved_queries = Vec::with_capacity(queries.len());
+        for TypeQuery(region) in queries.into_iter() {
+            let start = region.start().offset;
+            let end = region.end().offset;
+            let text = &src[start as usize..end as usize];
+            let var = find_type_at(region, &decls)
+                .unwrap_or_else(|| panic!("No type for {} ({:?})!", &text, region));
+
+            let actual_str = name_and_print_var(var, subs, home, &interns);
+
+            let elaborated = match find_ability_member_at(region, &decls) {
+                Some((member, specialization_id)) => {
+                    let qual = match abilities_store.get_resolved(specialization_id) {
+                        Some(specialization) => {
+                            abilities_store
+                                .iter_specializations()
+                                .find(|(_, ms)| ms.symbol == specialization)
+                                .unwrap()
+                                .0
+                                 .1
+                        }
+                        None => abilities_store.member_def(member).unwrap().parent_ability,
+                    };
+                    let qual_str = qual.as_str(&interns);
+                    format!("{}#{} : {}", qual_str, text, actual_str)
+                }
+                None => format!("{} : {}", text, actual_str),
+            };
+
+            solved_queries.push(elaborated);
+        }
+
+        assert_eq!(solved_queries, expected)
+    }
+
+    fn check_inferred_abilities<'a, I>(src: &'a str, expected_specializations: I)
+    where
+        I: IntoIterator<Item = (&'a str, &'a str)>,
+    {
+        let LoadedModule {
+            module_id: home,
+            mut can_problems,
+            mut type_problems,
+            interns,
+            abilities_store,
+            ..
+        } = run_load_and_infer(src).unwrap().0;
+
+        let can_problems = can_problems.remove(&home).unwrap_or_default();
+        let type_problems = type_problems.remove(&home).unwrap_or_default();
+
+        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
+
+        if !type_problems.is_empty() {
+            eprintln!("{:?}", type_problems);
+            panic!();
+        }
+
+        let known_specializations = abilities_store.iter_specializations();
+        use std::collections::HashSet;
+        let pretty_specializations = known_specializations
+            .into_iter()
+            .map(|((member, typ), _)| {
+                let member_data = abilities_store.member_def(member).unwrap();
+                let member_str = member.as_str(&interns);
+                let ability_str = member_data.parent_ability.as_str(&interns);
+                (
+                    format!("{}:{}", ability_str, member_str),
+                    typ.as_str(&interns),
+                )
+            })
+            .collect::<HashSet<_>>();
+
+        for (parent, specialization) in expected_specializations.into_iter() {
+            let has_the_one = pretty_specializations
+                .iter()
+                // references are annoying so we do this
+                .any(|(p, s)| p == parent && s == &specialization);
+            assert!(
+                has_the_one,
+                "{:#?} not in {:#?}",
+                (parent, specialization),
+                pretty_specializations,
+            );
+        }
     }
 
     #[test]
@@ -236,7 +437,7 @@ mod solve_expr {
                 Str.fromUtf8
                 "#
             ),
-            "List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*",
+            "List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*",
         );
     }
 
@@ -296,7 +497,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ [], [ [] ] ]
+                    [[], [[]]]
                 "#
             ),
             "List (List (List *))",
@@ -309,8 +510,8 @@ mod solve_expr {
             indoc!(
                 r#"
                 empty = []
-                one = List.concat [ 1 ] empty
-                str = List.concat [ "blah" ] empty
+                one = List.concat [1] empty
+                str = List.concat ["blah"] empty
 
                 empty
             "#
@@ -336,7 +537,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [[[ 5 ]]]
+                    [[[5]]]
                 "#
             ),
             "List (List (List (Num *)))",
@@ -348,7 +549,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ 1, 2, 3 ]
+                    [1, 2, 3]
                 "#
             ),
             "List (Num *)",
@@ -360,7 +561,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ [ 1 ], [ 2, 3 ] ]
+                    [[1], [2, 3]]
                 "#
             ),
             "List (List (Num *))",
@@ -372,7 +573,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ "cowabunga" ]
+                    ["cowabunga"]
                 "#
             ),
             "List Str",
@@ -384,7 +585,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [[[ "foo" ]]]
+                    [[["foo"]]]
                 "#
             ),
             "List (List (List Str))",
@@ -396,7 +597,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ "foo", "bar" ]
+                    ["foo", "bar"]
                 "#
             ),
             "List Str",
@@ -458,7 +659,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ "foo", 5 ]
+                    ["foo", 5]
                 "#
             ),
             "List <type mismatch>",
@@ -470,7 +671,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    [ [ "foo", 5 ] ]
+                    [["foo", 5]]
                 "#
             ),
             "List (List <type mismatch>)",
@@ -482,7 +683,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                [ [ 1 ], [ [] ] ]
+                [[1], [[]]]
             "#
             ),
             "List <type mismatch>",
@@ -576,10 +777,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List.map [ "a", "b" ] \elem -> Foo elem
+                List.map ["a", "b"] \elem -> Foo elem
                 "#
             ),
-            "List [ Foo Str ]*",
+            "List [Foo Str]*",
         )
     }
 
@@ -594,7 +795,7 @@ mod solve_expr {
                 foo "hi"
                 "#
             ),
-            "[ Foo Str ]*",
+            "[Foo Str]*",
         )
     }
 
@@ -604,10 +805,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                List.map [ "a", "b" ] Foo
+                List.map ["a", "b"] Foo
                 "#
             ),
-            "List [ Foo Str ]*",
+            "List [Foo Str]*",
         )
     }
 
@@ -617,10 +818,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                [ \x -> Bar x, Foo ]
+                [\x -> Bar x, Foo]
                 "#
             ),
-            "List (a -> [ Bar a, Foo a ]*)",
+            "List (a -> [Bar a, Foo a]*)",
         )
     }
 
@@ -630,10 +831,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                [ Foo, \x -> Bar x ]
+                [Foo, \x -> Bar x]
                 "#
             ),
-            "List (a -> [ Bar a, Foo a ]*)",
+            "List (a -> [Bar a, Foo a]*)",
         )
     }
 
@@ -646,13 +847,13 @@ mod solve_expr {
                 foo = Foo
 
                 {
-                    x: [ foo, Foo ],
-                    y: [ foo, \x -> Foo x ],
-                    z: [ foo, \x,y  -> Foo x y ]
+                    x: [foo, Foo],
+                    y: [foo, \x -> Foo x],
+                    z: [foo, \x,y  -> Foo x y]
                 }
                 "#
             ),
-            "{ x : List [ Foo ]*, y : List (a -> [ Foo a ]*), z : List (b, c -> [ Foo b c ]*) }",
+            "{ x : List [Foo]*, y : List (a -> [Foo a]*), z : List (b, c -> [Foo b c]*) }",
         )
     }
 
@@ -662,13 +863,13 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                x : List [ Foo I64 ]
-                x = List.map [ 1, 2 ] Foo
+                x : List [Foo I64]
+                x = List.map [1, 2] Foo
 
                 x
                 "#
             ),
-            "List [ Foo I64 ]",
+            "List [Foo I64]",
         )
     }
 
@@ -837,7 +1038,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    enlist = \val -> [ val ]
+                    enlist = \val -> [val]
 
                     enlist 5
                 "#
@@ -1095,7 +1296,7 @@ mod solve_expr {
     //     infer_eq(
     //         indoc!(
     //             r#"
-    //             \always -> [ always [], always "" ]
+    //             \always -> [always [], always ""]
     //        "#
     //         ),
     //         "<type mismatch>",
@@ -1109,7 +1310,7 @@ mod solve_expr {
                 r#"
                     alwaysFive = \_ -> 5
 
-                    [ alwaysFive "foo", alwaysFive [] ]
+                    [alwaysFive "foo", alwaysFive []]
                 "#
             ),
             "List (Num *)",
@@ -1308,7 +1509,7 @@ mod solve_expr {
                     Foo
                 "#
             ),
-            "[ Foo ]*",
+            "[Foo]*",
         );
     }
 
@@ -1320,19 +1521,7 @@ mod solve_expr {
                     \Foo -> 42
                 "#
             ),
-            "[ Foo ] -> Num *",
-        );
-    }
-
-    #[test]
-    fn single_private_tag_pattern() {
-        infer_eq(
-            indoc!(
-                r#"
-                    \@Foo -> 42
-                "#
-            ),
-            "[ @Foo ] -> Num *",
+            "[Foo] -> Num *",
         );
     }
 
@@ -1347,7 +1536,7 @@ mod solve_expr {
                             False -> 0
                 "#
             ),
-            "[ False, True ] -> Num *",
+            "[False, True] -> Num *",
         );
     }
 
@@ -1359,19 +1548,7 @@ mod solve_expr {
                     Foo "happy" 2020
                 "#
             ),
-            "[ Foo Str (Num *) ]*",
-        );
-    }
-
-    #[test]
-    fn private_tag_application() {
-        infer_eq(
-            indoc!(
-                r#"
-                    @Foo "happy" 2020
-                "#
-            ),
-            "[ @Foo Str (Num *) ]*",
+            "[Foo Str (Num *)]*",
         );
     }
 
@@ -1412,7 +1589,7 @@ mod solve_expr {
                     \Foo x -> Foo x
                 "#
             ),
-            "[ Foo a ] -> [ Foo a ]*",
+            "[Foo a] -> [Foo a]*",
         );
     }
 
@@ -1424,30 +1601,17 @@ mod solve_expr {
                     \Foo x _ -> Foo x "y"
                 "#
             ),
-            "[ Foo a * ] -> [ Foo a Str ]*",
+            "[Foo a *] -> [Foo a Str]*",
         );
     }
 
     #[test]
-    fn global_tag_with_field() {
+    fn tag_with_field() {
         infer_eq(
             indoc!(
                 r#"
                     when Foo "blah" is
                         Foo x -> x
-                "#
-            ),
-            "Str",
-        );
-    }
-
-    #[test]
-    fn private_tag_with_field() {
-        infer_eq(
-            indoc!(
-                r#"
-                    when @Foo "blah" is
-                        @Foo x -> x
                 "#
             ),
             "Str",
@@ -2229,7 +2393,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Res a e : [ Okay a, Error e ]
+                    Res a e : [Okay a, Error e]
 
                     ok : Res I64 *
                     ok = Okay 5
@@ -2246,7 +2410,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Res a e : [ Okay a, Error e ]
+                    Res a e : [Okay a, Error e]
 
                     err : Res * Str
                     err = Error "blah"
@@ -2340,7 +2504,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num a, y : F64 }",
+            "{ numIdentity : Num a -> Num a, x : Num a, y : Float * }",
         );
     }
 
@@ -2385,14 +2549,14 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    map : (a -> b), [ Identity a ] -> [ Identity b ]
+                    map : (a -> b), [Identity a] -> [Identity b]
                     map = \f, identity ->
                         when identity is
                             Identity v -> Identity (f v)
                     map
                 "#
             ),
-            "(a -> b), [ Identity a ] -> [ Identity b ]",
+            "(a -> b), [Identity a] -> [Identity b]",
         );
     }
 
@@ -2409,16 +2573,15 @@ mod solve_expr {
                    toBit
                 "#
             ),
-            "[ False, True ] -> Num *",
+            "[False, True] -> Num *",
         );
     }
 
     // this test is related to a bug where ext_var would have an incorrect rank.
-    // This match has duplicate cases, but that's not important because exhaustiveness happens
-    // after inference.
+    // This match has duplicate cases, but we ignore that.
     #[test]
     fn to_bit_record() {
-        infer_eq_without_problem(
+        infer_eq(
             indoc!(
                 r#"
                     foo = \rec ->
@@ -2446,7 +2609,7 @@ mod solve_expr {
                    fromBit
                 "#
             ),
-            "Num * -> [ False, True ]*",
+            "Num * -> [False, True]*",
         );
     }
 
@@ -2455,7 +2618,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    map : (a -> b), [ Err e, Ok a ] -> [ Err e, Ok b ]
+                    map : (a -> b), [Err e, Ok a] -> [Err e, Ok b]
                     map = \f, result ->
                         when result is
                             Ok v -> Ok (f v)
@@ -2464,7 +2627,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "(a -> b), [ Err e, Ok a ] -> [ Err e, Ok b ]",
+            "(a -> b), [Err e, Ok a] -> [Err e, Ok b]",
         );
     }
 
@@ -2473,7 +2636,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    Res e a : [ Ok a, Err e ]
+                    Res e a : [Ok a, Err e]
 
                     map : (a -> b), Res e a -> Res e b
                     map = \f, result ->
@@ -2593,7 +2756,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    empty : [ Cons a (ConsList a), Nil ] as ConsList a
+                    empty : [Cons a (ConsList a), Nil] as ConsList a
                     empty = Nil
 
                     empty
@@ -2608,7 +2771,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    singleton : a -> [ Cons a (ConsList a), Nil ] as ConsList a
+                    singleton : a -> [Cons a (ConsList a), Nil] as ConsList a
                     singleton = \x -> Cons x Nil
 
                     singleton
@@ -2623,7 +2786,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    Peano : [ S Peano, Z ]
+                    Peano : [S Peano, Z]
 
                     length : Peano -> Num.Num (Num.Integer Num.Signed64)
                     length = \peano ->
@@ -2643,7 +2806,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    map : [ S Peano, Z ] as Peano -> Peano
+                    map : [S Peano, Z] as Peano -> Peano
                     map = \peano ->
                         when peano is
                             Z -> Z
@@ -2673,7 +2836,7 @@ mod solve_expr {
                     map
                        "#
             ),
-            "(a -> b), [ Cons a c, Nil ] as c -> [ Cons b d, Nil ]* as d",
+            "(a -> b), [Cons a c, Nil] as c -> [Cons b d, Nil]* as d",
         );
     }
 
@@ -2682,7 +2845,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ConsList a : [ Cons a (ConsList a), Nil ]
+                    ConsList a : [Cons a (ConsList a), Nil]
 
                     map : (a -> b), ConsList a -> ConsList b
                     map = \f, list ->
@@ -2745,10 +2908,10 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                r : [ Ok Str.Str ]
+                r : [Ok Str.Str]
                 r = Ok 1
 
-                s : { left: [ Ok {} ] }
+                s : { left: [Ok {}] }
                 s = { left: Ok 3.14  }
 
                 when 0 is
@@ -2782,9 +2945,9 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                Peano : [ S Peano, Z ]
+                Peano : [S Peano, Z]
 
                 map : Peano -> Peano
                 map = \peano ->
@@ -2805,7 +2968,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Unit : [ Unit ]
+                    Unit : [Unit]
 
                     unit : Unit
                     unit = Unit
@@ -2822,7 +2985,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ConsList a : [ Cons a (ConsList a), Nil ]
+                    ConsList a : [Cons a (ConsList a), Nil]
 
                     toEmpty : ConsList a -> ConsList a
                     toEmpty = \_ ->
@@ -2844,7 +3007,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ConsList a : [ Cons a (ConsList a), Nil ]
+                    ConsList a : [Cons a (ConsList a), Nil]
 
                     toEmpty : ConsList a -> ConsList a
                     toEmpty = \_ ->
@@ -2865,9 +3028,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                ConsList a : [ Cons a (ConsList a), Nil ]
+                ConsList a : [Cons a (ConsList a), Nil]
 
                 toEmpty : ConsList a -> ConsList a
                 toEmpty = \_ ->
@@ -2921,7 +3084,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 map =
                     \peano ->
@@ -2934,7 +3097,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ] as a -> [ S b, Z ]* as b",
+            "[S a, Z] as a -> [S b, Z]* as b",
         );
     }
 
@@ -2953,7 +3116,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "[ S a, Z ] as a -> [ S b, Z ]* as b",
+            "[S a, Z] as a -> [S b, Z]* as b",
         );
     }
 
@@ -2979,7 +3142,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                     UserId x : [ UserId I64 ]
+                     UserId x : [UserId I64]
                      UserId x = UserId 42
 
                      x
@@ -2994,7 +3157,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ConsList q : [ Cons { x: q, xs: ConsList q }, Nil ]
+                    ConsList q : [Cons { x: q, xs: ConsList q }, Nil]
 
                     map : (a -> b), ConsList a -> ConsList b
                     map = \f, list ->
@@ -3024,7 +3187,7 @@ mod solve_expr {
                     map
                 "#
             ),
-            "(a -> b), [ Cons { x : a, xs : c }*, Nil ] as c -> [ Cons { x : b, xs : d }, Nil ]* as d",
+            "(a -> b), [Cons { x : a, xs : c }*, Nil] as c -> [Cons { x : b, xs : d }, Nil]* as d",
         );
     }
 
@@ -3033,10 +3196,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ListA a b : [ Cons a (ListB b a), Nil ]
-                    ListB a b : [ Cons a (ListA b a), Nil ]
+                    ListA a b : [Cons a (ListB b a), Nil]
+                    ListB a b : [Cons a (ListA b a), Nil]
 
-                    ConsList q : [ Cons q (ConsList q), Nil ]
+                    ConsList q : [Cons q (ConsList q), Nil]
 
                     toAs : (b -> a), ListA a b -> ConsList a
                     toAs = \f, lista ->
@@ -3060,9 +3223,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    ListA a : [ Cons a (ListB a) ]
-                    ListB a : [ Cons a (ListC a) ]
-                    ListC a : [ Cons a (ListA a), Nil ]
+                    ListA a : [Cons a (ListB a)]
+                    ListB a : [Cons a (ListC a)]
+                    ListC a : [Cons a (ListA a), Nil]
 
                     val : ListC Num.I64
                     val = Cons 1 (Cons 2 (Cons 3 Nil))
@@ -3091,7 +3254,7 @@ mod solve_expr {
                    toAs
                 "#
             ),
-            "(a -> b), [ Cons c [ Cons a d, Nil ], Nil ] as d -> [ Cons c [ Cons b e ]*, Nil ]* as e"
+            "(a -> b), [Cons c [Cons a d, Nil], Nil] as d -> [Cons c [Cons b e]*, Nil]* as e",
         );
     }
 
@@ -3100,10 +3263,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List.get [ "a" ] 0
+                    List.get ["a"] 0
                 "#
             ),
-            "Result Str [ OutOfBounds ]*",
+            "Result Str [OutOfBounds]*",
         );
     }
 
@@ -3112,7 +3275,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                partition : Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]
+                partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok _ ->
@@ -3124,7 +3287,7 @@ mod solve_expr {
                 partition
                             "#
             ),
-            "Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]",
+            "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
         );
     }
 
@@ -3145,7 +3308,7 @@ mod solve_expr {
                         _ ->
                             list
 
-                partition : Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]
+                partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
@@ -3173,7 +3336,7 @@ mod solve_expr {
                 partition
             "#
                 ),
-                "Nat, Nat, List (Int a) -> [ Pair Nat (List (Int a)) ]",
+                "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
             );
         });
     }
@@ -3202,10 +3365,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    List.get [ 10, 9, 8, 7 ] 1
+                    List.get [10, 9, 8, 7] 1
                 "#
             ),
-            "Result (Num *) [ OutOfBounds ]*",
+            "Result (Num *) [OutOfBounds]*",
         );
 
         infer_eq_without_problem(
@@ -3214,7 +3377,7 @@ mod solve_expr {
                     List.get
                 "#
             ),
-            "List a, Nat -> Result a [ OutOfBounds ]*",
+            "List a, Nat -> Result a [OutOfBounds]*",
         );
     }
 
@@ -3249,11 +3412,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn num_to_float() {
+    fn num_to_frac() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Num.toFloat
+                Num.toFrac
                 "#
             ),
             "Num * -> Float *",
@@ -3297,6 +3460,30 @@ mod solve_expr {
     }
 
     #[test]
+    fn div() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.div
+                "#
+            ),
+            "Float a, Float a -> Float a",
+        )
+    }
+
+    #[test]
+    fn div_checked() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divChecked
+                "#
+            ),
+            "Float a, Float a -> Result (Float a) [DivByZero]*",
+        )
+    }
+
+    #[test]
     fn div_ceil() {
         infer_eq_without_problem(
             indoc!(
@@ -3304,19 +3491,43 @@ mod solve_expr {
                 Num.divCeil
                 "#
             ),
-            "Int a, Int a -> Result (Int a) [ DivByZero ]*",
+            "Int a, Int a -> Int a",
         );
     }
 
     #[test]
-    fn pow_int() {
+    fn div_ceil_checked() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Num.powInt
+                Num.divCeilChecked
+                "#
+            ),
+            "Int a, Int a -> Result (Int a) [DivByZero]*",
+        );
+    }
+
+    #[test]
+    fn div_trunc() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divTrunc
                 "#
             ),
             "Int a, Int a -> Int a",
+        );
+    }
+
+    #[test]
+    fn div_trunc_checked() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.divTruncChecked
+                "#
+            ),
+            "Int a, Int a -> Result (Int a) [DivByZero]*",
         );
     }
 
@@ -3498,13 +3709,13 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" imports [Result.{ Result }] provides [main] to "./platform"
 
                 boom = \_ -> boom {}
 
                 Model position : { openSet : Set position }
 
-                cheapestOpen : Model position -> Result position [ KeyNotFound ]*
+                cheapestOpen : Model position -> Result position [KeyNotFound]*
                 cheapestOpen = \model ->
 
                     folder = \resSmallestSoFar, position ->
@@ -3519,14 +3730,14 @@ mod solve_expr {
                     Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
                         |> Result.map (\x -> x.position)
 
-                astar : Model position -> Result position [ KeyNotFound ]*
+                astar : Model position -> Result position [KeyNotFound]*
                 astar = \model -> cheapestOpen model
 
                 main =
                     astar
                 "#
             ),
-            "Model position -> Result position [ KeyNotFound ]*",
+            "Model position -> Result position [KeyNotFound]*",
         );
     }
 
@@ -3548,7 +3759,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn sorting() {
         // based on https://github.com/elm/compiler/issues/2057
         // Roc seems to do this correctly, tracking to make sure it stays that way
@@ -3582,12 +3792,11 @@ mod solve_expr {
                         g = \bs ->
                             when bs is
                                 bx -> f bx
-                                _ -> Nil
 
                         always Nil (f list)
 
-                Order : [ LT, GT, EQ ]
-                ConsList a : [ Nil, Cons a (ConsList a) ]
+                Order : [LT, GT, EQ]
+                ConsList a : [Nil, Cons a (ConsList a)]
 
                 { x: sortWith, y: sort, z: sortBy }
                 "#
@@ -3609,11 +3818,11 @@ mod solve_expr {
     //        infer_eq_without_problem(
     //            indoc!(
     //                r#"
-    //                Type a : [ TypeCtor (Type (Wrapper a)) ]
+    //                Type a : [TypeCtor (Type (Wrapper a))]
     //
-    //                Wrapper a : [ Wrapper a ]
+    //                Wrapper a : [Wrapper a]
     //
-    //                Opaque : [ Opaque ]
+    //                Opaque : [Opaque]
     //
     //                encodeType1 : Type a -> Opaque
     //                encodeType1 = \thing ->
@@ -3715,7 +3924,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : F64, z : Int * }",
+            "{ x : Num a, y : Float *, z : Int * }",
         );
     }
 
@@ -3732,7 +3941,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num a, y : F64, z : c }, b : { blah : Str, x : Num a, y : F64, z : c } }",
+            "{ a : { x : Num a, y : Float *, z : c }, b : { blah : Str, x : Num a, y : Float *, z : c } }",
         );
     }
 
@@ -3946,7 +4155,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
 
                 main : List x
@@ -3966,7 +4175,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
 
                 main =
@@ -3976,21 +4185,21 @@ mod solve_expr {
                         Foo Bar 1
                 "#
             ),
-            "[ Foo [ Bar ]* (Num *) ]*",
+            "[Foo [Bar]* (Num *)]*",
         );
 
-        infer_eq_without_problem("Foo Bar 1", "[ Foo [ Bar ]* (Num *) ]*");
+        infer_eq_without_problem("Foo Bar 1", "[Foo [Bar]* (Num *)]*");
     }
 
     #[test]
-    fn double_tag_application_pattern_global() {
+    fn double_tag_application_pattern() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                Bar : [ Bar ]
-                Foo : [ Foo Bar I64, Empty ]
+                Bar : [Bar]
+                Foo : [Foo Bar I64, Empty]
 
                 foo : Foo
                 foo = Foo Bar 1
@@ -4004,32 +4213,7 @@ mod solve_expr {
                             x
                 "#
             ),
-            "[ Empty, Foo Bar I64 ]",
-        );
-    }
-
-    #[test]
-    fn double_tag_application_pattern_private() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                app "test" provides [ main ] to "./platform"
-
-                Foo : [ @Foo [ @Bar ] I64, @Empty ]
-
-                foo : Foo
-                foo = @Foo @Bar 1
-
-                main =
-                    when foo is
-                        @Foo @Bar 1 ->
-                            @Foo @Bar 2
-
-                        x ->
-                            x
-                "#
-            ),
-            "[ @Empty, @Foo [ @Bar ] I64 ]",
+            "[Empty, Foo Bar I64]",
         );
     }
 
@@ -4038,7 +4222,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 State a : { count : I64, x : a }
 
@@ -4063,12 +4247,12 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 # The color of a node. Leaves are considered Black.
-                NodeColor : [ Red, Black ]
+                NodeColor : [Red, Black]
 
-                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
+                RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
                 # Create an empty dictionary.
                 empty : RBTree k v
@@ -4096,9 +4280,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                RBTree k : [ Node k (RBTree k), Empty ]
+                RBTree k : [Node k (RBTree k), Empty]
 
                 balance : RBTree  k -> RBTree k
                 balance = \left ->
@@ -4117,16 +4301,15 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn rbtree_full_remove_min() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                NodeColor : [ Red, Black ]
+                NodeColor : [Red, Black]
 
-                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
+                RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
                 moveRedLeft : RBTree k v -> RBTree k v
                 moveRedLeft = \dict ->
@@ -4352,9 +4535,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+                RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
                 removeHelp : Num k, RBTree (Num k) -> RBTree (Num k)
                 removeHelp = \targetKey, dict ->
@@ -4392,11 +4575,11 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                NodeColor : [ Red, Black ]
+                NodeColor : [Red, Black]
 
-                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
+                RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
                 removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v
                 removeHelp = \targetKey, dict ->
@@ -4468,7 +4651,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ partitionHelp ] to "./platform"
+                app "test" provides [partitionHelp] to "./platform"
 
                 swap : Nat, Nat, List a -> List a
                 swap = \i, j, list ->
@@ -4481,7 +4664,7 @@ mod solve_expr {
                         _ ->
                             []
 
-                partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [ Pair Nat (List (Num a)) ]
+                partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [Pair Nat (List (Num a))]
                 partitionHelp = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
@@ -4497,7 +4680,7 @@ mod solve_expr {
                         Pair i list
                 "#
             ),
-            "Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]",
+            "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
         );
     }
 
@@ -4506,9 +4689,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+                RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
                 balance : k, RBTree k -> RBTree k
                 balance = \key, left ->
@@ -4528,9 +4711,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+                RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
                 node = \x,y,z -> Node x y z
 
@@ -4552,11 +4735,11 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                NodeColor : [ Red, Black ]
+                NodeColor : [Red, Black]
 
-                RBTree k v : [ Node NodeColor k v (RBTree k v) (RBTree k v), Empty ]
+                RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
                 balance : NodeColor, k, v, RBTree k v, RBTree k v -> RBTree k v
                 balance = \color, key, value, left, right ->
@@ -4601,9 +4784,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+                RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
                 balance : k, RBTree k -> RBTree k
                 balance = \key, left ->
@@ -4629,9 +4812,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
-                Expr : [ Add Expr Expr, Val I64, Var I64 ]
+                Expr : [Add Expr Expr, Val I64, Var I64]
 
                 printExpr : Expr -> Str
                 printExpr = \e ->
@@ -4658,7 +4841,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 x = 4
 
@@ -4681,9 +4864,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-        app "test" provides [ main ] to "./platform"
+        app "test" provides [main] to "./platform"
 
-        RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+        RBTree k : [Node k (RBTree k) (RBTree k), Empty]
 
         balance : a, RBTree a -> RBTree a
         balance = \key, left ->
@@ -4723,7 +4906,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                canIGo : _ -> Result _ _
+                canIGo : _ -> Result.Result _ _
                 canIGo = \color ->
                     when color is
                         "green" -> Ok "go!"
@@ -4733,7 +4916,7 @@ mod solve_expr {
                 canIGo
                 "#
             ),
-            "Str -> Result Str [ SlowIt Str, StopIt Str, UnknownColor Str ]*",
+            "Str -> Result Str [SlowIt Str, StopIt Str, UnknownColor Str]*",
         )
     }
 
@@ -4770,7 +4953,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                badComics: Bool -> [ CowTools _, Thagomizer _ ]
+                badComics: Bool -> [CowTools _, Thagomizer _]
                 badComics = \c ->
                     when c is
                         True -> CowTools "The Far Side"
@@ -4778,18 +4961,18 @@ mod solve_expr {
                 badComics
                 "#
             ),
-            "Bool -> [ CowTools Str, Thagomizer Str ]",
+            "Bool -> [CowTools Str, Thagomizer Str]",
         )
     }
 
     #[test]
     fn inference_var_tag_union_ext() {
-        // TODO: we should really be inferring [ Blue, Orange ]a -> [ Lavender, Peach ]a here.
+        // TODO: we should really be inferring [Blue, Orange]a -> [Lavender, Peach]a here.
         // See https://github.com/rtfeldman/roc/issues/2053
         infer_eq_without_problem(
             indoc!(
                 r#"
-                pastelize: _ -> [ Lavender, Peach ]_
+                pastelize: _ -> [Lavender, Peach]_
                 pastelize = \color ->
                     when color is
                         Blue -> Lavender
@@ -4798,7 +4981,7 @@ mod solve_expr {
                 pastelize
                 "#
             ),
-            "[ Blue, Lavender, Orange, Peach ]a -> [ Blue, Lavender, Orange, Peach ]a",
+            "[Blue, Lavender, Orange, Peach]a -> [Blue, Lavender, Orange, Peach]a",
         )
     }
 
@@ -4839,7 +5022,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                fromList : List elem -> [ Empty, Prepend (LinkedList elem) elem ] as LinkedList elem
+                fromList : List elem -> [Empty, Prepend (LinkedList elem) elem] as LinkedList elem
                 fromList = \elems -> List.walk elems Empty Prepend
 
                 fromList
@@ -4860,7 +5043,7 @@ mod solve_expr {
                        B -> Y
                  "#
             ),
-            "[ A, B ] -> [ X, Y ]*",
+            "[A, B] -> [X, Y]*",
         )
     }
 
@@ -4876,7 +5059,7 @@ mod solve_expr {
                        _ -> Z
                  "#
             ),
-            "[ A, B ]* -> [ X, Y, Z ]*",
+            "[A, B]* -> [X, Y, Z]*",
         )
     }
 
@@ -4891,7 +5074,7 @@ mod solve_expr {
                        A N -> Y
                  "#
             ),
-            "[ A [ M, N ] ] -> [ X, Y ]*",
+            "[A [M, N]] -> [X, Y]*",
         )
     }
 
@@ -4907,7 +5090,7 @@ mod solve_expr {
                        A _ -> Z
                  "#
             ),
-            "[ A [ M, N ]* ] -> [ X, Y, Z ]*",
+            "[A [M, N]*] -> [X, Y, Z]*",
         )
     }
 
@@ -4922,7 +5105,7 @@ mod solve_expr {
                        A (N K) -> X
                  "#
             ),
-            "[ A [ M [ J ], N [ K ] ] ] -> [ X ]*",
+            "[A [M [J], N [K]]] -> [X]*",
         )
     }
 
@@ -4938,7 +5121,7 @@ mod solve_expr {
                        A N -> X
                  "#
             ),
-            "[ A [ M, N ], B ] -> [ X ]*",
+            "[A [M, N], B] -> [X]*",
         )
     }
 
@@ -4955,8 +5138,8 @@ mod solve_expr {
             ),
             // TODO: we could be a bit smarter by subtracting "A" as a possible
             // tag in the union known by t, which would yield the principal type
-            // [ A, ]a -> [ X ]a
-            "[ A, X ]a -> [ A, X ]a",
+            // [A,]a -> [X]a
+            "[A, X]a -> [A, X]a",
         )
     }
 
@@ -4972,7 +5155,7 @@ mod solve_expr {
                          None -> 0
                  "#
             ),
-            "[ None, Some { tag : [ A, B ] }* ] -> Num *",
+            "[None, Some { tag : [A, B] }*] -> Num *",
         )
     }
 
@@ -4981,7 +5164,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                 opt : [ Some Str, None ]
+                 opt : [Some Str, None]
                  opt = Some ""
                  rcd = { opt }
 
@@ -5005,7 +5188,7 @@ mod solve_expr {
                          { x: Red, y ? 5 } -> y
                  "#
             ),
-            "{ x : [ Blue, Red ], y ? Num a }* -> Num a",
+            "{ x : [Blue, Red], y ? Num a }* -> Num a",
         )
     }
 
@@ -5018,7 +5201,7 @@ mod solve_expr {
                  \UserId id -> id + 1
                  "#
             ),
-            "[ UserId (Num a) ] -> Num a",
+            "[UserId (Num a)] -> Num a",
         )
     }
 
@@ -5032,7 +5215,7 @@ mod solve_expr {
                     Str.isEmpty str
                  "#
             ),
-            "[ Email Str ] -> Bool",
+            "[Email Str] -> Bool",
         )
     }
 
@@ -5092,95 +5275,123 @@ mod solve_expr {
                 {
                     u8:   (\n ->
                             when n is
-                              123u8 -> n),
+                              123u8 -> n
+                              _ -> n),
                     u16:  (\n ->
                             when n is
-                              123u16 -> n),
+                              123u16 -> n
+                              _ -> n),
                     u32:  (\n ->
                             when n is
-                              123u32 -> n),
+                              123u32 -> n
+                              _ -> n),
                     u64:  (\n ->
                             when n is
-                              123u64 -> n),
+                              123u64 -> n
+                              _ -> n),
                     u128: (\n ->
                             when n is
-                              123u128 -> n),
+                              123u128 -> n
+                              _ -> n),
 
                     i8:   (\n ->
                             when n is
-                              123i8 -> n),
+                              123i8 -> n
+                              _ -> n),
                     i16:  (\n ->
                             when n is
-                              123i16 -> n),
+                              123i16 -> n
+                              _ -> n),
                     i32:  (\n ->
                             when n is
-                              123i32 -> n),
+                              123i32 -> n
+                              _ -> n),
                     i64:  (\n ->
                             when n is
-                              123i64 -> n),
+                              123i64 -> n
+                              _ -> n),
                     i128: (\n ->
                             when n is
-                              123i128 -> n),
+                              123i128 -> n
+                              _ -> n),
 
                     nat:  (\n ->
                             when n is
-                              123nat -> n),
+                              123nat -> n
+                              _ -> n),
 
                     bu8:   (\n ->
                             when n is
-                              0b11u8 -> n),
+                              0b11u8 -> n
+                              _ -> n),
                     bu16:  (\n ->
                             when n is
-                              0b11u16 -> n),
+                              0b11u16 -> n
+                              _ -> n),
                     bu32:  (\n ->
                             when n is
-                              0b11u32 -> n),
+                              0b11u32 -> n
+                              _ -> n),
                     bu64:  (\n ->
                             when n is
-                              0b11u64 -> n),
+                              0b11u64 -> n
+                              _ -> n),
                     bu128: (\n ->
                             when n is
-                              0b11u128 -> n),
+                              0b11u128 -> n
+                              _ -> n),
 
                     bi8:   (\n ->
                             when n is
-                              0b11i8 -> n),
+                              0b11i8 -> n
+                              _ -> n),
                     bi16:  (\n ->
                             when n is
-                              0b11i16 -> n),
+                              0b11i16 -> n
+                              _ -> n),
                     bi32:  (\n ->
                             when n is
-                              0b11i32 -> n),
+                              0b11i32 -> n
+                              _ -> n),
                     bi64:  (\n ->
                             when n is
-                              0b11i64 -> n),
+                              0b11i64 -> n
+                              _ -> n),
                     bi128: (\n ->
                             when n is
-                              0b11i128 -> n),
+                              0b11i128 -> n
+                              _ -> n),
 
                     bnat:  (\n ->
                             when n is
-                              0b11nat -> n),
+                              0b11nat -> n
+                              _ -> n),
 
                     dec:  (\n ->
                             when n is
-                              123.0dec -> n),
+                              123.0dec -> n
+                              _ -> n),
                     f32:  (\n ->
                             when n is
-                              123.0f32 -> n),
+                              123.0f32 -> n
+                              _ -> n),
                     f64:  (\n ->
                             when n is
-                              123.0f64 -> n),
+                              123.0f64 -> n
+                              _ -> n),
 
                     fdec: (\n ->
                             when n is
-                              123dec -> n),
+                              123dec -> n
+                              _ -> n),
                     ff32: (\n ->
                             when n is
-                              123f32 -> n),
+                              123f32 -> n
+                              _ -> n),
                     ff64: (\n ->
                             when n is
-                              123f64 -> n),
+                              123f64 -> n
+                              _ -> n),
                 }
                 "#
             ),
@@ -5193,8 +5404,26 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Foo a : [ Blah (Result (Bar a) { val: a }) ]
+                Foo a : [Blah (Result (Bar a) { val: a })]
                 Bar a : Foo a
+
+                v : Bar U8
+                v = Blah (Ok (Blah (Err { val: 1 })))
+
+                v
+                "#
+            ),
+            "Bar U8",
+        )
+    }
+
+    #[test]
+    fn issue_2458_swapped_order() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Bar a : Foo a
+                Foo a : [Blah (Result (Bar a) { val: a })]
 
                 v : Bar U8
                 v = Blah (Ok (Blah (Err { val: 1 })))
@@ -5212,7 +5441,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Job : [ Job [ Command ] (List Job) ]
+                Job : [Job [Command] (List Job)]
 
                 job : Job
 
@@ -5224,26 +5453,19 @@ mod solve_expr {
     }
 
     #[test]
-    fn copy_vars_referencing_copied_vars_specialized() {
+    fn generalize_and_specialize_recursion_var() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Job a : [ Job [ Command ] (Job a) (List (Job a)) a ]
+                Job a : [Job (List (Job a)) a]
 
                 job : Job Str
 
                 when job is
-                    Job _ j lst _ ->
-                        when j is
-                            Job _ _ _ s ->
-                                { j, lst, s }
+                    Job lst s -> P lst s
                 "#
             ),
-            // TODO: this means that we're doing our job correctly, as now both `Job a`s have been
-            // specialized to the same type, and the second destructuring proves the reified type
-            // is `Job Str`. But we should just print the structure of the recursive type directly.
-            // See https://github.com/rtfeldman/roc/issues/2513
-            "{ j : a, lst : List a, s : Str }",
+            "[P (List [Job (List a) Str] as a) Str]*",
         )
     }
 
@@ -5293,7 +5515,7 @@ mod solve_expr {
                 r#"
                 Age := U32
 
-                $Age 21
+                @Age 21
                 "#
             ),
             r#"Age"#,
@@ -5308,7 +5530,7 @@ mod solve_expr {
                 Age := U32
 
                 a : Age
-                a = $Age 21
+                a = @Age 21
 
                 a
                 "#
@@ -5322,9 +5544,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
-                $Id (Id 21 "sasha")
+                @Id (Id 21 "sasha")
                 "#
             ),
             r#"Id Str"#,
@@ -5336,10 +5558,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 a : Id Str
-                a = $Id (Id 21 "sasha")
+                a = @Id (Id 21 "sasha")
 
                 a
                 "#
@@ -5353,15 +5575,15 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
                 condition : Bool
 
                 if condition
-                then $Id (Id 21 (Y "sasha"))
-                else $Id (Id 21 (Z "felix"))
+                then @Id (Id 21 (Y "sasha"))
+                else @Id (Id 21 (Z "felix"))
                 "#
             ),
-            r#"Id [ Y Str, Z Str ]*"#,
+            r#"Id [Y Str, Z Str]*"#,
         )
     }
 
@@ -5370,19 +5592,19 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
                 condition : Bool
 
-                v : Id [ Y Str, Z Str ]
+                v : Id [Y Str, Z Str]
                 v =
                     if condition
-                    then $Id (Id 21 (Y "sasha"))
-                    else $Id (Id 21 (Z "felix"))
+                    then @Id (Id 21 (Y "sasha"))
+                    else @Id (Id 21 (Z "felix"))
 
                 v
                 "#
             ),
-            r#"Id [ Y Str, Z Str ]"#,
+            r#"Id [Y Str, Z Str]"#,
         )
     }
 
@@ -5393,7 +5615,7 @@ mod solve_expr {
                 r#"
                 Age := U32
 
-                \$Age n -> n
+                \@Age n -> n
                 "#
             ),
             r#"Age -> U32"#,
@@ -5408,7 +5630,7 @@ mod solve_expr {
                 Age := U32
 
                 v : Age -> U32
-                v = \$Age n -> n
+                v = \@Age n -> n
                 v
                 "#
             ),
@@ -5421,9 +5643,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
-                \$Id (Id _ n) -> n
+                \@Id (Id _ n) -> n
                 "#
             ),
             r#"Id a -> a"#,
@@ -5435,10 +5657,10 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 v : Id a -> a
-                v = \$Id (Id _ n) -> n
+                v = \@Id (Id _ n) -> n
 
                 v
                 "#
@@ -5452,11 +5674,11 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 strToBool : Str -> Bool
 
-                \$Id (Id _ n) -> strToBool n
+                \@Id (Id _ n) -> strToBool n
                 "#
             ),
             r#"Id Str -> Bool"#,
@@ -5468,12 +5690,12 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 strToBool : Str -> Bool
 
                 v : Id Str -> Bool
-                v = \$Id (Id _ n) -> strToBool n
+                v = \@Id (Id _ n) -> strToBool n
 
                 v
                 "#
@@ -5487,16 +5709,17 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
                 \id ->
                     when id is
-                        $Id (Id _ A) -> ""
-                        $Id (Id _ B) -> ""
-                        $Id (Id _ (C { a: "" })) -> ""
+                        @Id (Id _ A) -> ""
+                        @Id (Id _ B) -> ""
+                        @Id (Id _ (C { a: "" })) -> ""
+                        @Id (Id _ (C { a: _ })) -> "" # any other string, for exhautiveness
                 "#
             ),
-            r#"Id [ A, B, C { a : Str }* ] -> Str"#,
+            r#"Id [A, B, C { a : Str }*] -> Str"#,
         )
     }
 
@@ -5505,19 +5728,20 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Id n := [ Id U32 n ]
+                Id n := [Id U32 n]
 
-                f : Id [ A, B, C { a : Str }e ] -> Str
+                f : Id [A, B, C { a : Str }e] -> Str
                 f = \id ->
                     when id is
-                        $Id (Id _ A) -> ""
-                        $Id (Id _ B) -> ""
-                        $Id (Id _ (C { a: "" })) -> ""
+                        @Id (Id _ A) -> ""
+                        @Id (Id _ B) -> ""
+                        @Id (Id _ (C { a: "" })) -> ""
+                        @Id (Id _ (C { a: _ })) -> "" # any other string, for exhautiveness
 
                 f
                 "#
             ),
-            r#"Id [ A, B, C { a : Str }e ] -> Str"#,
+            r#"Id [A, B, C { a : Str }e] -> Str"#,
         )
     }
 
@@ -5526,9 +5750,9 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app "test" provides [ effectAlways ] to "./platform"
+                app "test" provides [effectAlways] to "./platform"
 
-                Effect a : [ @Effect ({} -> a) ]
+                Effect a := {} -> a
 
                 effectAlways : a -> Effect a
                 effectAlways = \x ->
@@ -5575,13 +5799,13 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Other : [ B, C ]
+                Other : [B, C]
 
-                f : [ A ]Other
+                f : [A]Other
                 f
                 "#
             ),
-            r#"[ A, B, C ]"#,
+            r#"[A, B, C]"#,
         )
     }
 
@@ -5591,13 +5815,13 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Outer k := [ Empty, Wrapped k ]
+                Outer k := [Empty, Wrapped k]
 
                 insert : Outer k, k -> Outer k
                 insert = \m, var ->
                     when m is
-                        $Outer Empty -> $Outer (Wrapped var)
-                        $Outer (Wrapped _) -> $Outer (Wrapped var)
+                        @Outer Empty -> @Outer (Wrapped var)
+                        @Outer (Wrapped _) -> @Outer (Wrapped var)
 
                 insert
                 "#
@@ -5611,11 +5835,11 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Outer k := [ Empty, Wrapped k ]
+                Outer k := [Empty, Wrapped k]
 
-                when ($Outer Empty) is
-                    $Outer Empty -> $Outer (Wrapped "")
-                    $Outer (Wrapped k) -> $Outer (Wrapped k)
+                when (@Outer Empty) is
+                    @Outer Empty -> @Outer (Wrapped "")
+                    @Outer (Wrapped k) -> @Outer (Wrapped k)
                 "#
             ),
             r#"Outer Str"#,
@@ -5627,11 +5851,11 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Outer := [ A, B ]
+                Outer := [A, B]
 
-                when ($Outer A) is
-                    $Outer A -> $Outer A
-                    $Outer B -> $Outer B
+                when (@Outer A) is
+                    @Outer A -> @Outer A
+                    @Outer B -> @Outer B
                 "#
             ),
             r#"Outer"#,
@@ -5646,7 +5870,7 @@ mod solve_expr {
                 if True then List.first [] else Str.toI64 ""
                 "#
             ),
-            "Result I64 [ InvalidNumStr, ListWasEmpty ]*",
+            "Result I64 [InvalidNumStr, ListWasEmpty]*",
         )
     }
 
@@ -5660,6 +5884,612 @@ mod solve_expr {
                 "#
             ),
             "a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z, aa, bb -> { a : a, aa : aa, b : b, bb : bb, c : c, d : d, e : e, f : f, g : g, h : h, i : i, j : j, k : k, l : l, m : m, n : n, o : o, p : p, q : q, r : r, s : s, t : t, u : u, v : v, w : w, x : x, y : y, z : z }",
+        )
+    }
+
+    #[test]
+    fn exposed_ability_name() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [hash] to "./platform"
+
+                Hash has hash : a -> U64 | a has Hash
+                "#
+            ),
+            "a -> U64 | a has Hash",
+        )
+    }
+
+    #[test]
+    fn single_ability_single_member_specializations() {
+        check_inferred_abilities(
+            indoc!(
+                r#"
+                app "test" provides [hash] to "./platform"
+
+                Hash has hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash = \@Id n -> n
+                "#
+            ),
+            [("Hash:hash", "Id")],
+        )
+    }
+
+    #[test]
+    fn single_ability_multiple_members_specializations() {
+        check_inferred_abilities(
+            indoc!(
+                r#"
+                app "test" provides [hash, hash32] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+                    hash32 : a -> U32 | a has Hash
+
+                Id := U64
+
+                hash = \@Id n -> n
+                hash32 = \@Id n -> Num.toU32 n
+                "#
+            ),
+            [("Hash:hash", "Id"), ("Hash:hash32", "Id")],
+        )
+    }
+
+    #[test]
+    fn multiple_abilities_multiple_members_specializations() {
+        check_inferred_abilities(
+            indoc!(
+                r#"
+                app "test" provides [hash, hash32, eq, le] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+                    hash32 : a -> U32 | a has Hash
+
+                Ord has
+                    eq : a, a -> Bool | a has Ord
+                    le : a, a -> Bool | a has Ord
+
+                Id := U64
+
+                hash = \@Id n -> n
+                hash32 = \@Id n -> Num.toU32 n
+
+                eq = \@Id m, @Id n -> m == n
+                le = \@Id m, @Id n -> m < n
+                "#
+            ),
+            [
+                ("Hash:hash", "Id"),
+                ("Hash:hash32", "Id"),
+                ("Ord:eq", "Id"),
+                ("Ord:le", "Id"),
+            ],
+        )
+    }
+
+    #[test]
+    fn ability_checked_specialization_with_typed_body() {
+        check_inferred_abilities(
+            indoc!(
+                r#"
+                app "test" provides [hash] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash : Id -> U64
+                hash = \@Id n -> n
+                "#
+            ),
+            [("Hash:hash", "Id")],
+        )
+    }
+
+    #[test]
+    fn ability_checked_specialization_with_annotation_only() {
+        check_inferred_abilities(
+            indoc!(
+                r#"
+                app "test" provides [hash] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash : Id -> U64
+                "#
+            ),
+            [("Hash:hash", "Id")],
+        )
+    }
+
+    #[test]
+    fn ability_specialization_called() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [zero] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                Id := U64
+
+                hash = \@Id n -> n
+
+                zero = hash (@Id 0)
+                "#
+            ),
+            "U64",
+        )
+    }
+
+    #[test]
+    fn alias_ability_member() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [thething] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                thething =
+                    itis = hash
+                    itis
+                "#
+            ),
+            "a -> U64 | a has Hash",
+        )
+    }
+
+    #[test]
+    fn when_branch_and_body_flipflop() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                func = \record ->
+                    when record.tag is
+                        A -> { record & tag: B }
+                        B -> { record & tag: A }
+
+                func
+                "#
+            ),
+            "{ tag : [A, B] }a -> { tag : [A, B] }a",
+        )
+    }
+
+    #[test]
+    fn ability_constrained_in_non_member_check() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [hashEq] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                hashEq : a, a -> Bool | a has Hash
+                hashEq = \x, y -> hash x == hash y
+                "#
+            ),
+            "a, a -> Bool | a has Hash",
+        )
+    }
+
+    #[test]
+    fn ability_constrained_in_non_member_infer() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [hashEq] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                hashEq = \x, y -> hash x == hash y
+                "#
+            ),
+            "a, a -> Bool | a has Hash",
+        )
+    }
+
+    #[test]
+    fn ability_constrained_in_non_member_infer_usage() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [result] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                hashEq = \x, y -> hash x == hash y
+
+                Id := U64
+                hash = \@Id n -> n
+
+                result = hashEq (@Id 100) (@Id 101)
+                "#
+            ),
+            "Bool",
+        )
+    }
+
+    #[test]
+    fn ability_constrained_in_non_member_multiple_specializations() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [result] to "./platform"
+
+                Hash has
+                    hash : a -> U64 | a has Hash
+
+                mulHashes = \x, y -> hash x * hash y
+
+                Id := U64
+                hash = \@Id n -> n
+
+                Three := {}
+                hash = \@Three _ -> 3
+
+                result = mulHashes (@Id 100) (@Three {})
+                "#
+            ),
+            "U64",
+        )
+    }
+
+    #[test]
+    fn intermediate_branch_types() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test" provides [foo] to "./platform"
+
+                foo : Bool -> Str
+                foo = \ob ->
+                #      ^^
+                    when ob is
+                #        ^^
+                        True -> "A"
+                #       ^^^^
+                        False -> "B"
+                #       ^^^^^
+                "#
+            ),
+            &[
+                "ob : Bool",
+                "ob : Bool",
+                "True : [False, True]",
+                "False : [False, True]",
+            ],
+        )
+    }
+
+    #[test]
+    fn nested_open_tag_union() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [go] to "./platform"
+
+                Expr : [
+                    Wrap Expr,
+                    Val I64,
+                ]
+
+                go : Expr -> Expr
+                go = \e ->
+                        when P e is
+                            P (Wrap (Val _)) -> Wrap e
+
+                            # This branch should force the first argument to `P` and
+                            # the first argument to `Wrap` to be an open tag union.
+                            # This tests checks that we don't regress on that.
+                            P y1 -> Wrap y1
+                "#
+            ),
+            indoc!(r#"Expr -> Expr"#),
+        )
+    }
+
+    #[test]
+    fn opaque_and_alias_unify() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [always] to "./platform"
+
+                Effect a := {} -> a
+
+                Task a err : Effect (Result a err)
+
+                always : a -> Task a *
+                always = \x -> @Effect (\{} -> Ok x)
+                "#
+            ),
+            "a -> Task a *",
+        );
+    }
+
+    #[test]
+    fn export_rigid_to_lower_rank() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [foo] to "./platform"
+
+                F a : { foo : a }
+
+                foo = \arg ->
+                    x : F b
+                    x = arg
+                    x.foo
+                "#
+            ),
+            "F b -> b",
+        );
+    }
+
+    #[test]
+    fn alias_in_opaque() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [foo] to "./platform"
+
+                MyError : [Error]
+
+                MyResult := Result U8 MyError
+
+                foo = @MyResult (Err Error)
+                "#
+            ),
+            "MyResult",
+        )
+    }
+
+    #[test]
+    fn alias_propagates_able_var() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [zeroEncoder] to "./platform"
+
+                Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+
+                Format has it : fmt -> {} | fmt has Format
+
+                zeroEncoder = @Encoder \lst, _ -> lst
+                "#
+            ),
+            "Encoder a | a has Format",
+        )
+    }
+
+    #[test]
+    fn encoder() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test" provides [myU8Bytes] to "./platform"
+
+                Encoder fmt := List U8, fmt -> List U8 | fmt has Format
+
+                Encoding has
+                  toEncoder : val -> Encoder fmt | val has Encoding, fmt has Format
+
+                Format has
+                  u8 : U8 -> Encoder fmt | fmt has Format
+
+                appendWith : List U8, Encoder fmt, fmt -> List U8 | fmt has Format
+                appendWith = \lst, (@Encoder doFormat), fmt -> doFormat lst fmt
+
+                toBytes : val, fmt -> List U8 | val has Encoding, fmt has Format
+                toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
+
+
+                Linear := {}
+
+                # impl Format for Linear
+                u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
+                #^^{-1}
+
+                MyU8 := U8
+
+                # impl Encoding for MyU8
+                toEncoder = \@MyU8 n -> u8 n
+                #^^^^^^^^^{-1}
+
+                myU8Bytes = toBytes (@MyU8 15) (@Linear {})
+                #^^^^^^^^^{-1}
+                "#
+            ),
+            &[
+                "u8 : U8 -> Encoder Linear",
+                "toEncoder : MyU8 -> Encoder fmt | fmt has Format",
+                "myU8Bytes : List U8",
+            ],
+        )
+    }
+
+    #[test]
+    fn decoder() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test" provides [myU8] to "./platform"
+
+                DecodeError : [TooShort, Leftover (List U8)]
+
+                Decoder val fmt := List U8, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
+
+                Decoding has
+                    decoder : Decoder val fmt | val has Decoding, fmt has DecoderFormatting
+
+                DecoderFormatting has
+                    u8 : Decoder U8 fmt | fmt has DecoderFormatting
+
+                decodeWith : List U8, Decoder val fmt, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
+                decodeWith = \lst, (@Decoder doDecode), fmt -> doDecode lst fmt
+
+                fromBytes : List U8, fmt -> Result val DecodeError
+                            | fmt has DecoderFormatting, val has Decoding
+                fromBytes = \lst, fmt ->
+                    when decodeWith lst decoder fmt is
+                        { result, rest } ->
+                            when result is
+                                Ok val -> if List.isEmpty rest then Ok val else Err (Leftover rest)
+                                Err e -> Err e
+
+
+                Linear := {}
+
+                # impl DecoderFormatting for Linear
+                u8 = @Decoder \lst, @Linear {} ->
+                #^^{-1}
+                        when List.first lst is
+                            Ok n -> { result: Ok n, rest: List.dropFirst lst }
+                            Err _ -> { result: Err TooShort, rest: [] }
+
+                MyU8 := U8
+
+                # impl Decoding for MyU8
+                decoder = @Decoder \lst, fmt ->
+                #^^^^^^^{-1}
+                    when decodeWith lst u8 fmt is
+                        { result, rest } ->
+                            { result: Result.map result (\n -> @MyU8 n), rest }
+
+                myU8 : Result MyU8 _
+                myU8 = fromBytes [15] (@Linear {})
+                #^^^^{-1}
+                "#
+            ),
+            &[
+                "u8 : Decoder U8 Linear",
+                "decoder : Decoder MyU8 fmt | fmt has DecoderFormatting",
+                "myU8 : Result MyU8 DecodeError",
+            ],
+        )
+    }
+
+    #[test]
+    fn task_wildcard_wildcard() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [tforever] to "./platform"
+
+                Effect a := {} -> a
+
+                eforever : Effect a -> Effect b
+
+                Task a err : Effect (Result a err)
+
+                tforever : Task val err -> Task * *
+                tforever = \task -> eforever task
+                "#
+            ),
+            "Task val err -> Task * *",
+        );
+    }
+
+    #[test]
+    fn static_specialization() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Default has default : {} -> a | a has Default
+
+                A := {}
+                default = \{} -> @A {}
+
+                main =
+                    a : A
+                    a = default {}
+                #       ^^^^^^^
+                    a
+                "#
+            ),
+            &["A#default : {} -> A"],
+        )
+    }
+
+    #[test]
+    fn stdlib_encode_json() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test"
+                    imports [Encode.{ toEncoder }, Json]
+                    provides [main] to "./platform"
+
+                HelloWorld := {}
+
+                toEncoder = \@HelloWorld {} ->
+                    Encode.custom \bytes, fmt ->
+                        bytes
+                        |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format) is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            "Str",
+        )
+    }
+
+    #[test]
+    fn encode_record() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test"
+                    imports [Encode.{ toEncoder }]
+                    provides [main] to "./platform"
+
+                main = toEncoder { a: "" }
+                     # ^^^^^^^^^
+                "#
+            ),
+            &["Encoding#toEncoder : { a : Str } -> Encoder fmt | fmt has EncoderFormatting"],
+        )
+    }
+
+    #[test]
+    fn encode_record_with_nested_custom_impl() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test"
+                    imports [Encode.{ toEncoder, Encoding, custom }]
+                    provides [main] to "./platform"
+
+                A := {}
+                toEncoder = \@A _ -> custom \b, _ -> b
+
+                main = toEncoder { a: @A {} }
+                     # ^^^^^^^^^
+                "#
+            ),
+            &["Encoding#toEncoder : { a : A } -> Encoder fmt | fmt has EncoderFormatting"],
         )
     }
 }

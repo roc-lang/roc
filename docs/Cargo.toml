@@ -3,9 +3,7 @@ name = "roc_docs"
 version = "0.1.0"
 license = "UPL-1.0"
 authors = ["The Roc Contributors"]
-edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+edition = "2021"
 
 [dependencies]
 pulldown-cmark = { version = "0.8.0", default-features = false }
@@ -21,12 +19,10 @@ roc_parse = { path = "../compiler/parse" }
 roc_target = { path = "../compiler/roc_target" }
 roc_collections = { path = "../compiler/collections" }
 roc_highlight = { path = "../highlight"}
+roc_reporting = { path = "../reporting"}
 bumpalo = { version = "3.8.0", features = ["collections"] }
 snafu = { version = "0.6.10", features = ["backtraces"] }
 peg = "0.8.0"
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"
-tempfile = "3.2.0"
-uuid = { version = "0.8.2", features = ["v4"] }
-indoc = "1.0.3"

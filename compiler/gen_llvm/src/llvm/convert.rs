@@ -116,8 +116,8 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
 /// Current differences
 ///
 /// - tag unions are passed by-reference. That means that
-///     * `f : [ Some I64, None ] -> I64` is typed `{ { i64, i8 }, i64 }* -> i64`
-///     * `f : { x : [ Some I64, None ] } -> I64 is typed `{ { { i64, i8 }, i64 } } -> i64`
+///     * `f : [Some I64, None] -> I64` is typed `{ { i64, i8 }, i64 }* -> i64`
+///     * `f : { x : [Some I64, None] } -> I64 is typed `{ { { i64, i8 }, i64 } } -> i64`
 ///
 /// Ideas exist to have (bigger than 2 register) records also be passed by-reference, but this
 /// is not currently implemented
@@ -273,7 +273,10 @@ pub fn zig_str_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ct
 }
 
 pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
-    env.module.get_struct_type("list.HasTagId").unwrap()
+    let u8_ptr_t = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    env.context
+        .struct_type(&[env.context.bool_type().into(), u8_ptr_t.into()], false)
 }
 
 pub fn zig_with_overflow_roc_dec<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {

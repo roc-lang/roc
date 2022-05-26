@@ -468,8 +468,10 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
     const size = comptime blk: {
         // the string representation of the minimum i128 value uses at most 40 characters
         var buf: [40]u8 = undefined;
-        var result = std.fmt.bufPrint(&buf, "{}", .{std.math.minInt(T)}) catch unreachable;
-        break :blk result.len;
+        var resultMin = std.fmt.bufPrint(&buf, "{}", .{std.math.minInt(T)}) catch unreachable;
+        var resultMax = std.fmt.bufPrint(&buf, "{}", .{std.math.maxInt(T)}) catch unreachable;
+        var result = if (resultMin.len > resultMax.len) resultMin.len else resultMax.len;
+        break :blk result;
     };
 
     var buf: [size]u8 = undefined;
@@ -545,7 +547,7 @@ fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
 }
 
 test "strSplitInPlace: empty delimiter" {
-    // Str.split "abc" "" == [ "abc" ]
+    // Str.split "abc" "" == ["abc"]
     const str_arr = "abc";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -579,7 +581,7 @@ test "strSplitInPlace: empty delimiter" {
 }
 
 test "strSplitInPlace: no delimiter" {
-    // Str.split "abc" "!" == [ "abc" ]
+    // Str.split "abc" "!" == ["abc"]
     const str_arr = "abc";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -698,7 +700,7 @@ test "strSplitInPlace: delimiter on sides" {
 }
 
 test "strSplitInPlace: three pieces" {
-    // Str.split "a!b!c" "!" == [ "a", "b", "c" ]
+    // Str.split "a!b!c" "!" == ["a", "b", "c"]
     const str_arr = "a!b!c";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -784,7 +786,7 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
 }
 
 test "countSegments: long delimiter" {
-    // Str.split "str" "delimiter" == [ "str" ]
+    // Str.split "str" "delimiter" == ["str"]
     // 1 segment
     const str_arr = "str";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -802,7 +804,7 @@ test "countSegments: long delimiter" {
 }
 
 test "countSegments: delimiter at start" {
-    // Str.split "hello there" "hello" == [ "", " there" ]
+    // Str.split "hello there" "hello" == ["", " there"]
     // 2 segments
     const str_arr = "hello there";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -821,7 +823,7 @@ test "countSegments: delimiter at start" {
 }
 
 test "countSegments: delimiter interspered" {
-    // Str.split "a!b!c" "!" == [ "a", "b", "c" ]
+    // Str.split "a!b!c" "!" == ["a", "b", "c"]
     // 3 segments
     const str_arr = "a!b!c";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -2039,7 +2041,7 @@ test "ReverseUtf8View: empty" {
     const original_bytes = "";
 
     var iter = ReverseUtf8View.initUnchecked(original_bytes).iterator();
-    while (iter.nextCodepoint()) |codepoint| {
+    while (iter.nextCodepoint()) |_| {
         try expect(false);
     }
 }

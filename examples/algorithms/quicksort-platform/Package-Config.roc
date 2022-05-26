@@ -3,7 +3,7 @@ platform "quicksort"
     exposes []
     packages {}
     imports []
-    provides [ mainForHost ]
+    provides [mainForHost]
 
 mainForHost : List I64 -> List I64
 mainForHost = \list -> quicksort list

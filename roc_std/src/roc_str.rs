@@ -6,6 +6,7 @@ use core::{
     mem::{size_of, ManuallyDrop},
     ops::{Deref, DerefMut},
 };
+use std::hash::Hash;
 
 use crate::{rc::ReferenceCount, RocList};
 
@@ -96,6 +97,18 @@ impl PartialEq for RocStr {
 }
 
 impl Eq for RocStr {}
+
+impl PartialOrd for RocStr {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.as_str().partial_cmp(other.as_str())
+    }
+}
+
+impl Ord for RocStr {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
 
 impl Debug for RocStr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -217,5 +230,11 @@ impl DerefMut for SmallString {
     fn deref_mut(&mut self) -> &mut Self::Target {
         let len = self.len();
         unsafe { core::str::from_utf8_unchecked_mut(self.bytes.get_unchecked_mut(..len)) }
+    }
+}
+
+impl Hash for RocStr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state)
     }
 }

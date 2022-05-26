@@ -283,6 +283,8 @@ pub fn dict_get<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(value_layout.stack_size(env.target_info) as u64, false);
 
+    let value_bt = basic_type_from_layout(env, value_layout);
+
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.target_info);
     let alignment_iv = alignment.as_int_value(env.context);
 
@@ -308,17 +310,26 @@ pub fn dict_get<'a, 'ctx, 'env>(
     )
     .into_struct_value();
 
-    let flag = env
+    let flag_u8 = env
         .builder
         .build_extract_value(result, 1, "get_flag")
         .unwrap()
         .into_int_value();
 
+    let flag = env
+        .builder
+        .build_int_cast(flag_u8, env.context.bool_type(), "to_bool");
+
+    let value_u8_ptr_int = env
+        .builder
+        .build_extract_value(result, 0, "get_value_ptr_int")
+        .unwrap()
+        .into_int_value();
+
+    let ptr_type = value_bt.ptr_type(AddressSpace::Generic);
     let value_u8_ptr = env
         .builder
-        .build_extract_value(result, 0, "get_value_ptr")
-        .unwrap()
-        .into_pointer_value();
+        .build_int_to_ptr(value_u8_ptr_int, ptr_type, "opaque_value_ptr");
 
     let start_block = env.builder.get_insert_block().unwrap();
     let parent = start_block.get_parent().unwrap();
@@ -326,7 +337,6 @@ pub fn dict_get<'a, 'ctx, 'env>(
     let if_not_null = env.context.append_basic_block(parent, "if_not_null");
     let done_block = env.context.append_basic_block(parent, "done");
 
-    let value_bt = basic_type_from_layout(env, value_layout);
     let default = value_bt.const_zero();
 
     env.builder

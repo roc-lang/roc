@@ -200,7 +200,7 @@ fn when_record_with_guard_pattern() {
     assert_evals_to!(
         indoc!(
             r#"
-                when { x: 0x2, y: 3.14 } is
+                when { x: 0x2, y: 1.23 } is
                     { x: var } -> var + 3
                 "#
         ),
@@ -215,7 +215,7 @@ fn let_with_record_pattern() {
     assert_evals_to!(
         indoc!(
             r#"
-                { x } = { x: 0x2, y: 3.14 }
+                { x } = { x: 0x2, y: 1.23 }
 
                 x
                 "#
@@ -231,7 +231,7 @@ fn record_guard_pattern() {
     assert_evals_to!(
         indoc!(
             r#"
-                when { x: 0x2, y: 3.14 } is
+                when { x: 0x2, y: 1.23 } is
                     { x: 0x4 } -> 5
                     { x } -> x + 3
                 "#
@@ -423,7 +423,7 @@ fn optional_field_when_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 f = \r ->
                     when r is
@@ -475,7 +475,7 @@ fn optional_field_when_no_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -514,7 +514,7 @@ fn optional_field_let_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -535,7 +535,7 @@ fn optional_field_let_no_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 f = \r ->
                     { x ? 10, y } = r
@@ -591,7 +591,7 @@ fn optional_field_function_no_use_default() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 f = \{ x ? 10, y } -> x + y
 
@@ -741,10 +741,10 @@ fn return_record_float_int() {
     assert_evals_to!(
         indoc!(
             r#"
-                { a: 3.14, b: 0x1 }
+                { a: 1.23, b: 0x1 }
                 "#
         ),
-        (3.14, 0x1),
+        (1.23, 0x1),
         (f64, i64)
     );
 }
@@ -755,10 +755,10 @@ fn return_record_int_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                { a: 0x1, b: 3.14 }
+                { a: 0x1, b: 1.23 }
                 "#
         ),
-        (0x1, 3.14),
+        (0x1, 1.23),
         (i64, f64)
     );
 }
@@ -769,10 +769,10 @@ fn return_record_float_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                { a: 6.28, b: 3.14 }
+                { a: 2.46, b: 1.23 }
                 "#
         ),
-        (6.28, 3.14),
+        (2.46, 1.23),
         (f64, f64)
     );
 }
@@ -783,10 +783,10 @@ fn return_record_float_float_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                { a: 6.28, b: 3.14, c: 0.1 }
+                { a: 2.46, b: 1.23, c: 0.1 }
                 "#
         ),
-        (6.28, 3.14, 0.1),
+        (2.46, 1.23, 0.1),
         (f64, f64, f64)
     );
 }
@@ -797,10 +797,10 @@ fn return_nested_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                { flag: 0x0, payload: { a: 6.28, b: 3.14, c: 0.1 } }
+                { flag: 0x0, payload: { a: 2.46, b: 1.23, c: 0.1 } }
                 "#
         ),
-        (0x0, (6.28, 3.14, 0.1)),
+        (0x0, (2.46, 1.23, 0.1)),
         (i64, (f64, f64, f64))
     );
 }
@@ -826,7 +826,7 @@ fn nested_record_load() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn accessor_twice() {
-    assert_evals_to!(".foo { foo: 4 }  + .foo { bar: 6.28, foo: 3 } ", 7, i64);
+    assert_evals_to!(".foo { foo: 4 }  + .foo { bar: 2.46, foo: 3 } ", 7, i64);
 }
 
 #[test]
@@ -863,12 +863,12 @@ fn update_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                rec = { foo: 42, bar: 6.28 }
+                rec = { foo: 42, bar: 2.46 }
 
                 { rec & foo: rec.foo + 1 }
                 "#
         ),
-        (6.28, 43),
+        (2.46, 43),
         (f64, i64)
     );
 }
@@ -1014,7 +1014,7 @@ fn different_proc_types_specialized_to_same_layout() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ nums ] to "./platform"
+            app "test" provides [nums] to "./platform"
 
             # Top-level values compile to procedure calls with no args
             # alpha has the generic type { a: Num *, b: Num * }
@@ -1029,7 +1029,7 @@ fn different_proc_types_specialized_to_same_layout() {
                 [
                     alpha.a,   # alpha specialized to layout { b: I64, a: U8 }
                     alpha.b,   # alpha specialized to layout { a: I64, b: U8 }
-                ]
+               ]
             "#
         ),
         RocList::from_slice(&[1, 2]),
@@ -1047,7 +1047,7 @@ fn different_proc_types_specialized_to_same_layout() {
 fn call_with_bad_record_runtime_error() {
     expect_runtime_error_panic!(indoc!(
         r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main =
                 get : {a: Bool} -> Bool
@@ -1063,7 +1063,7 @@ fn call_with_bad_record_runtime_error() {
 fn call_with_bad_record_runtime_error() {
     expect_runtime_error_panic!(indoc!(
         r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main =
                 get : {a: Bool} -> Bool

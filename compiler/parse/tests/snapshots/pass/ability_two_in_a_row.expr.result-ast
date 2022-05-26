@@ -10,8 +10,8 @@ Defs(
                 members: [
                     AbilityMember {
                         name: @8-11 "ab1",
-                        typ: @19-33 Where(
-                            @19-21 Function(
+                        typ: @14-33 Where(
+                            @14-21 Function(
                                 [
                                     @14-15 BoundVariable(
                                         "a",
@@ -37,57 +37,53 @@ Defs(
                 ],
             },
         ),
-    ],
-    @35-71 SpaceBefore(
-        Defs(
-            [
-                @35-68 Type(
-                    Ability {
-                        header: TypeHeader {
-                            name: @35-38 "Ab2",
-                            vars: [],
-                        },
-                        loc_has: @39-42 Has,
-                        members: [
-                            AbilityMember {
-                                name: @43-46 "ab2",
-                                typ: @54-68 Where(
-                                    @54-56 Function(
-                                        [
-                                            @49-50 BoundVariable(
-                                                "a",
-                                            ),
-                                        ],
-                                        @54-56 Record {
-                                            fields: [],
-                                            ext: None,
-                                        },
-                                    ),
-                                    [
-                                        @59-68 HasClause {
-                                            var: @59-60 "a",
-                                            ability: @65-68 Apply(
-                                                "",
-                                                "Ab2",
-                                                [],
-                                            ),
-                                        },
-                                    ],
-                                ),
-                            },
-                        ],
+        @35-68 SpaceBefore(
+            Type(
+                Ability {
+                    header: TypeHeader {
+                        name: @35-38 "Ab2",
+                        vars: [],
                     },
-                ),
-            ],
-            @70-71 SpaceBefore(
-                Num(
-                    "1",
-                ),
-                [
-                    Newline,
-                    Newline,
-                ],
+                    loc_has: @39-42 Has,
+                    members: [
+                        AbilityMember {
+                            name: @43-46 "ab2",
+                            typ: @49-68 Where(
+                                @49-56 Function(
+                                    [
+                                        @49-50 BoundVariable(
+                                            "a",
+                                        ),
+                                    ],
+                                    @54-56 Record {
+                                        fields: [],
+                                        ext: None,
+                                    },
+                                ),
+                                [
+                                    @59-68 HasClause {
+                                        var: @59-60 "a",
+                                        ability: @65-68 Apply(
+                                            "",
+                                            "Ab2",
+                                            [],
+                                        ),
+                                    },
+                                ],
+                            ),
+                        },
+                    ],
+                },
             ),
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ],
+    @70-71 SpaceBefore(
+        Num(
+            "1",
         ),
         [
             Newline,

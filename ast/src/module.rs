@@ -1,10 +1,9 @@
+use bumpalo::Bump;
+use roc_load::{LoadedModule, Threading};
+use roc_target::TargetInfo;
 use std::path::Path;
 
-use bumpalo::Bump;
-use roc_load::LoadedModule;
-use roc_target::TargetInfo;
-
-pub fn load_module(src_file: &Path) -> LoadedModule {
+pub fn load_module(src_file: &Path, threading: Threading) -> LoadedModule {
     let subs_by_module = Default::default();
 
     let arena = Bump::new();
@@ -19,6 +18,8 @@ pub fn load_module(src_file: &Path) -> LoadedModule {
         }),
         subs_by_module,
         TargetInfo::default_x86_64(),
+        roc_reporting::report::RenderTarget::ColorTerminal,
+        threading,
     );
 
     match loaded {

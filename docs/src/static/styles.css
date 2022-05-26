@@ -53,6 +53,7 @@ a {
 
 .entry-name {
   white-space: pre-wrap;
+  font-family: var(--font-mono);
 }
 
 .pkg-full-name a {

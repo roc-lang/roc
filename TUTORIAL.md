@@ -115,18 +115,19 @@ Create a new file called `Hello.roc` and put this inside it:
 
 ```coffee
 app "hello"
-    packages { pf: "examples/cli/platform" }
-    imports [ pf.Stdout ]
-    provides [ main ] to pf
+    packages { pf: "examples/interactive/cli-platform" }
+    imports [pf.Stdout]
+    provides [main] to pf
 
 main = Stdout.line "I'm a Roc application!"
 ```
 
-> **NOTE:** This assumes you've put Hello.roc in the root directory of the
-> Roc source code. If you'd like to put it somewhere else, you'll need to replace
-> `"examples/cli/"` with the path to the `examples/cli/` folder in
-> that source code. In the future, Roc will have the tutorial built in, and this
-> aside will no longer be necessary!
+> **NOTE:** This assumes you've put Hello.roc in the root directory of the Roc
+> source code. If you'd like to put it somewhere else, you'll need to replace
+> `"examples/interactive/cli-platform"` with the path to the
+> `examples/interactive/cli-platform` folder in that source code. In the future,
+> Roc will have the tutorial built in, and this aside will no longer be
+> necessary!
 
 Try running this with:
 
@@ -579,7 +580,7 @@ suggest making a `when` branch that begins with something like `Custom descripti
 Another thing we can do in Roc is to make a *list* of values. Here's an example:
 
 ```coffee
-names = [ "Sam", "Lee", "Ari" ]
+names = ["Sam", "Lee", "Ari"]
 ```
 
 This is a list with three elements in it, all strings. We can add a fourth
@@ -600,24 +601,24 @@ A common way to transform one list into another is to use `List.map`. Here's an 
 use it:
 
 ```coffee
-List.map [ 1, 2, 3 ] \num -> num * 2
+List.map [1, 2, 3] \num -> num * 2
 ```
 
-This returns `[ 2, 4, 6 ]`. `List.map` takes two arguments:
+This returns `[2, 4, 6]`. `List.map` takes two arguments:
 
 1. An input list
 2. A function that will be called on each element of that list
 
 It then returns a list which it creates by calling the given function on each element in the input list.
 In this example, `List.map` calls the function `\num -> num * 2` on each element in
-`[ 1, 2, 3 ]` to get a new list of `[ 2, 4, 6 ]`.
+`[1, 2, 3]` to get a new list of `[2, 4, 6]`.
 
 We can also give `List.map` a named function, instead of an anonymous one:
 
 For example, the `Num.isOdd` function returns `True` if it's given an odd number, and `False` otherwise.
 So `Num.isOdd 5` returns `True` and `Num.isOdd 2` returns `False`.
 
-So calling `List.map [ 1, 2, 3 ] Num.isOdd` returns a new list of `[ True, False, True ]`.
+So calling `List.map [1, 2, 3] Num.isOdd` returns a new list of `[True, False, True]`.
 
 ### List element type compatibility
 
@@ -626,13 +627,13 @@ an error at compile time. Here's a valid, and then an invalid example:
 
 ```coffee
 # working example
-List.map [ -1, 2, 3, -4 ] Num.isNegative
-# returns [ True, False, False, True ]
+List.map [-1, 2, 3, -4] Num.isNegative
+# returns [True, False, False, True]
 ```
 
 ```coffee
 # invalid example
-List.map [ "A", "B", "C" ] Num.isNegative
+List.map ["A", "B", "C"] Num.isNegative
 # error: isNegative doesn't work on strings!
 ```
 
@@ -642,12 +643,12 @@ list of numbers works, but doing the same with a list of strings doesn't work.
 This wouldn't work either:
 
 ```coffee
-List.map [ "A", "B", "C", 1, 2, 3 ] Num.isNegative
+List.map ["A", "B", "C", 1, 2, 3] Num.isNegative
 ```
 
 In fact, this wouldn't work for a more fundamental reason: every element in a Roc list has to share the same type.
-For example, we can have a list of strings like `[ "Sam", "Lee", "Ari" ]`, or a list of numbers like
-`[ 1, 2, 3, 4, 5 ]` but we can't have a list which mixes strings and numbers like `[ "Sam", 1, "Lee", 2, 3 ]` -
+For example, we can have a list of strings like `["Sam", "Lee", "Ari"]`, or a list of numbers like
+`[1, 2, 3, 4, 5]` but we can't have a list which mixes strings and numbers like `["Sam", 1, "Lee", 2, 3]` -
 that would be a compile-time error.
 
 Ensuring all elements in a list share a type eliminates entire categories of problems.
@@ -662,18 +663,18 @@ incompatibility (like `Num.negate` on a list of strings).
 We can use tags with payloads to make a list that contains a mixture of different types. For example:
 
 ```coffee
-List.map [ StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3 ] \elem ->
+List.map [StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3] \elem ->
     when elem is
         NumElem num -> Num.isNegative num
         StrElem str -> Str.isCapitalized str
 
-# returns [ True, False, False, False, True ]
+# returns [True, False, False, False, True]
 ```
 
 Compare this with the example from earlier, which caused a compile-time error:
 
 ```coffee
-List.map [ "A", "B", "C", 1, 2, 3 ] Num.isNegative
+List.map ["A", "B", "C", 1, 2, 3] Num.isNegative
 ```
 
 The version that uses tags works because we aren't trying to call `Num.isNegative` on each element.
@@ -688,13 +689,13 @@ more branches to the `when` to handle them appropriately.
 Let's say I want to apply a tag to a bunch of elements in a list. For example:
 
 ```elm
-List.map [ "a", "b", "c", ] \str -> Foo str
+List.map ["a", "b", "c"] \str -> Foo str
 ```
 
 This is a perfectly reasonable way to write it, but I can also write it like this:
 
 ```elm
-List.map [ "a", "b", "c", ] Foo
+List.map ["a", "b", "c"] Foo
 ```
 
 These two versions compile to the same thing. As a convenience, Roc lets you specify
@@ -708,22 +709,22 @@ something with it. Another is `List.any`, which returns `True` if calling the gi
 in the list returns `True`:
 
 ```coffee
-List.any [ 1, 2, 3 ] Num.isOdd
+List.any [1, 2, 3] Num.isOdd
 # returns True because 1 and 3 are odd
 ```
 ```coffee
-List.any [ 1, 2, 3 ] Num.isNegative
+List.any [1, 2, 3] Num.isNegative
 # returns False because none of these is negative
 ```
 
 There's also `List.all` which only returns `True` if all the elements in the list pass the test:
 
 ```coffee
-List.all [ 1, 2, 3 ] Num.isOdd
+List.all [1, 2, 3] Num.isOdd
 # returns False because 2 is not odd
 ```
 ```coffee
-List.all [ 1, 2, 3 ] Num.isPositive
+List.all [1, 2, 3] Num.isPositive
 # returns True because all of these are positive
 ```
 
@@ -732,23 +733,23 @@ List.all [ 1, 2, 3 ] Num.isPositive
 You can also drop elements from a list. One way is `List.dropAt` - for example:
 
 ```coffee
-List.dropAt [ "Sam", "Lee", "Ari" ] 1
-# drops the element at offset 1 ("Lee") and returns [ "Sam", "Ari" ]
+List.dropAt ["Sam", "Lee", "Ari"] 1
+# drops the element at offset 1 ("Lee") and returns ["Sam", "Ari"]
 ```
 
 Another way is to use `List.keepIf`, which passes each of the list's elements to the given
 function, and then keeps them only if that function returns `True`.
 
 ```coffee
-List.keepIf [ 1, 2, 3, 4, 5 ] Num.isEven
-# returns [ 2, 4 ]
+List.keepIf [1, 2, 3, 4, 5] Num.isEven
+# returns [2, 4]
 ```
 
 There's also `List.dropIf`, which does the reverse:
 
 ```coffee
-List.dropIf [ 1, 2, 3, 4, 5 ] Num.isEven
-# returns [ 1, 3, 5 ]
+List.dropIf [1, 2, 3, 4, 5] Num.isEven
+# returns [1, 3, 5]
 ```
 
 ### Custom operations that walk over a list
@@ -757,13 +758,13 @@ You can make your own custom operations that walk over all the elements in a lis
 Let's look at an example and then walk (ha!) through it.
 
 ```coffee
-List.walk [ 1, 2, 3, 4, 5 ] { evens: [], odds: [] } \state, elem ->
+List.walk [1, 2, 3, 4, 5] { evens: [], odds: [] } \state, elem ->
     if Num.isEven elem then
         { state & evens: List.append state.evens elem }
     else
         { state & odds: List.append state.odds elem }
 
-# returns { evens: [ 2, 4 ], odds: [ 1, 3, 5 ] }
+# returns { evens: [2, 4], odds: [1, 3, 5] }
 ```
 
 `List.walk` walks through each element of the list, building up a state as it goes. At the end,
@@ -771,7 +772,7 @@ it returns the final state - whatever it ended up being after processing the las
 function it takes as its last argument accepts both the current state as well as the current list element
 it's looking at, and then returns the new state based on whatever it decides to do with that element.
 
-In this example, we walk over the list `[ 1, 2, 3, 4, 5 ]` and add each element to either the `evens` or `odds`
+In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to either the `evens` or `odds`
 field of a `state` record `{ evens, odds }`. By the end, that record has a list of all the even numbers in the
 list as well as a list of all the odd numbers.
 
@@ -799,10 +800,10 @@ it takes a list and an index, and then returns the element at that index...if th
 For example, what do each of these return?
 
 ```coffee
-List.get [ "a", "b", "c" ] 1
+List.get ["a", "b", "c"] 1
 ```
 ```coffee
-List.get [ "a", "b", "c" ] 100
+List.get ["a", "b", "c"] 100
 ```
 
 The answer is that the first one returns `Ok "b"` and the second one returns `Err OutOfBounds`.
@@ -812,7 +813,7 @@ the index is outside the bounds of that particular list.
 Here's how calling `List.get` can look in practice:
 
 ```coffee
-when List.get [ "a", "b", "c" ] index is
+when List.get ["a", "b", "c"] index is
     Ok str -> "I got this string: \(str)"
     Err OutOfBounds -> "That index was out of bounds, sorry!"
 ```
@@ -827,12 +828,12 @@ In fact, it's such a common pattern that there's a whole module called `Result` 
 Here are some examples of `Result` functions:
 
 ```coffee
-Result.withDefault (List.get [ "a", "b", "c" ] 100) ""
+Result.withDefault (List.get ["a", "b", "c"] 100) ""
 # returns "" because that's the default we said to use if List.get returned an Err
 ```
 
 ```coffee
-Result.isOk (List.get [ "a", "b", "c" ] 1)
+Result.isOk (List.get ["a", "b", "c"] 1)
 # returns True because `List.get` returned an `Ok` tag. (The payload gets ignored.)
 
 # Note: There's a Result.isErr function that works similarly.
@@ -845,37 +846,37 @@ style using the `|>` operator. Here are three examples of writing the same expre
 compile to exactly the same thing, but two of them use the `|>` operator to change how the calls look.
 
 ```coffee
-Result.withDefault (List.get [ "a", "b", "c" ] 1) ""
+Result.withDefault (List.get ["a", "b", "c"] 1) ""
 ```
 
 ```coffee
-List.get [ "a", "b", "c" ] 1
+List.get ["a", "b", "c"] 1
     |> Result.withDefault ""
 ```
 
 The `|>` operator takes the value that comes before the `|>` and passes it as the first argument to whatever
-comes after the `|>` - so in the example above, the `|>` takes `List.get [ "a", "b", "c" ] 1` and passes that
+comes after the `|>` - so in the example above, the `|>` takes `List.get ["a", "b", "c"] 1` and passes that
 value as the first argument to `Result.withDefault` - making `""` the second argument to `Result.withDefault`.
 
 We can take this a step further like so:
 
 ```coffee
-[ "a", "b", "c" ]
+["a", "b", "c"]
     |> List.get 1
     |> Result.withDefault ""
 ```
 
 This is still equivalent to the first expression. Since `|>` is known as the "pipe operator," we can read
-this as "start with `[ "a", "b", "c" ]`, then pipe it to `List.get`, then pipe it to `Result.withDefault`."
+this as "start with `["a", "b", "c"]`, then pipe it to `List.get`, then pipe it to `Result.withDefault`."
 
 One reason the `|>` operator injects the value as the first argument is to make it work better with
 functions where argument order matters. For example, these two uses of `List.append` are equivalent:
 
 ```coffee
-List.append [ "a", "b", "c" ] "d"
+List.append ["a", "b", "c"] "d"
 ```
 ```coffee
-[ "a", "b", "c" ]
+["a", "b", "c"]
     |> List.append "d"
 ```
 
@@ -969,7 +970,7 @@ you can also read `Musician : { firstName : Str, lastName : Str }` as "`Musician
 We can also give type annotations to tag unions:
 
 ```coffee
-colorFromStr : Str -> [ Red, Green, Yellow ]
+colorFromStr : Str -> [Red, Green, Yellow]
 colorFromStr = \string ->
     when string is
         "red" -> Red
@@ -977,13 +978,13 @@ colorFromStr = \string ->
         _ -> Yellow
 ```
 
-You can read the type `[ Red, Green, Yellow ]` as "a tag union of the tags `Red`, `Green`, and `Yellow`."
+You can read the type `[Red, Green, Yellow]` as "a tag union of the tags `Red`, `Green`, and `Yellow`."
 
 When we annotate a list type, we have to specify the type of its elements:
 
 ```coffee
 names : List Str
-names = [ "Amy", "Simone", "Tarja" ]
+names = ["Amy", "Simone", "Tarja"]
 ```
 
 You can read `List Str` as "a list of strings." Here, `Str` is a *type parameter* that tells us what type of
@@ -1000,7 +1001,7 @@ isEmpty : List * -> Bool
 
 The `*` is a *wildcard type* - that is, a type that's compatible with any other type. `List *` is compatible
 with any type of `List` - so, `List Str`, `List Bool`, and so on. So you can call
-`List.isEmpty [ "I am a List Str" ]` as well as `List.isEmpty [ True ]`, and they will both work fine.
+`List.isEmpty ["I am a List Str"]` as well as `List.isEmpty [True]`, and they will both work fine.
 
 The wildcard type also comes up with empty lists. Suppose we have one function that takes a `List Str` and another
 function that takes a `List Bool`. We might reasonably expect to be able to pass an empty list (that is, `[]`) to
@@ -1012,10 +1013,10 @@ call `List.reverse` on any list, regardless of its type parameter. However, cons
 
 ```coffee
 strings : List Str
-strings = List.reverse [ "a", "b" ]
+strings = List.reverse ["a", "b"]
 
 bools : List Bool
-bools = List.reverse [ True, False ]
+bools = List.reverse [True, False]
 ```
 
 In the `strings` example, we have `List.reverse` returning a `List Str`. In the `bools` example, it's returning a
@@ -1202,9 +1203,27 @@ and also `Num.cos 1` and have them all work as expected; the number literal `1` 
 `Num *`, which is compatible with the more constrained types `Int` and `Frac`. For the same reason,
 you can pass number literals to functions expecting even more constrained types, like `I32` or `F64`.
 
+### Typed Number Literals
+When writing a number literal in Roc you can specify the numeric type as a suffix of the literal.
+`1u8` specifies `1` as an unsigned 8-bit integer, `5i32` specifies `5` as a signed 32-bit integer, etc.
+The full list of possible suffixes includes:
+`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`, `i128`, `u128`, `nat`, `f32`, `f64`, `dec`
+
+### Hexadecimal Integer Literals
+Integer literals can be written in hexadecimal form by prefixing with `0x` followed by hexadecimal characters.
+`0xFE` evaluates to decimal `254`
+The integer type can be specified as a suffix to the hexadecimal literal,
+so `0xC8u8` evaluates to decimal `200` as an unsigned 8-bit integer.
+
+### Binary Integer Literals
+Integer literals can be written in binary form by prefixing with `0b` followed by the 1's and 0's representing
+each bit. `0b0000_1000` evaluates to decimal `8`
+The integer type can be specified as a suffix to the binary literal,
+so `0b0100u8` evaluates to decimal `4` as an unsigned 8-bit integer.
+
 ## Interface modules
 
-[ This part of the tutorial has not been written yet. Coming soon! ]
+[This part of the tutorial has not been written yet. Coming soon!]
 
 ## Builtin modules
 
@@ -1228,7 +1247,7 @@ Roc compiler. That's why they're called "builtins!"
 Besides being built into the compiler, the builtin modules are different from other modules in that:
 
 * They are always imported. You never need to add them to `imports`.
-* All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [ Num.{ Nat } ]` (and the same for all the other types in the `Num` module).
+* All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (and the same for all the other types in the `Num` module).
 
 ## The app module header
 
@@ -1236,8 +1255,8 @@ Let's take a closer look at the part of `Hello.roc` above `main`:
 
 ```coffee
 app "hello"
-    packages { pf: "examples/cli/platform" }
-    imports [ pf.Stdout ]
+    packages { pf: "examples/interactive/cli-platform" }
+    imports [pf.Stdout]
     provides main to pf
 ```
 
@@ -1254,17 +1273,17 @@ without running it by running `roc build Hello.roc`.
 The remaining lines all involve the *platform* this application is built on:
 
 ```coffee
-packages { pf: "examples/cli/platform" }
-imports [ pf.Stdout ]
+packages { pf: "examples/interactive/cli-platform" }
+imports [pf.Stdout]
 provides main to pf
 ```
 
-The `packages { pf: "examples/cli/platform" }` part says two things:
+The `packages { pf: "examples/interactive/cli-platform" }` part says two things:
 
-- We're going to be using a *package* (that is, a collection of modules) called `"examples/cli/platform"`
+- We're going to be using a *package* (that is, a collection of modules) called `"examples/interactive/cli-platform"`
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
 
-The `imports [ pf.Stdout ]` line says that we want to import the `Stdout` module
+The `imports [pf.Stdout]` line says that we want to import the `Stdout` module
 from the `pf` package, and make it available in the current module.
 
 This import has a direct interaction with our definition of `main`. Let's look
@@ -1278,20 +1297,21 @@ Here, `main` is calling a function called `Stdout.line`. More specifically, it's
 calling a function named `line` which is exposed by a module named
 `Stdout`.
 
-When we write `imports [ pf.Stdout ]`, it specifies that the `Stdout`
+When we write `imports [pf.Stdout]`, it specifies that the `Stdout`
 module comes from the `pf` package.
 
-Since `pf` was the name we chose for the `examples/cli/platform` package
-(when we wrote `packages { pf: "examples/cli/platform" }`), this `imports` line
-tells the Roc compiler that when we call `Stdout.line`, it should look for that
-`line` function in the `Stdout` module of the `examples/cli/platform` package.
+Since `pf` was the name we chose for the `examples/interactive/cli-platform`
+package (when we wrote `packages { pf: "examples/interactive/cli-platform" }`),
+this `imports` line tells the Roc compiler that when we call `Stdout.line`, it
+should look for that `line` function in the `Stdout` module of the
+`examples/interactive/cli-platform` package.
 
 # Building a Command-Line Interface (CLI)
 
 ## Tasks
 
 Tasks are technically not part of the Roc language, but they're very common in
-platforms. Let's use the CLI platform in `examples/cli` as an example!
+platforms. Let's use the CLI platform in `examples/interactive/cli-platform` as an example!
 
 In the CLI platform, we have four operations we can do:
 
@@ -1306,9 +1326,9 @@ First, let's do a basic "Hello World" using the tutorial app.
 
 ```coffee
 app "cli-tutorial"
-    packages { pf: "examples/cli/platform" }
-    imports [ pf.Stdout ]
-    provides [ main ] to pf
+    packages { pf: "examples/interactive/cli-platform" }
+    imports [pf.Stdout]
+    provides [main] to pf
 
 main =
     Stdout.line "Hello, World!"
@@ -1343,9 +1363,9 @@ Let's change `main` to read a line from `stdin`, and then print it back out agai
 
 ```swift
 app "cli-tutorial"
-    packages { pf: "examples/cli/platform" }
-    imports [ pf.Stdout, pf.Stdin, pf.Task ]
-    provides [ main ] to pf
+    packages { pf: "examples/interactive/cli-platform" }
+    imports [pf.Stdout, pf.Stdin, pf.Task]
+    provides [main] to pf
 
 main =
     Task.await Stdin.line \text ->
@@ -1393,9 +1413,9 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```haskell
 app "cli-tutorial"
-    packages { pf: "examples/cli/platform" }
-    imports [ pf.Stdout, pf.Stdin, pf.Task.{ await } ]
-    provides [ main ] to pf
+    packages { pf: "examples/interactive/cli-platform" }
+    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
+    provides [main] to pf
 
 main =
     await (Stdout.line "Type something press Enter:") \_ ->
@@ -1734,15 +1754,15 @@ type that accumulates more and more fields as it progresses through a series of 
 
 Just like how Roc has open records and closed records, it also has open and closed tag unions.
 
-The *open tag union* (or *open union* for short) `[ Foo Str, Bar Bool ]*` represents a tag that might
+The *open tag union* (or *open union* for short) `[Foo Str, Bar Bool]*` represents a tag that might
 be `Foo Str` and might be `Bar Bool`, but might also be some other tag whose type isn't known at compile time.
 
 Because an open union represents possibilities that are impossible to know ahead of time, any `when` I use on a
-`[ Foo Str, Bar Bool ]*` value must include a catch-all `_ ->` branch. Otherwise, if one of those
+`[Foo Str, Bar Bool]*` value must include a catch-all `_ ->` branch. Otherwise, if one of those
 unknown tags were to come up, the `when` would not know what to do with it! For example:
 
 ```coffee
-example : [ Foo Str, Bar Bool ]* -> Bool
+example : [Foo Str, Bar Bool]* -> Bool
 example = \tag ->
     when tag is
         Foo str -> Str.isEmpty str
@@ -1750,12 +1770,12 @@ example = \tag ->
         _ -> False
 ```
 
-In contrast, a *closed tag union* (or *closed union*) like `[ Foo Str, Bar Bool ]` (without the `*`)
+In contrast, a *closed tag union* (or *closed union*) like `[Foo Str, Bar Bool]` (without the `*`)
 represents an exhaustive set of possible tags. If I use a `when` on one of these, I can match on `Foo`
 only and then on `Bar` only, with no need for a catch-all branch. For example:
 
 ```coffee
-example : [ Foo Str, Bar Bool ] -> Bool
+example : [Foo Str, Bar Bool] -> Bool
 example = \tag ->
     when tag is
         Foo str -> Str.isEmpty str
@@ -1765,11 +1785,11 @@ example = \tag ->
 If we were to remove the type annotations from the previous two code examples, Roc would infer the same
 types for them anyway.
 
-It would infer `tag : [ Foo Str, Bar Bool ]` for the latter example because the `when tag is` expression
+It would infer `tag : [Foo Str, Bar Bool]` for the latter example because the `when tag is` expression
 only includes a `Foo Str` branch and a `Bar Bool` branch, and nothing else. Since the `when` doesn't handle
 any other possibilities, these two tags must be the only possible ones the `tag` argument could be.
 
-It would infer `tag : [ Foo Str, Bar Bool ]*` for the former example because the `when tag is` expression
+It would infer `tag : [Foo Str, Bar Bool]*` for the former example because the `when tag is` expression
 includes a `Foo Str` branch and a `Bar Bool` branch - meaning we know about at least those two specific
 possibilities - but also a `_ ->` branch, indicating that there may be other tags we don't know about. Since
 the `when` is flexible enough to handle all possible tags, `tag` gets inferred as an open union.
@@ -1779,14 +1799,14 @@ the implementation actually handles.
 
 > **Aside:** As with open and closed records, we can use type annotations to make tag union types less flexible
 > than what would be inferred. If we added a `_ ->` branch to the second example above, the compiler would still
-> accept `example : [ Foo Str, Bar Bool ] -> Bool` as the type annotation, even though the catch-all branch
-> would permit the more flexible `example : [ Foo Str, Bar Bool ]* -> Bool` annotation instead.
+> accept `example : [Foo Str, Bar Bool] -> Bool` as the type annotation, even though the catch-all branch
+> would permit the more flexible `example : [Foo Str, Bar Bool]* -> Bool` annotation instead.
 
 ## Combining Open Unions
 
 When we make a new record, it's inferred to be a closed record. For example, in `foo { a: "hi" }`,
 the type of `{ a: "hi" }` is inferred to be `{ a : Str }`. In contrast, when we make a new tag, it's inferred
-to be an open union. So in `foo (Bar "hi")`, the type of `Bar "hi"` is inferred to be `[ Bar Str ]*`.
+to be an open union. So in `foo (Bar "hi")`, the type of `Bar "hi"` is inferred to be `[Bar Str]*`.
 
 This is because open unions can accumulate additional tags based on how they're used in the program,
 whereas closed unions cannot. For example, let's look at this conditional:
@@ -1810,50 +1830,50 @@ else
 
 This shouldn't be a type mismatch, because we can see that the two branches are compatible; they are both
 tags that could easily coexist in the same tag union. But if the compiler inferred the type of `Ok "foo"` to be
-the closed union `[ Ok Str ]`, and likewise for `Err "bar"` and `[ Err Str ]`, then this would have to be
+the closed union `[Ok Str]`, and likewise for `Err "bar"` and `[Err Str]`, then this would have to be
 a type mismatch - because those two closed unions are incompatible.
 
-Instead, the compiler infers `Ok "foo"` to be the open union `[ Ok Str ]*`, and `Err "bar"` to be the open
-union `[ Err Str ]*`. Then, when using them together in this conditional, the inferred type of the conditional
-becomes `[ Ok Str, Err Str ]*` - that is, the combination of the unions in each of its branches. (Branches in
+Instead, the compiler infers `Ok "foo"` to be the open union `[Ok Str]*`, and `Err "bar"` to be the open
+union `[Err Str]*`. Then, when using them together in this conditional, the inferred type of the conditional
+becomes `[Ok Str, Err Str]*` - that is, the combination of the unions in each of its branches. (Branches in
 a `when` work the same way with open unions.)
 
 Earlier we saw how a function which accepts an open union must account for more possibilities, by including
 catch-all `_ ->` patterns in its `when` expressions. So *accepting* an open union means you have more requirements.
 In contrast, when you already *have* a value which is an open union, you have fewer requirements. A value
-which is an open union (like `Ok "foo"`, which has the type `[ Ok Str ]*`) can be provided to anything that's
+which is an open union (like `Ok "foo"`, which has the type `[Ok Str]*`) can be provided to anything that's
 expecting a tag union (no matter whether it's open or closed), as long as the expected tag union includes at least
 the tags in the open union you're providing.
 
-So if I have an `[ Ok Str ]*` value, I can pass it to functions with any of these types (among others):
+So if I have an `[Ok Str]*` value, I can pass it to functions with any of these types (among others):
 
-* `[ Ok Str ]* -> Bool`
-* `[ Ok Str ] -> Bool`
-* `[ Ok Str, Err Bool ]* -> Bool`
-* `[ Ok Str, Err Bool ] -> Bool`
-* `[ Ok Str, Err Bool, Whatever ]* -> Bool`
-* `[ Ok Str, Err Bool, Whatever ] -> Bool`
+* `[Ok Str]* -> Bool`
+* `[Ok Str] -> Bool`
+* `[Ok Str, Err Bool]* -> Bool`
+* `[Ok Str, Err Bool] -> Bool`
+* `[Ok Str, Err Bool, Whatever]* -> Bool`
+* `[Ok Str, Err Bool, Whatever] -> Bool`
 * `Result Str Bool -> Bool`
-* `[ Err Bool, Whatever ]* -> Bool`
+* `[Err Bool, Whatever]* -> Bool`
 
 That last one works because a function accepting an open union can accept any unrecognized tag, including
-`Ok Str` - even though it is not mentioned as one of the tags in `[ Err Bool, Whatever ]*`! Remember, when
+`Ok Str` - even though it is not mentioned as one of the tags in `[Err Bool, Whatever]*`! Remember, when
 a function accepts an open tag union, any `when` branches on that union must include a catch-all `_ ->` branch,
 which is the branch that will end up handling the `Ok Str` value we pass in.
 
-However, I could not pass an `[ Ok Str ]*` to a function with a *closed* tag union argument that did not
-mention `Ok Str` as one of its tags. So if I tried to pass `[ Ok Str ]*` to a function with the type
-`[ Err Bool, Whatever ] -> Str`, I would get a type mismatch - because a `when` in that function could
+However, I could not pass an `[Ok Str]*` to a function with a *closed* tag union argument that did not
+mention `Ok Str` as one of its tags. So if I tried to pass `[Ok Str]*` to a function with the type
+`[Err Bool, Whatever] -> Str`, I would get a type mismatch - because a `when` in that function could
 be handling the `Err Bool` possibility and the `Whatever` possibility, and since it would not necessarily have
 a catch-all `_ ->` branch, it might not know what to do with an `Ok Str` if it received one.
 
 > **Note:** It wouldn't be accurate to say that a function which accepts an open union handles
-> "all possible tags." For example, if I have a function `[ Ok Str ]* -> Bool` and I pass it
+> "all possible tags." For example, if I have a function `[Ok Str]* -> Bool` and I pass it
 > `Ok 5`, that will still be a type mismatch. If you think about it, a `when` in that function might
 > have the branch `Ok str ->` which assumes there's a string inside that `Ok`, and if `Ok 5` type-checked,
 > then that assumption would be false and things would break!
 >
-> So `[ Ok Str ]*` is more restrictive than `[]*`. It's basically saying "this may or may not be an `Ok` tag,
+> So `[Ok Str]*` is more restrictive than `[]*`. It's basically saying "this may or may not be an `Ok` tag,
 > but if it is an `Ok` tag, then it's guaranteed to have a payload of exactly `Str`."
 
 In summary, here's a way to think about the difference between open unions in a value you have, compared to a value you're accepting:
@@ -1868,7 +1888,7 @@ In summary, here's a way to think about the difference between open unions in a 
 Earlier we saw these two examples, one with an open tag union and the other with a closed one:
 
 ```coffee
-example : [ Foo Str, Bar Bool ]* -> Bool
+example : [Foo Str, Bar Bool]* -> Bool
 example = \tag ->
     when tag is
         Foo str -> Str.isEmpty str
@@ -1877,7 +1897,7 @@ example = \tag ->
 ```
 
 ```coffee
-example : [ Foo Str, Bar Bool ] -> Bool
+example : [Foo Str, Bar Bool] -> Bool
 example = \tag ->
     when tag is
         Foo str -> Str.isEmpty str
@@ -1889,7 +1909,7 @@ and constrained records with a named type variable, we can also have *constraine
 with a named type variable. Here's an example:
 
 ```coffee
-example : [ Foo Str, Bar Bool ]a -> [ Foo Str, Bar Bool ]a
+example : [Foo Str, Bar Bool]a -> [Foo Str, Bar Bool]a
 example = \tag ->
     when tag is
         Foo str -> Bar (Str.isEmpty str)
@@ -1901,15 +1921,15 @@ This type says that the `example` function will take either a `Foo Str` tag, or 
 or possibly another tag we don't know about at compile time - and it also says that the function's
 return type is the same as the type of its argument.
 
-So if we give this function a `[ Foo Str, Bar Bool, Baz (List Str) ]` argument, then it will be guaranteed
-to return a `[ Foo Str, Bar Bool, Baz (List Str) ]` value. This is more constrained than a function that
-returned `[ Foo Str, Bar Bool ]*` because that would say it could return *any* other tag (in addition to
+So if we give this function a `[Foo Str, Bar Bool, Baz (List Str)]` argument, then it will be guaranteed
+to return a `[Foo Str, Bar Bool, Baz (List Str)]` value. This is more constrained than a function that
+returned `[Foo Str, Bar Bool]*` because that would say it could return *any* other tag (in addition to
 the `Foo Str` and `Bar Bool` we already know about).
 
 If we removed the type annotation from `example` above, Roc's compiler would infer the same type anyway.
 This may be surprising if you look closely at the body of the function, because:
 
-* The return type includes `Foo Str`, but no branch explicitly returns `Foo`. Couldn't the return type be `[ Bar Bool ]a` instead?
+* The return type includes `Foo Str`, but no branch explicitly returns `Foo`. Couldn't the return type be `[Bar Bool]a` instead?
 * The argument type includes `Bar Bool` even though we never look at `Bar`'s payload. Couldn't the argument type be inferred to be `Bar *` instead of `Bar Bool`, since we never look at it?
 
 The reason it has this type is the `other -> other` branch. Take a look at that branch, and ask this question:
@@ -1922,14 +1942,14 @@ includes a branch like `x -> x` or `other -> other`, the function's argument typ
 be equivalent.
 
 > **Note:** Just like with records, you can also replace the type variable in tag union types with a concrete type.
-> For example, `[ Foo Str ][ Bar Bool ][ Baz (List Str) ]` is equivalent to `[ Foo Str, Bar Bool, Baz (List Str) ]`.
+> For example, `[Foo Str][Bar Bool][Baz (List Str)]` is equivalent to `[Foo Str, Bar Bool, Baz (List Str)]`.
 >
 > Also just like with records, you can use this to compose tag union type aliases. For example, you can write
-> `NetworkError : [ Timeout, Disconnected ]` and then `Problem : [ InvalidInput, UnknownFormat ]NetworkError`
+> `NetworkError : [Timeout, Disconnected]` and then `Problem : [InvalidInput, UnknownFormat]NetworkError`
 
 ## Phantom Types
 
-[ This part of the tutorial has not been written yet. Coming soon! ]
+[This part of the tutorial has not been written yet. Coming soon!]
 
 ## Operator Desugaring Table
 
@@ -1941,10 +1961,9 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `a - b`           | `Num.sub a b`      |
 | `a * b`           | `Num.mul a b`      |
 | `a / b`           | `Num.div a b`    |
-| `a // b`          | `Num.divFloor a b`      |
+| `a // b`          | `Num.divTrunc a b`      |
 | `a ^ b`           | `Num.pow a b`      |
 | `a % b`           | `Num.rem a b`    |
-| `a %% b`          | `Num.mod a b`    |
 | `a >> b`          | `Num.shr a b`    |
 | `a << b`          | `Num.shl a b`    |
 | `-a`              | `Num.neg a`        |

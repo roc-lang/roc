@@ -3,7 +3,7 @@ name = "test_mono"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 
 [[test]]
 name = "test_mono"
@@ -17,7 +17,7 @@ roc_load = { path = "../load" }
 roc_can = { path = "../can" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
+roc_reporting = { path = "../../reporting" }
 test_mono_macros = { path = "../test_mono_macros" }
-pretty_assertions = "1.0.0"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 indoc = "1.0.3"

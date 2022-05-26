@@ -1,4 +1,4 @@
-interface AStar exposes [ findPath, Model, initialModel, cheapestOpen, reconstructPath ] imports [ Quicksort ]
+interface AStar exposes [findPath, Model, initialModel, cheapestOpen, reconstructPath] imports [Quicksort]
 
 findPath = \costFn, moveFn, start, end ->
     astar costFn moveFn end (initialModel start)
@@ -12,13 +12,12 @@ Model position :
     }
 
 initialModel : position -> Model position
-initialModel = \start ->
-    {
-        evaluated: Set.empty,
-        openSet: Set.single start,
-        costs: Dict.single start 0,
-        cameFrom: Dict.empty,
-    }
+initialModel = \start -> {
+    evaluated: Set.empty,
+    openSet: Set.single start,
+    costs: Dict.single start 0,
+    cameFrom: Dict.empty,
+}
 
 cheapestOpen : (position -> F64), Model position -> Result position {}
 cheapestOpen = \costFn, model ->
@@ -29,7 +28,6 @@ cheapestOpen = \costFn, model ->
                     when Dict.get model.costs position is
                         Err _ ->
                             Err {}
-
                         Ok cost ->
                             Ok { cost: cost + costFn position, position }
             )
@@ -43,7 +41,6 @@ reconstructPath = \cameFrom, goal ->
     when Dict.get cameFrom goal is
         Err _ ->
             []
-
         Ok next ->
             List.append (reconstructPath cameFrom next) goal
 
@@ -58,7 +55,7 @@ updateCost = \current, neighbor, model ->
     distanceTo =
         reconstructPath newCameFrom neighbor
             |> List.len
-            |> Num.toFloat
+            |> Num.toFrac
 
     newModel =
         { model &
@@ -69,7 +66,6 @@ updateCost = \current, neighbor, model ->
     when Dict.get model.costs neighbor is
         Err _ ->
             newModel
-
         Ok previousDistance ->
             if distanceTo < previousDistance then
                 newModel
@@ -79,9 +75,8 @@ updateCost = \current, neighbor, model ->
 astar : (position, position -> F64), (position -> Set position), position, Model position -> Result (List position) {}
 astar = \costFn, moveFn, goal, model ->
     when cheapestOpen (\source -> costFn source goal) model is
-        Err {  } ->
+        Err {} ->
             Err {}
-
         Ok current ->
             if current == goal then
                 Ok (reconstructPath model.cameFrom goal)

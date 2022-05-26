@@ -11,38 +11,32 @@ cd $SCRIPT_RELATIVE_DIR
 rm -rf build/
 cp -r public/ build/
 
-pushd build
-
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
+pushd build
 wget https://github.com/rtfeldman/elm-css/files/8037422/roc-source-code.zip
-
-# Copy REPL webpage source files
-cp -r ../../repl_www/public/* .
-
-# grab the pre-compiled REPL and copy it to Netlify's server; if it's not there, fail the build.
-wget https://github.com/brian-carroll/mock-repl/archive/refs/heads/deploy.zip
-unzip deploy.zip
-mv mock-repl-deploy/* .
-rmdir mock-repl-deploy
-rm deploy.zip
-
 popd
 
-# pushd ..
-# echo 'Generating docs...'
-# cargo --version
-# rustc --version
-# # We run the CLI with --no-default-features because that way we don't have the
-# # "llvm" feature and therefore don't depend on LLVM being installed on the
-# # system. (Netlify's build servers have Rust installed, but not LLVM.)
-# #
-# # We set RUSTFLAGS to -Awarnings to ignore warnings during this build,
-# # because when building without "the" llvm feature (which is only ever done
-# # for this exact use case), the result is lots of "unused" warnings!
-# #
-# # We set ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
-# # "/builtins/" rather than "/" - which is what we want based on how the server
-# # is set up to serve them.
-# RUSTFLAGS=-Awarnings ROC_DOCS_URL_ROOT=builtins cargo run -p roc_cli --no-default-features docs compiler/builtins/docs/*.roc
-# mv generated-docs/ www/build/builtins
-# popd
+pushd ..
+echo 'Generating docs...'
+cargo --version
+rustc --version
+
+# removing `-C link-arg=-fuse-ld=lld` from RUSTFLAGS because this causes an error when compiling `roc_repl_wasm`
+RUSTFLAGS="-C target-cpu=native"
+
+# We set ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
+# "/builtins/" rather than "/" - which is what we want based on how the server
+# is set up to serve them.
+export ROC_DOCS_URL_ROOT=/builtins
+
+cargo run --bin roc-docs compiler/builtins/roc/*.roc
+mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
+mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
+
+echo "Building Web REPL..."
+repl_www/build.sh www/build
+
+echo "Asset sizes:"
+ls -lh www/build/*
+
+popd

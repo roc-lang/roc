@@ -3,7 +3,7 @@ name = "roc_editor"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 description = "An editor for Roc"
 
 [package.metadata.cargo-udeps.ignore]

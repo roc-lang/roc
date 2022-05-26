@@ -1,13 +1,10 @@
 use crate::docs::DocEntry::DetachedDoc;
-use crate::docs::TypeAnnotation::{
-    Apply, BoundVariable, Function, NoTypeAnn, ObscuredRecord, ObscuredTagUnion, Record, TagUnion,
-};
+use crate::docs::TypeAnnotation::{Apply, BoundVariable, Function, NoTypeAnn, Record, TagUnion};
 use crate::file::LoadedModule;
 use roc_can::scope::Scope;
-use roc_error_macros::todo_abilities;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
-use roc_parse::ast::{self, TypeHeader};
+use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
 use roc_parse::ast::{AssignedField, Def};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
 use roc_region::all::Loc;
@@ -64,9 +61,13 @@ pub enum TypeAnnotation {
         fields: Vec<RecordField>,
         extension: Box<TypeAnnotation>,
     },
+    Ability {
+        members: Vec<AbilityMember>,
+    },
     Wildcard,
     NoTypeAnn,
 }
+
 #[derive(Debug, Clone)]
 pub enum RecordField {
     RecordField {
@@ -83,6 +84,14 @@ pub enum RecordField {
 }
 
 #[derive(Debug, Clone)]
+pub struct AbilityMember {
+    pub name: String,
+    pub type_annotation: TypeAnnotation,
+    pub able_variables: Vec<(String, TypeAnnotation)>,
+    pub docs: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Tag {
     pub name: String,
     pub values: Vec<TypeAnnotation>,
@@ -91,14 +100,18 @@ pub struct Tag {
 pub fn generate_module_docs<'a>(
     scope: Scope,
     module_name: ModuleName,
-    ident_ids: &'a IdentIds,
     parsed_defs: &'a [Loc<ast::Def<'a>>],
 ) -> ModuleDocumentation {
     let (entries, _) =
         parsed_defs
             .iter()
             .fold((vec![], None), |(acc, maybe_comments_after), def| {
-                generate_entry_doc(ident_ids, acc, maybe_comments_after, &def.value)
+                generate_entry_doc(
+                    &scope.locals.ident_ids,
+                    acc,
+                    maybe_comments_after,
+                    &def.value,
+                )
             });
 
     ModuleDocumentation {
@@ -262,7 +275,45 @@ fn generate_entry_doc<'a>(
                 (acc, None)
             }
 
-            TypeDef::Ability { .. } => todo_abilities!(),
+            TypeDef::Ability {
+                header: TypeHeader { name, vars },
+                members,
+                ..
+            } => {
+                let mut type_vars = Vec::new();
+
+                for var in vars.iter() {
+                    if let Pattern::Identifier(ident_name) = var.value {
+                        type_vars.push(ident_name.to_string());
+                    }
+                }
+
+                let members = members
+                    .iter()
+                    .map(|mem| {
+                        let extracted = mem.name.value.extract_spaces();
+                        let (type_annotation, able_variables) =
+                            ability_member_type_to_docs(mem.typ.value);
+
+                        AbilityMember {
+                            name: extracted.item.to_string(),
+                            type_annotation,
+                            able_variables,
+                            docs: comments_or_new_lines_to_docs(extracted.before),
+                        }
+                    })
+                    .collect();
+
+                let doc_def = DocDef {
+                    name: name.value.to_string(),
+                    type_annotation: TypeAnnotation::Ability { members },
+                    type_vars,
+                    docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+                };
+                acc.push(DocEntry::DocDef(doc_def));
+
+                (acc, None)
+            }
         },
 
         Def::NotYetImplemented(s) => todo!("{}", s),
@@ -274,36 +325,20 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
         ast::TypeAnnotation::TagUnion { tags, ext } => {
             let mut tags_to_render: Vec<Tag> = Vec::new();
 
-            let mut any_tags_are_private = false;
-
             for tag in tags.iter() {
-                match tag_to_doc(in_func_type_ann, tag.value) {
-                    None => {
-                        any_tags_are_private = true;
-                        break;
-                    }
-                    Some(tag_ann) => {
-                        tags_to_render.push(tag_ann);
-                    }
+                if let Some(tag_ann) = tag_to_doc(in_func_type_ann, tag.value) {
+                    tags_to_render.push(tag_ann);
                 }
             }
 
-            if any_tags_are_private {
-                if in_func_type_ann {
-                    ObscuredTagUnion
-                } else {
-                    NoTypeAnn
-                }
-            } else {
-                let extension = match ext {
-                    None => NoTypeAnn,
-                    Some(ext_type_ann) => type_to_docs(in_func_type_ann, ext_type_ann.value),
-                };
+            let extension = match ext {
+                None => NoTypeAnn,
+                Some(ext_type_ann) => type_to_docs(in_func_type_ann, ext_type_ann.value),
+            };
 
-                TagUnion {
-                    tags: tags_to_render,
-                    extension: Box::new(extension),
-                }
+            TagUnion {
+                tags: tags_to_render,
+                extension: Box::new(extension),
             }
         }
         ast::TypeAnnotation::BoundVariable(var_name) => BoundVariable(var_name.to_string()),
@@ -328,35 +363,19 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
         ast::TypeAnnotation::Record { fields, ext } => {
             let mut doc_fields = Vec::new();
 
-            let mut any_fields_include_private_tags = false;
-
             for field in fields.items {
-                match record_field_to_doc(in_func_type_ann, field.value) {
-                    None => {
-                        any_fields_include_private_tags = true;
-                        break;
-                    }
-                    Some(doc_field) => {
-                        doc_fields.push(doc_field);
-                    }
+                if let Some(doc_field) = record_field_to_doc(in_func_type_ann, field.value) {
+                    doc_fields.push(doc_field);
                 }
             }
-            if any_fields_include_private_tags {
-                if in_func_type_ann {
-                    ObscuredRecord
-                } else {
-                    NoTypeAnn
-                }
-            } else {
-                let extension = match ext {
-                    None => NoTypeAnn,
-                    Some(ext_type_ann) => type_to_docs(in_func_type_ann, ext_type_ann.value),
-                };
+            let extension = match ext {
+                None => NoTypeAnn,
+                Some(ext_type_ann) => type_to_docs(in_func_type_ann, ext_type_ann.value),
+            };
 
-                Record {
-                    fields: doc_fields,
-                    extension: Box::new(extension),
-                }
+            Record {
+                fields: doc_fields,
+                extension: Box::new(extension),
             }
         }
         ast::TypeAnnotation::SpaceBefore(&sub_type_ann, _) => {
@@ -382,6 +401,29 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
     }
 }
 
+fn ability_member_type_to_docs(
+    type_annotation: ast::TypeAnnotation,
+) -> (TypeAnnotation, Vec<(String, TypeAnnotation)>) {
+    match type_annotation {
+        ast::TypeAnnotation::Where(ta, has_clauses) => {
+            let ta = type_to_docs(false, ta.value);
+            let has_clauses = has_clauses
+                .iter()
+                .map(|hc| {
+                    let ast::HasClause { var, ability } = hc.value;
+                    (
+                        var.value.extract_spaces().item.to_string(),
+                        type_to_docs(false, ability.value),
+                    )
+                })
+                .collect();
+
+            (ta, has_clauses)
+        }
+        _ => (type_to_docs(false, type_annotation), vec![]),
+    }
+}
+
 fn record_field_to_doc(
     in_func_ann: bool,
     field: ast::AssignedField<'_, ast::TypeAnnotation>,
@@ -404,11 +446,10 @@ fn record_field_to_doc(
     }
 }
 
-// The Option here represents if it is private. Private tags
-// evaluate to `None`.
+// The Option here represents if it is malformed.
 fn tag_to_doc(in_func_ann: bool, tag: ast::Tag) -> Option<Tag> {
     match tag {
-        ast::Tag::Global { name, args } => Some(Tag {
+        ast::Tag::Apply { name, args } => Some(Tag {
             name: name.value.to_string(),
             values: {
                 let mut type_vars = Vec::new();
@@ -420,7 +461,6 @@ fn tag_to_doc(in_func_ann: bool, tag: ast::Tag) -> Option<Tag> {
                 type_vars
             },
         }),
-        ast::Tag::Private { .. } => None,
         ast::Tag::SpaceBefore(&sub_tag, _) => tag_to_doc(in_func_ann, sub_tag),
         ast::Tag::SpaceAfter(&sub_tag, _) => tag_to_doc(in_func_ann, sub_tag),
         ast::Tag::Malformed(_) => None,

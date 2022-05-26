@@ -3,6 +3,7 @@ use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
+use roc_mono::code_gen_help::HelperOp;
 use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_mono::low_level::HigherOrder;
@@ -21,7 +22,7 @@ use crate::TARGET_INFO;
 /// the smallest integer supported in the Wasm instruction set.
 /// We may choose different instructions for signed and unsigned integers,
 /// but they share the same Wasm value type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum CodeGenNumType {
     I32,     // Supported in Wasm instruction set
     I64,     // Supported in Wasm instruction set
@@ -115,6 +116,13 @@ impl From<&StoredValue> for CodeGenNumType {
     }
 }
 
+fn integer_symbol_is_signed(backend: &WasmBackend<'_>, symbol: Symbol) -> bool {
+    return match backend.storage.symbol_layouts[&symbol] {
+        Layout::Builtin(Builtin::Int(int_width)) => int_width.is_signed(),
+        x => internal_error!("Expected integer, found {:?}", x),
+    };
+}
+
 pub struct LowLevelCall<'a> {
     pub lowlevel: LowLevel,
     pub arguments: &'a [Symbol],
@@ -128,7 +136,7 @@ impl<'a> LowLevelCall<'a> {
     /// For numerical ops, this just pushes the arguments to the Wasm VM's value stack
     /// It implements the calling convention used by Zig for both numbers and structs
     /// Result is the type signature of the call
-    fn load_args(&self, backend: &mut WasmBackend<'a>) -> (Vec<'a, ValueType>, Option<ValueType>) {
+    fn load_args(&self, backend: &mut WasmBackend<'a>) -> (usize, bool, bool) {
         backend.storage.load_symbols_for_call(
             backend.env.arena,
             &mut backend.code_builder,
@@ -140,8 +148,29 @@ impl<'a> LowLevelCall<'a> {
     }
 
     fn load_args_and_call_zig(&self, backend: &mut WasmBackend<'a>, name: &'a str) {
-        let (param_types, ret_type) = self.load_args(backend);
-        backend.call_zig_builtin_after_loading_args(name, param_types.len(), ret_type.is_some());
+        let (num_wasm_args, has_return_val, ret_zig_packed_struct) = self.load_args(backend);
+        backend.call_zig_builtin_after_loading_args(name, num_wasm_args, has_return_val);
+
+        if ret_zig_packed_struct {
+            match self.ret_storage {
+                StoredValue::StackMemory {
+                    size,
+                    alignment_bytes,
+                    ..
+                } => {
+                    // The address of the return value was already loaded before the call
+                    let align = Align::from(alignment_bytes);
+                    if size > 4 {
+                        backend.code_builder.i64_store(align, 0);
+                    } else {
+                        backend.code_builder.i32_store(align, 0);
+                    }
+                }
+                _ => {
+                    internal_error!("Zig packed struct should always be stored to StackMemory")
+                }
+            }
+        }
     }
 
     /// Wrap an integer whose Wasm representation is i32
@@ -269,6 +298,8 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
+            ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
+
             ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
             | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
             | ListAny | ListAll | ListFindUnsafe | DictWalk => {
@@ -283,7 +314,7 @@ impl<'a> LowLevelCall<'a> {
 
             DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
             | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference
-            | SetFromList => {
+            | SetFromList | SetToDict => {
                 todo!("{:?}", self.lowlevel);
             }
 
@@ -376,8 +407,20 @@ impl<'a> LowLevelCall<'a> {
             NumGt => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_gt_s(),
-                    I64 => backend.code_builder.i64_gt_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_gt_s()
+                        } else {
+                            backend.code_builder.i32_gt_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_gt_s()
+                        } else {
+                            backend.code_builder.i64_gt_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_gt(),
                     F64 => backend.code_builder.f64_gt(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
@@ -386,8 +429,20 @@ impl<'a> LowLevelCall<'a> {
             NumGte => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_ge_s(),
-                    I64 => backend.code_builder.i64_ge_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_ge_s()
+                        } else {
+                            backend.code_builder.i32_ge_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_ge_s()
+                        } else {
+                            backend.code_builder.i64_ge_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_ge(),
                     F64 => backend.code_builder.f64_ge(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
@@ -396,8 +451,20 @@ impl<'a> LowLevelCall<'a> {
             NumLt => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_lt_s(),
-                    I64 => backend.code_builder.i64_lt_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_lt_s()
+                        } else {
+                            backend.code_builder.i32_lt_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_lt_s()
+                        } else {
+                            backend.code_builder.i64_lt_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_lt(),
                     F64 => backend.code_builder.f64_lt(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
@@ -406,8 +473,20 @@ impl<'a> LowLevelCall<'a> {
             NumLte => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_le_s(),
-                    I64 => backend.code_builder.i64_le_s(),
+                    I32 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i32_le_s()
+                        } else {
+                            backend.code_builder.i32_le_u()
+                        }
+                    }
+                    I64 => {
+                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                            backend.code_builder.i64_le_s()
+                        } else {
+                            backend.code_builder.i64_le_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_le(),
                     F64 => backend.code_builder.f64_le(),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
@@ -503,19 +582,7 @@ impl<'a> LowLevelCall<'a> {
             NumCos => todo!("{:?}", self.lowlevel),
             NumSqrtUnchecked => todo!("{:?}", self.lowlevel),
             NumLogUnchecked => todo!("{:?}", self.lowlevel),
-            NumRound => {
-                self.load_args(backend);
-                match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    F32 => {
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND[FloatWidth::F32])
-                    }
-                    F64 => {
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND[FloatWidth::F64])
-                    }
-                    _ => todo!("{:?} for {:?}", self.lowlevel, self.ret_layout),
-                }
-            }
-            NumToFloat => {
+            NumToFrac => {
                 self.load_args(backend);
                 let ret_type = CodeGenNumType::from(self.ret_layout);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
@@ -534,35 +601,72 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumPow => todo!("{:?}", self.lowlevel),
-            NumCeiling => {
+            NumRound => {
                 self.load_args(backend);
-                match CodeGenNumType::from(self.ret_layout) {
-                    I32 => {
+                let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
+                let ret_type = CodeGenNumType::from(self.ret_layout);
+
+                let width = match ret_type {
+                    CodeGenNumType::I32 => IntWidth::I32,
+                    CodeGenNumType::I64 => IntWidth::I64,
+                    CodeGenNumType::I128 => todo!("{:?} for I128", self.lowlevel),
+                    _ => internal_error!("Invalid return type for round: {:?}", ret_type),
+                };
+
+                match arg_type {
+                    F32 => self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F32[width]),
+                    F64 => self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F64[width]),
+                    _ => internal_error!("Invalid argument type for round: {:?}", arg_type),
+                }
+            }
+            NumCeiling | NumFloor => {
+                self.load_args(backend);
+                let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
+                let ret_type = CodeGenNumType::from(self.ret_layout);
+                match (arg_type, self.lowlevel) {
+                    (F32, NumCeiling) => {
                         backend.code_builder.f32_ceil();
-                        backend.code_builder.i32_trunc_s_f32()
                     }
-                    I64 => {
+                    (F64, NumCeiling) => {
                         backend.code_builder.f64_ceil();
-                        backend.code_builder.i64_trunc_s_f64()
                     }
-                    _ => panic_ret_type(),
-                }
-            }
-            NumPowInt => todo!("{:?}", self.lowlevel),
-            NumFloor => {
-                self.load_args(backend);
-                match CodeGenNumType::from(self.ret_layout) {
-                    I32 => {
+                    (F32, NumFloor) => {
                         backend.code_builder.f32_floor();
-                        backend.code_builder.i32_trunc_s_f32()
                     }
-                    I64 => {
+                    (F64, NumFloor) => {
                         backend.code_builder.f64_floor();
-                        backend.code_builder.i64_trunc_s_f64()
                     }
+                    _ => internal_error!("Invalid argument type for ceiling: {:?}", arg_type),
+                }
+                match (ret_type, arg_type) {
+                    // TODO: unsigned truncation
+                    (I32, F32) => backend.code_builder.i32_trunc_s_f32(),
+                    (I32, F64) => backend.code_builder.i32_trunc_s_f64(),
+                    (I64, F32) => backend.code_builder.i64_trunc_s_f32(),
+                    (I64, F64) => backend.code_builder.i64_trunc_s_f64(),
+                    (I128, _) => todo!("{:?} for I128", self.lowlevel),
                     _ => panic_ret_type(),
                 }
             }
+            NumPowInt => {
+                self.load_args(backend);
+                let base_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
+                let exponent_type = CodeGenNumType::for_symbol(backend, self.arguments[1]);
+                let ret_type = CodeGenNumType::from(self.ret_layout);
+
+                debug_assert!(base_type == exponent_type);
+                debug_assert!(exponent_type == ret_type);
+
+                let width = match ret_type {
+                    CodeGenNumType::I32 => IntWidth::I32,
+                    CodeGenNumType::I64 => IntWidth::I64,
+                    CodeGenNumType::I128 => todo!("{:?} for I128", self.lowlevel),
+                    _ => internal_error!("Invalid return type for pow: {:?}", ret_type),
+                };
+
+                self.load_args_and_call_zig(backend, &bitcode::NUM_POW_INT[width])
+            }
+
             NumIsFinite => num_is_finite(backend, self.arguments[0]),
 
             NumAtan => match self.ret_layout {
@@ -1014,58 +1118,73 @@ pub fn call_higher_order_lowlevel<'a>(
     };
 
     let wrapper_fn_idx = backend.register_helper_proc(wrapper_sym, wrapper_layout, source);
-    let inc_fn_idx = backend.gen_refcount_inc_for_zig(closure_data_layout);
-
     let wrapper_fn_ptr = backend.get_fn_table_index(wrapper_fn_idx);
-    let inc_fn_ptr = backend.get_fn_table_index(inc_fn_idx);
+    let inc_fn_ptr = match closure_data_layout {
+        Layout::Struct {
+            field_layouts: &[], ..
+        } => {
+            // Our code gen would ignore the Unit arg, but the Zig builtin passes a pointer for it!
+            // That results in an exception (type signature mismatch in indirect call).
+            // The workaround is to use I32 layout, treating the (ignored) pointer as an integer.
+            backend.get_refcount_fn_ptr(Layout::Builtin(Builtin::Int(IntWidth::I32)), HelperOp::Inc)
+        }
+        _ => backend.get_refcount_fn_ptr(closure_data_layout, HelperOp::Inc),
+    };
 
     match op {
-        // List.map : List elem_x, (elem_x -> elem_ret) -> List elem_ret
-        ListMap { xs } => {
-            let list_layout_in = backend.storage.symbol_layouts[xs];
+        ListMap { xs } => list_map_n(
+            bitcode::LIST_MAP,
+            backend,
+            &[*xs],
+            return_sym,
+            *return_layout,
+            wrapper_fn_ptr,
+            inc_fn_ptr,
+            closure_data_exists,
+            *captured_environment,
+            *owns_captured_environment,
+        ),
 
-            let (elem_x, elem_ret) = match (list_layout_in, return_layout) {
-                (
-                    Layout::Builtin(Builtin::List(elem_x)),
-                    Layout::Builtin(Builtin::List(elem_ret)),
-                ) => (elem_x, elem_ret),
-                _ => unreachable!("invalid layout for List.map arguments"),
-            };
-            let elem_x_size = elem_x.stack_size(TARGET_INFO);
-            let (elem_ret_size, elem_ret_align) = elem_ret.stack_size_and_alignment(TARGET_INFO);
+        ListMap2 { xs, ys } => list_map_n(
+            bitcode::LIST_MAP2,
+            backend,
+            &[*xs, *ys],
+            return_sym,
+            *return_layout,
+            wrapper_fn_ptr,
+            inc_fn_ptr,
+            closure_data_exists,
+            *captured_environment,
+            *owns_captured_environment,
+        ),
 
-            let cb = &mut backend.code_builder;
+        ListMap3 { xs, ys, zs } => list_map_n(
+            bitcode::LIST_MAP3,
+            backend,
+            &[*xs, *ys, *zs],
+            return_sym,
+            *return_layout,
+            wrapper_fn_ptr,
+            inc_fn_ptr,
+            closure_data_exists,
+            *captured_environment,
+            *owns_captured_environment,
+        ),
 
-            // Load return pointer & argument values
-            // Wasm signature: (i32, i64, i64, i32, i32, i32, i32, i32, i32, i32) -> nil
-            backend.storage.load_symbols(cb, &[return_sym]);
-            backend.storage.load_symbol_zig(cb, *xs); // list with capacity = 2 x i64 args
-            cb.i32_const(wrapper_fn_ptr);
-            if closure_data_exists {
-                backend.storage.load_symbols(cb, &[*captured_environment]);
-            } else {
-                // Normally, a zero-size arg would be eliminated in code gen, but Zig expects one!
-                cb.i32_const(0); // null pointer
-            }
-            cb.i32_const(inc_fn_ptr);
-            cb.i32_const(*owns_captured_environment as i32);
-            cb.i32_const(elem_ret_align as i32); // used for allocating the new list
-            cb.i32_const(elem_x_size as i32);
-            cb.i32_const(elem_ret_size as i32);
+        ListMap4 { xs, ys, zs, ws } => list_map_n(
+            bitcode::LIST_MAP4,
+            backend,
+            &[*xs, *ys, *zs, *ws],
+            return_sym,
+            *return_layout,
+            wrapper_fn_ptr,
+            inc_fn_ptr,
+            closure_data_exists,
+            *captured_environment,
+            *owns_captured_environment,
+        ),
 
-            let num_wasm_args = 10; // 1 return pointer + 8 Zig args + list 2nd i64
-            let has_return_val = false;
-            backend.call_zig_builtin_after_loading_args(
-                bitcode::LIST_MAP,
-                num_wasm_args,
-                has_return_val,
-            );
-        }
-
-        ListMap2 { .. }
-        | ListMap3 { .. }
-        | ListMap4 { .. }
-        | ListMapWithIndex { .. }
+        ListMapWithIndex { .. }
         | ListKeepIf { .. }
         | ListWalk { .. }
         | ListWalkUntil { .. }
@@ -1078,4 +1197,72 @@ pub fn call_higher_order_lowlevel<'a>(
         | ListFindUnsafe { .. }
         | DictWalk { .. } => todo!("{:?}", op),
     }
+}
+
+fn unwrap_list_elem_layout(list_layout: Layout<'_>) -> &Layout<'_> {
+    match list_layout {
+        Layout::Builtin(Builtin::List(x)) => x,
+        e => internal_error!("expected List layout, got {:?}", e),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn list_map_n<'a>(
+    zig_fn_name: &'static str,
+    backend: &mut WasmBackend<'a>,
+    arg_symbols: &[Symbol],
+    return_sym: Symbol,
+    return_layout: Layout<'a>,
+    wrapper_fn_ptr: i32,
+    inc_fn_ptr: i32,
+    closure_data_exists: bool,
+    captured_environment: Symbol,
+    owns_captured_environment: bool,
+) {
+    let arg_elem_layouts = Vec::from_iter_in(
+        arg_symbols
+            .iter()
+            .map(|sym| *unwrap_list_elem_layout(backend.storage.symbol_layouts[sym])),
+        backend.env.arena,
+    );
+
+    let elem_ret = unwrap_list_elem_layout(return_layout);
+    let (elem_ret_size, elem_ret_align) = elem_ret.stack_size_and_alignment(TARGET_INFO);
+
+    let cb = &mut backend.code_builder;
+
+    backend.storage.load_symbols(cb, &[return_sym]);
+
+    for s in arg_symbols {
+        backend.storage.load_symbol_zig(cb, *s);
+    }
+    cb.i32_const(wrapper_fn_ptr);
+    if closure_data_exists {
+        backend.storage.load_symbols(cb, &[captured_environment]);
+    } else {
+        // load_symbols assumes that a zero-size arg should be eliminated in code gen,
+        // but that's a specialization that our Zig code doesn't have! Pass a null pointer.
+        cb.i32_const(0);
+    }
+    cb.i32_const(inc_fn_ptr);
+    cb.i32_const(owns_captured_environment as i32);
+    cb.i32_const(elem_ret_align as i32);
+    for el in arg_elem_layouts.iter() {
+        cb.i32_const(el.stack_size(TARGET_INFO) as i32);
+    }
+    cb.i32_const(elem_ret_size as i32);
+
+    // If we have lists of different lengths, we may need to decrement
+    let num_wasm_args = if arg_elem_layouts.len() > 1 {
+        for el in arg_elem_layouts.iter() {
+            let ptr = backend.get_refcount_fn_ptr(*el, HelperOp::Dec);
+            backend.code_builder.i32_const(ptr);
+        }
+        7 + arg_elem_layouts.len() * 4
+    } else {
+        7 + arg_elem_layouts.len() * 3
+    };
+
+    let has_return_val = false;
+    backend.call_zig_builtin_after_loading_args(zig_fn_name, num_wasm_args, has_return_val);
 }

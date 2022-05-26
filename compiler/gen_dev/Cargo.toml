@@ -4,7 +4,7 @@ description = "The development backend for the Roc compiler"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 roc_collections = { path = "../collections" }
@@ -19,7 +19,7 @@ roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
 roc_error_macros = { path = "../../error_macros" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
-target-lexicon = "0.12.2"
+target-lexicon = "0.12.3"
 # TODO: Deal with the update of object to 0.27.
 # It looks like it breaks linking the generated objects.
 # Probably just need to specify an extra field that used to be implicit or something.

@@ -1,9 +1,11 @@
+use crate::abilities::SpecializationId;
+use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::Variable;
+use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
 use roc_types::types::{Category, PatternCategory, Type};
 
 #[derive(Debug)]
@@ -19,6 +21,10 @@ pub struct Constraints {
     pub pattern_expectations: Vec<PExpected<Type>>,
     pub includes_tags: Vec<IncludesTag>,
     pub strings: Vec<&'static str>,
+    pub sketched_rows: Vec<SketchedRows>,
+    pub eq: Vec<Eq>,
+    pub pattern_eq: Vec<PatternEq>,
+    pub cycles: Vec<Cycle>,
 }
 
 impl Default for Constraints {
@@ -40,6 +46,10 @@ impl Constraints {
         let pattern_expectations = Vec::new();
         let includes_tags = Vec::new();
         let strings = Vec::new();
+        let sketched_rows = Vec::new();
+        let eq = Vec::new();
+        let pattern_eq = Vec::new();
+        let cycles = Vec::new();
 
         types.extend([
             Type::EmptyRec,
@@ -90,6 +100,10 @@ impl Constraints {
             pattern_expectations,
             includes_tags,
             strings,
+            sketched_rows,
+            eq,
+            pattern_eq,
+            cycles,
         }
     }
 
@@ -225,7 +239,7 @@ impl Constraints {
         let expected_index = Index::push_new(&mut self.expectations, expected);
         let category_index = Self::push_category(self, category);
 
-        Constraint::Eq(type_index, expected_index, category_index, region)
+        Constraint::Eq(Eq(type_index, expected_index, category_index, region))
     }
 
     #[inline(always)]
@@ -240,7 +254,7 @@ impl Constraints {
         let expected_index = Index::push_new(&mut self.expectations, expected);
         let category_index = Self::push_category(self, category);
 
-        Constraint::Eq(type_index, expected_index, category_index, region)
+        Constraint::Eq(Eq(type_index, expected_index, category_index, region))
     }
 
     #[inline(always)]
@@ -256,17 +270,17 @@ impl Constraints {
         let expected_index = Index::push_new(&mut self.expectations, expected);
         let category_index = Self::push_category(self, category);
 
-        let equal = Constraint::Eq(type_index, expected_index, category_index, region);
+        let equal = Constraint::Eq(Eq(type_index, expected_index, category_index, region));
 
         let storage_type_index = Self::push_type_variable(storage_var);
         let storage_category = Category::Storage(std::file!(), std::line!());
         let storage_category_index = Self::push_category(self, storage_category);
-        let storage = Constraint::Eq(
+        let storage = Constraint::Eq(Eq(
             storage_type_index,
             expected_index,
             storage_category_index,
             region,
-        );
+        ));
 
         self.and_constraint([equal, storage])
     }
@@ -544,11 +558,6 @@ impl Constraints {
 
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         match constraint {
-            Constraint::Eq(..) => false,
-            Constraint::Store(..) => false,
-            Constraint::Lookup(..) => false,
-            Constraint::Pattern(..) => false,
-            Constraint::True => false,
             Constraint::SaveTheEnvironment => true,
             Constraint::Let(index, _) => {
                 let let_constraint = &self.let_constraints[index.index()];
@@ -567,9 +576,17 @@ impl Constraints {
                     .iter()
                     .any(|c| self.contains_save_the_environment(c))
             }
-            Constraint::IsOpenType(_) => false,
-            Constraint::IncludesTag(_) => false,
-            Constraint::PatternPresence(_, _, _, _) => false,
+            Constraint::Eq(..)
+            | Constraint::Store(..)
+            | Constraint::Lookup(..)
+            | Constraint::Pattern(..)
+            | Constraint::True
+            | Constraint::IsOpenType(_)
+            | Constraint::IncludesTag(_)
+            | Constraint::PatternPresence(_, _, _, _)
+            | Constraint::Exhaustive { .. }
+            | Constraint::Resolve(..)
+            | Constraint::CheckCycle(..) => false,
         }
     }
 
@@ -597,18 +614,116 @@ impl Constraints {
 
         Constraint::Store(type_index, variable, string_index, line_number)
     }
+
+    pub fn exhaustive(
+        &mut self,
+        real_var: Variable,
+        real_region: Region,
+        category_and_expectation: Result<
+            (Category, Expected<Type>),
+            (PatternCategory, PExpected<Type>),
+        >,
+        sketched_rows: SketchedRows,
+        context: ExhaustiveContext,
+        exhaustive: ExhaustiveMark,
+    ) -> Constraint {
+        let real_var = Self::push_type_variable(real_var);
+        let sketched_rows = Index::push_new(&mut self.sketched_rows, sketched_rows);
+
+        let equality = match category_and_expectation {
+            Ok((category, expected)) => {
+                let category = Index::push_new(&mut self.categories, category);
+                let expected = Index::push_new(&mut self.expectations, expected);
+                let equality = Eq(real_var, expected, category, real_region);
+                let equality = Index::push_new(&mut self.eq, equality);
+                Ok(equality)
+            }
+            Err((category, expected)) => {
+                let category = Index::push_new(&mut self.pattern_categories, category);
+                let expected = Index::push_new(&mut self.pattern_expectations, expected);
+                let equality = PatternEq(real_var, expected, category, real_region);
+                let equality = Index::push_new(&mut self.pattern_eq, equality);
+                Err(equality)
+            }
+        };
+
+        Constraint::Exhaustive(equality, sketched_rows, context, exhaustive)
+    }
+
+    pub fn check_cycle<I, I1>(
+        &mut self,
+        loc_symbols: I,
+        expr_regions: I1,
+        cycle_mark: IllegalCycleMark,
+    ) -> Constraint
+    where
+        I: IntoIterator<Item = (Symbol, Region)>,
+        I1: IntoIterator<Item = Region>,
+    {
+        let def_names = Slice::extend_new(&mut self.loc_symbols, loc_symbols);
+
+        // we add a dummy symbol to these regions, so we can store the data in the loc_symbols vec
+        let it = expr_regions.into_iter().map(|r| (Symbol::ATTR_ATTR, r));
+        let expr_regions = Slice::extend_new(&mut self.loc_symbols, it);
+        let expr_regions = Slice::new(expr_regions.start() as _, expr_regions.len() as _);
+
+        let cycle = Cycle {
+            def_names,
+            expr_regions,
+        };
+        let cycle_index = Index::push_new(&mut self.cycles, cycle);
+
+        Constraint::CheckCycle(cycle_index, cycle_mark)
+    }
 }
 
 roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Constraint, 3 * 8);
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, Debug)]
+pub struct Eq(
+    pub EitherIndex<Type, Variable>,
+    pub Index<Expected<Type>>,
+    pub Index<Category>,
+    pub Region,
+);
+
+#[derive(Clone, Copy, Debug)]
+pub struct PatternEq(
+    pub EitherIndex<Type, Variable>,
+    pub Index<PExpected<Type>>,
+    pub Index<PatternCategory>,
+    pub Region,
+);
+
+/// When we come across a lookup of an ability member, we'd like to try to specialize that
+/// lookup during solving (knowing the specialization statically avoids re-solving during mono,
+/// and always gives us a way to show what specialization was intended in the editor).
+///
+/// However, we attempting to resolve the specialization right at the lookup site is futile
+/// (we may not have solved enough of the surrounding context to know the specialization).
+/// So, we only collect what resolutions we'd like to make, and attempt to resolve them once
+/// we pass through a let-binding (a def, or a normal `=` binding). At those positions, the
+/// expression is generalized, so if there is a static specialization, we'd know it at that
+/// point.
+///
+/// Note that this entirely opportunistic; if a lookup of an ability member uses it
+/// polymorphically, we won't find its specialization(s) until monomorphization.
+#[derive(Clone, Copy, Debug)]
+pub struct OpportunisticResolve {
+    /// The specialized type of this lookup, to try to resolve.
+    pub specialization_variable: Variable,
+    pub specialization_expectation: Index<Expected<Type>>,
+
+    /// The ability member to try to resolve.
+    pub member: Symbol,
+    /// If we resolve a specialization, what specialization ID to store it on.
+    pub specialization_id: SpecializationId,
+}
+
+#[derive(Clone, Copy)]
 pub enum Constraint {
-    Eq(
-        EitherIndex<Type, Variable>,
-        Index<Expected<Type>>,
-        Index<Category>,
-        Region,
-    ),
+    Eq(Eq),
     Store(
         EitherIndex<Type, Variable>,
         Variable,
@@ -641,15 +756,24 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
+    Exhaustive(
+        Result<Index<Eq>, Index<PatternEq>>,
+        Index<SketchedRows>,
+        ExhaustiveContext,
+        ExhaustiveMark,
+    ),
+    /// Attempt to resolve a specialization.
+    Resolve(OpportunisticResolve),
+    CheckCycle(Index<Cycle>, IllegalCycleMark),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct DefTypes {
     pub types: Slice<Type>,
     pub loc_symbols: Slice<(Symbol, Region)>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct LetConstraint {
     pub rigid_vars: Slice<Variable>,
     pub flex_vars: Slice<Variable>,
@@ -657,7 +781,7 @@ pub struct LetConstraint {
     pub defs_and_ret_constraint: Index<(Constraint, Constraint)>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct IncludesTag {
     pub type_index: Index<Type>,
     pub tag_name: TagName,
@@ -666,11 +790,17 @@ pub struct IncludesTag {
     pub region: Region,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Cycle {
+    pub def_names: Slice<(Symbol, Region)>,
+    pub expr_regions: Slice<Region>,
+}
+
 /// Custom impl to limit vertical space used by the debug output
 impl std::fmt::Debug for Constraint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Eq(arg0, arg1, arg2, arg3) => {
+            Self::Eq(Eq(arg0, arg1, arg2, arg3)) => {
                 write!(f, "Eq({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
             }
             Self::Store(arg0, arg1, arg2, arg3) => {
@@ -694,6 +824,19 @@ impl std::fmt::Debug for Constraint {
                     "PatternPresence({:?}, {:?}, {:?}, {:?})",
                     arg0, arg1, arg2, arg3
                 )
+            }
+            Self::Exhaustive(arg0, arg1, arg2, arg3) => {
+                write!(
+                    f,
+                    "Exhaustive({:?}, {:?}, {:?}, {:?})",
+                    arg0, arg1, arg2, arg3
+                )
+            }
+            Self::Resolve(arg0) => {
+                write!(f, "Resolve({:?})", arg0)
+            }
+            Self::CheckCycle(arg0, arg1) => {
+                write!(f, "CheckCycle({:?}, {:?})", arg0, arg1)
             }
         }
     }

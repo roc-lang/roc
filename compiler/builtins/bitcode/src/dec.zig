@@ -139,7 +139,7 @@ pub const RocDec = extern struct {
 
         // Format the backing i128 into an array of digit (ascii) characters (u8s)
         var digit_bytes_storage: [max_digits + 1]u8 = undefined;
-        var num_digits = std.fmt.formatIntBuf(digit_bytes_storage[0..], num, 10, false, .{});
+        var num_digits = std.fmt.formatIntBuf(digit_bytes_storage[0..], num, 10, .lower, .{});
         var digit_bytes: [*]u8 = digit_bytes_storage[0..];
 
         // space where we assemble all the characters that make up the final string
@@ -310,9 +310,7 @@ pub const RocDec = extern struct {
 
         // (n / 0) is an error
         if (denominator_i128 == 0) {
-            // The compiler frontend does the `denominator == 0` check for us,
-            // therefore this case is unreachable from roc user code
-            unreachable;
+            @panic("TODO runtime exception for dividing by 0!");
         }
 
         // If they're both negative, or if neither is negative, the final answer

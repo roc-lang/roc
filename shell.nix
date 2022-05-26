@@ -2,8 +2,13 @@
 
 let
   sources = import nix/sources.nix { };
-  pkgs = import sources.nixpkgs { };
-  unstable-pkgs = import sources.nixpkgs-unstable { };
+  rust_overlay = import (builtins.fetchTarball "https://github.com/oxalica/rust-overlay/archive/master.tar.gz");
+  pkgs = import sources.nixpkgs {
+    overlays = [ rust_overlay ];
+  };
+  rust_toolchain = (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml);
+  
+  #unstable-pkgs = import sources.nixpkgs-unstable { };
 
   darwinInputs = with pkgs;
     lib.optionals stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks; [
@@ -31,7 +36,7 @@ let
       alsa-lib
     ];
 
-  llvmPkgs = pkgs.llvmPackages_12;
+  llvmPkgs = pkgs.llvmPackages_13;
 
   zig = import ./nix/zig.nix { inherit pkgs; };
   debugir = import ./nix/debugir.nix { inherit pkgs; };
@@ -65,15 +70,15 @@ let
 
     # tools for development environment
     less
-  ]) ++ (with unstable-pkgs; [
-    rustup
-  ]);
+  ]) ++ [
+    rust_toolchain
+  ];
 
 in pkgs.mkShell {
   buildInputs = inputs ++ darwinInputs ++ linuxInputs;
 
   # Additional Env vars
-  LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
+  LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
   NIX_GLIBC_PATH =
     if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else "";
   LD_LIBRARY_PATH = with pkgs;

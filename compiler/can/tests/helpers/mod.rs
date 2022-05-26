@@ -7,10 +7,11 @@ use roc_can::expr::{canonicalize_expr, Expr};
 use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
-use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::{AliasVar, Type};
 use std::hash::Hash;
 
 pub fn test_home() -> ModuleId {
@@ -54,9 +55,20 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
-    let mut scope = Scope::new(home, &mut var_store);
+    let mut scope = Scope::new(home, IdentIds::default(), Default::default());
+    scope.add_alias(
+        Symbol::NUM_INT,
+        Region::zero(),
+        vec![Loc::at_zero(AliasVar::unbound(
+            "a".into(),
+            Variable::EMPTY_RECORD,
+        ))],
+        Type::EmptyRec,
+        roc_types::types::AliasKind::Structural,
+    );
+
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(home, &dep_idents, &module_ids, IdentIds::default());
+    let mut env = Env::new(home, &dep_idents, &module_ids);
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,
@@ -65,15 +77,8 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         &loc_expr.value,
     );
 
-    let mut all_ident_ids = MutMap::default();
-
-    // When pretty printing types, we may need the exposed builtins,
-    // so include them in the Interns we'll ultimately return.
-    for (module_id, ident_ids) in IdentIds::exposed_builtins(0) {
-        all_ident_ids.insert(module_id, ident_ids);
-    }
-
-    all_ident_ids.insert(home, env.ident_ids);
+    let mut all_ident_ids = IdentIds::exposed_builtins(1);
+    all_ident_ids.insert(home, scope.locals.ident_ids);
 
     let interns = Interns {
         module_ids: env.module_ids.clone(),

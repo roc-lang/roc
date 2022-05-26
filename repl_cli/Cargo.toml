@@ -15,7 +15,7 @@ target-x86_64 = ["roc_build/target-x86_64"]
 
 [dependencies]
 bumpalo = {version = "3.8.0", features = ["collections"]}
-const_format = "0.2.22"
+const_format = { version = "0.2.23", features = ["const_generics"] }
 inkwell = {path = "../vendor/inkwell"}
 libloading = "0.7.1"
 rustyline = {git = "https://github.com/rtfeldman/rustyline", rev = "e74333c"}
@@ -23,7 +23,7 @@ rustyline-derive = {git = "https://github.com/rtfeldman/rustyline", rev = "e7433
 target-lexicon = "0.12.2"
 
 # TODO: make llvm optional
-roc_build = {path = "../compiler/build", features = ["llvm"]}
+roc_build = {path = "../compiler/build"}
 roc_builtins = {path = "../compiler/builtins"}
 roc_collections = {path = "../compiler/collections"}
 roc_gen_llvm = {path = "../compiler/gen_llvm"}
