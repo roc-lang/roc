@@ -1,8 +1,11 @@
 mod bindings;
 
+use bindings::{StrConsList, StrConsList_Cons};
+use indoc::indoc;
+
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut bindings::NonRecursive);
+    fn roc_main(_: *mut StrConsList);
 }
 
 #[no_mangle]
@@ -11,8 +14,7 @@ pub extern "C" fn rust_main() -> i32 {
     use std::collections::hash_set::HashSet;
 
     let tag_union = unsafe {
-        let mut ret: core::mem::MaybeUninit<bindings::NonRecursive> =
-            core::mem::MaybeUninit::uninit();
+        let mut ret: core::mem::MaybeUninit<StrConsList> = core::mem::MaybeUninit::uninit();
 
         roc_main(ret.as_mut_ptr());
 
@@ -27,13 +29,20 @@ pub extern "C" fn rust_main() -> i32 {
     assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
     assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
 
-    println!(
-        "tag_union was: {:?}\n`Foo \"small str\"` is: {:?}\n`Bar 123` is: {:?}\n`Baz` is: {:?}\n`Blah 456` is: {:?}",
+    print!(
+        indoc!(
+            r#"
+                tag_union was: {:?}
+                `Cons "small str" Nil` is: {:?}
+                `Nil` is: {:?}
+            "#
+        ),
         tag_union,
-        bindings::NonRecursive::Foo("small str".into()),
-        bindings::NonRecursive::Bar(123),
-        bindings::NonRecursive::Baz,
-        bindings::NonRecursive::Blah(456),
+        StrConsList::Cons(StrConsList_Cons {
+            f0: "small str".into(),
+            f1: StrConsList::Nil
+        }),
+        StrConsList::Nil,
     ); // Debug
 
     let mut set = HashSet::new();

@@ -29,5 +29,6 @@ path = "src/main.rs"
 [dependencies]
 roc_std = { path = "../../../../roc_std" }
 libc = "0.2"
+indoc = "1.0.6"
 
 [workspace]

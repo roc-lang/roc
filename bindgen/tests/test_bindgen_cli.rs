@@ -112,10 +112,14 @@ mod bindgen_cli_run {
         union_without_padding:"union-without-padding" => indoc!(r#"
             tag_union was: NonRecursive::Foo("This is a test")
             `Foo "small str"` is: NonRecursive::Foo("small str")
-            `Foo "A long enough string to not be small"` is: NonRecursive::Foo("A long enough string to not be small")
             `Bar 123` is: NonRecursive::Bar(123)
             `Baz` is: NonRecursive::Baz
             `Blah 456` is: NonRecursive::Blah(456)
+        "#),
+        nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
+            tag_union was: StrConsList::Cons(StrConsList_Cons { f0: "World!", f1: StrConsList::Cons(StrConsList_Cons { f0: "Hello ", f1: StrConsList::Nil }) })
+            `Cons "small str" Nil` is: StrConsList::Cons(StrConsList_Cons { f0: "small str", f1: StrConsList::Nil })
+            `Nil` is: StrConsList::Nil
         "#),
     }
 
