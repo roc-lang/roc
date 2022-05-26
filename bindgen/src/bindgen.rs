@@ -350,6 +350,12 @@ fn add_tag_union(
         // Sort tags alphabetically by tag name
         tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
+        let opt_recursion_id = if is_recursive_tag_union(&layout) {
+            Some(type_id)
+        } else {
+            None
+        };
+
         let mut tags: Vec<_> = tags
             .into_iter()
             .map(|(tag_name, payload_vars)| {
@@ -358,17 +364,17 @@ fn add_tag_union(
                         // no payload
                         (tag_name, None)
                     }
-                    1 => {
-                        // there's 1 payload item, so it doesn't need its own
-                        // struct - e.g. for `[Foo Str, Bar Str]` both of them
+                    1 if opt_recursion_id.is_none() => {
+                        // this isn't recursive and there's 1 payload item, so it doesn't
+                        // need its own struct - e.g. for `[Foo Str, Bar Str]` both of them
                         // can have payloads of plain old Str, no struct wrapper needed.
                         let payload_var = payload_vars.get(0).unwrap();
                         let layout = env
                             .layout_cache
-                            .from_var(env.arena, var, env.subs)
+                            .from_var(env.arena, *payload_var, env.subs)
                             .expect("Something weird ended up in the content");
                         let payload_id =
-                            add_type_help(env, layout, *payload_var, None, types, Some(type_id));
+                            add_type_help(env, layout, *payload_var, None, types, opt_recursion_id);
 
                         (tag_name, Some(payload_id))
                     }
@@ -378,7 +384,8 @@ fn add_tag_union(
                         let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
                             (format!("f{}", index).into(), *payload_var)
                         });
-                        let struct_id = add_struct(env, struct_name, fields, types, Some(type_id));
+                        let struct_id =
+                            add_struct(env, struct_name, fields, types, opt_recursion_id);
 
                         (tag_name, Some(struct_id))
                     }
@@ -473,6 +480,21 @@ fn add_tag_union(
         types.replace(type_id, typ);
 
         type_id
+    }
+}
+
+fn is_recursive_tag_union(layout: &Layout) -> bool {
+    use roc_mono::layout::UnionLayout::*;
+
+    match layout {
+        Layout::Union(tag_union) => match tag_union {
+            NonRecursive(_) => false,
+            Recursive(_)
+            | NonNullableUnwrapped(_)
+            | NullableWrapped { .. }
+            | NullableUnwrapped { .. } => true,
+        },
+        _ => false,
     }
 }
 
