@@ -1093,7 +1093,7 @@ pub struct {name} {{
 
         let payload = {assign_payload};
 
-        core::mem::drop(self);
+        core::mem::drop::<Self>(self);
 
         payload
     }}"#,
@@ -1194,32 +1194,33 @@ pub struct {name} {{
             impls,
             opt_impl,
             architecture,
-            r#"fn drop(&mut self) {
-        if let Some(storage) = self.storage() {
+            format!(
+                r#"fn drop(&mut self) {{
+        if let Some(storage) = self.storage() {{
             // Decrement the refcount and return early if no dealloc is needed
-            {
+            {{
                 let mut new_storage = storage.get();
 
-                if new_storage.is_readonly() {
+                if new_storage.is_readonly() {{
                     return;
-                }
+                }}
 
                 let needs_dealloc = new_storage.decrease();
 
-                if !needs_dealloc {
+                if !needs_dealloc {{
                     // Write the storage back.
                     storage.set(new_storage);
 
                     return;
-                }
-            }
+                }}
+            }}
 
-            if !self.pointer.is_null() {
+            if !self.pointer.is_null() {{
                 // If there is a payload, drop it first.
-                let payload = unsafe { core::mem::ManuallyDrop::take(&mut *self.pointer) };
+               let payload = unsafe {{ core::mem::ManuallyDrop::take(&mut *self.pointer) }};
 
-                core::mem::drop(payload);
-            }
+                core::mem::drop::<{payload_type_name}>(payload);
+            }}
 
             // Dealloc the pointer
             unsafe {{
@@ -1231,9 +1232,9 @@ pub struct {name} {{
                     alignment as u32,
                 );
             }}
-        }
-    }"#
-            .to_string(),
+        }}
+    }}"#
+            ),
         );
     }
 
