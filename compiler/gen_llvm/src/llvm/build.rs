@@ -2739,6 +2739,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
         Expect {
             condition: cond,
+            region: _,
             lookups: _,
             layouts: _,
             remainder,

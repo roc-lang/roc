@@ -195,6 +195,7 @@ fn function_s<'a, 'i>(
 
         Expect {
             condition,
+            region,
             lookups,
             layouts,
             remainder,
@@ -207,6 +208,7 @@ fn function_s<'a, 'i>(
             } else {
                 let new_refcounting = Expect {
                     condition: *condition,
+                    region: *region,
                     lookups,
                     layouts,
                     remainder: new_continuation,
@@ -415,6 +417,7 @@ fn function_d_main<'a, 'i>(
 
         Expect {
             condition,
+            region,
             lookups,
             layouts,
             remainder,
@@ -424,6 +427,7 @@ fn function_d_main<'a, 'i>(
             if found || *condition != x {
                 let refcounting = Expect {
                     condition: *condition,
+                    region: *region,
                     lookups,
                     layouts,
                     remainder: b,
@@ -435,6 +439,7 @@ fn function_d_main<'a, 'i>(
 
                 let refcounting = Expect {
                     condition: *condition,
+                    region: *region,
                     lookups,
                     layouts,
                     remainder: b,
@@ -597,6 +602,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
 
         Expect {
             condition,
+            region,
             lookups,
             layouts,
             remainder,
@@ -605,6 +611,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
 
             let expect = Expect {
                 condition: *condition,
+                region: *region,
                 lookups,
                 layouts,
                 remainder: b,

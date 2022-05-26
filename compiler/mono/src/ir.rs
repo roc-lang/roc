@@ -1328,6 +1328,7 @@ pub enum Stmt<'a> {
     Refcounting(ModifyRc, &'a Stmt<'a>),
     Expect {
         condition: Symbol,
+        region: Region,
         lookups: &'a [Symbol],
         layouts: &'a [Layout<'a>],
         /// what happens after the expect
@@ -5959,6 +5960,7 @@ pub fn from_can<'a>(
 
             let mut stmt = Stmt::Expect {
                 condition: cond_symbol,
+                region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
                 layouts: layouts.into_bump_slice(),
                 remainder: env.arena.alloc(rest),
@@ -6317,6 +6319,7 @@ fn substitute_in_stmt_help<'a>(
 
         Expect {
             condition,
+            region,
             lookups,
             layouts,
             remainder,
@@ -6325,6 +6328,7 @@ fn substitute_in_stmt_help<'a>(
             match substitute_in_stmt_help(arena, remainder, subs) {
                 Some(cont) => Some(arena.alloc(Expect {
                     condition: *condition,
+                    region: *region,
                     lookups,
                     layouts,
                     remainder: cont,
