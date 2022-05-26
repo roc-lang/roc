@@ -124,8 +124,8 @@ impl<'a> WasmModule<'a> {
         let data = DataSection::parse(arena, bytes, &mut cursor)?;
 
         let linking = LinkingSection::new(arena);
-        let reloc_code = RelocationSection::new(arena, "reloc.CODE");
-        let reloc_data = RelocationSection::new(arena, "reloc.DATA");
+        let reloc_code = RelocationSection::parse((arena, "reloc.CODE"), bytes, &mut cursor)?;
+        let reloc_data = RelocationSection::parse((arena, "reloc.DATA"), bytes, &mut cursor)?;
         let names = NameSection::parse(arena, bytes, &mut cursor)?;
 
         // WebAssembly spec doesn't guarantee the order of the remaining "custom" sections.

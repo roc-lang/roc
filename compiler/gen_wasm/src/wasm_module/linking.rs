@@ -1,10 +1,11 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-use super::sections::{update_section_size, write_custom_section_header};
+use super::parse::parse_fixed_size_items;
+use super::sections::{update_section_size, write_custom_section_header, SectionId};
 use super::serialize::{SerialBuffer, Serialize};
 use super::Align;
-use crate::wasm_module::{Parse, ParseError};
+use crate::wasm_module::parse::{Parse, ParseError, SkipBytes};
 
 /*******************************************************************
  *
@@ -178,35 +179,53 @@ impl Parse<()> for RelocationEntry {
 pub struct RelocationSection<'a> {
     pub name: &'a str,
     /// The *index* (not ID!) of the target section in the module
-    pub target_section_index: Option<u32>,
+    pub target_section_index: u32,
     pub entries: Vec<'a, RelocationEntry>,
-}
-
-impl<'a> RelocationSection<'a> {
-    pub fn new(arena: &'a Bump, name: &'a str) -> Self {
-        RelocationSection {
-            name,
-            target_section_index: None,
-            entries: Vec::with_capacity_in(64, arena),
-        }
-    }
 }
 
 impl<'a> Serialize for RelocationSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         if !self.entries.is_empty() {
             let header_indices = write_custom_section_header(buffer, self.name);
-            buffer.encode_u32(self.target_section_index.unwrap());
+            buffer.encode_u32(self.target_section_index);
             self.entries.serialize(buffer);
             update_section_size(buffer, header_indices);
         }
     }
 }
 
-impl<'a> Parse<&'a Bump> for RelocationSection<'a> {
-    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        let name = <&'a str>::parse(arena, bytes, cursor)?;
-        todo!()
+type RelocCtx<'a> = (&'a Bump, &'static str);
+
+impl<'a> Parse<RelocCtx<'a>> for RelocationSection<'a> {
+    fn parse(ctx: RelocCtx<'a>, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (arena, name) = ctx;
+
+        if *cursor > bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
+            return Ok(RelocationSection {
+                name,
+                target_section_index: 0,
+                entries: bumpalo::vec![in arena],
+            });
+        }
+        *cursor += 1;
+        u32::skip_bytes(bytes, cursor)?; // section body size
+
+        let actual_name = <&'a str>::parse(arena, bytes, cursor)?;
+        if actual_name != name {
+            return Ok(RelocationSection {
+                name,
+                target_section_index: 0,
+                entries: bumpalo::vec![in arena],
+            })
+        }
+
+        let target_section_index = u32::parse((), bytes, cursor)?;
+        let entries = parse_fixed_size_items(arena, bytes, cursor)?;
+        Ok(RelocationSection {
+            name,
+            target_section_index,
+            entries,
+        })
     }
 }
 
