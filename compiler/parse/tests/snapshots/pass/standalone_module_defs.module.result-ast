@@ -12,12 +12,12 @@ Defs {
     space_before: [
         Slice(start = 0, length = 1),
         Slice(start = 1, length = 3),
-        Slice(start = 6, length = 1),
+        Slice(start = 4, length = 1),
     ],
     space_after: [
-        Slice(start = 0, length = 0),
-        Slice(start = 0, length = 0),
-        Slice(start = 4, length = 2),
+        Slice(start = 1, length = 0),
+        Slice(start = 4, length = 0),
+        Slice(start = 5, length = 2),
     ],
     spaces: [
         LineComment(
@@ -29,10 +29,10 @@ Defs {
             " comment 2",
         ),
         Newline,
+        Newline,
         LineComment(
             " comment n",
         ),
-        Newline,
     ],
     type_defs: [],
     value_defs: [
