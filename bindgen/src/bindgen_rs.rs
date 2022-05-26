@@ -980,15 +980,6 @@ fn add_nullable_unwrapped(
     let payload_type = types.get(non_null_payload);
     let payload_type_name = type_name(non_null_payload, types);
     let has_pointer = payload_type.has_pointer(types);
-    let (wrapped_payload_type_name, init_payload, ref_if_needed) = if has_pointer {
-        (
-            format!("core::mem::ManuallyDrop<{payload_type_name}>"),
-            "core::mem::ManuallyDrop::new(payload)",
-            "&",
-        )
-    } else {
-        (payload_type_name.clone(), "payload", "")
-    };
 
     // The opaque struct for the tag union
     {
@@ -1003,7 +994,7 @@ fn add_nullable_unwrapped(
             r#"#[repr(C)]
 #[derive(PartialEq, PartialOrd{derive_extras})]
 pub struct {name} {{
-    pointer: *mut {wrapped_payload_type_name},
+    pointer: *mut core::mem::ManuallyDrop<{payload_type_name}>,
 }}"#
         );
 
@@ -1079,9 +1070,9 @@ pub struct {name} {{
             // Store the payload at `self_align` bytes after the allocation,
             // to leave room for the refcount.
             let alloc_ptr = crate::roc_alloc(size, payload_align as u32);
-            let payload_ptr = alloc_ptr.cast::<u8>().add(self_align).cast::<{wrapped_payload_type_name}>();
+            let payload_ptr = alloc_ptr.cast::<u8>().add(self_align).cast::<core::mem::ManuallyDrop<{payload_type_name}>>();
 
-            *payload_ptr = {init_payload};
+            *payload_ptr = core::mem::ManuallyDrop::new(payload);
 
             // The reference count is stored immediately before the payload,
             // which isn't necessarily the same as alloc_ptr - e.g. when alloc_ptr
@@ -1131,9 +1122,9 @@ pub struct {name} {{
                 r#"/// Unsafely assume the given {name} has a .variant() of {non_null_tag} and return its payload.
     /// (Always examine .variant() first to make sure this is the correct variant!)
     /// Panics in debug builds if the .variant() doesn't return {non_null_tag}.
-    pub unsafe fn as_{non_null_tag}(&self) -> {ref_if_needed}{payload_type_name} {{
+    pub unsafe fn as_{non_null_tag}(&self) -> &{payload_type_name} {{
         debug_assert_eq!(self.variant(), {discriminant_name}::{non_null_tag});
-        {ref_if_needed}*self.pointer
+        &*self.pointer
     }}"#,
             ),
         );
