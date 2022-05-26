@@ -1183,36 +1183,15 @@ pub struct {name} {{
             ),
         );
 
-        let mut drop_payload_fields = String::new();
-
-        if let RocType::Struct { fields, .. } = &payload_type {
-            for field in fields {
-                match field {
-                    Field::NonRecursive(label, type_id) => {
-                        // Only drop fields that actually need dropping
-                        if types.get(*type_id).has_pointer(types) {
-                            drop_payload_fields.push_str(&format!(
-                            "core::mem::drop(core::mem::ManuallyDrop::take(&mut payload.{label}));"
-                        ));
-                        }
-                    }
-                    Field::Recursive(_, _) => {
-                        // Never drop the recursive pointer. If this is getting run,
-                        // it's because we're already in the process of freeing that pointer!
-                    }
-                }
-            }
-        }
-
         add_decl(
             impls,
             opt_impl,
             architecture,
             format!(
                 r#"unsafe fn decrement(wrapper_ptr: *const Self) {{
-        let wrapper = *wrapper_ptr;
+        let wrapper = &*wrapper_ptr;
 
-        if let Some(storage) = Self::storage(&wrapper) {{
+        if let Some(storage) = Self::storage(wrapper) {{
             // Decrement the refcount and return early if no dealloc is needed
             {{
                 let mut new_storage = storage.get();
@@ -1232,10 +1211,10 @@ pub struct {name} {{
             }}
 
             if !wrapper.pointer.is_null() {{
-                // Drop all the payload fields except the recursive one.
+                // If there is a payload, recursively drop it first.
                 let mut payload = core::mem::ManuallyDrop::take(&mut *wrapper.pointer);
 
-                {drop_payload_fields}
+                core::mem::drop(payload);
             }}
 
             // Dealloc the pointer
