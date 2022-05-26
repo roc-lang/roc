@@ -179,7 +179,7 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
         | RocType::RocBox(_) => {}
         RocType::TransparentWrapper { name, content } => {
             let typ = types.get(id);
-            let derive = derive_str(typ, types, typ.has_enumeration(types));
+            let derive = derive_str(typ, types, !typ.has_enumeration(types));
             let body = format!(
                 "{derive}\n#[repr(transparent)]\npub struct {name}({});",
                 type_name(*content, types)
