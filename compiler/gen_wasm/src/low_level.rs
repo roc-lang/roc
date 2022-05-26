@@ -802,7 +802,6 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 backend.code_builder.i32_eqz();
             }
-            ExpectTrue | RocReport => todo!("{:?}", self.lowlevel),
             RefCountInc => self.load_args_and_call_zig(backend, bitcode::UTILS_INCREF),
             RefCountDec => self.load_args_and_call_zig(backend, bitcode::UTILS_DECREF),
 

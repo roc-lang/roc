@@ -975,8 +975,6 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         SetFromList => arena.alloc_slice_copy(&[owned]),
         SetToDict => arena.alloc_slice_copy(&[owned]),
 
-        ExpectTrue | RocReport => arena.alloc_slice_copy(&[irrelevant]),
-
         ListIsUnique => arena.alloc_slice_copy(&[borrowed]),
 
         BoxExpr | UnboxExpr => {

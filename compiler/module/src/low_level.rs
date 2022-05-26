@@ -123,13 +123,11 @@ pub enum LowLevel {
     Or,
     Not,
     Hash,
-    ExpectTrue,
     PtrCast,
     RefCountInc,
     RefCountDec,
     BoxExpr,
     UnboxExpr,
-    RocReport,
 }
 
 macro_rules! higher_order {

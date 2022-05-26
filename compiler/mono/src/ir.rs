@@ -1326,11 +1326,11 @@ pub enum Stmt<'a> {
     },
     Ret(Symbol),
     Refcounting(ModifyRc, &'a Stmt<'a>),
-    Expect { 
+    Expect {
         condition: Symbol,
-        lookups: &'a [Symbol], 
+        lookups: &'a [Symbol],
         layouts: &'a [Layout<'a>],
-        /// what happens after the expect 
+        /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
     /// a join point `join f <params> = <continuation> in remainder`
@@ -1919,8 +1919,8 @@ impl<'a> Stmt<'a> {
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
 
-            Expect{condition, .. }  => 
-                alloc.text("expect ")
+            Expect { condition, .. } => alloc
+                .text("expect ")
                 .append(symbol_to_doc(alloc, *condition)),
 
             Ret(symbol) => alloc
@@ -5948,12 +5948,19 @@ pub fn from_can<'a>(
             let cond_symbol = env.unique_symbol();
 
             let lookups = Vec::from_iter_in(lookups_in_cond.iter().map(|t| t.0), env.arena);
-            // let layouts = Vec::from_iter_in(lookups_in_cond.iter().map(|t| t.1), env.arena);
+
+            let mut layouts = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+
+            for (_, var) in lookups_in_cond {
+                let res_layout = layout_cache.from_var(env.arena, var, env.subs);
+                let layout = return_on_layout_error!(env, res_layout);
+                layouts.push(layout);
+            }
 
             let mut stmt = Stmt::Expect {
                 condition: cond_symbol,
                 lookups: lookups.into_bump_slice(),
-                layouts: &[],
+                layouts: layouts.into_bump_slice(),
                 remainder: env.arena.alloc(rest),
             };
 
@@ -6308,10 +6315,20 @@ fn substitute_in_stmt_help<'a>(
             }
         }
 
-        Expect { condition, lookups, layouts, remainder } => {  
+        Expect {
+            condition,
+            lookups,
+            layouts,
+            remainder,
+        } => {
             // TODO should we substitute in the ModifyRc?
             match substitute_in_stmt_help(arena, remainder, subs) {
-                Some(cont) => Some(arena.alloc(Expect { condition: *condition , lookups, layouts, remainder: cont} )),
+                Some(cont) => Some(arena.alloc(Expect {
+                    condition: *condition,
+                    lookups,
+                    layouts,
+                    remainder: cont,
+                })),
                 None => None,
             }
         }
