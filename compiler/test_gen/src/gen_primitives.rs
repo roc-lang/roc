@@ -2541,23 +2541,6 @@ fn call_invalid_layout() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = "Failed with 1 failures. Failures: ")]
-fn expect_fail() {
-    assert_expect_failed!(
-        indoc!(
-            r#"
-            expect 1 == 2
-
-            3
-            "#
-        ),
-        3,
-        i64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm"))]
 fn increment_or_double_closure() {
     assert_evals_to!(
         indoc!(
