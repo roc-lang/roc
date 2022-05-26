@@ -85,8 +85,6 @@ pub fn expectFailedStart() callconv(.C) [*]u8 {
 
     const shared_fd = shm_open(@ptrCast(*const i8, name), O_RDWR | O_CREAT, 0o666);
 
-    // TODO ftruncate?
-
     const shared_ptr = mmap(
         null,
         4096,

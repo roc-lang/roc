@@ -140,6 +140,7 @@ struct ModuleCache<'a> {
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
+    expectations: VecMap<ModuleId, Expectations>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
@@ -186,6 +187,7 @@ impl Default for ModuleCache<'_> {
             can_problems: Default::default(),
             type_problems: Default::default(),
             sources: Default::default(),
+            expectations: Default::default(),
         }
     }
 }
@@ -580,6 +582,14 @@ pub struct MonomorphizedModule<'a> {
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
+    pub expectations: VecMap<ModuleId, Expectations>,
+}
+
+#[derive(Debug)]
+pub struct Expectations {
+    pub subs: roc_types::subs::Subs,
+    pub path: PathBuf,
+    pub expectations: VecMap<Region, Vec<(Symbol, Variable)>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -639,6 +649,7 @@ enum Msg<'a> {
         dep_idents: IdentIdsByModule,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
+        expectations: VecMap<Region, Vec<(Symbol, Variable)>>,
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
@@ -2071,6 +2082,7 @@ fn update<'a>(
             dep_idents,
             mut module_timing,
             abilities_store,
+            expectations,
         } => {
             log!("solved types for {:?}", module_id);
             module_timing.end_time = SystemTime::now();
@@ -2079,6 +2091,21 @@ fn update<'a>(
                 .module_cache
                 .type_problems
                 .insert(module_id, solved_module.problems);
+
+            if !expectations.is_empty() {
+                let (path, _) = state.module_cache.sources.get(&module_id).unwrap();
+
+                let expectations = Expectations {
+                    expectations,
+                    subs: solved_subs.clone().into_inner(),
+                    path: path.to_owned(),
+                };
+
+                state
+                    .module_cache
+                    .expectations
+                    .insert(module_id, expectations);
+            }
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
@@ -2391,6 +2418,7 @@ fn finish_specialization(
         type_problems,
         can_problems,
         sources,
+        expectations,
         ..
     } = module_cache;
 
@@ -2461,6 +2489,7 @@ fn finish_specialization(
         entry_point,
         sources,
         timings: state.timings,
+        expectations,
     })
 }
 
@@ -3717,7 +3746,7 @@ fn run_solve_solve(
 
 #[allow(clippy::too_many_arguments)]
 fn run_solve<'a>(
-    module: Module,
+    mut module: Module,
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
     imported_builtins: Vec<Symbol>,
@@ -3736,6 +3765,8 @@ fn run_solve<'a>(
 
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
+
+    let expectations = std::mem::take(&mut module.expectations);
 
     let (solved_subs, solved_specializations, exposed_vars_by_symbol, problems, abilities_store) = {
         if module_id.is_builtin() {
@@ -3801,6 +3832,7 @@ fn run_solve<'a>(
         solved_module,
         module_timing,
         abilities_store,
+        expectations,
     }
 }
 
@@ -3989,6 +4021,7 @@ fn canonicalize_and_constrain<'a>(
         aliases,
         rigid_variables: module_output.rigid_variables,
         abilities_store: module_output.scope.abilities_store,
+        expectations: module_output.expectations,
     };
 
     let constrained_module = ConstrainedModule {

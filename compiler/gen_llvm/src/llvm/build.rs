@@ -2738,8 +2738,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         }
 
         Expect {
-            condition: cond,
-            region: _,
+            condition: cond_symbol,
+            region,
             lookups,
             layouts: _,
             remainder,
@@ -2749,7 +2749,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let bd = env.builder;
             let context = env.context;
 
-            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond);
+            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
 
             let condition = bd.build_int_compare(
                 IntPredicate::EQ,
@@ -2780,6 +2780,68 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             .left()
                             .unwrap()
                             .into_pointer_value();
+
+                        {
+                            let value = env.context.i32_type().const_int(region.start().offset as _, false);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            env.builder.build_store(cast_ptr, value);
+
+                            // let increment = layout.stack_size(env.target_info);
+                            let increment = 4;
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
+
+                        {
+                            let value = env.context.i32_type().const_int(region.end().offset as _, false);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            env.builder.build_store(cast_ptr, value);
+
+                            // let increment = layout.stack_size(env.target_info);
+                            let increment = 4;
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
+
+                        {
+                            let region_bytes: u32 =
+                                unsafe { std::mem::transmute(cond_symbol.module_id()) };
+                            let value = env.context.i32_type().const_int(region_bytes as _, false);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            env.builder.build_store(cast_ptr, value);
+
+                            // let increment = layout.stack_size(env.target_info);
+                            let increment = 4;
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
 
                         for lookup in lookups.iter() {
                             let (value, _layout) = load_symbol_and_layout(scope, lookup);

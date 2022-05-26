@@ -8,7 +8,7 @@ use crate::operator::desugar_def;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
-use roc_collections::{MutMap, SendMap, VecSet};
+use roc_collections::{MutMap, SendMap, VecMap, VecSet};
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
@@ -31,6 +31,7 @@ pub struct Module {
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
     pub abilities_store: AbilitiesStore,
+    pub expectations: VecMap<Region, Vec<(Symbol, Variable)>>,
 }
 
 #[derive(Debug, Default)]
@@ -53,6 +54,7 @@ pub struct ModuleOutput {
     pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     pub pending_derives: PendingDerives,
     pub scope: Scope,
+    pub expectations: VecMap<Region, Vec<(Symbol, Variable)>>,
 }
 
 fn validate_generate_with<'a>(
@@ -350,6 +352,8 @@ pub fn canonicalize_module_defs<'a>(
     // symbols from this set
     let mut exposed_but_not_defined = exposed_symbols.clone();
 
+    let expectations = output.expectations;
+
     let new_output = Output {
         aliases: output.aliases,
         ..Default::default()
@@ -598,6 +602,7 @@ pub fn canonicalize_module_defs<'a>(
         symbols_from_requires,
         pending_derives,
         lookups,
+        expectations,
     }
 }
 

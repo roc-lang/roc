@@ -51,6 +51,7 @@ roc_builtins = { path = "../compiler/builtins" }
 roc_mono = { path = "../compiler/mono" }
 roc_load = { path = "../compiler/load" }
 roc_build = { path = "../compiler/build" }
+roc_types = { path = "../compiler/types" }
 roc_fmt = { path = "../compiler/fmt" }
 roc_target = { path = "../compiler/roc_target" }
 roc_reporting = { path = "../reporting" }
@@ -65,6 +66,7 @@ mimalloc = { version = "0.1.26", default-features = false }
 libc = "0.2.106"
 errno = "0.2.8"
 signal-hook = "0.3.14"
+ven_pretty = { path = "../vendor/pretty" }
 
 target-lexicon = "0.12.3"
 tempfile = "3.2.0"

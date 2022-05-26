@@ -34,6 +34,7 @@ pub struct Output {
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
+    pub expectations: VecMap<Region, Vec<(Symbol, Variable)>>,
     pub pending_derives: PendingDerives,
 }
 
@@ -49,6 +50,7 @@ impl Output {
             .union_owned(other.introduced_variables);
         self.aliases.extend(other.aliases);
         self.non_closures.extend(other.non_closures);
+        self.expectations.extend(other.expectations);
 
         {
             let expected_derives_size = self.pending_derives.len() + other.pending_derives.len();
@@ -846,8 +848,6 @@ pub fn canonicalize_expr<'a>(
             (RuntimeError(problem), Output::default())
         }
         ast::Expr::Expect(condition, continuation) => {
-            let mut output = Output::default();
-
             let (loc_condition, output1) =
                 canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
 
@@ -863,8 +863,12 @@ pub fn canonicalize_expr<'a>(
                 &continuation.value,
             );
 
-            output.union(output1);
+            let mut output = output1;
             output.union(output2);
+
+            output
+                .expectations
+                .insert(loc_condition.region, lookups_in_cond.clone());
 
             (
                 Expect {

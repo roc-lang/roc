@@ -4,8 +4,11 @@ use roc_build::{
     program::{self, Problems},
 };
 use roc_builtins::bitcode;
-use roc_load::{LoadingProblem, Threading};
+use roc_collections::VecMap;
+use roc_load::{Expectations, LoadingProblem, Threading};
+use roc_module::symbol::ModuleId;
 use roc_mono::ir::OptLevel;
+use roc_region::all::Region;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
 use std::time::{Duration, SystemTime};
@@ -25,6 +28,7 @@ pub struct BuiltFile {
     pub binary_path: PathBuf,
     pub problems: Problems,
     pub total_time: Duration,
+    pub expectations: VecMap<ModuleId, Expectations>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -48,7 +52,7 @@ pub fn build_file<'a>(
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
 
-    let loaded = roc_load::load_and_monomorphize(
+    let mut loaded = roc_load::load_and_monomorphize(
         arena,
         roc_file_path.clone(),
         src_dir.as_path(),
@@ -58,6 +62,8 @@ pub fn build_file<'a>(
         RenderTarget::ColorTerminal,
         threading,
     )?;
+
+    let expectations = std::mem::take(&mut loaded.expectations);
 
     use target_lexicon::Architecture;
     let emit_wasm = matches!(target.architecture, Architecture::Wasm32);
@@ -339,6 +345,7 @@ pub fn build_file<'a>(
         binary_path,
         problems,
         total_time,
+        expectations,
     })
 }
 

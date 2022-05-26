@@ -5,9 +5,13 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command};
 use roc_build::link::{LinkType, LinkingStrategy};
+use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
-use roc_load::{LoadingProblem, Threading};
+use roc_load::{Expectations, LoadingProblem, Threading};
+use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
+use roc_region::all::Region;
+use roc_reporting::report::{Palette, Report, RocDocAllocator, RocDocBuilder};
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -370,6 +374,7 @@ pub fn build(
             binary_path,
             problems,
             total_time,
+            expectations,
         }) => {
             match config {
                 BuildOnly => {
@@ -448,7 +453,7 @@ pub fn build(
 
                     let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                    let x = roc_run(arena, triple, opt_level, args, &mut bytes);
+                    let x = roc_run(arena, triple, opt_level, args, &mut bytes, expectations);
                     std::mem::forget(bytes);
                     x
                 }
@@ -472,7 +477,7 @@ pub fn build(
 
                         let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                        let x = roc_run(arena, triple, opt_level, args, &mut bytes);
+                        let x = roc_run(arena, triple, opt_level, args, &mut bytes, expectations);
                         std::mem::forget(bytes);
                         x
                     } else {
@@ -526,6 +531,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     opt_level: OptLevel,
     args: I,
     binary_bytes: &mut [u8],
+    expectations: VecMap<ModuleId, Expectations>,
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
@@ -560,7 +566,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => roc_run_native(arena, opt_level, args, binary_bytes),
+        _ => roc_run_native(arena, opt_level, args, binary_bytes, expectations),
     }
 }
 
@@ -571,6 +577,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     opt_level: OptLevel,
     args: I,
     binary_bytes: &mut [u8],
+    expectations: VecMap<ModuleId, Expectations>,
 ) -> std::io::Result<i32> {
     use bumpalo::collections::CollectIn;
     use std::os::unix::ffi::OsStrExt;
@@ -625,7 +632,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         //            }
         //        }
 
-        roc_run_native_debug(executable, &argv, &envp)
+        roc_run_native_debug(executable, &argv, &envp, expectations)
     }
 
     Ok(1)
@@ -667,6 +674,7 @@ unsafe fn roc_run_native_debug(
     executable: ExecutableFile,
     argv: &[*const libc::c_char],
     envp: &[*const libc::c_char],
+    expectations: VecMap<ModuleId, Expectations>,
 ) {
     use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
     use std::os::unix::ffi::OsStrExt;
@@ -749,24 +757,54 @@ unsafe fn roc_run_native_debug(
                             0,
                         );
 
-                        // if bytes_read > 0 {
-                        //     // Shrink down to the number of bytes that were actually read
-                        //     buf.resize(bytes_read.try_into().unwrap(), 0);
+                        let shared_ptr: *const u8 = shared_ptr.cast();
 
-                        //     dbg!(&buf);
-                        // } else {
-                        //     // Get the current value of errno
-                        //     let e = errno::errno();
+                        let region_bytes: [u8; 8] = *(shared_ptr.cast());
+                        let region: Region = std::mem::transmute(region_bytes);
 
-                        //     // Extract the error code as an i32
-                        //     let code = e.0;
+                        let module_id_bytes: [u8; 4] = *(shared_ptr.add(8).cast());
+                        let module_id: ModuleId = std::mem::transmute(module_id_bytes);
 
-                        //     // Display a human-friendly error message
-                        //     println!("Error reading shared  memory {}: {}", code, e);
-                        // }
+                        let data = expectations.get(&module_id).unwrap();
+                        let current = data.expectations.get(&region).unwrap();
+                        let subs = &data.subs;
+                        let path = &data.path;
 
-                        let slice: &[u8] = std::slice::from_raw_parts(shared_ptr.cast(), 3);
+                        let slice: &[u8] = std::slice::from_raw_parts(shared_ptr.add(12), 3);
                         let cstr = std::ffi::CStr::from_bytes_with_nul_unchecked(slice);
+
+                        let filename = path.to_owned();
+                        let file_string = std::fs::read_to_string(path).unwrap();
+                        let src_lines: Vec<_> = file_string.lines().collect();
+
+                        let interns = Interns::default();
+                        let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+                        let line_info = roc_region::all::LineInfo::new(&file_string);
+                        let line_col_region = line_info.convert_region(region);
+
+                        use ven_pretty::DocAllocator;
+
+                        let report = Report {
+                            title: "Expect failed".into(),
+                            filename,
+                            doc: alloc.stack([
+                                alloc.text("This expectation failed"),
+                                alloc.region(line_col_region),
+                            ]),
+                            severity: roc_reporting::report::Severity::RuntimeError,
+                        };
+
+                        let mut buf = String::new();
+
+                        report.render(
+                            roc_reporting::report::RenderTarget::ColorTerminal,
+                            &mut buf,
+                            &alloc,
+                            &roc_reporting::report::DEFAULT_PALETTE,
+                        );
+
+                        println!("{}", buf);
 
                         println!("The child process said: {:?}", cstr);
                     }
