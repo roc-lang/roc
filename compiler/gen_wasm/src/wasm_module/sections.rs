@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -11,10 +11,8 @@ use super::dead_code::{
 };
 use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
-use super::serialize::{
-    parse_string_bytes, parse_u32_or_panic, SerialBuffer, Serialize, SkipBytes,
-    MAX_SIZE_ENCODED_U32,
-};
+use super::parse::{Parse, ParseError, SkipBytes};
+use super::serialize::{SerialBuffer, Serialize, MAX_SIZE_ENCODED_U32};
 use super::{CodeBuilder, ValueType};
 
 /*******************************************************************
@@ -24,7 +22,7 @@ use super::{CodeBuilder, ValueType};
  *******************************************************************/
 
 #[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum SectionId {
     Custom = 0,
     Type = 1,
@@ -43,43 +41,64 @@ pub enum SectionId {
     DataCount = 12,
 }
 
-const MAX_SIZE_SECTION_HEADER: usize = std::mem::size_of::<SectionId>() + 2 * MAX_SIZE_ENCODED_U32;
-
-pub trait Section<'a>: Sized {
-    const ID: SectionId;
-
-    fn get_bytes(&self) -> &[u8];
-    fn get_count(&self) -> u32;
-
-    fn size(&self) -> usize {
-        MAX_SIZE_SECTION_HEADER + self.get_bytes().len()
+impl Debug for SectionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Custom => write!(f, "Custom"),
+            Self::Type => write!(f, "Type"),
+            Self::Import => write!(f, "Import"),
+            Self::Function => write!(f, "Function"),
+            Self::Table => write!(f, "Table"),
+            Self::Memory => write!(f, "Memory"),
+            Self::Global => write!(f, "Global"),
+            Self::Export => write!(f, "Export"),
+            Self::Start => write!(f, "Start"),
+            Self::Element => write!(f, "Element"),
+            Self::Code => write!(f, "Code"),
+            Self::Data => write!(f, "Data"),
+            Self::DataCount => write!(f, "DataCount"),
+            #[allow(unreachable_patterns)]
+            unknown => write!(f, "<unknown section ID 0x{:2x}>", *unknown as u8),
+        }
     }
-
-    fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self;
 }
 
+const MAX_SIZE_SECTION_HEADER: usize = std::mem::size_of::<SectionId>() + 2 * MAX_SIZE_ENCODED_U32;
+
+// Trait to help serialize simple sections that we just store as bytes
+pub trait Section<'a>: Sized {
+    const ID: SectionId;
+    fn size(&self) -> usize;
+}
+
+// Boilerplate for simple sections that we just store as bytes
 macro_rules! section_impl {
     ($structname: ident, $id: expr, $from_count_and_bytes: expr) => {
         impl<'a> Section<'a> for $structname<'a> {
             const ID: SectionId = $id;
 
-            fn get_bytes(&self) -> &[u8] {
-                &self.bytes
-            }
-
-            fn get_count(&self) -> u32 {
-                self.count
-            }
-
-            fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
-                let (count, initial_bytes) = parse_section(Self::ID, module_bytes, cursor);
-                let mut bytes = Vec::with_capacity_in(initial_bytes.len() * 2, arena);
-                bytes.extend_from_slice(initial_bytes);
-                $from_count_and_bytes(count, bytes)
-            }
-
             fn size(&self) -> usize {
-                section_size(self.get_bytes())
+                MAX_SIZE_SECTION_HEADER + self.bytes.len()
+            }
+        }
+
+        impl<'a> Parse<&'a Bump> for $structname<'a> {
+            fn parse(
+                arena: &'a Bump,
+                module_bytes: &[u8],
+                cursor: &mut usize,
+            ) -> Result<Self, ParseError> {
+                let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
+                let mut bytes = Vec::<u8>::with_capacity_in(range.len() * 2, arena);
+                *cursor = range.end;
+                bytes.extend_from_slice(&module_bytes[range]);
+                Ok($from_count_and_bytes(count, bytes))
+            }
+        }
+
+        impl<'a> Serialize for $structname<'a> {
+            fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
+                serialize_bytes_section(Self::ID, self.count, &self.bytes, buffer);
             }
         }
     };
@@ -92,45 +111,50 @@ macro_rules! section_impl {
     };
 }
 
-impl<'a, Sec> Serialize for Sec
-where
-    Sec: Section<'a>,
-{
-    fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
-        if !self.get_bytes().is_empty() {
-            let header_indices = write_section_header(buffer, Self::ID);
-            buffer.encode_u32(self.get_count());
-            buffer.append_slice(self.get_bytes());
-            update_section_size(buffer, header_indices);
-        }
+fn serialize_bytes_section<B: SerialBuffer>(
+    id: SectionId,
+    count: u32,
+    bytes: &[u8],
+    buffer: &mut B,
+) {
+    if !bytes.is_empty() {
+        let header_indices = write_section_header(buffer, id);
+        buffer.encode_u32(count);
+        buffer.append_slice(bytes);
+        update_section_size(buffer, header_indices);
     }
 }
 
-fn section_size(bytes: &[u8]) -> usize {
-    let id = 1;
-    let encoded_length = MAX_SIZE_ENCODED_U32;
-    let encoded_count = MAX_SIZE_ENCODED_U32;
-
-    id + encoded_length + encoded_count + bytes.len()
-}
-
-fn parse_section<'a>(id: SectionId, module_bytes: &'a [u8], cursor: &mut usize) -> (u32, &'a [u8]) {
-    if (*cursor >= module_bytes.len()) || (module_bytes[*cursor] != id as u8) {
-        return (0, &[]);
+fn parse_section(
+    expected_id: SectionId,
+    module_bytes: &[u8],
+    cursor: &mut usize,
+) -> Result<(u32, std::ops::Range<usize>), ParseError> {
+    if *cursor >= module_bytes.len() {
+        return Err(ParseError {
+            offset: *cursor,
+            message: "End of file".into(),
+        });
+    }
+    if module_bytes[*cursor] != expected_id as u8 {
+        let actual_id: SectionId = unsafe { std::mem::transmute(module_bytes[*cursor]) };
+        return Err(ParseError {
+            offset: *cursor,
+            message: format!(
+                "Expected section '{:?}', but found '{:?}'",
+                expected_id, actual_id
+            ),
+        });
     }
     *cursor += 1;
 
-    let section_size = parse_u32_or_panic(module_bytes, cursor);
+    let section_size = u32::parse((), module_bytes, cursor)?;
     let count_start = *cursor;
-    let count = parse_u32_or_panic(module_bytes, cursor);
+    let count = u32::parse((), module_bytes, cursor)?;
     let body_start = *cursor;
-
     let next_section_start = count_start + section_size as usize;
-    let body = &module_bytes[body_start..next_section_start];
 
-    *cursor = next_section_start;
-
-    (count, body)
+    Ok((count, body_start..next_section_start))
 }
 
 pub struct SectionHeaderIndices {
@@ -228,45 +252,54 @@ impl<'a> TypeSection<'a> {
 
         sig_id as u32
     }
-
-    pub fn parse_offsets(&mut self) {
-        self.offsets.clear();
-
-        let mut i = 0;
-        while i < self.bytes.len() {
-            self.offsets.push(i);
-
-            debug_assert!(self.bytes[i] == Signature::SEPARATOR);
-            i += 1;
-
-            let n_params = parse_u32_or_panic(&self.bytes, &mut i);
-            i += n_params as usize; // skip over one byte per param type
-
-            let n_return_values = self.bytes[i];
-            i += 1 + n_return_values as usize;
-        }
-    }
 }
 
 impl<'a> Section<'a> for TypeSection<'a> {
     const ID: SectionId = SectionId::Type;
 
-    fn get_bytes(&self) -> &[u8] {
-        &self.bytes
+    fn size(&self) -> usize {
+        MAX_SIZE_SECTION_HEADER + self.bytes.len()
     }
-    fn get_count(&self) -> u32 {
-        self.offsets.len() as u32
-    }
+}
 
-    fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
-        let (count, initial_bytes) = parse_section(Self::ID, module_bytes, cursor);
-        let mut bytes = Vec::with_capacity_in(initial_bytes.len() * 2, arena);
-        bytes.extend_from_slice(initial_bytes);
-        TypeSection {
+impl<'a> Parse<&'a Bump> for TypeSection<'a> {
+    fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
+        let mut bytes = Vec::<u8>::with_capacity_in(range.len() * 2, arena);
+        *cursor = range.end;
+        bytes.extend_from_slice(&module_bytes[range]);
+
+        let mut offsets = Vec::with_capacity_in(2 * count as usize, arena);
+        let mut i = 0;
+        while i < bytes.len() {
+            offsets.push(i);
+
+            if bytes[i] != Signature::SEPARATOR {
+                return Err(ParseError {
+                    message: "Invalid signature separator in TypeSection".into(),
+                    offset: *cursor,
+                });
+            }
+            i += 1;
+
+            let n_params = u32::parse((), &bytes, &mut i).unwrap();
+            i += n_params as usize; // skip over one byte per param type
+
+            let n_return_values = bytes[i];
+            i += 1 + n_return_values as usize;
+        }
+
+        Ok(TypeSection {
             arena,
             bytes,
-            offsets: Vec::with_capacity_in(2 * count as usize, arena),
-        }
+            offsets,
+        })
+    }
+}
+
+impl<'a> Serialize for TypeSection<'a> {
+    fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
+        serialize_bytes_section(Self::ID, self.offsets.len() as u32, &self.bytes, buffer);
     }
 }
 
@@ -343,60 +376,69 @@ impl Serialize for Import {
 #[derive(Debug)]
 pub struct ImportSection<'a> {
     pub count: u32,
-    pub function_count: u32,
+    pub fn_signatures: Vec<'a, u32>,
     pub bytes: Vec<'a, u8>,
 }
 
 impl<'a> ImportSection<'a> {
-    pub fn append(&mut self, import: Import) {
-        import.serialize(&mut self.bytes);
-        self.count += 1;
+    const ID: SectionId = SectionId::Import;
+
+    pub fn size(&self) -> usize {
+        self.bytes.len()
     }
+}
 
-    pub fn parse(&mut self, arena: &'a Bump) -> Vec<'a, u32> {
-        let mut fn_signatures = bumpalo::vec![in arena];
-        let mut cursor = 0;
-        while cursor < self.bytes.len() {
-            String::skip_bytes(&self.bytes, &mut cursor); // import namespace
-            String::skip_bytes(&self.bytes, &mut cursor); // import name
+impl<'a> Parse<&'a Bump> for ImportSection<'a> {
+    fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
+        let mut bytes = Vec::with_capacity_in(range.len() * 2, arena);
+        let mut fn_signatures = Vec::with_capacity_in(range.len() / 8, arena);
 
-            let type_id = ImportTypeId::from(self.bytes[cursor]);
-            cursor += 1;
+        let end = range.end;
+        bytes.extend_from_slice(&module_bytes[range]);
+
+        while *cursor < end {
+            String::skip_bytes(module_bytes, cursor)?; // import namespace
+            String::skip_bytes(module_bytes, cursor)?; // import name
+
+            let type_id = ImportTypeId::from(module_bytes[*cursor]);
+            *cursor += 1;
 
             match type_id {
                 ImportTypeId::Func => {
-                    fn_signatures.push(parse_u32_or_panic(&self.bytes, &mut cursor));
+                    let sig = u32::parse((), module_bytes, cursor)?;
+                    fn_signatures.push(sig);
                 }
                 ImportTypeId::Table => {
-                    TableType::skip_bytes(&self.bytes, &mut cursor);
+                    TableType::skip_bytes(module_bytes, cursor)?;
                 }
                 ImportTypeId::Mem => {
-                    Limits::skip_bytes(&self.bytes, &mut cursor);
+                    Limits::skip_bytes(module_bytes, cursor)?;
                 }
                 ImportTypeId::Global => {
-                    GlobalType::skip_bytes(&self.bytes, &mut cursor);
+                    GlobalType::skip_bytes(module_bytes, cursor)?;
                 }
             }
         }
 
-        self.function_count = fn_signatures.len() as u32;
-        fn_signatures
-    }
-
-    pub fn from_count_and_bytes(count: u32, bytes: Vec<'a, u8>) -> Self {
-        ImportSection {
-            bytes,
+        Ok(ImportSection {
             count,
-            function_count: 0,
-        }
+            fn_signatures,
+            bytes,
+        })
     }
 }
 
-section_impl!(
-    ImportSection,
-    SectionId::Import,
-    ImportSection::from_count_and_bytes
-);
+impl<'a> Serialize for ImportSection<'a> {
+    fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
+        if !self.bytes.is_empty() {
+            let header_indices = write_section_header(buffer, Self::ID);
+            buffer.encode_u32(self.count);
+            buffer.append_slice(&self.bytes);
+            update_section_size(buffer, header_indices);
+        }
+    }
+}
 
 /*******************************************************************
  *
@@ -407,28 +449,47 @@ section_impl!(
 
 #[derive(Debug)]
 pub struct FunctionSection<'a> {
-    pub count: u32,
+    pub signatures: Vec<'a, u32>,
     pub bytes: Vec<'a, u8>,
 }
 
 impl<'a> FunctionSection<'a> {
     pub fn add_sig(&mut self, sig_id: u32) {
         self.bytes.encode_u32(sig_id);
-        self.count += 1;
-    }
-
-    pub fn parse(&self, arena: &'a Bump) -> Vec<'a, u32> {
-        let count = self.count as usize;
-        let mut signatures = Vec::with_capacity_in(count, arena);
-        let mut cursor = 0;
-        for _ in 0..count {
-            signatures.push(parse_u32_or_panic(&self.bytes, &mut cursor));
-        }
-        signatures
+        self.signatures.push(sig_id);
     }
 }
 
-section_impl!(FunctionSection, SectionId::Function);
+impl<'a> Parse<&'a Bump> for FunctionSection<'a> {
+    fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (count, range) = parse_section(SectionId::Function, module_bytes, cursor)?;
+        let end = range.end;
+
+        let mut bytes = Vec::<u8>::with_capacity_in(range.len() * 2, arena);
+        bytes.extend_from_slice(&module_bytes[range]);
+
+        let mut signatures = Vec::with_capacity_in(count as usize, arena);
+        for _ in 0..count {
+            signatures.push(u32::parse((), module_bytes, cursor)?);
+        }
+
+        *cursor = end;
+        Ok(FunctionSection { signatures, bytes })
+    }
+}
+
+impl<'a> Section<'a> for FunctionSection<'a> {
+    const ID: SectionId = SectionId::Function;
+    fn size(&self) -> usize {
+        MAX_SIZE_SECTION_HEADER + self.bytes.len()
+    }
+}
+
+impl<'a> Serialize for FunctionSection<'a> {
+    fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
+        serialize_bytes_section(Self::ID, self.signatures.len() as u32, &self.bytes, buffer);
+    }
+}
 
 /*******************************************************************
  *
@@ -460,9 +521,10 @@ impl Serialize for TableType {
 }
 
 impl SkipBytes for TableType {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
-        u8::skip_bytes(bytes, cursor);
-        Limits::skip_bytes(bytes, cursor);
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), ParseError> {
+        u8::skip_bytes(bytes, cursor)?;
+        Limits::skip_bytes(bytes, cursor)?;
+        Ok(())
     }
 }
 
@@ -473,34 +535,6 @@ pub struct TableSection {
 
 impl TableSection {
     const ID: SectionId = SectionId::Table;
-
-    pub fn preload(module_bytes: &[u8], mod_cursor: &mut usize) -> Self {
-        let (count, section_bytes) = parse_section(Self::ID, module_bytes, mod_cursor);
-
-        match count {
-            0 => TableSection {
-                function_table: TableType {
-                    ref_type: RefType::Func,
-                    limits: Limits::MinMax(0, 0),
-                },
-            },
-            1 => {
-                if section_bytes[0] != RefType::Func as u8 {
-                    internal_error!("Only funcref tables are supported")
-                }
-                let mut section_cursor = 1;
-                let limits = Limits::parse(section_bytes, &mut section_cursor);
-
-                TableSection {
-                    function_table: TableType {
-                        ref_type: RefType::Func,
-                        limits,
-                    },
-                }
-            }
-            _ => internal_error!("Multiple tables are not supported"),
-        }
-    }
 
     pub fn size(&self) -> usize {
         let section_id_bytes = 1;
@@ -513,6 +547,45 @@ impl TableSection {
         };
 
         section_id_bytes + section_length_bytes + num_tables_bytes + ref_type_bytes + limits_bytes
+    }
+}
+
+impl Parse<()> for TableSection {
+    fn parse(_ctx: (), module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
+
+        match count {
+            0 => {
+                *cursor = range.end;
+                Ok(TableSection {
+                    function_table: TableType {
+                        ref_type: RefType::Func,
+                        limits: Limits::MinMax(0, 0),
+                    },
+                })
+            }
+            1 => {
+                if module_bytes[range.start] != RefType::Func as u8 {
+                    Err(ParseError {
+                        offset: *cursor,
+                        message: "Only funcref tables are supported".into(),
+                    })
+                } else {
+                    let limits = Limits::parse((), module_bytes, cursor)?;
+                    *cursor = range.end;
+                    Ok(TableSection {
+                        function_table: TableType {
+                            ref_type: RefType::Func,
+                            limits,
+                        },
+                    })
+                }
+            }
+            _ => Err(ParseError {
+                offset: *cursor,
+                message: "Multiple tables are not supported".into(),
+            }),
+        }
     }
 }
 
@@ -563,27 +636,28 @@ impl Serialize for Limits {
 }
 
 impl SkipBytes for Limits {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), ParseError> {
         let variant_id = bytes[*cursor];
-        u8::skip_bytes(bytes, cursor); // advance past the variant byte
-        u32::skip_bytes(bytes, cursor); // skip "min"
+        u8::skip_bytes(bytes, cursor)?; // advance past the variant byte
+        u32::skip_bytes(bytes, cursor)?; // skip "min"
         if variant_id == LimitsId::MinMax as u8 {
-            u32::skip_bytes(bytes, cursor); // skip "max"
+            u32::skip_bytes(bytes, cursor)?; // skip "max"
         }
+        Ok(())
     }
 }
 
-impl Limits {
-    fn parse(bytes: &[u8], cursor: &mut usize) -> Self {
+impl Parse<()> for Limits {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let variant_id = bytes[*cursor];
         *cursor += 1;
 
-        let min = parse_u32_or_panic(bytes, cursor);
+        let min = u32::parse((), bytes, cursor).unwrap();
         if variant_id == LimitsId::MinMax as u8 {
-            let max = parse_u32_or_panic(bytes, cursor);
-            Limits::MinMax(min, max)
+            let max = u32::parse((), bytes, cursor).unwrap();
+            Ok(Limits::MinMax(min, max))
         } else {
-            Limits::Min(min)
+            Ok(Limits::Min(min))
         }
     }
 }
@@ -637,8 +711,9 @@ impl Serialize for GlobalType {
 }
 
 impl SkipBytes for GlobalType {
-    fn skip_bytes(_bytes: &[u8], cursor: &mut usize) {
+    fn skip_bytes(_bytes: &[u8], cursor: &mut usize) -> Result<(), ParseError> {
         *cursor += 2;
+        Ok(())
     }
 }
 
@@ -653,22 +728,25 @@ pub enum ConstExpr {
 }
 
 impl ConstExpr {
-    fn parse_u32(bytes: &[u8], cursor: &mut usize) -> u32 {
-        let err = || internal_error!("Invalid ConstExpr. Expected i32.");
+    fn parse_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, ParseError> {
+        let err = Err(ParseError {
+            offset: *cursor,
+            message: "Invalid ConstExpr. Expected i32.".into(),
+        });
 
         if bytes[*cursor] != OpCode::I32CONST as u8 {
-            err();
+            return err;
         }
         *cursor += 1;
 
-        let value = parse_u32_or_panic(bytes, cursor);
+        let value = u32::parse((), bytes, cursor)?;
 
         if bytes[*cursor] != OpCode::END as u8 {
-            err();
+            return err;
         }
         *cursor += 1;
 
-        value
+        Ok(value)
     }
 
     fn unwrap_i32(&self) -> i32 {
@@ -704,11 +782,12 @@ impl Serialize for ConstExpr {
 }
 
 impl SkipBytes for ConstExpr {
-    fn skip_bytes(bytes: &[u8], cursor: &mut usize) {
+    fn skip_bytes(bytes: &[u8], cursor: &mut usize) -> Result<(), ParseError> {
         while bytes[*cursor] != OpCode::END as u8 {
-            OpCode::skip_bytes(bytes, cursor);
+            OpCode::skip_bytes(bytes, cursor)?;
         }
         *cursor += 1;
+        Ok(())
     }
 }
 
@@ -734,13 +813,13 @@ pub struct GlobalSection<'a> {
 }
 
 impl<'a> GlobalSection<'a> {
-    pub fn parse_u32_at_index(&self, index: u32) -> u32 {
+    pub fn parse_u32_at_index(&self, index: u32) -> Result<u32, ParseError> {
         let mut cursor = 0;
         for _ in 0..index {
-            GlobalType::skip_bytes(&self.bytes, &mut cursor);
-            ConstExpr::skip_bytes(&self.bytes, &mut cursor);
+            GlobalType::skip_bytes(&self.bytes, &mut cursor)?;
+            ConstExpr::skip_bytes(&self.bytes, &mut cursor)?;
         }
-        GlobalType::skip_bytes(&self.bytes, &mut cursor);
+        GlobalType::skip_bytes(&self.bytes, &mut cursor)?;
         ConstExpr::parse_u32(&self.bytes, &mut cursor)
     }
 
@@ -781,21 +860,21 @@ impl From<u8> for ExportType {
 
 #[derive(Debug)]
 pub struct Export<'a> {
-    pub name: &'a [u8],
+    pub name: &'a str,
     pub ty: ExportType,
     pub index: u32,
 }
 
-impl<'a> Export<'a> {
-    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Self {
-        let name = parse_string_bytes(arena, bytes, cursor);
+impl<'a> Parse<&'a Bump> for Export<'a> {
+    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let name = <&'a str>::parse(arena, bytes, cursor)?;
 
         let ty = ExportType::from(bytes[*cursor]);
         *cursor += 1;
 
-        let index = parse_u32_or_panic(bytes, cursor);
+        let index = u32::parse((), bytes, cursor)?;
 
-        Export { name, ty, index }
+        Ok(Export { name, ty, index })
     }
 }
 
@@ -825,22 +904,22 @@ impl<'a> ExportSection<'a> {
             .map(|ex| ex.name.len() + 1 + MAX_SIZE_ENCODED_U32)
             .sum()
     }
+}
 
-    /// Preload from object file.
-    pub fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
-        let (num_exports, body_bytes) = parse_section(Self::ID, module_bytes, cursor);
+impl<'a> Parse<&'a Bump> for ExportSection<'a> {
+    fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (num_exports, range) = parse_section(Self::ID, module_bytes, cursor)?;
 
         let mut export_section = ExportSection {
             exports: Vec::with_capacity_in(num_exports as usize, arena),
         };
 
-        let mut body_cursor = 0;
-        while body_cursor < body_bytes.len() {
-            let export = Export::parse(arena, body_bytes, &mut body_cursor);
+        while *cursor < range.end {
+            let export = Export::parse(arena, module_bytes, cursor)?;
             export_section.exports.push(export);
         }
 
-        export_section
+        Ok(export_section)
     }
 }
 
@@ -882,7 +961,18 @@ struct ElementSegment<'a> {
 }
 
 impl<'a> ElementSegment<'a> {
-    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Self {
+    fn size(&self) -> usize {
+        let variant_id = 1;
+        let constexpr_opcode = 1;
+        let constexpr_value = MAX_SIZE_ENCODED_U32;
+        let vec_len = MAX_SIZE_ENCODED_U32;
+        let vec_contents = MAX_SIZE_ENCODED_U32 * self.fn_indices.len();
+        variant_id + constexpr_opcode + constexpr_value + vec_len + vec_contents
+    }
+}
+
+impl<'a> Parse<&'a Bump> for ElementSegment<'a> {
+    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         // In practice we only need the original MVP format
         let format_id = bytes[*cursor];
         debug_assert!(format_id == ElementSegmentFormatId::ActiveImplicitTableIndex as u8);
@@ -892,31 +982,22 @@ impl<'a> ElementSegment<'a> {
         let const_expr_opcode = bytes[*cursor];
         debug_assert!(const_expr_opcode == OpCode::I32CONST as u8);
         *cursor += 1;
-        let offset = parse_u32_or_panic(bytes, cursor);
+        let offset = u32::parse((), bytes, cursor)?;
         debug_assert!(bytes[*cursor] == OpCode::END as u8);
         *cursor += 1;
 
-        let num_elems = parse_u32_or_panic(bytes, cursor);
+        let num_elems = u32::parse((), bytes, cursor)?;
         let mut fn_indices = Vec::with_capacity_in(num_elems as usize, arena);
         for _ in 0..num_elems {
-            let fn_idx = parse_u32_or_panic(bytes, cursor);
+            let fn_idx = u32::parse((), bytes, cursor)?;
 
             fn_indices.push(fn_idx);
         }
 
-        ElementSegment {
+        Ok(ElementSegment {
             offset: ConstExpr::I32(offset as i32),
             fn_indices,
-        }
-    }
-
-    fn size(&self) -> usize {
-        let variant_id = 1;
-        let constexpr_opcode = 1;
-        let constexpr_value = MAX_SIZE_ENCODED_U32;
-        let vec_len = MAX_SIZE_ENCODED_U32;
-        let vec_contents = MAX_SIZE_ENCODED_U32 * self.fn_indices.len();
-        variant_id + constexpr_opcode + constexpr_value + vec_len + vec_contents
+        })
     }
 }
 
@@ -937,29 +1018,6 @@ pub struct ElementSection<'a> {
 
 impl<'a> ElementSection<'a> {
     const ID: SectionId = SectionId::Element;
-
-    pub fn preload(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
-        let (num_segments, body_bytes) = parse_section(Self::ID, module_bytes, cursor);
-
-        if num_segments == 0 {
-            let seg = ElementSegment {
-                offset: ConstExpr::I32(1),
-                fn_indices: bumpalo::vec![in arena],
-            };
-            ElementSection {
-                segments: bumpalo::vec![in arena; seg],
-            }
-        } else {
-            let mut segments = Vec::with_capacity_in(num_segments as usize, arena);
-
-            let mut body_cursor = 0;
-            for _ in 0..num_segments {
-                let seg = ElementSegment::parse(arena, body_bytes, &mut body_cursor);
-                segments.push(seg);
-            }
-            ElementSection { segments }
-        }
-    }
 
     /// Get a table index for a function (equivalent to a function pointer)
     /// The function will be inserted into the table if it's not already there.
@@ -1002,6 +1060,32 @@ impl<'a> ElementSection<'a> {
             result.extend_from_slice(&segment.fn_indices);
         }
         result
+    }
+}
+
+impl<'a> Parse<&'a Bump> for ElementSection<'a> {
+    fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (num_segments, range) = parse_section(Self::ID, module_bytes, cursor)?;
+
+        if num_segments == 0 {
+            let seg = ElementSegment {
+                offset: ConstExpr::I32(1),
+                fn_indices: bumpalo::vec![in arena],
+            };
+            *cursor = range.end;
+            Ok(ElementSection {
+                segments: bumpalo::vec![in arena; seg],
+            })
+        } else {
+            let mut segments = Vec::with_capacity_in(num_segments as usize, arena);
+
+            for _ in 0..num_segments {
+                let seg = ElementSegment::parse(arena, module_bytes, cursor)?;
+                segments.push(seg);
+            }
+            *cursor = range.end;
+            Ok(ElementSection { segments })
+        }
     }
 }
 
@@ -1052,38 +1136,38 @@ impl<'a> CodeSection<'a> {
         MAX_SIZE_SECTION_HEADER + self.preloaded_bytes.len() + builders_size
     }
 
-    pub fn preload(
+    pub fn parse(
         arena: &'a Bump,
         module_bytes: &[u8],
         cursor: &mut usize,
         import_signatures: &[u32],
         function_signatures: &[u32],
         indirect_callees: &[u32],
-    ) -> Self {
-        let (preloaded_count, initial_bytes) = parse_section(SectionId::Code, module_bytes, cursor);
-        let preloaded_bytes = arena.alloc_slice_copy(initial_bytes);
+    ) -> Result<Self, ParseError> {
+        let (preloaded_count, range) = parse_section(SectionId::Code, module_bytes, cursor)?;
+        *cursor = range.end;
+        let preloaded_bytes = arena.alloc_slice_copy(&module_bytes[range]);
 
-        // TODO: Try to move this call_graph preparation to platform build time
         let dead_code_metadata = parse_preloads_call_graph(
             arena,
-            initial_bytes,
+            preloaded_bytes,
             import_signatures,
             function_signatures,
             indirect_callees,
-        );
+        )?;
 
-        CodeSection {
+        Ok(CodeSection {
             preloaded_count,
             preloaded_bytes,
             code_builders: Vec::with_capacity_in(0, arena),
             dead_code_metadata,
-        }
+        })
     }
 
     pub(super) fn remove_dead_preloads<T: IntoIterator<Item = u32>>(
         &mut self,
         arena: &'a Bump,
-        import_fn_count: u32,
+        import_fn_count: usize,
         exported_fns: &[u32],
         called_preload_fns: T,
     ) {
@@ -1202,13 +1286,14 @@ impl<'a> OpaqueSection<'a> {
     pub fn size(&self) -> usize {
         self.bytes.len()
     }
+}
 
-    pub fn preload(
-        id: SectionId,
-        arena: &'a Bump,
+impl<'a> Parse<(&'a Bump, SectionId)> for OpaqueSection<'a> {
+    fn parse(
+        (arena, id): (&'a Bump, SectionId),
         module_bytes: &[u8],
         cursor: &mut usize,
-    ) -> Self {
+    ) -> Result<Self, ParseError> {
         let bytes: &[u8];
 
         if module_bytes[*cursor] != id as u8 {
@@ -1216,15 +1301,15 @@ impl<'a> OpaqueSection<'a> {
         } else {
             let section_start = *cursor;
             *cursor += 1;
-            let section_size = parse_u32_or_panic(module_bytes, cursor);
+            let section_size = u32::parse((), module_bytes, cursor)?;
             let next_section_start = *cursor + section_size as usize;
             bytes = &module_bytes[section_start..next_section_start];
             *cursor = next_section_start;
         };
 
-        OpaqueSection {
+        Ok(OpaqueSection {
             bytes: arena.alloc_slice_clone(bytes),
-        }
+        })
     }
 }
 
@@ -1251,7 +1336,7 @@ enum NameSubSections {
 
 pub struct NameSection<'a> {
     pub bytes: Vec<'a, u8>,
-    pub functions: MutMap<&'a [u8], u32>,
+    pub functions: MutMap<&'a str, u32>,
 }
 
 impl<'a> NameSection<'a> {
@@ -1262,35 +1347,41 @@ impl<'a> NameSection<'a> {
         self.bytes.len()
     }
 
-    pub fn append_function(&mut self, index: u32, name: &'a [u8]) {
+    pub fn append_function(&mut self, index: u32, name: &'a str) {
         index.serialize(&mut self.bytes);
         name.serialize(&mut self.bytes);
         self.functions.insert(name, index);
     }
+}
 
-    pub fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Self {
+impl<'a> Parse<&'a Bump> for NameSection<'a> {
+    fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         // If we're already past the end of the preloaded file then there is no Name section
         if *cursor >= module_bytes.len() {
-            return NameSection {
+            return Ok(NameSection {
                 bytes: bumpalo::vec![in arena],
                 functions: MutMap::default(),
-            };
+            });
         }
 
         // Custom section ID
         let section_id_byte = module_bytes[*cursor];
         if section_id_byte != Self::ID as u8 {
-            internal_error!(
+            let message = format!(
                 "Expected section ID 0x{:x}, but found 0x{:x} at offset 0x{:x}",
                 Self::ID as u8,
                 section_id_byte,
                 *cursor
             );
+            return Err(ParseError {
+                message,
+                offset: *cursor,
+            });
         }
         *cursor += 1;
 
         // Section size
-        let section_size = parse_u32_or_panic(module_bytes, cursor) as usize;
+        let section_size = u32::parse((), module_bytes, cursor)? as usize;
         let section_end = *cursor + section_size;
 
         let mut section = NameSection {
@@ -1298,24 +1389,17 @@ impl<'a> NameSection<'a> {
             functions: MutMap::default(),
         };
 
-        section.parse_body(arena, module_bytes, cursor, section_end);
-        section
-    }
-
-    fn parse_body(
-        &mut self,
-        arena: &'a Bump,
-        module_bytes: &[u8],
-        cursor: &mut usize,
-        section_end: usize,
-    ) {
-        let section_name = parse_string_bytes(arena, module_bytes, cursor);
-        if section_name != Self::NAME.as_bytes() {
-            internal_error!(
+        let section_name = <&'a str>::parse(arena, module_bytes, cursor)?;
+        if section_name != Self::NAME {
+            let message = format!(
                 "Expected Custom section {:?}, found {:?}",
                 Self::NAME,
-                std::str::from_utf8(section_name)
+                section_name
             );
+            return Err(ParseError {
+                message,
+                offset: *cursor,
+            });
         }
 
         // Find function names subsection
@@ -1323,36 +1407,43 @@ impl<'a> NameSection<'a> {
         for _possible_subsection_id in 0..2 {
             let subsection_id = module_bytes[*cursor];
             *cursor += 1;
-            let subsection_size = parse_u32_or_panic(module_bytes, cursor);
+            let subsection_size = u32::parse((), module_bytes, cursor)?;
             if subsection_id == NameSubSections::FunctionNames as u8 {
                 found_function_names = true;
                 break;
             }
             *cursor += subsection_size as usize;
             if *cursor >= section_end {
-                internal_error!("Failed to parse Name section");
+                return Err(ParseError {
+                    message: "Failed to parse Name section".into(),
+                    offset: *cursor,
+                });
             }
         }
         if !found_function_names {
-            internal_error!("Failed to parse Name section");
+            return Err(ParseError {
+                message: "Failed to parse Name section".into(),
+                offset: *cursor,
+            });
         }
 
         // Function names
-        let num_entries = parse_u32_or_panic(module_bytes, cursor) as usize;
+        let num_entries = u32::parse((), module_bytes, cursor)? as usize;
         let fn_names_start = *cursor;
         for _ in 0..num_entries {
-            let fn_index = parse_u32_or_panic(module_bytes, cursor);
-            let name_bytes = parse_string_bytes(arena, module_bytes, cursor);
-
-            self.functions
-                .insert(arena.alloc_slice_copy(name_bytes), fn_index);
+            let fn_index = u32::parse((), module_bytes, cursor)?;
+            let name_bytes = <&'a str>::parse(arena, module_bytes, cursor)?;
+            section.functions.insert(name_bytes, fn_index);
         }
 
         // Copy only the bytes for the function names segment
-        self.bytes
+        section
+            .bytes
             .extend_from_slice(&module_bytes[fn_names_start..*cursor]);
 
         *cursor = section_end;
+
+        Ok(section)
     }
 }
 
@@ -1390,8 +1481,7 @@ impl<'a> Debug for NameSection<'a> {
         by_index.sort_unstable();
 
         for (index, name) in by_index.iter() {
-            let name_str = unsafe { std::str::from_utf8_unchecked(name) };
-            writeln!(f, "  {:4}: {}", index, name_str)?;
+            writeln!(f, "  {:4}: {}", index, name)?;
         }
 
         Ok(())
@@ -1416,8 +1506,7 @@ mod tests {
 
         // Reconstruct a new TypeSection by "pre-loading" the bytes of the original
         let mut cursor = 0;
-        let mut preloaded = TypeSection::preload(arena, &original_serialized, &mut cursor);
-        preloaded.parse_offsets();
+        let preloaded = TypeSection::parse(arena, &original_serialized, &mut cursor).unwrap();
 
         debug_assert_eq!(original.offsets, preloaded.offsets);
         debug_assert_eq!(original.bytes, preloaded.bytes);

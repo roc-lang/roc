@@ -175,13 +175,13 @@ impl<'a> Serialize for RelocationSection<'a> {
 
 /// Linking metadata for data segments
 #[derive(Debug)]
-pub struct LinkingSegment {
-    pub name: String,
+pub struct LinkingSegment<'a> {
+    pub name: &'a str,
     pub alignment: Align,
     pub flags: u32,
 }
 
-impl Serialize for LinkingSegment {
+impl<'a> Serialize for LinkingSegment<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.encode_u32(self.name.len() as u32);
         buffer.append_slice(self.name.as_bytes());
@@ -238,7 +238,7 @@ impl Serialize for ComdatSym {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct LinkingComdat<'a> {
-    name: String,
+    name: &'a str,
     flags: u32,
     syms: Vec<'a, ComdatSym>,
 }
@@ -292,11 +292,11 @@ pub const WASM_SYM_EXPLICIT_NAME: u32 = 0x40; // use the name from the symbol ta
 pub const WASM_SYM_NO_STRIP: u32 = 0x80;
 
 #[derive(Clone, Debug)]
-pub enum WasmObjectSymbol {
+pub enum WasmObjectSymbol<'a> {
     Defined {
         flags: u32,
         index: u32,
-        name: String,
+        name: &'a str,
     },
     Imported {
         flags: u32,
@@ -304,7 +304,7 @@ pub enum WasmObjectSymbol {
     },
 }
 
-impl Serialize for WasmObjectSymbol {
+impl<'a> Serialize for WasmObjectSymbol<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
             Self::Defined { flags, index, name } => {
@@ -322,21 +322,21 @@ impl Serialize for WasmObjectSymbol {
 }
 
 #[derive(Clone, Debug)]
-pub enum DataSymbol {
+pub enum DataSymbol<'a> {
     Defined {
         flags: u32,
-        name: String,
+        name: &'a str,
         segment_index: u32,
         segment_offset: u32,
         size: u32,
     },
     Imported {
         flags: u32,
-        name: String,
+        name: &'a str,
     },
 }
 
-impl Serialize for DataSymbol {
+impl<'a> Serialize for DataSymbol<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         match self {
             Self::Defined {
@@ -377,17 +377,17 @@ impl Serialize for SectionSymbol {
 }
 
 #[derive(Clone, Debug)]
-pub enum SymInfo {
-    Function(WasmObjectSymbol),
-    Data(DataSymbol),
-    Global(WasmObjectSymbol),
+pub enum SymInfo<'a> {
+    Function(WasmObjectSymbol<'a>),
+    Data(DataSymbol<'a>),
+    Global(WasmObjectSymbol<'a>),
     Section(SectionSymbol),
-    Event(WasmObjectSymbol),
-    Table(WasmObjectSymbol),
+    Event(WasmObjectSymbol<'a>),
+    Table(WasmObjectSymbol<'a>),
 }
 
-impl SymInfo {
-    pub fn for_function(wasm_function_index: u32, name: String) -> Self {
+impl<'a> SymInfo<'a> {
+    pub fn for_function(wasm_function_index: u32, name: &'a str) -> Self {
         SymInfo::Function(WasmObjectSymbol::Defined {
             flags: 0,
             index: wasm_function_index,
@@ -396,7 +396,7 @@ impl SymInfo {
     }
 }
 
-impl Serialize for SymInfo {
+impl<'a> Serialize for SymInfo<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_u8(match self {
             Self::Function(_) => 0,
@@ -459,8 +459,8 @@ const LINKING_VERSION: u8 = 2;
 /// No point writing code to "find" the symbol table, when we know there's exactly one.
 #[derive(Debug)]
 pub struct LinkingSection<'a> {
-    pub symbol_table: Vec<'a, SymInfo>,
-    pub segment_info: Vec<'a, LinkingSegment>,
+    pub symbol_table: Vec<'a, SymInfo<'a>>,
+    pub segment_info: Vec<'a, LinkingSegment<'a>>,
     pub init_funcs: Vec<'a, LinkingInitFunc>,
     pub comdat_info: Vec<'a, LinkingComdat<'a>>,
 }

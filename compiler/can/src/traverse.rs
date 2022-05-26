@@ -163,10 +163,18 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             let (var, le) = &**argument;
             visitor.visit_expr(&le.value, le.region, *var);
         }
-        Expr::Expect(e1, e2) => {
-            // TODO: what type does an expect have?
-            visitor.visit_expr(&e1.value, e1.region, Variable::NULL);
-            visitor.visit_expr(&e2.value, e2.region, Variable::NULL);
+        Expr::Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond: _,
+        } => {
+            // TODO: what type does an expect have? bool
+            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::NULL);
+            visitor.visit_expr(
+                &loc_continuation.value,
+                loc_continuation.region,
+                Variable::NULL,
+            );
         }
         Expr::TypedHole(_) => { /* terminal */ }
         Expr::RuntimeError(..) => { /* terminal */ }

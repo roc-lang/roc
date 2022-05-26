@@ -472,17 +472,36 @@ fn gen_from_mono_module_dev_wasm32(
         exposed_to_host,
     };
 
-    let preloaded_host_bytes = std::fs::read(preprocessed_host_path)
-        .expect("Failed to read host object file! Try setting --precompiled-host=false");
+    let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {
+        panic!(
+            "Failed to read host object file {}! Try setting --precompiled-host=false",
+            preprocessed_host_path.display()
+        )
+    });
+
+    let host_module = roc_gen_wasm::parse_host(arena, &host_bytes).unwrap_or_else(|e| {
+        panic!(
+            "I ran into a problem with the host object file, {} at offset 0x{:x}:\n{}",
+            preprocessed_host_path.display(),
+            e.offset,
+            e.message
+        )
+    });
 
     let final_binary_bytes =
-        roc_gen_wasm::build_module(&env, &mut interns, &preloaded_host_bytes, procedures);
+        roc_gen_wasm::build_app_binary(&env, &mut interns, host_module, procedures);
 
     let code_gen = code_gen_start.elapsed().unwrap();
     let emit_o_file_start = SystemTime::now();
 
     // The app_o_file is actually the final binary
-    std::fs::write(&app_o_file, &final_binary_bytes).expect("failed to write object to file");
+    std::fs::write(&app_o_file, &final_binary_bytes).unwrap_or_else(|e| {
+        panic!(
+            "I wasn't able to write to the output file {}\n{}",
+            app_o_file.display(),
+            e
+        )
+    });
 
     let emit_o_file = emit_o_file_start.elapsed().unwrap();
 

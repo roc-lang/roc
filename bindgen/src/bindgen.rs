@@ -1,13 +1,11 @@
 use crate::structs::Structs;
-use crate::types::{RocTagUnion, TypeId, Types};
+use crate::types::{Field, RocTagUnion, TypeId, Types};
 use crate::{enums::Enums, types::RocType};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth::*, IntWidth::*};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::layout::{
-    cmp_fields, ext_var_is_empty_tag_union, Builtin, Layout, LayoutCache, UnionLayout,
-};
+use roc_mono::layout::{cmp_fields, ext_var_is_empty_tag_union, Builtin, Layout, LayoutCache};
 use roc_types::subs::UnionTags;
 use roc_types::{
     subs::{Content, FlatType, Subs, Variable},
@@ -23,21 +21,24 @@ pub struct Env<'a> {
     pub enum_names: Enums,
 }
 
-pub fn add_type<'a>(env: &mut Env<'a>, var: Variable, types: &mut Types) -> TypeId {
-    let layout = env
-        .layout_cache
-        .from_var(env.arena, var, env.subs)
-        .expect("Something weird ended up in the content");
+impl<'a> Env<'a> {
+    pub fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
+        let layout = self
+            .layout_cache
+            .from_var(self.arena, var, self.subs)
+            .expect("Something weird ended up in the content");
 
-    add_type_help(env, layout, var, None, types)
+        add_type_help(self, layout, var, None, types, None)
+    }
 }
 
-pub fn add_type_help<'a>(
+fn add_type_help<'a>(
     env: &mut Env<'a>,
     layout: Layout<'a>,
     var: Variable,
     opt_name: Option<Symbol>,
     types: &mut Types,
+    opt_recursion_id: Option<TypeId>,
 ) -> TypeId {
     let subs = env.subs;
 
@@ -69,7 +70,7 @@ pub fn add_type_help<'a>(
                 None => env.struct_names.get_name(var),
             };
 
-            add_struct(env, name, it, types)
+            add_struct(env, name, it, types, opt_recursion_id)
         }
         Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
@@ -81,10 +82,22 @@ pub fn add_type_help<'a>(
 
             add_tag_union(env, opt_name, tag_vars, var, types)
         }
-        Content::Structure(FlatType::Apply(_symbol, _)) => match layout {
+        Content::Structure(FlatType::Apply(symbol, _)) => match layout {
             Layout::Builtin(builtin) => add_builtin_type(env, builtin, var, opt_name, types),
             _ => {
-                todo!("Handle non-builtin Apply")
+                if symbol.is_builtin() {
+                    todo!(
+                        "Handle Apply for builtin symbol {:?} and layout {:?}",
+                        symbol,
+                        layout
+                    )
+                } else {
+                    todo!(
+                        "Handle non-builtin Apply for symbol {:?} and layout {:?}",
+                        symbol,
+                        layout
+                    )
+                }
             }
         },
         Content::Structure(FlatType::Func(_, _, _)) => {
@@ -112,7 +125,7 @@ pub fn add_type_help<'a>(
             } else {
                 // If this was a non-builtin type alias, we can use that alias name
                 // in the generated bindings.
-                add_type_help(env, layout, *real_var, Some(*name), types)
+                add_type_help(env, layout, *real_var, Some(*name), types, opt_recursion_id)
             }
         }
         Content::RangedNumber(_, _) => todo!(),
@@ -124,7 +137,7 @@ pub fn add_type_help<'a>(
     }
 }
 
-pub fn add_builtin_type<'a>(
+fn add_builtin_type<'a>(
     env: &mut Env<'a>,
     builtin: Builtin<'a>,
     var: Variable,
@@ -154,8 +167,8 @@ pub fn add_builtin_type<'a>(
         Builtin::Str => types.add(RocType::RocStr),
         Builtin::Dict(key_layout, val_layout) => {
             // TODO FIXME this `var` is wrong - should have a different `var` for key and for val
-            let key_id = add_type_help(env, *key_layout, var, opt_name, types);
-            let val_id = add_type_help(env, *val_layout, var, opt_name, types);
+            let key_id = add_type_help(env, *key_layout, var, opt_name, types, None);
+            let val_id = add_type_help(env, *val_layout, var, opt_name, types, None);
             let dict_id = types.add(RocType::RocDict(key_id, val_id));
 
             types.depends(dict_id, key_id);
@@ -164,7 +177,7 @@ pub fn add_builtin_type<'a>(
             dict_id
         }
         Builtin::Set(elem_layout) => {
-            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
+            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types, None);
             let set_id = types.add(RocType::RocSet(elem_id));
 
             types.depends(set_id, elem_id);
@@ -172,7 +185,7 @@ pub fn add_builtin_type<'a>(
             set_id
         }
         Builtin::List(elem_layout) => {
-            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
+            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types, None);
             let list_id = types.add(RocType::RocList(elem_id));
 
             types.depends(list_id, elem_id);
@@ -187,6 +200,7 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
     name: String,
     fields: I,
     types: &mut Types,
+    opt_recursion_id: Option<TypeId>,
 ) -> TypeId {
     let subs = env.subs;
     let fields_iter = &mut fields.into_iter();
@@ -204,7 +218,7 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
         Some(field) => field,
         None => {
             // This is a single-field record; put it in a transparent wrapper.
-            let content = add_type(env, first_field.1, types);
+            let content = env.add_type(first_field.1, types);
 
             return types.add(RocType::TransparentWrapper { name, content });
         }
@@ -237,18 +251,15 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
 
     let fields = sortables
         .into_iter()
-        .filter_map(|(label, field_var, field_layout)| {
+        .map(|(label, field_var, field_layout)| {
             let content = subs.get_content_without_compacting(field_var);
 
-            // Discard RecursionVar nodes. If we try to follow them,
-            // we'll end up right back here and recurse forever!
             if matches!(content, Content::RecursionVar { .. }) {
-                None
+                Field::Recursive(label.to_string(), opt_recursion_id.unwrap())
             } else {
-                Some((
-                    label.to_string(),
-                    add_type_help(env, field_layout, field_var, None, types),
-                ))
+                let type_id = add_type_help(env, field_layout, field_var, None, types, None);
+
+                Field::NonRecursive(label.to_string(), type_id)
             }
         })
         .collect();
@@ -277,6 +288,7 @@ fn add_tag_union(
         .collect();
 
     if tags.len() == 1 {
+        // This is a single-tag union.
         let (tag_name, payload_vars) = tags.pop().unwrap();
 
         // If there was a type alias name, use that. Otherwise use the tag name.
@@ -285,7 +297,7 @@ fn add_tag_union(
             None => tag_name,
         };
 
-        return match payload_vars.len() {
+        match payload_vars.len() {
             0 => {
                 // This is a single-tag union with no payload, e.g. `[Foo]`
                 // so just generate an empty record
@@ -298,7 +310,7 @@ fn add_tag_union(
                 // This is a single-tag union with 1 payload field, e.g.`[Foo Str]`.
                 // We'll just wrap that.
                 let var = *payload_vars.get(0).unwrap();
-                let content = add_type(env, var, types);
+                let content = env.add_type(var, types);
 
                 types.add(RocType::TransparentWrapper { name, content })
             }
@@ -311,146 +323,179 @@ fn add_tag_union(
                     (field_name, *payload_var)
                 });
 
-                add_struct(env, name, fields, types)
+                // Note that we assume no recursion variable here. If you write something like:
+                //
+                // Rec : [Blah Rec]
+                //
+                // ...then it's not even theoretically possible to instantiate one, so
+                // bindgen won't be able to help you do that!
+                add_struct(env, name, fields, types, None)
             }
+        }
+    } else {
+        // This is a multi-tag union.
+
+        // This is a placeholder so that we can get a TypeId for future recursion IDs.
+        // At the end, we will replace this with the real tag union type.
+        let type_id = types.add(RocType::Struct {
+            name: "[THIS SHOULD BE REMOVED]".to_string(),
+            fields: Vec::new(),
+        });
+        let layout = env.layout_cache.from_var(env.arena, var, subs).unwrap();
+        let name = match opt_name {
+            Some(sym) => sym.as_str(env.interns).to_string(),
+            None => env.enum_names.get_name(var),
         };
-    }
 
-    let layout = env.layout_cache.from_var(env.arena, var, subs).unwrap();
-    let name = match opt_name {
-        Some(sym) => sym.as_str(env.interns).to_string(),
-        None => env.enum_names.get_name(var),
-    };
+        // Sort tags alphabetically by tag name
+        tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
-    // Sort tags alphabetically by tag name
-    tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+        let opt_recursion_id = if is_recursive_tag_union(&layout) {
+            Some(type_id)
+        } else {
+            None
+        };
 
-    let mut tags: Vec<_> = tags
-        .into_iter()
-        .map(|(tag_name, payload_vars)| {
-            match struct_fields_needed(env, payload_vars.iter().copied()) {
-                0 => {
-                    // no payload
-                    (tag_name, None)
-                }
-                1 => {
-                    // there's 1 payload item, so it doesn't need its own
-                    // struct - e.g. for `[Foo Str, Bar Str]` both of them
-                    // can have payloads of plain old Str, no struct wrapper needed.
-                    let payload_var = payload_vars.get(0).unwrap();
-                    let payload_id = add_type(env, *payload_var, types);
-
-                    (tag_name, Some(payload_id))
-                }
-                _ => {
-                    if matches!(layout, Layout::Union(UnionLayout::NullableUnwrapped { .. })) {
-                        // In the specific case of a NullableUnwrapped layout, we always
-                        // know the payload has 1 element, and we always want to
-                        // unwrap it even though there's technically 2 vars in there (the
-                        // other being the recursion pointer, which we store implicitly
-                        // in the nullable pointer instead of explicitly in the struct)
-                        debug_assert_eq!(payload_vars.len(), 2);
-
+        let mut tags: Vec<_> = tags
+            .into_iter()
+            .map(|(tag_name, payload_vars)| {
+                match struct_fields_needed(env, payload_vars.iter().copied()) {
+                    0 => {
+                        // no payload
+                        (tag_name, None)
+                    }
+                    1 if opt_recursion_id.is_none() => {
+                        // this isn't recursive and there's 1 payload item, so it doesn't
+                        // need its own struct - e.g. for `[Foo Str, Bar Str]` both of them
+                        // can have payloads of plain old Str, no struct wrapper needed.
                         let payload_var = payload_vars.get(0).unwrap();
-                        let payload_id = add_type(env, *payload_var, types);
+                        let layout = env
+                            .layout_cache
+                            .from_var(env.arena, *payload_var, env.subs)
+                            .expect("Something weird ended up in the content");
+                        let payload_id =
+                            add_type_help(env, layout, *payload_var, None, types, opt_recursion_id);
 
                         (tag_name, Some(payload_id))
-                    } else {
+                    }
+                    _ => {
                         // create a struct type for the payload and save it
                         let struct_name = format!("{}_{}", name, tag_name); // e.g. "MyUnion_MyVariant"
                         let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
                             (format!("f{}", index).into(), *payload_var)
                         });
-                        let struct_id = add_struct(env, struct_name, fields, types);
+                        let struct_id =
+                            add_struct(env, struct_name, fields, types, opt_recursion_id);
 
                         (tag_name, Some(struct_id))
                     }
                 }
-            }
-        })
-        .collect();
+            })
+            .collect();
 
-    let typ = match layout {
-        Layout::Union(union_layout) => {
-            use roc_mono::layout::UnionLayout::*;
+        let typ = match layout {
+            Layout::Union(union_layout) => {
+                use roc_mono::layout::UnionLayout::*;
 
-            match union_layout {
-                // A non-recursive tag union
-                // e.g. `Result ok err : [Ok ok, Err err]`
-                NonRecursive(_) => RocType::TagUnion(RocTagUnion::NonRecursive { name, tags }),
-                // A recursive tag union (general case)
-                // e.g. `Expr : [Sym Str, Add Expr Expr]`
-                Recursive(_) => {
-                    todo!()
-                }
-                // A recursive tag union with just one constructor
-                // Optimization: No need to store a tag ID (the payload is "unwrapped")
-                // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
-                NonNullableUnwrapped(_) => {
-                    todo!()
-                }
-                // A recursive tag union that has an empty variant
-                // Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
-                // It has more than one other variant, so they need tag IDs (payloads are "wrapped")
-                // e.g. `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`
-                // see also: https://youtu.be/ip92VMpf_-A?t=164
-                NullableWrapped { .. } => {
-                    todo!()
-                }
-                // A recursive tag union with only two variants, where one is empty.
-                // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
-                // e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
-                NullableUnwrapped { nullable_id, .. } => {
-                    // NullableUnwrapped tag unions should always have exactly 2 tags.
-                    debug_assert_eq!(tags.len(), 2);
-
-                    let null_tag;
-                    let non_null;
-
-                    if nullable_id {
-                        // If nullable_id is true, then the null tag is second, which means
-                        // pop() will return it because it's at the end of the vec.
-                        null_tag = tags.pop().unwrap().0;
-                        non_null = tags.pop().unwrap();
-                    } else {
-                        // The null tag is first, which means the tag with the payload is second.
-                        non_null = tags.pop().unwrap();
-                        null_tag = tags.pop().unwrap().0;
+                match union_layout {
+                    // A non-recursive tag union
+                    // e.g. `Result ok err : [Ok ok, Err err]`
+                    NonRecursive(_) => RocType::TagUnion(RocTagUnion::NonRecursive { name, tags }),
+                    // A recursive tag union (general case)
+                    // e.g. `Expr : [Sym Str, Add Expr Expr]`
+                    Recursive(_) => {
+                        todo!()
                     }
+                    // A recursive tag union with just one constructor
+                    // Optimization: No need to store a tag ID (the payload is "unwrapped")
+                    // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
+                    NonNullableUnwrapped(_) => {
+                        todo!()
+                    }
+                    // A recursive tag union that has an empty variant
+                    // Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
+                    // It has more than one other variant, so they need tag IDs (payloads are "wrapped")
+                    // e.g. `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`
+                    // see also: https://youtu.be/ip92VMpf_-A?t=164
+                    NullableWrapped { .. } => {
+                        todo!()
+                    }
+                    // A recursive tag union with only two variants, where one is empty.
+                    // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
+                    // e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
+                    NullableUnwrapped {
+                        nullable_id: null_represents_first_tag,
+                        other_fields: _, // TODO use this!
+                    } => {
+                        // NullableUnwrapped tag unions should always have exactly 2 tags.
+                        debug_assert_eq!(tags.len(), 2);
 
-                    let (non_null_tag, non_null_payload) = non_null;
+                        let null_tag;
+                        let non_null;
 
-                    RocType::TagUnion(RocTagUnion::NullableUnwrapped {
-                        name,
-                        null_tag,
-                        non_null_tag,
-                        non_null_payload: non_null_payload.unwrap(),
-                    })
+                        if null_represents_first_tag {
+                            // If nullable_id is true, then the null tag is second, which means
+                            // pop() will return it because it's at the end of the vec.
+                            null_tag = tags.pop().unwrap().0;
+                            non_null = tags.pop().unwrap();
+                        } else {
+                            // The null tag is first, which means the tag with the payload is second.
+                            non_null = tags.pop().unwrap();
+                            null_tag = tags.pop().unwrap().0;
+                        }
+
+                        let (non_null_tag, non_null_payload) = non_null;
+
+                        RocType::TagUnion(RocTagUnion::NullableUnwrapped {
+                            name,
+                            null_tag,
+                            non_null_tag,
+                            non_null_payload: non_null_payload.unwrap(),
+                            null_represents_first_tag,
+                        })
+                    }
                 }
             }
-        }
-        Layout::Builtin(builtin) => match builtin {
-            Builtin::Int(_) => RocType::TagUnion(RocTagUnion::Enumeration {
-                name,
-                tags: tags.into_iter().map(|(tag_name, _)| tag_name).collect(),
-            }),
-            Builtin::Bool => RocType::Bool,
-            Builtin::Float(_)
-            | Builtin::Decimal
-            | Builtin::Str
-            | Builtin::Dict(_, _)
-            | Builtin::Set(_)
-            | Builtin::List(_) => unreachable!(),
-        },
-        Layout::Struct { .. }
-        | Layout::Boxed(_)
-        | Layout::LambdaSet(_)
-        | Layout::RecursivePointer => {
-            unreachable!()
-        }
-    };
+            Layout::Builtin(builtin) => match builtin {
+                Builtin::Int(_) => RocType::TagUnion(RocTagUnion::Enumeration {
+                    name,
+                    tags: tags.into_iter().map(|(tag_name, _)| tag_name).collect(),
+                }),
+                Builtin::Bool => RocType::Bool,
+                Builtin::Float(_)
+                | Builtin::Decimal
+                | Builtin::Str
+                | Builtin::Dict(_, _)
+                | Builtin::Set(_)
+                | Builtin::List(_) => unreachable!(),
+            },
+            Layout::Struct { .. }
+            | Layout::Boxed(_)
+            | Layout::LambdaSet(_)
+            | Layout::RecursivePointer => {
+                unreachable!()
+            }
+        };
 
-    types.add(typ)
+        types.replace(type_id, typ);
+
+        type_id
+    }
+}
+
+fn is_recursive_tag_union(layout: &Layout) -> bool {
+    use roc_mono::layout::UnionLayout::*;
+
+    match layout {
+        Layout::Union(tag_union) => match tag_union {
+            NonRecursive(_) => false,
+            Recursive(_)
+            | NonNullableUnwrapped(_)
+            | NullableWrapped { .. }
+            | NullableUnwrapped { .. } => true,
+        },
+        _ => false,
+    }
 }
 
 fn struct_fields_needed<I: IntoIterator<Item = Variable>>(env: &mut Env<'_>, vars: I) -> usize {

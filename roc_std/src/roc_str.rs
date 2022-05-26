@@ -6,6 +6,7 @@ use core::{
     mem::{size_of, ManuallyDrop},
     ops::{Deref, DerefMut},
 };
+use std::hash::Hash;
 
 use crate::{rc::ReferenceCount, RocList};
 
@@ -229,5 +230,11 @@ impl DerefMut for SmallString {
     fn deref_mut(&mut self) -> &mut Self::Target {
         let len = self.len();
         unsafe { core::str::from_utf8_unchecked_mut(self.bytes.get_unchecked_mut(..len)) }
+    }
+}
+
+impl Hash for RocStr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state)
     }
 }
