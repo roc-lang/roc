@@ -997,18 +997,17 @@ pub struct {name} {{
             impls,
             opt_impl.clone(),
             architecture,
-            format!(
-                r#"#[inline(always)]
-    fn storage(&self) -> Option<&core::cell::Cell<roc_std::Storage>> {{
-        if self.pointer.is_null() {{
+            r#"#[inline(always)]
+    fn storage(&self) -> Option<&core::cell::Cell<roc_std::Storage>> {
+        if self.pointer.is_null() {
             None
-        }} else {{
-            unsafe {{
+        } else {
+            unsafe {
                 Some(&*self.pointer.cast::<core::cell::Cell<roc_std::Storage>>().sub(1))
-            }}
-        }}
-    }}"#
-            ),
+            }
+        }
+    }"#
+            .to_string(),
         );
 
         add_decl(
@@ -1170,52 +1169,50 @@ pub struct {name} {{
             impls,
             opt_impl.clone(),
             architecture,
-            format!(
-                r#"fn increment(&self) {{
-        if let Some(storage) = self.storage() {{
+            r#"fn increment(&self) {
+        if let Some(storage) = self.storage() {
             let mut copy = storage.get();
-            if !copy.is_readonly() {{
+            if !copy.is_readonly() {
                 copy.increment_reference_count();
                 storage.set(copy);
-            }}
-        }}
-    }}"#
-            ),
+            }
+        }
+    }"#
+            .to_string(),
         );
 
         add_decl(
             impls,
             opt_impl,
             architecture,
-            format!(
-                r#"unsafe fn decrement(wrapper_ptr: *const Self) {{
+                r#"unsafe fn decrement(wrapper_ptr: *const Self) {
         let wrapper = &*wrapper_ptr;
 
-        if let Some(storage) = Self::storage(wrapper) {{
+        if let Some(storage) = Self::storage(wrapper) {
             // Decrement the refcount and return early if no dealloc is needed
-            {{
+            {
                 let mut new_storage = storage.get();
 
-                if new_storage.is_readonly() {{
+                if new_storage.is_readonly() {
                     return;
-                }}
+                }
 
                 let needs_dealloc = new_storage.decrease();
 
-                if !needs_dealloc {{
+                if !needs_dealloc {
                     // Write the storage back.
                     storage.set(new_storage);
 
                     return;
-                }}
-            }}
+                }
+            }
 
-            if !wrapper.pointer.is_null() {{
+            if !wrapper.pointer.is_null() {
                 // If there is a payload, recursively drop it first.
                 let mut payload = core::mem::ManuallyDrop::take(&mut *wrapper.pointer);
 
                 core::mem::drop(payload);
-            }}
+            }
 
             // Dealloc the pointer
             let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
@@ -1225,9 +1222,8 @@ pub struct {name} {{
                 alloc_ptr as *mut core::ffi::c_void,
                 alignment as u32,
             );
-        }}
-    }}"#
-            ),
+        }
+    }"#.to_string()
         );
     }
 
@@ -1258,13 +1254,12 @@ pub struct {name} {{
             impls,
             opt_impl,
             architecture,
-            format!(
-                r#"fn drop(&mut self) {{
-        unsafe {{
+            r#"fn drop(&mut self) {
+        unsafe {
             roc_std::ReferenceCount::decrement(self as *const Self);
-        }}
-    }}"#
-            ),
+        }
+    }"#
+            .to_string(),
         );
     }
 
