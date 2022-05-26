@@ -866,27 +866,15 @@ fn add_struct(
             )
         }
         _ => {
-            let is_recursive_payload = fields
-                .iter()
-                .any(|field| matches!(field, Field::Recursive(_, _)));
             let derive = derive_str(types.get(struct_id), types, true);
             let mut buf = format!("{derive}\n#[repr(C)]\npub struct {name} {{\n");
 
             for field in fields {
-                let field_type_name = type_name(field.type_id(), types);
-                let type_str = if is_recursive_payload {
-                    // If this struct is a recursive payload (meaning any one of its
-                    // fields is recursive), then all fields with pointers must
-                    // be dropped manually.
-                    if types.get(field.type_id()).has_pointer(types) {
-                        format!("core::mem::ManuallyDrop<{field_type_name}>")
-                    } else {
-                        field_type_name
-                    };
-                };
-                let field_label = field.label();
-
-                buf.push_str(&format!("{INDENT}pub {field_label}: {type_str},\n",));
+                buf.push_str(&format!(
+                    "{INDENT}pub {}: {},\n",
+                    field.label(),
+                    type_name(field.type_id(), types)
+                ));
             }
 
             buf.push('}');
