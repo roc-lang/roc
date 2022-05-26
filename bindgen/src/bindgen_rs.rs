@@ -1195,31 +1195,62 @@ pub struct {name} {{
             ),
         );
 
+        let mut drop_payload_fields = String::new();
+
+        if let RocType::Struct { fields, .. } = &payload_type {
+            for field in fields {
+                match field {
+                    Field::NonRecursive(label, type_id) => {
+                        // Only drop fields that actually need dropping
+                        if types.get(*type_id).has_pointer(types) {
+                            drop_payload_fields.push_str(&format!(
+                            "core::mem::drop(core::mem::ManuallyDrop::take(&mut payload.{label}));"
+                        ));
+                        }
+                    }
+                    Field::Recursive(_, _) => {
+                        // Never drop the recursive pointer. If this is getting run,
+                        // it's because we're already in the process of freeing that pointer!
+                    }
+                }
+            }
+        }
+
         add_decl(
             impls,
             opt_impl,
             architecture,
             format!(
                 r#"unsafe fn decrement(wrapper_ptr: *const Self) {{
-        let wrapper = &*wrapper_ptr;
+        let wrapper = *wrapper_ptr;
 
-        if let Some(storage) = Self::storage(wrapper) {{
+        if let Some(storage) = Self::storage(&wrapper) {{
             // Decrement the refcount and return early if no dealloc is needed
             {{
-                let mut copy = storage.get();
-                let needs_dealloc = copy.decrease();
+                let mut new_storage = storage.get();
+
+                if new_storage.is_readonly() {{
+                    return;
+                }}
+
+                let needs_dealloc = new_storage.decrease();
 
                 if !needs_dealloc {{
-                    if !copy.is_readonly() {{
-                        // Write the storage back.
-                        storage.set(copy);
-                    }}
+                    // Write the storage back.
+                    storage.set(new_storage);
 
                     return;
                 }}
             }}
 
-            // Dealloc the memory
+            if !wrapper.pointer.is_null() {{
+                // Drop all the payload fields except the recursive one.
+                let mut payload = core::mem::ManuallyDrop::take(&mut *wrapper.pointer);
+
+                {drop_payload_fields}
+            }}
+
+            // Dealloc the pointer
             let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
             let alloc_ptr = wrapper.pointer.cast::<u8>().sub(alignment);
 
@@ -1262,13 +1293,8 @@ pub struct {name} {{
             architecture,
             format!(
                 r#"fn drop(&mut self) {{
-        if !self.pointer.is_null() {{
-            unsafe {{
-                // Drop the payload before dropping its wrapper.
-                core::mem::drop(core::mem::ManuallyDrop::take(&mut *self.pointer));
-
-                roc_std::ReferenceCount::decrement(self as *const Self);
-            }}
+        unsafe {{
+            roc_std::ReferenceCount::decrement(self as *const Self);
         }}
     }}"#
             ),
