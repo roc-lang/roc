@@ -160,7 +160,8 @@ comptime {
     exportUtilsFn(utils.decrefC, "decref");
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
-    exportExpectFn(expect.expectFailedC, "expect_failed");
+    exportExpectFn(expect.expectFailedStart, "expect_failed_start");
+    exportExpectFn(expect.expectFailedFinalize, "expect_failed_finalize");
     exportExpectFn(expect.getExpectFailuresC, "get_expect_failures");
     exportExpectFn(expect.deinitFailuresC, "deinit_failures");
 

@@ -372,7 +372,8 @@ pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with
 pub const UTILS_INCREF: &str = "roc_builtins.utils.incref";
 pub const UTILS_DECREF: &str = "roc_builtins.utils.decref";
 pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null";
-pub const UTILS_EXPECT_FAILED: &str = "roc_builtins.expect.expect_failed";
+pub const UTILS_EXPECT_FAILED_START: &str = "roc_builtins.expect.expect_failed_start";
+pub const UTILS_EXPECT_FAILED_FINALIZE: &str = "roc_builtins.expect.expect_failed_finalize";
 pub const UTILS_GET_EXPECT_FAILURES: &str = "roc_builtins.expect.get_expect_failures";
 pub const UTILS_DEINIT_FAILURES: &str = "roc_builtins.expect.deinit_failures";
 

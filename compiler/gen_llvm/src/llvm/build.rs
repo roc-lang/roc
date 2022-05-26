@@ -2740,7 +2740,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         Expect {
             condition: cond,
             region: _,
-            lookups: _,
+            lookups,
             layouts: _,
             remainder,
         } => {
@@ -2770,26 +2770,43 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     roc_target::PtrWidth::Bytes8 => {
                         let func = env
                             .module
-                            .get_function(bitcode::UTILS_EXPECT_FAILED)
+                            .get_function(bitcode::UTILS_EXPECT_FAILED_START)
                             .unwrap();
-                        // TODO get the actual line info instead of
-                        // hardcoding as zero!
-                        let callable = CallableValue::try_from(func).unwrap();
-                        let start_line = context.i32_type().const_int(0, false);
-                        let end_line = context.i32_type().const_int(0, false);
-                        let start_col = context.i16_type().const_int(0, false);
-                        let end_col = context.i16_type().const_int(0, false);
 
-                        bd.build_call(
-                            callable,
-                            &[
-                                start_line.into(),
-                                end_line.into(),
-                                start_col.into(),
-                                end_col.into(),
-                            ],
-                            "call_expect_failed",
-                        );
+                        let call_result = bd.build_call(func, &[], "call_expect_start_failed");
+
+                        let mut ptr = call_result
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                            .into_pointer_value();
+
+                        for lookup in lookups.iter() {
+                            let (value, _layout) = load_symbol_and_layout(scope, lookup);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            env.builder.build_store(cast_ptr, value);
+
+                            // let increment = layout.stack_size(env.target_info);
+                            let increment = 1;
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
+
+                        let func = env
+                            .module
+                            .get_function(bitcode::UTILS_EXPECT_FAILED_FINALIZE)
+                            .unwrap();
+
+                        bd.build_call(func, &[], "call_expect_finalize_failed");
 
                         bd.build_unconditional_branch(then_block);
                     }

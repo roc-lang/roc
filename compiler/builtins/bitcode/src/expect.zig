@@ -80,17 +80,7 @@ const O_CREAT: c_int = 64;
 pub const PROT_WRITE: c_int = 2;
 pub const MAP_SHARED: c_int = 0x0001;
 
-pub fn expectFailedC(
-    start_line: u32,
-    end_line: u32,
-    start_col: u16,
-    end_col: u16,
-) callconv(.C) void {
-    _ = start_line;
-    _ = end_line;
-    _ = start_col;
-    _ = end_col;
-
+pub fn expectFailedStart() callconv(.C) [*]u8 {
     const name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
 
     const shared_fd = shm_open(@ptrCast(*const i8, name), O_RDWR | O_CREAT, 0o666);
@@ -106,14 +96,12 @@ pub fn expectFailedC(
         0,
     );
 
-    const bytes_to_write = "42";
     const ptr = @ptrCast([*]u8, shared_ptr);
 
-    @memcpy(ptr, &bytes_to_write.*, 2);
+    return ptr;
+}
 
-    // region
-    // [ symbol, length, ptr ]
-
+pub fn expectFailedFinalize() callconv(.C) void {
     const parent_pid = getppid();
 
     _ = kill(parent_pid, SIGUSR1);

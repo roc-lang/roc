@@ -3,8 +3,12 @@ app "helloZig"
     imports []
     provides [main] to pf
 
-x = 42
 
 main = 
-    expect x != x
-    "Hello, World!\n"
+    a = 'A'
+    b = 'C'
+
+    (
+        expect a == b
+        "Hello, World!\n"
+    )
