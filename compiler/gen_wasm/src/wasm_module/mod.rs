@@ -2,16 +2,17 @@ pub mod code_builder;
 mod dead_code;
 pub mod linking;
 pub mod opcodes;
+pub mod parse;
 pub mod sections;
 pub mod serialize;
 
 use bumpalo::{collections::Vec, Bump};
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 pub use linking::SymInfo;
-use roc_error_macros::internal_error;
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
 use self::linking::{LinkingSection, RelocationSection};
+use self::parse::{Parse, ParseError};
 use self::sections::{
     CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
     ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId, TableSection,
@@ -23,6 +24,7 @@ use self::serialize::{SerialBuffer, Serialize};
 /// https://webassembly.github.io/spec/core/binary/modules.html
 #[derive(Debug)]
 pub struct WasmModule<'a> {
+    pub data_end: u32,
     pub types: TypeSection<'a>,
     pub import: ImportSection<'a>,
     pub function: FunctionSection<'a>,
@@ -68,42 +70,6 @@ impl<'a> WasmModule<'a> {
         self.names.serialize(buffer);
     }
 
-    /// Serialize the module to bytes
-    /// (Mutates some data related to linking)
-    pub fn serialize_with_linker_data_mut<T: SerialBuffer>(&mut self, buffer: &mut T) {
-        buffer.append_u8(0);
-        buffer.append_slice("asm".as_bytes());
-        buffer.write_unencoded_u32(Self::WASM_VERSION);
-
-        // Keep track of (non-empty) section indices for linking
-        let mut counter = SectionCounter {
-            buffer_size: buffer.size(),
-            section_index: 0,
-        };
-
-        counter.serialize_and_count(buffer, &self.types);
-        counter.serialize_and_count(buffer, &self.import);
-        counter.serialize_and_count(buffer, &self.function);
-        counter.serialize_and_count(buffer, &self.table);
-        counter.serialize_and_count(buffer, &self.memory);
-        counter.serialize_and_count(buffer, &self.global);
-        counter.serialize_and_count(buffer, &self.export);
-        counter.serialize_and_count(buffer, &self.start);
-        counter.serialize_and_count(buffer, &self.element);
-
-        // Code section is the only one with relocations so we can stop counting
-        let code_section_index = counter.section_index;
-        self.code
-            .serialize_with_relocs(buffer, &mut self.relocations.entries);
-
-        self.data.serialize(buffer);
-
-        self.linking.serialize(buffer);
-
-        self.relocations.target_section_index = Some(code_section_index);
-        self.relocations.serialize(buffer);
-    }
-
     /// Module size in bytes (assuming no linker data)
     /// May be slightly overestimated. Intended for allocating buffer capacity.
     pub fn size(&self) -> usize {
@@ -121,54 +87,48 @@ impl<'a> WasmModule<'a> {
             + self.names.size()
     }
 
-    pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Self {
+    pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Result<Self, ParseError> {
         let is_valid_magic_number = &bytes[0..4] == "\0asm".as_bytes();
         let is_valid_version = bytes[4..8] == Self::WASM_VERSION.to_le_bytes();
         if !is_valid_magic_number || !is_valid_version {
-            internal_error!("Invalid Wasm object file header for platform & builtins");
+            return Err(ParseError {
+                offset: 0,
+                message: "This file is not a WebAssembly binary. The file header is not valid."
+                    .into(),
+            });
         }
 
         let mut cursor: usize = 8;
 
-        let mut types = TypeSection::preload(arena, bytes, &mut cursor);
-        types.parse_offsets();
-
-        let mut import = ImportSection::preload(arena, bytes, &mut cursor);
-        let imported_fn_signatures = import.parse(arena);
-
-        let function = FunctionSection::preload(arena, bytes, &mut cursor);
-        let defined_fn_signatures = function.parse(arena);
-
-        let table = TableSection::preload(bytes, &mut cursor);
-
-        let memory = MemorySection::preload(arena, bytes, &mut cursor);
-
-        let global = GlobalSection::preload(arena, bytes, &mut cursor);
-
-        let export = ExportSection::preload(arena, bytes, &mut cursor);
-
-        let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
-
-        let element = ElementSection::preload(arena, bytes, &mut cursor);
+        let types = TypeSection::parse(arena, bytes, &mut cursor)?;
+        let import = ImportSection::parse(arena, bytes, &mut cursor)?;
+        let function = FunctionSection::parse(arena, bytes, &mut cursor)?;
+        let table = TableSection::parse((), bytes, &mut cursor)?;
+        let memory = MemorySection::parse(arena, bytes, &mut cursor)?;
+        let global = GlobalSection::parse(arena, bytes, &mut cursor)?;
+        let export = ExportSection::parse(arena, bytes, &mut cursor)?;
+        let start = OpaqueSection::parse((arena, SectionId::Start), bytes, &mut cursor)?;
+        let element = ElementSection::parse(arena, bytes, &mut cursor)?;
         let indirect_callees = element.indirect_callees(arena);
 
-        let code = CodeSection::preload(
+        let code = CodeSection::parse(
             arena,
             bytes,
             &mut cursor,
-            &imported_fn_signatures,
-            &defined_fn_signatures,
+            &import.fn_signatures,
+            &function.signatures,
             &indirect_callees,
-        );
+        )?;
 
-        let data = DataSection::preload(arena, bytes, &mut cursor);
+        let data = DataSection::parse(arena, bytes, &mut cursor)?;
 
         // Metadata sections
-        let names = NameSection::parse(arena, bytes, &mut cursor);
+        let names = NameSection::parse(arena, bytes, &mut cursor)?;
         let linking = LinkingSection::new(arena);
         let relocations = RelocationSection::new(arena, "reloc.CODE");
 
-        WasmModule {
+        let mut module = WasmModule {
+            data_end: 0,
             types,
             import,
             function,
@@ -183,6 +143,14 @@ impl<'a> WasmModule<'a> {
             names,
             linking,
             relocations,
+        };
+
+        if let Some(data_end) = module.get_exported_global_u32("__data_end") {
+            module.data_end = data_end;
+            Ok(module)
+        } else {
+            let message = "The Wasm module must export the __data_end global so that I know where its constant data ends (including zero data)".into();
+            Err(ParseError { offset: 0, message })
         }
     }
 
@@ -201,38 +169,17 @@ impl<'a> WasmModule<'a> {
 
         self.code.remove_dead_preloads(
             arena,
-            self.import.function_count,
+            self.import.fn_signatures.len(),
             &function_indices,
             called_preload_fns,
         )
     }
-}
 
-/// Helper struct to count non-empty sections.
-/// Needed to generate linking data, which refers to target sections by index.
-struct SectionCounter {
-    buffer_size: usize,
-    section_index: u32,
-}
-
-impl SectionCounter {
-    /// Update the section counter if buffer size increased since last call
-    #[inline]
-    fn update<SB: SerialBuffer>(&mut self, buffer: &mut SB) {
-        let new_size = buffer.size();
-        if new_size > self.buffer_size {
-            self.section_index += 1;
-            self.buffer_size = new_size;
-        }
-    }
-
-    #[inline]
-    fn serialize_and_count<SB: SerialBuffer, S: Serialize>(
-        &mut self,
-        buffer: &mut SB,
-        section: &S,
-    ) {
-        section.serialize(buffer);
-        self.update(buffer);
+    pub fn get_exported_global_u32(&self, name: &str) -> Option<u32> {
+        self.export
+            .exports
+            .iter()
+            .find(|ex| ex.name == name)
+            .and_then(|ex| self.global.parse_u32_at_index(ex.index).ok())
     }
 }

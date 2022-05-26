@@ -1,5 +1,4 @@
-use bumpalo::{self, collections::Vec};
-use std::fmt::Write;
+use bumpalo::collections::{String, Vec};
 
 use code_builder::Align;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -51,7 +50,6 @@ pub struct WasmBackend<'a> {
     // Module-level data
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
-    next_constant_addr: u32,
     pub fn_index_offset: u32,
     called_preload_fns: Vec<'a, u32>,
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
@@ -88,19 +86,8 @@ impl<'a> WasmBackend<'a> {
             }
         }
 
-        // The preloaded binary has a global to tell us where its data section ends
-        // Note: We need this to account for zero data (.bss), which doesn't have an explicit DataSegment!
-        let data_end_name = "__data_end".as_bytes();
-        let data_end_idx = app_exports
-            .iter()
-            .find(|ex| ex.name == data_end_name)
-            .map(|ex| ex.index)
-            .unwrap_or_else(|| {
-                internal_error!("Preloaded Wasm binary must export global constant `__data_end`")
-            });
-        let next_constant_addr = module.global.parse_u32_at_index(data_end_idx);
-
         module.export.exports = app_exports;
+        module.code.code_builders.reserve(proc_lookup.len());
 
         WasmBackend {
             env,
@@ -110,7 +97,6 @@ impl<'a> WasmBackend<'a> {
             module,
 
             layout_ids,
-            next_constant_addr,
             fn_index_offset,
             called_preload_fns: Vec::with_capacity_in(2, env.arena),
             proc_lookup,
@@ -142,6 +128,7 @@ impl<'a> WasmBackend<'a> {
             .layout_ids
             .get_toplevel(symbol, &layout)
             .to_symbol_string(symbol, self.interns);
+        let name = String::from_str_in(&name, self.env.arena).into_bump_str();
 
         self.proc_lookup.push(ProcLookupData {
             name: symbol,
@@ -299,10 +286,8 @@ impl<'a> WasmBackend<'a> {
             .unwrap();
         let wasm_fn_index = self.fn_index_offset + proc_index as u32;
 
-        let mut debug_name = bumpalo::collections::String::with_capacity_in(64, self.env.arena);
-        write!(debug_name, "{:?}", sym).unwrap();
-        let name_bytes = debug_name.into_bytes().into_bump_slice();
-        self.module.names.append_function(wasm_fn_index, name_bytes);
+        let name = String::from_str_in(sym.as_str(self.interns), self.env.arena).into_bump_str();
+        self.module.names.append_function(wasm_fn_index, name);
     }
 
     /// Build a wrapper around a Roc procedure so that it can be called from our higher-order Zig builtins.
@@ -931,10 +916,10 @@ impl<'a> WasmBackend<'a> {
     /// Return the data we need for code gen: linker symbol index and memory address
     fn store_bytes_in_data_section(&mut self, bytes: &[u8], sym: Symbol) -> (u32, u32) {
         // Place the segment at a 4-byte aligned offset
-        let segment_addr = round_up_to_alignment!(self.next_constant_addr, PTR_SIZE);
+        let segment_addr = round_up_to_alignment!(self.module.data_end, PTR_SIZE);
         let elements_addr = segment_addr + PTR_SIZE;
         let length_with_refcount = 4 + bytes.len();
-        self.next_constant_addr = segment_addr + length_with_refcount as u32;
+        self.module.data_end = segment_addr + length_with_refcount as u32;
 
         let mut segment = DataSegment {
             mode: DataMode::active_at(segment_addr),
@@ -953,10 +938,11 @@ impl<'a> WasmBackend<'a> {
             .layout_ids
             .get(sym, &Layout::Builtin(Builtin::Str))
             .to_symbol_string(sym, self.interns);
+        let name = String::from_str_in(&name, self.env.arena).into_bump_str();
 
         let linker_symbol = SymInfo::Data(DataSymbol::Defined {
             flags: 0,
-            name: name.clone(),
+            name,
             segment_index,
             segment_offset: 4,
             size: bytes.len() as u32,
@@ -1103,7 +1089,7 @@ impl<'a> WasmBackend<'a> {
         num_wasm_args: usize,
         has_return_val: bool,
     ) {
-        let fn_index = self.module.names.functions[name.as_bytes()];
+        let fn_index = self.module.names.functions[name];
         self.called_preload_fns.push(fn_index);
         let linker_symbol_index = u32::MAX;
 
