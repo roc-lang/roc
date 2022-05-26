@@ -36,9 +36,10 @@ pub struct WasmModule<'a> {
     pub element: ElementSection<'a>,
     pub code: CodeSection<'a>,
     pub data: DataSection<'a>,
-    pub names: NameSection<'a>,
     pub linking: LinkingSection<'a>,
-    pub relocations: RelocationSection<'a>,
+    pub reloc_code: RelocationSection<'a>,
+    pub reloc_data: RelocationSection<'a>,
+    pub names: NameSection<'a>,
 }
 
 impl<'a> WasmModule<'a> {
@@ -122,11 +123,13 @@ impl<'a> WasmModule<'a> {
 
         let data = DataSection::parse(arena, bytes, &mut cursor)?;
 
-        // Metadata sections
-        let names = NameSection::parse(arena, bytes, &mut cursor)?;
         let linking = LinkingSection::new(arena);
-        let relocations = RelocationSection::new(arena, "reloc.CODE");
+        let reloc_code = RelocationSection::new(arena, "reloc.CODE");
+        let reloc_data = RelocationSection::new(arena, "reloc.DATA");
+        let names = NameSection::parse(arena, bytes, &mut cursor)?;
 
+        // WebAssembly spec doesn't guarantee the order of the remaining "custom" sections.
+        // Create them as empty sections, then fill them in whatever order they appear.
         let mut module = WasmModule {
             data_end: 0,
             types,
@@ -140,9 +143,10 @@ impl<'a> WasmModule<'a> {
             element,
             code,
             data,
-            names,
             linking,
-            relocations,
+            reloc_code,
+            reloc_data,
+            names,
         };
 
         if let Some(data_end) = module.get_exported_global_u32("__data_end") {
