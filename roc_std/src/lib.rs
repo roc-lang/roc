@@ -8,12 +8,10 @@ use core::str;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 
-mod rc;
 mod roc_list;
 mod roc_str;
 mod storage;
 
-pub use rc::ReferenceCount;
 pub use roc_list::RocList;
 pub use roc_str::RocStr;
 pub use storage::Storage;
