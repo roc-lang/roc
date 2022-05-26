@@ -2782,7 +2782,10 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             .into_pointer_value();
 
                         {
-                            let value = env.context.i32_type().const_int(region.start().offset as _, false);
+                            let value = env
+                                .context
+                                .i32_type()
+                                .const_int(region.start().offset as _, false);
 
                             let cast_ptr = env.builder.build_pointer_cast(
                                 ptr,
@@ -2802,7 +2805,10 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         }
 
                         {
-                            let value = env.context.i32_type().const_int(region.end().offset as _, false);
+                            let value = env
+                                .context
+                                .i32_type()
+                                .const_int(region.end().offset as _, false);
 
                             let cast_ptr = env.builder.build_pointer_cast(
                                 ptr,
@@ -2844,7 +2850,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         }
 
                         for lookup in lookups.iter() {
-                            let (value, _layout) = load_symbol_and_layout(scope, lookup);
+                            let (value, layout) = load_symbol_and_layout(scope, lookup);
 
                             let cast_ptr = env.builder.build_pointer_cast(
                                 ptr,
@@ -2854,8 +2860,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                             env.builder.build_store(cast_ptr, value);
 
-                            // let increment = layout.stack_size(env.target_info);
-                            let increment = 1;
+                            let increment = layout.stack_size(env.target_info);
                             let increment = env.ptr_int().const_int(increment as _, false);
 
                             ptr = unsafe {

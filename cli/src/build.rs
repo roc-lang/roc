@@ -6,9 +6,8 @@ use roc_build::{
 use roc_builtins::bitcode;
 use roc_collections::VecMap;
 use roc_load::{Expectations, LoadingProblem, Threading};
-use roc_module::symbol::ModuleId;
+use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
-use roc_region::all::Region;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
 use std::time::{Duration, SystemTime};
@@ -29,6 +28,7 @@ pub struct BuiltFile {
     pub problems: Problems,
     pub total_time: Duration,
     pub expectations: VecMap<ModuleId, Expectations>,
+    pub interns: Interns,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -64,6 +64,7 @@ pub fn build_file<'a>(
     )?;
 
     let expectations = std::mem::take(&mut loaded.expectations);
+    let interns = loaded.interns.clone();
 
     use target_lexicon::Architecture;
     let emit_wasm = matches!(target.architecture, Architecture::Wasm32);
@@ -346,6 +347,7 @@ pub fn build_file<'a>(
         problems,
         total_time,
         expectations,
+        interns,
     })
 }
 

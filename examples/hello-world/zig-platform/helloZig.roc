@@ -5,8 +5,8 @@ app "helloZig"
 
 
 main = 
-    a = 'X'
-    b = 'y'
+    a = "foo" 
+    b = "bar" 
 
     (
         expect a == b

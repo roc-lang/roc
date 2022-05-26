@@ -39,7 +39,18 @@ impl RocStr {
         }
     }
 
-    fn is_small_str(&self) -> bool {
+    /// Create a string from bytes.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to `length` valid UTF-8 bytes.
+    pub unsafe fn from_raw_parts(ptr: *const u8, length: usize, _capacity: usize) -> Self {
+        let slice = unsafe { std::slice::from_raw_parts(ptr, length) };
+
+        unsafe { Self::from_slice(slice) }
+    }
+
+    pub fn is_small_str(&self) -> bool {
         unsafe { self.0.small_string.is_small_str() }
     }
 

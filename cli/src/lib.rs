@@ -12,6 +12,7 @@ use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::Region;
 use roc_reporting::report::{Palette, Report, RocDocAllocator, RocDocBuilder};
+use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -375,6 +376,7 @@ pub fn build(
             problems,
             total_time,
             expectations,
+            interns,
         }) => {
             match config {
                 BuildOnly => {
@@ -453,7 +455,15 @@ pub fn build(
 
                     let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                    let x = roc_run(arena, triple, opt_level, args, &mut bytes, expectations);
+                    let x = roc_run(
+                        arena,
+                        triple,
+                        opt_level,
+                        args,
+                        &mut bytes,
+                        expectations,
+                        interns,
+                    );
                     std::mem::forget(bytes);
                     x
                 }
@@ -477,7 +487,15 @@ pub fn build(
 
                         let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                        let x = roc_run(arena, triple, opt_level, args, &mut bytes, expectations);
+                        let x = roc_run(
+                            arena,
+                            triple,
+                            opt_level,
+                            args,
+                            &mut bytes,
+                            expectations,
+                            interns,
+                        );
                         std::mem::forget(bytes);
                         x
                     } else {
@@ -532,6 +550,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     args: I,
     binary_bytes: &mut [u8],
     expectations: VecMap<ModuleId, Expectations>,
+    interns: Interns,
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
@@ -566,7 +585,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => roc_run_native(arena, opt_level, args, binary_bytes, expectations),
+        _ => roc_run_native(arena, opt_level, args, binary_bytes, expectations, interns),
     }
 }
 
@@ -578,6 +597,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     args: I,
     binary_bytes: &mut [u8],
     expectations: VecMap<ModuleId, Expectations>,
+    interns: Interns,
 ) -> std::io::Result<i32> {
     use bumpalo::collections::CollectIn;
     use std::os::unix::ffi::OsStrExt;
@@ -632,7 +652,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         //            }
         //        }
 
-        roc_run_native_debug(executable, &argv, &envp, expectations)
+        roc_run_native_debug(executable, &argv, &envp, expectations, interns)
     }
 
     Ok(1)
@@ -675,6 +695,7 @@ unsafe fn roc_run_native_debug(
     argv: &[*const libc::c_char],
     envp: &[*const libc::c_char],
     expectations: VecMap<ModuleId, Expectations>,
+    interns: Interns,
 ) {
     use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
     use std::os::unix::ffi::OsStrExt;
@@ -724,6 +745,9 @@ unsafe fn roc_run_native_debug(
 
             let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
             let cstring = CString::new(name).unwrap();
+
+            let arena = &bumpalo::Bump::new();
+            let interns = arena.alloc(interns);
 
             for sig in &mut signals {
                 match sig {
@@ -777,21 +801,58 @@ unsafe fn roc_run_native_debug(
                         let file_string = std::fs::read_to_string(path).unwrap();
                         let src_lines: Vec<_> = file_string.lines().collect();
 
-                        let interns = Interns::default();
-                        let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
-
                         let line_info = roc_region::all::LineInfo::new(&file_string);
                         let line_col_region = line_info.convert_region(region);
 
                         use ven_pretty::DocAllocator;
 
+                        let target_info = (&target_lexicon::Triple::host()).into();
+
+                        let subs = arena.alloc(subs);
+
+                        let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
+
+                        let start = shared_ptr;
+                        let start_offset = 12;
+
+                        let (symbols, variables): (Vec<_>, Vec<_>) =
+                            current.iter().map(|(a, b)| (*a, *b)).unzip();
+
+                        let expressions = roc_repl_expect::get_values(
+                            module_id,
+                            target_info,
+                            arena,
+                            subs,
+                            interns,
+                            start,
+                            start_offset,
+                            &variables,
+                        )
+                        .unwrap();
+
+                        let it = symbols.iter().zip(expressions).map(|(symbol, expr)| {
+                            alloc.vcat([
+                                alloc
+                                    .symbol_unqualified(*symbol)
+                                    .append(" : ")
+                                    .append("I64"),
+                                alloc
+                                    .symbol_unqualified(*symbol)
+                                    .append(" : ")
+                                    .append(format!("{:?}", expr)),
+                            ])
+                        });
+
+                        let doc = alloc.stack([
+                            alloc.text("This expectation failed"),
+                            alloc.region(line_col_region),
+                            alloc.stack(it),
+                        ]);
+
                         let report = Report {
                             title: "Expect failed".into(),
+                            doc,
                             filename,
-                            doc: alloc.stack([
-                                alloc.text("This expectation failed"),
-                                alloc.region(line_col_region),
-                            ]),
                             severity: roc_reporting::report::Severity::RuntimeError,
                         };
 

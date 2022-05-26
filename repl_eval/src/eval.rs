@@ -27,6 +27,7 @@ struct Env<'a, 'env> {
     home: ModuleId,
 }
 
+#[derive(Debug)]
 pub enum ToAstProblem {
     FunctionLayout,
 }

@@ -590,6 +590,7 @@ pub struct Expectations {
     pub subs: roc_types::subs::Subs,
     pub path: PathBuf,
     pub expectations: VecMap<Region, Vec<(Symbol, Variable)>>,
+    pub ident_ids: IdentIds,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2099,6 +2100,7 @@ fn update<'a>(
                     expectations,
                     subs: solved_subs.clone().into_inner(),
                     path: path.to_owned(),
+                    ident_ids: ident_ids.clone(),
                 };
 
                 state

@@ -52,6 +52,7 @@ roc_mono = { path = "../compiler/mono" }
 roc_load = { path = "../compiler/load" }
 roc_build = { path = "../compiler/build" }
 roc_types = { path = "../compiler/types" }
+roc_repl_expect = { path = "../repl_expect" }
 roc_fmt = { path = "../compiler/fmt" }
 roc_target = { path = "../compiler/roc_target" }
 roc_reporting = { path = "../reporting" }

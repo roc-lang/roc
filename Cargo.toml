@@ -43,6 +43,7 @@ members = [
     "repl_eval",
     "repl_test",
     "repl_wasm",
+    "repl_expect",
     "test_utils",
     "utils",
     "docs",

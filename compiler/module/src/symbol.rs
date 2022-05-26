@@ -246,7 +246,7 @@ lazy_static! {
         std::sync::Mutex::new(roc_collections::all::MutMap::default());
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Interns {
     pub module_ids: ModuleIds,
     pub all_ident_ids: IdentIdsByModule,
@@ -670,7 +670,7 @@ impl IdentIds {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct IdentIdsByModule(VecMap<ModuleId, IdentIds>);
 
 impl IdentIdsByModule {
