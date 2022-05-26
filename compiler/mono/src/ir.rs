@@ -1326,6 +1326,13 @@ pub enum Stmt<'a> {
     },
     Ret(Symbol),
     Refcounting(ModifyRc, &'a Stmt<'a>),
+    Expect { 
+        condition: Symbol,
+        lookups: &'a [Symbol], 
+        layouts: &'a [Layout<'a>],
+        /// what happens after the expect 
+        remainder: &'a Stmt<'a>,
+    },
     /// a join point `join f <params> = <continuation> in remainder`
     Join {
         id: JoinPointId,
@@ -1911,6 +1918,10 @@ impl<'a> Stmt<'a> {
                 .to_doc(alloc)
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
+
+            Expect{condition, .. }  => 
+                alloc.text("expect ")
+                .append(symbol_to_doc(alloc, *condition)),
 
             Ret(symbol) => alloc
                 .text("ret ")
@@ -5931,22 +5942,20 @@ pub fn from_can<'a>(
         Expect {
             loc_condition,
             loc_continuation,
-            lookups_in_cond: _ ,
+            lookups_in_cond,
         } => {
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
             let cond_symbol = env.unique_symbol();
-            let mut stmt = Stmt::Let(
-                env.unique_symbol(),
-                Expr::Call(self::Call {
-                    call_type: CallType::LowLevel {
-                        op: LowLevel::ExpectTrue,
-                        update_mode: env.next_update_mode_id(),
-                    },
-                    arguments: env.arena.alloc([cond_symbol]),
-                }),
-                Layout::Builtin(Builtin::Bool),
-                env.arena.alloc(rest),
-            );
+
+            let lookups = Vec::from_iter_in(lookups_in_cond.iter().map(|t| t.0), env.arena);
+            // let layouts = Vec::from_iter_in(lookups_in_cond.iter().map(|t| t.1), env.arena);
+
+            let mut stmt = Stmt::Expect {
+                condition: cond_symbol,
+                lookups: lookups.into_bump_slice(),
+                layouts: &[],
+                remainder: env.arena.alloc(rest),
+            };
 
             stmt = with_hole(
                 env,
@@ -5957,7 +5966,6 @@ pub fn from_can<'a>(
                 cond_symbol,
                 env.arena.alloc(stmt),
             );
-
 
             stmt
         }
@@ -6296,6 +6304,14 @@ fn substitute_in_stmt_help<'a>(
             // TODO should we substitute in the ModifyRc?
             match substitute_in_stmt_help(arena, cont, subs) {
                 Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
+                None => None,
+            }
+        }
+
+        Expect { condition, lookups, layouts, remainder } => {  
+            // TODO should we substitute in the ModifyRc?
+            match substitute_in_stmt_help(arena, remainder, subs) {
+                Some(cont) => Some(arena.alloc(Expect { condition: *condition , lookups, layouts, remainder: cont} )),
                 None => None,
             }
         }
