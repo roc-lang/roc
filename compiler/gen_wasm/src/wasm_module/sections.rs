@@ -136,15 +136,10 @@ fn parse_section(
             message: "End of file".into(),
         });
     }
+
+    // If we see the wrong section ID, assume the one we were looking for is just empty
     if module_bytes[*cursor] != expected_id as u8 {
-        let actual_id: SectionId = unsafe { std::mem::transmute(module_bytes[*cursor]) };
-        return Err(ParseError {
-            offset: *cursor,
-            message: format!(
-                "Expected section '{:?}', but found '{:?}'",
-                expected_id, actual_id
-            ),
-        });
+        return Ok((0, *cursor..*cursor));
     }
     *cursor += 1;
 
