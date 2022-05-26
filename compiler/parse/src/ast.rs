@@ -391,6 +391,19 @@ impl<'a> Defs<'a> {
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
 
+    pub fn replace_with_value_def(
+        &mut self,
+        index: usize,
+        value_def: ValueDef<'a>,
+        region: Region,
+    ) {
+        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
+        let tag = EitherIndex::from_right(value_def_index);
+
+        self.tags[index] = tag;
+        self.regions[index] = region;
+    }
+
     pub fn push_type_def(
         &mut self,
         type_def: TypeDef<'a>,

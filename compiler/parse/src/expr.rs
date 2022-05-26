@@ -945,11 +945,10 @@ fn parse_toplevel_defs_end<'a>(
 
                                     let region = Region::span_across(&ann_pattern.region, &region);
 
-                                    defs.push_value_def(
+                                    defs.replace_with_value_def(
+                                        defs.tags.len() - 1,
                                         value_def,
                                         region,
-                                        spaces_before_current,
-                                        &[],
                                     )
                                 }
                                 Some(Ok(TypeDef::Alias {
@@ -982,11 +981,10 @@ fn parse_toplevel_defs_end<'a>(
 
                                     let region = Region::span_across(&header.name.region, &region);
 
-                                    defs.push_value_def(
+                                    defs.replace_with_value_def(
+                                        defs.tags.len() - 1,
                                         value_def,
                                         region,
-                                        spaces_before_current,
-                                        &[],
                                     )
                                 }
                                 _ => {
@@ -2313,16 +2311,18 @@ pub fn toplevel_defs<'a>(min_indent: u32) -> impl Parser<'a, Defs<'a>, EExpr<'a>
         let (_, final_space, state) =
             space0_e(start_column, EExpr::IndentEnd).parse(arena, state)?;
 
-        // add surrounding whitespace
-        let before = Slice::extend_new(&mut output.spaces, initial_space.iter().copied());
-        let after = Slice::extend_new(&mut output.spaces, final_space.iter().copied());
+        if !output.tags.is_empty() {
+            // add surrounding whitespace
+            let after = Slice::extend_new(&mut output.spaces, final_space.iter().copied());
+            let before = Slice::extend_new(&mut output.spaces, initial_space.iter().copied());
 
-        debug_assert!(output.space_before[0].is_empty());
-        output.space_before[0] = before;
+            debug_assert!(output.space_before[0].is_empty());
+            output.space_before[0] = before;
 
-        let last = output.tags.len() - 1;
-        debug_assert!(output.space_after[last].is_empty() || after.is_empty());
-        output.space_after[last] = after;
+            let last = output.tags.len() - 1;
+            debug_assert!(output.space_after[last].is_empty() || after.is_empty());
+            output.space_after[last] = after;
+        }
 
         Ok((MadeProgress, output, state))
     }

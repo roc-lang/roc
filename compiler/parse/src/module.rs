@@ -15,7 +15,6 @@ use crate::state::State;
 use crate::string_literal;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
-use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_region::all::{Loc, Position};
 
 fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
@@ -30,77 +29,14 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
 
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Defs<'a>, SyntaxError<'a>> {
-    |arena, state: State<'a>| {
-        let (progress, defs_vec, state) = module_defs_help().parse(arena, state)?;
-
-        let cap = defs_vec.len();
-
-        let mut defs = Defs {
-            tags: std::vec::Vec::with_capacity(cap),
-            regions: std::vec::Vec::with_capacity(cap),
-            space_before: std::vec::Vec::with_capacity(cap),
-            space_after: std::vec::Vec::with_capacity(cap),
-            spaces: std::vec::Vec::with_capacity(cap),
-            type_defs: std::vec::Vec::with_capacity(cap),
-            value_defs: std::vec::Vec::with_capacity(cap),
-        };
-
-        for def in defs_vec.iter() {
-            defs.regions.push(def.region);
-
-            let mut def = &def.value;
-
-            loop {
-                match def {
-                    Def::Type(type_def) => {
-                        if defs.space_before.len() != defs.regions.len() {
-                            defs.space_before.push(Slice::default());
-                        }
-
-                        if defs.space_after.len() != defs.regions.len() {
-                            defs.space_after.push(Slice::default());
-                        }
-
-                        let def_index = Index::push_new(&mut defs.type_defs, *type_def);
-                        defs.tags.push(EitherIndex::from_left(def_index));
-
-                        break;
-                    }
-                    Def::Value(value_def) => {
-                        if defs.space_before.len() != defs.regions.len() {
-                            defs.space_before.push(Slice::default());
-                        }
-
-                        if defs.space_after.len() != defs.regions.len() {
-                            defs.space_after.push(Slice::default());
-                        }
-
-                        let def_index = Index::push_new(&mut defs.value_defs, *value_def);
-                        defs.tags.push(EitherIndex::from_right(def_index));
-
-                        break;
-                    }
-                    Def::SpaceBefore(inner, spaces) => {
-                        let slice = Slice::extend_new(&mut defs.spaces, spaces.iter().copied());
-                        defs.space_before.push(slice);
-                        debug_assert_eq!(defs.regions.len(), defs.space_before.len());
-
-                        def = inner;
-                    }
-                    Def::SpaceAfter(inner, spaces) => {
-                        let slice = Slice::extend_new(&mut defs.spaces, spaces.iter().copied());
-                        defs.space_after.push(slice);
-                        debug_assert_eq!(defs.regions.len(), defs.space_after.len());
-
-                        def = inner;
-                    }
-                    Def::NotYetImplemented(_) => todo!(),
-                }
-            }
-        }
-
-        Ok((progress, defs, state))
-    }
+    let min_indent = 0;
+    skip_second!(
+        specialize_region(
+            |e, r| SyntaxError::Expr(e, r.start()),
+            crate::expr::toplevel_defs(min_indent),
+        ),
+        end_of_file()
+    )
 }
 
 #[inline(always)]
