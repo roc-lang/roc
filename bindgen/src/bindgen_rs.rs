@@ -971,7 +971,7 @@ fn add_nullable_unwrapped(
 
     // The opaque struct for the tag union
     {
-        // These need their own Clone impl because they have
+        // This struct needs its own Clone impl because it has
         // a refcount to bump
         let derive_extras = if types.get(id).has_float(types) {
             ""
