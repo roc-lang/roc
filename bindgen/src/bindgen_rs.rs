@@ -125,11 +125,31 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
                     // Empty tag unions can never come up at runtime,
                     // and so don't need declared types.
                     if !tags.is_empty() {
-                        add_tag_union(name, architecture, id, tags, types, impls);
+                        add_tag_union(
+                            Recursiveness::NonRecursive,
+                            name,
+                            architecture,
+                            id,
+                            tags,
+                            types,
+                            impls,
+                        );
                     }
                 }
-                RocTagUnion::Recursive { .. } => {
-                    todo!();
+                RocTagUnion::Recursive { tags, name } => {
+                    // Empty tag unions can never come up at runtime,
+                    // and so don't need declared types.
+                    if !tags.is_empty() {
+                        add_tag_union(
+                            Recursiveness::Recursive,
+                            name,
+                            architecture,
+                            id,
+                            tags,
+                            types,
+                            impls,
+                        );
+                    }
                 }
                 RocTagUnion::NullableWrapped { .. } => {
                     todo!();
@@ -222,7 +242,13 @@ fn add_discriminant(
     discriminant_name
 }
 
+enum Recursiveness {
+    Recursive,
+    NonRecursive,
+}
+
 fn add_tag_union(
+    recursiveness: Recursiveness,
     name: &str,
     architecture: Architecture,
     type_id: TypeId,
@@ -236,6 +262,40 @@ fn add_tag_union(
     let target_info = architecture.into();
     let discriminant_offset = RocTagUnion::discriminant_offset(tags, types, target_info);
     let size = typ.size(types, target_info);
+
+    // Find the first recursive pointer field in the tags' payloads.
+    // TODO: what if there's more than one? Is it safe to assume the first
+    // one is it? What if it's another one?
+    let recursive_pointer_field = match recursiveness {
+        Recursiveness::Recursive => {
+            let opt_tag_and_field = tags.iter().find_map(|(tag_name, opt_payload_id)| {
+                if let Some(payload_id) = opt_payload_id {
+                    match types.get(*payload_id) {
+                        RocType::Struct { fields, .. } => {
+                            fields.iter().find_map(|field| match field {
+                                Field::NonRecursive(_, _) => None,
+                                Field::Recursive(label, field_id) => {
+                                    debug_assert_eq!(*field_id, type_id);
+
+                                    Some(label)
+                                }
+                            })
+                        }
+                        _ => None,
+                    }
+                    .map(|label| (tag_name, label))
+                } else {
+                    None
+                }
+            });
+
+            match opt_tag_and_field {
+                Some((tag_name, label)) => format!("{tag_name}.{label}"),
+                None => String::new(),
+            }
+        }
+        Recursiveness::NonRecursive => String::new(),
+    };
 
     {
         // No #[derive(...)] for unions; we have to generate each impl ourselves!
@@ -280,25 +340,69 @@ fn add_tag_union(
     {
         let opt_impl = Some(format!("impl {name}"));
 
-        // An old design, which ended up not working out, was that the tag union
-        // was a struct containing two fields: one for the `union`, and another
-        // for the discriminant.
-        //
-        // The problem with this was alignment; e.g. if you have one variant with a
-        // RocStr in it and another with an I128, then the `union` has a size of 32B
-        // and the discriminant is right after it - making the size of the whole struct
-        // round up to 48B total, since it has an alignment of 16 from the I128.
-        //
-        // However, Roc will generate the more efficient thing here: the whole thing will
-        // be 32B, and the discriminant will appear at offset 24 - right after the end of
-        // the RocStr. The current design recognizes this and works with it, by representing
-        // the entire structure as a union and manually setting the tag at the appropriate offset.
-        add_decl(
-            impls,
-            opt_impl.clone(),
-            architecture,
-            format!(
-                r#"{VARIANT_DOC_COMMENT}
+        match recursiveness {
+            Recursiveness::Recursive => {
+                if tags.len() <= max_pointer_tagged_variants(architecture) {
+                    let bitmask = format!("{:#b}", tagged_pointer_bitmask(architecture));
+
+                    add_decl(
+                        impls,
+                        opt_impl.clone(),
+                        architecture,
+                        format!(
+                            r#"{VARIANT_DOC_COMMENT}
+    pub fn variant(&self) -> {discriminant_name} {{
+        // The discriminant is stored in the unused bytes at the end of the recursive pointer
+        unsafe {{ core::mem::transmute::<u8, {discriminant_name}>((self.{recursive_pointer_field} as u8) & {bitmask}) }}
+    }}"#
+                        ),
+                    );
+
+                    add_decl(
+                        impls,
+                        opt_impl.clone(),
+                        architecture,
+                        format!(
+                            r#"/// Internal helper
+    fn set_discriminant(&mut self, discriminant: {discriminant_name}) {{
+        // The discriminant is stored in the unused bytes at the end of the recursive pointer
+        unsafe {{
+            let untagged = (self.{recursive_pointer_field} as usize) & (!{bitmask} as usize);
+            let tagged = pointer | (self.variant() as usize);
+
+            *self.{recursive_pointer_field} = tagged as _;
+        }}
+    }}"#
+                        ),
+                    );
+                } else {
+                    todo!(
+                        "Support {} tags in a recursive tag union on architecture {:?}. (This is too many tags for pointer tagging to work, so we need to bindgen something different.)",
+                        tags.len(),
+                        architecture
+                    );
+                }
+            }
+            Recursiveness::NonRecursive => {
+                // An old design, which ended up not working out, was that the tag union
+                // was a struct containing two fields: one for the `union`, and another
+                // for the discriminant.
+                //
+                // The problem with this was alignment; e.g. if you have one variant with a
+                // RocStr in it and another with an I128, then the `union` has a size of 32B
+                // and the discriminant is right after it - making the size of the whole struct
+                // round up to 48B total, since it has an alignment of 16 from the I128.
+                //
+                // However, Roc will generate the more efficient thing here: the whole thing will
+                // be 32B, and the discriminant will appear at offset 24 - right after the end of
+                // the RocStr. The current design recognizes this and works with it, by representing
+                // the entire structure as a union and manually setting the tag at the appropriate offset.
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    architecture,
+                    format!(
+                        r#"{VARIANT_DOC_COMMENT}
     pub fn variant(&self) -> {discriminant_name} {{
         unsafe {{
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
@@ -306,15 +410,15 @@ fn add_tag_union(
             core::mem::transmute::<u8, {discriminant_name}>(*bytes.as_ptr().add({discriminant_offset}))
         }}
     }}"#
-            ),
-        );
+                    ),
+                );
 
-        add_decl(
-            impls,
-            opt_impl.clone(),
-            architecture,
-            format!(
-                r#"/// Internal helper
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    architecture,
+                    format!(
+                        r#"/// Internal helper
     fn set_discriminant(&mut self, discriminant: {discriminant_name}) {{
         let discriminant_ptr: *mut {discriminant_name} = (self as *mut {name}).cast();
 
@@ -322,8 +426,10 @@ fn add_tag_union(
             *(discriminant_ptr.add({discriminant_offset})) = discriminant;
         }}
     }}"#
-            ),
-        );
+                    ),
+                );
+            }
+        }
 
         for (tag_name, opt_payload_id) in tags {
             // Add a convenience constructor function to the impl, e.g.
@@ -1270,5 +1376,24 @@ fn arch_to_str(architecture: &Architecture) -> &'static str {
 fn write_indents(indentations: usize, buf: &mut String) {
     for _ in 0..indentations {
         buf.push_str(INDENT);
+    }
+}
+
+fn max_pointer_tagged_variants(architecture: Architecture) -> usize {
+    match architecture {
+        // On a 64-bit system, pointers have 3 bits that are unused, so return 2^3 = 8
+        Architecture::X86_64 | Architecture::Aarch64 => 8,
+        // On a 32-bit system, pointers have 2 bits that are unused, so return 2^4 = 4
+        Architecture::X86_32 | Architecture::Aarch32 | Architecture::Wasm32 => 4,
+    }
+}
+
+#[inline(always)]
+fn tagged_pointer_bitmask(architecture: Architecture) -> u8 {
+    match architecture {
+        // On a 64-bit system, pointers have 3 bits that are unused
+        Architecture::X86_64 | Architecture::Aarch64 => 0b0000_0111,
+        // On a 32-bit system, pointers have 2 bits that are unused
+        Architecture::X86_32 | Architecture::Aarch32 | Architecture::Wasm32 => 0b0000_0011,
     }
 }
